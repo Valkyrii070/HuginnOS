@@ -96,7 +96,7 @@ LOCAL_MODELS = [
 ]
 
 DEFAULTS = {"enabled": False, "provider": "", "models": {}, "local": {"model": "gemma-4-e4b", "gpu": True},
-            "azure": {"endpoint": ""}, "custom": {"url": ""}, "where": {s: True for s in SURFACES}, "kept": {}}
+            "azure": {"endpoint": ""}, "custom": {"url": ""}, "where": {s: True for s in SURFACES}, "kept": {}, "inline": False}
 
 # ------------------------------------------------------------------------------------------- what it's asked to do
 SYSTEM = ("You are Huginn AI, the assistant built into Huginn OS. Be accurate, plain and brief. Use the language the "
@@ -128,6 +128,9 @@ TASKS = {
                  "the text's language. Reply with only the list.\n\n{text}",
     "ask-about": "Answer this question about the document below, from what the document says. If it doesn't say, say "
                  "so.\nQuestion: {ask}\n\nDocument:\n{text}",
+    "complete-code": "Below is a {lang} file; <CURSOR> marks where the cursor is. Reply with only the code that should be "
+                     "typed at <CURSOR> to carry on from there: a few lines at most, matching the file's style and "
+                     "indentation, nothing that's already there, no explanation, no code fences.\n\n{text}",
     "translate": "Translate the text below into {target}. Keep its meaning, tone, names and numbers. Reply with only the "
                  "translation.\n\n{text}",
 }
@@ -331,7 +334,8 @@ def sse(resp):
         yield event, "\n".join(data)
 
 
-def chat(provider: str, model: str, messages: list, on_text, stopped=lambda: False, cfg: dict = None, max_tokens: int = 2048) -> str:
+def chat(provider: str, model: str, messages: list, on_text, stopped=lambda: False, cfg: dict = None, max_tokens: int = 2048,
+         limit: bool = False) -> str:
     """Ask, handing each piece of the answer to on_text as it comes. Returns the whole answer."""
     cfg = cfg or load_config()
     if provider not in PROVIDERS:
@@ -363,6 +367,8 @@ def chat(provider: str, model: str, messages: list, on_text, stopped=lambda: Fal
         body = {"model": model, "messages": messages, "stream": True}
         if provider == "local":                                     # the services' own limits are fine (and some of
             body["max_tokens"] = max_tokens                         # their models refuse max_tokens)
+        elif limit:                                                 # a short answer wanted (code as you type)
+            body["max_completion_tokens" if provider in ("openai", "azure", "github") else "max_tokens"] = max_tokens
         with _open(f"{base}/chat/completions", body, headers, timeout=600 if provider == "local" else 120) as resp:
             for _event, data in sse(resp):
                 if stopped():
@@ -816,7 +822,7 @@ def _qt():
             return {"enabled": bool(c.get("enabled")), "provider": prov, "ready": ready or (self._demo and bool(c.get("enabled"))),
                     "label": PROVIDERS.get(prov, {}).get("label", ""), "model": self._model(),
                     "where": c.get("where", {}), "local": c.get("local", {}), "azure": c.get("azure", {}), "custom": c.get("custom", {}),
-                    "engine": bool(have_llama()) or self._demo, "download": self._download}
+                    "engine": bool(have_llama()) or self._demo, "download": self._download, "inline": bool(c.get("inline"))}
         state = Property("QVariantMap", lambda self: self._state(), notify=changed)
 
         @Property("QVariantList", notify=changed)
@@ -869,6 +875,11 @@ def _qt():
                 self._save()
                 if prov != "local" and (self._keyinfo(prov).get("key") or not PROVIDERS[prov]["key"]) and not self._models.get(prov):
                     self.loadModels(prov)
+
+        @Slot(bool)
+        def setInline(self, on: bool):
+            self._cfg["inline"] = bool(on)
+            self._save()
 
         @Slot(str, bool)
         def setWhere(self, surface: str, on: bool):
@@ -1018,7 +1029,9 @@ def _qt():
                         model = rows[0]["id"]
                     msgs = [{"role": "system", "content": SYSTEM}] + [m for m in history if m.get("role") in ("user", "assistant")]
                     msgs.append({"role": "user", "content": prompt(task, text, extra)})
-                    chat(prov, model, msgs, lambda piece: self._back.emit("chunk", (ident, piece)), lambda: ident in self._stop, cfg)
+                    limit = int(extra.get("limit") or 0)
+                    chat(prov, model, msgs, lambda piece: self._back.emit("chunk", (ident, piece)), lambda: ident in self._stop, cfg,
+                         max_tokens=limit or 2048, limit=bool(limit))
                     self._back.emit("done", (ident, ""))
                 except Failed as err:
                     self._back.emit("done", (ident, str(err)))

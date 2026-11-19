@@ -1776,6 +1776,80 @@ def advice(sky: Sky) -> str:
             self._git_do("add", "-A")
         return self._git_do("commit", "-m", message.strip(), then_say="Committed")
 
+    # ---- branches: what's there, switch, start a new one, delete one that's merged
+    @Slot(result="QVariantList")
+    def branches(self) -> list:
+        if not self._root or not self._git:
+            return []
+        if self._demo:
+            return [{"name": "main", "current": True, "when": "2 hours ago", "subject": "Kp index from the forecast"},
+                    {"name": "clouds-layer", "current": False, "when": "yesterday", "subject": "Cloud cover by the hour"}]
+        try:
+            out = git(self._root, "for-each-ref", "--sort=-committerdate", "--format=%(HEAD)\t%(refname:short)\t%(committerdate:relative)\t%(subject)",
+                      "refs/heads", timeout=10)
+        except (OSError, subprocess.SubprocessError):
+            return []
+        rows = []
+        for line in out.stdout.splitlines():
+            head, name, when, subject = (line.split("\t") + ["", "", "", ""])[:4]
+            if name:
+                rows.append({"name": name, "current": head.strip() == "*", "when": when, "subject": subject})
+        if not rows and self._branch:                              # a repository with no commits yet
+            rows.append({"name": self._branch, "current": True, "when": "", "subject": "No commits yet"})
+        return rows
+
+    @Slot(str, result=str)
+    def switchBranch(self, name: str) -> str:
+        """Switch to a branch. Unsaved files are saved first; git keeps changes that don't clash with the branch."""
+        if self._demo:
+            self._branch = name
+            self.changed.emit()
+            return ""
+        for i, d in enumerate(self._docs):
+            if d.text != d.saved:
+                self.save(i, False)
+        got = self._git_do("switch", name, then_say=f"On {name} now")
+        if not got:
+            for i in range(len(self._docs)):
+                self.reload(i)
+        return self._why_not_switch(got)
+
+    @staticmethod
+    def _why_not_switch(got: str) -> str:
+        if "overwritten" in got or "would be" in got:
+            return "Some of your changes would be lost switching: commit them (or stash them) first."
+        if "while merging" in got or "merge" in got and "quit" in got:
+            return "A merge is under way here: finish it (resolve and commit) first."
+        if "rebase" in got:
+            return "A rebase is under way here: finish it first."
+        return got
+
+    @Slot(str, result=str)
+    def newBranch(self, name: str) -> str:
+        name = re.sub(r"\s+", "-", name.strip())
+        if not name:
+            return "Give it a name."
+        if self._demo:
+            self._branch = name
+            self.changed.emit()
+            return ""
+        check = git(self._root, "check-ref-format", "--branch", name, timeout=5) if self._root else None
+        if check is not None and check.returncode != 0:
+            return "That can't be a branch's name (no spaces, no .. or ~ ^ : ? * [)."
+        return self._why_not_switch(self._git_do("switch", "-c", name, then_say=f"Started {name}"))
+
+    @Slot(str, result=str)
+    def deleteBranch(self, name: str) -> str:
+        """Delete a branch that's merged (git refuses one with work that's only there, and says why)."""
+        if name == self._branch:
+            return "Switch to another branch first."
+        if self._demo:
+            return ""
+        got = self._git_do("branch", "-d", name, then_say=f"Deleted {name}")
+        if "not fully merged" in got:
+            return f"{name} has work that isn't anywhere else yet, so it's kept."
+        return got
+
     @Slot()
     def initRepo(self) -> None:
         self._git_do("init", then_say="This folder is now a Git repository")
@@ -2746,6 +2820,19 @@ def advice(sky: Sky) -> str:
         if not 0 <= i < len(self._docs):
             return []
         return more.scopes(self._docs[i].text, self.symbols(i))
+
+    @Slot(int, int, result="QVariantList")
+    def crumbsAt(self, i: int, line: int) -> list:
+        """Where the cursor is, as the scopes around it (outermost first): Shop › add."""
+        if not 0 <= i < len(self._docs) or self._docs[i].binary:
+            return []
+        d = self._docs[i]
+        key = (d.version, i)
+        if getattr(self, "_scoped_key", None) != key:
+            self._scoped_key, self._scoped = key, self.outline(i)
+        inside = [sc for sc in self._scoped if sc["line"] <= line <= sc["end"]]
+        inside.sort(key=lambda sc: (sc["indent"], sc["line"]))
+        return [{"name": sc["name"], "kind": sc.get("kind", ""), "line": sc["line"]} for sc in inside][-4:]
 
     @Slot(int, int, result="QVariantList")
     def stickyAt(self, i: int, line: int) -> list:

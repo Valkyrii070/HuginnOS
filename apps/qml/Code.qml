@@ -65,6 +65,8 @@ GlassWindow {
     function ask(kind, extra) { var s = extra || {}; s.kind = kind; sheet = s }
     // Huginn AI (Settings › AI): explain, fix, change or write code, on what's selected or else the whole file
     readonly property bool aiOn: aiPanel.on("code")
+    readonly property bool aiInline: aiOn && !!AI.state.inline                  // Huginn AI suggests code as you type
+    property var crumbs: []                                                     // the scopes the cursor is in: Shop › add
     function aiCode(mode, asked) {
         var v = view()
         if (!v || !win.tab) { toast.say("Open a file first.", false); return }
@@ -97,6 +99,8 @@ GlassWindow {
     function save() { if (Backend.current < 0) return; if (Backend.save(Backend.current, false) === "changed") ask("clash", { tab: Backend.current }) }
     function openPalette(prefix) { palBox.text = prefix; palList.model = paletteRows(prefix); palOpen = true; palBox.forceActiveFocus(); palBox.cursorPosition = prefix.length; palList.currentIndex = 0 }
     function closeOverlays() { palOpen = false; comp = []; tip = ""; sig = null; fixMenu = null; menuFor = null; var v = view(); if (v) v.focusEditor() }
+    function branches() { if (Backend.isGit) ask("branches"); else toast.say("This folder isn't a Git project.", false) }
+    function toBracket() { var v = view(); if (!v) return; v.findPair(); if (v.pair.length === 2) { var to = v.pair[1]; v.cursorTo(to + (to > v.pair[0] ? 1 : 0)) } }
     function refreshOutline() { outlineRows = Backend.current >= 0 ? Backend.outline(Backend.current) : [] }
     function showPanel(p) { side = true; panel = p; if (p === "outline") refreshOutline(); if (p === "search") Qt.callLater(function () { searchBox.forceActiveFocus() }); if (p === "tests" && Backend.tests.length === 0 && Backend.testBusy === "") Backend.discoverTests() }
     function syncDocs() {
@@ -170,13 +174,20 @@ GlassWindow {
         { name: "AI: Explain This Code", key: "", ai: true, run: function () { win.aiCode("explain", "") } },
         { name: "AI: Fix This Code", key: "", ai: true, run: function () { win.aiCode("fix", "") } },
         { name: "AI: Change This Code…", key: "", ai: true, run: function () { win.ask("aiask", { mode: "edit" }) } },
+        { name: "Go to Matching Bracket", key: "Ctrl+Shift+\\", run: function () { win.toBracket() } },
         { name: "AI: Write Code…", key: "", ai: true, run: function () { win.ask("aiask", { mode: "write" }) } },
+        { name: "AI: Suggest as I Type (On or Off)", key: "", ai: true, run: function () {
+            var on = !AI.state.inline; AI.setInline(on)
+            toast.say(on ? "Huginn AI suggests code when you pause, in grey: Tab takes it, Escape drops it." + (AI.state.provider === "local" ? "" : " Each pause is a request to " + (AI.state.label || "your service") + ".")
+                         : "Huginn AI no longer suggests as you type.", false) } },
         { name: "Languages: Add Support…", key: "", run: function () { win.ask("langs", { mode: "manage" }) } },
         { name: "New Folder", key: "", run: function () { win.ask("new", { folder: Backend.root, dir: true }) } },
         { name: "Open Folder…", key: "Ctrl+O", run: function () { win.browseAt = Backend.root || Backend.home; win.ask("open") } },
         { name: "Close Folder", key: "", run: function () { Backend.closeFolder() } },
         { name: "Reload This File from Disk", key: "", run: function () { if (Backend.current >= 0) Backend.reload(Backend.current) } },
         { name: "Show This File in Files", key: "", run: function () { if (win.tab) Backend.reveal(win.tab.path) } },
+        { name: "Git: Switch Branch…", key: "", run: function () { if (Backend.branch) win.ask("branches"); else toast.say("This folder isn't a Git repository yet.", false) } },
+        { name: "Git: Start a Branch…", key: "", run: function () { if (Backend.branch) win.ask("branches"); else toast.say("This folder isn't a Git repository yet.", false) } },
         { name: "Git: Commit…", key: "", run: function () { win.showPanel("git"); commitBox.focusIn() } },
         { name: "Git: Stage Everything", key: "", run: function () { Backend.stageAll() } },
         { name: "Git: Pull", key: "", run: function () { Backend.sync("pull") } },
@@ -292,7 +303,7 @@ GlassWindow {
         function onJump(i, line, col) { Backend.select(i); Qt.callLater(function () { var v = docs.itemAt(i); if (v) v.goTo(line, col) }) }
         function onCompletions(i, items) { var v = docs.itemAt(i); if (i === Backend.current && v) v.offer(items) }
         function onHoverText(i, text) { if (i === Backend.current) win.tip = text }
-        function onSignature(i, label, a, b, doc) { if (i === Backend.current) win.sig = label ? { label: label, a: a, b: b, doc: doc } : null }
+        function onSignature(i, label, a, b, doc) { var v = win.view(); if (i === Backend.current) win.sig = label && v && v.inCall() ? { label: label, a: a, b: b, doc: doc } : null }   // (it can come back after the call was closed)
         function onFixesFound(i, items) { if (i !== Backend.current) return; if (items.length) win.fixMenu = { items: items, k: 0 }; else toast.say("Nothing to fix on this line", false) }
         function onShown() { win.show(); win.raise(); win.requestActivate() }
     }
@@ -311,6 +322,7 @@ GlassWindow {
     Shortcut { sequence: "Ctrl+Shift+E"; onActivated: win.showPanel("files") }
     Shortcut { sequence: "Ctrl+Shift+G"; onActivated: win.showPanel("git") }
     Shortcut { sequence: "Ctrl+Shift+M"; onActivated: win.showPanel("problems") }
+    Shortcut { sequence: "Ctrl+Shift+\\"; onActivated: win.toBracket() }
     Shortcut { sequence: "Ctrl+Shift+T"; onActivated: win.showPanel("tests") }
     Shortcut { sequence: "Ctrl+Alt+B"; onActivated: win.blameOn = !win.blameOn }
     function showCommit(sha, title) { if (!sha) return; var info = Backend.commitInfo(sha); win.ask("diff", { rel: "", staged: false, commit: info, rows: Backend.commitRows(sha, "") }) }
@@ -411,14 +423,14 @@ GlassWindow {
             Rectangle { anchors.fill: parent; radius: win.r; color: "#77000000"; MouseArea { anchors.fill: parent; acceptedButtons: Qt.AllButtons; onClicked: if (win.sheet && win.sheet.kind !== "dirty") win.sheet = null } }
             Rectangle { id: card; anchors.centerIn: parent; radius: 18; color: Theme.t.menu_bg; border.width: 1; border.color: Theme.t.menu_border
                 readonly property string kind: win.sheet ? win.sheet.kind : ""
-                width: kind === "diff" ? win.width - 120 : kind === "open" || kind === "langs" ? 560 : 470
-                height: kind === "diff" ? win.height - 100 : kind === "open" || kind === "langs" ? Math.min(win.height - 80, 560) : kind === "dirty" || kind === "clash" || kind === "trash" || kind === "discard" ? 170 : 200
+                width: kind === "diff" ? win.width - 120 : kind === "open" || kind === "langs" || kind === "branches" ? 560 : 470
+                height: kind === "diff" ? win.height - 100 : kind === "open" || kind === "langs" || kind === "branches" ? Math.min(win.height - 80, 560) : kind === "dirty" || kind === "clash" || kind === "trash" || kind === "discard" ? 170 : 200
                 MouseArea { anchors.fill: parent }
                 Label { x: 24; y: 20; width: parent.width - 48; elide: Text.ElideMiddle; font.pixelSize: 17; font.weight: Font.DemiBold
                     text: ({ "open": "Open a folder", "dirty": "Save changes to “" + (win.sheet ? win.sheet.name : "") + "”?", "clash": "This file changed on disk",
                              "new": win.sheet && win.sheet.dir ? "New folder" : "New file", "rename": "Rename “" + (win.sheet ? win.sheet.name : "") + "”",
                              "trash": "Move “" + (win.sheet ? win.sheet.name : "") + "” to the Trash?", "renamesym": "Rename “" + (win.sheet ? win.sheet.name : "") + "” everywhere", "debugprog": "Which program should be debugged?", "aiask": win.sheet && win.sheet.mode === "write" ? "What should it write?" : "How should it change?", "run": "What Run does", "discard": "Throw away the changes to “" + (win.sheet ? win.sheet.rel : "") + "”?",
-                             "langs": win.sheet && win.sheet.mode === "new" ? "New file in…" : "Languages",
+                             "langs": win.sheet && win.sheet.mode === "new" ? "New file in…" : "Languages", "branches": "Branches",
                              "diff": (win.sheet ? win.sheet.rel : "") + (win.sheet && win.sheet.staged ? "  ·  staged" : "") })[card.kind] || "" }
                 // Languages: pick one for a new file (it starts with a few lines of it), or add what one needs: its helper
                 // for suggestions and problems, and its tools for Run (from Ubuntu, or npm into your own folder)
@@ -437,6 +449,22 @@ GlassWindow {
                         Btn { id: addLang; anchors { right: parent.right; rightMargin: 8; verticalCenter: parent.verticalCenter }
                             visible: modelData.canAdd || modelData.adding; enabled: !modelData.adding; text: modelData.adding ? "Adding…" : "Add"
                             onClicked: { var lang = modelData.name; Backend.addLanguage(lang) } } } }
+                // Branches: switch to one, start a new one from here, or delete one that's merged
+                property var branchRows: card.kind === "branches" ? Backend.branches() : []
+                Row { visible: card.kind === "branches"; x: 24; y: 52; width: parent.width - 48; spacing: 8
+                    TextBox { id: branchName; width: parent.width - newBranchBtn.width - 8; mono: true; placeholder: "a new branch, from here"; onAccepted: newBranchBtn.clicked() }
+                    Btn { id: newBranchBtn; text: "Start Branch"; primary: branchName.text.trim() !== ""; anchors.verticalCenter: parent.verticalCenter
+                        onClicked: { var why = Backend.newBranch(branchName.text); if (why) toast.say(why, true); else { branchName.text = ""; win.sheet = null } } } }
+                ListView { id: branchList; visible: card.kind === "branches"; x: 12; y: 100; width: parent.width - 24; height: parent.height - 164; clip: true; boundsBehavior: Flickable.StopAtBounds
+                    model: card.branchRows
+                    delegate: Pressable { required property var modelData; width: branchList.width; height: 46; radius: 10; color: modelData.current ? Qt.alpha(Theme.t.accent, 0.16) : hovered ? Theme.t.hover : "transparent"
+                        onClicked: { if (modelData.current) return; var name = modelData.name, why = Backend.switchBranch(name); if (why) toast.say(why, true); else win.sheet = null }
+                        Glyph { x: 12; anchors.verticalCenter: parent.verticalCenter; name: modelData.current ? "check" : "route"; size: 14; ink: modelData.current ? Theme.t.accent : Theme.t.icon }
+                        Label { x: 36; y: 6; width: parent.width - 120; elide: Text.ElideRight; text: modelData.name; font.family: win.mono; font.weight: Font.DemiBold }
+                        Label { x: 36; y: 25; width: parent.width - 120; elide: Text.ElideRight; font.pixelSize: 11; secondary: true
+                            text: (modelData.current ? "You're on it" : "Switch to it") + (modelData.when ? " · " + modelData.when : "") + (modelData.subject ? " · " + modelData.subject : "") }
+                        Seg { visible: !modelData.current; anchors { right: parent.right; rightMargin: 8; verticalCenter: parent.verticalCenter } icon: "trash"; tip: "Delete it (only if it's merged)"
+                            onClicked: { var name = modelData.name, why = Backend.deleteBranch(name); if (why) toast.say(why, true); else card.branchRows = Backend.branches() } } } }
                 Label { visible: ["dirty", "clash", "trash", "discard"].indexOf(card.kind) >= 0; x: 24; y: 52; width: parent.width - 48; wrapMode: Text.WordWrap; secondary: true
                     text: card.kind === "dirty" ? "If you don't save, your changes are lost." : card.kind === "clash" ? "Something else changed it since you opened it. Keep yours (overwrite) or take what's on disk?"
                         : card.kind === "trash" ? "You can put it back from the Trash in Files." : "This can't be undone: the file goes back to how it was at the last commit." }
@@ -481,10 +509,10 @@ GlassWindow {
                 Row { anchors { right: parent.right; rightMargin: 20; bottom: parent.bottom; bottomMargin: 18 } spacing: 8
                     Btn { visible: card.kind === "dirty"; text: "Don't Save"; onClicked: { var t = win.sheet.tab; win.sheet = null; Backend.close(t, true) } }
                     Btn { visible: card.kind === "new" && !(win.sheet && win.sheet.dir); text: "In a Language…"; onClicked: win.ask("langs", { mode: "new" }) }
-                    Btn { text: card.kind === "diff" || card.kind === "langs" && win.sheet.mode !== "new" ? "Done" : "Cancel"; onClicked: win.sheet = null }
+                    Btn { text: card.kind === "diff" || card.kind === "branches" || card.kind === "langs" && win.sheet.mode !== "new" ? "Done" : "Cancel"; onClicked: win.sheet = null }
                     Btn { visible: card.kind === "diff" && !win.sheet.staged && !!win.sheet.canStage; text: "Stage"; onClicked: { Backend.stage(win.sheet.rel); win.sheet = null } }
                     Btn { visible: card.kind === "clash"; text: "Take Theirs"; onClicked: { var t = win.sheet.tab; win.sheet = null; Backend.reload(t) } }
-                    Btn { id: sheetOk; visible: card.kind !== "diff" && card.kind !== "langs"; primary: card.kind !== "trash" && card.kind !== "discard"; danger: card.kind === "trash" || card.kind === "discard"
+                    Btn { id: sheetOk; visible: card.kind !== "diff" && card.kind !== "langs" && card.kind !== "branches"; primary: card.kind !== "trash" && card.kind !== "discard"; danger: card.kind === "trash" || card.kind === "discard"
                         text: ({ "open": "Open This Folder", "dirty": "Save", "clash": "Keep Mine", "new": "Make", "rename": "Rename", "trash": "Move to Trash", "run": "Use It", "discard": "Throw Away", "renamesym": "Rename", "debugprog": "Debug", "aiask": "Ask" })[card.kind] || "OK"
                         onClicked: {
                             var s = win.sheet, why = ""
@@ -591,7 +619,9 @@ GlassWindow {
             Column { id: gCol; visible: Backend.isGit && win.gitView === "changes"; y: 38; width: parent.width; spacing: 8
                 Row { spacing: 6; height: 30
                     Glyph { name: "route"; size: 14; anchors.verticalCenter: parent.verticalCenter; ink: Theme.t.accent }
-                    Label { anchors.verticalCenter: parent.verticalCenter; text: Backend.branch || "no branch"; font.weight: Font.DemiBold; width: gCol.width - 120; elide: Text.ElideRight }
+                    Label { anchors.verticalCenter: parent.verticalCenter; text: Backend.branch || "no branch"; font.weight: Font.DemiBold; width: gCol.width - 154; elide: Text.ElideRight
+                        MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: win.ask("branches") } }
+                    Seg { icon: "split"; tip: "Branches"; onClicked: win.ask("branches") }
                     Seg { icon: "down"; tip: "Pull"; onClicked: Backend.sync("pull") }
                     Seg { icon: "up"; tip: "Push"; onClicked: Backend.sync("push") } }
                 TextBox { id: commitBox; objectName: "commitBox"; width: parent.width; lines: 3; placeholder: "What changed? (the commit message)" }
@@ -685,6 +715,33 @@ GlassWindow {
                 function renameHere() { var lc = lineCol(); var w = Backend.wordAt(index, lc[0], lc[1]); if (w) win.ask("renamesym", { tab: index, line: lc[0], col: lc[1], name: w }) }
                 function referencesHere() { var lc = lineCol(); Backend.references(index, lc[0], lc[1]); win.showPanel("search") }
                 property bool loading: false
+                // Huginn AI's suggestion as you type (grey, after the cursor; Tab takes it, Escape or typing drops it)
+                property string ghost: ""
+                property string ghostBuf: ""
+                property int ghostAt: -1
+                property int ghostJob: -1
+                property string ghostText: ""
+                function dropGhost() { if (ghostJob >= 0) AI.stop(ghostJob); ghostJob = -1; ghost = ""; ghostBuf = "" }
+                function askGhost() {
+                    if (!win.aiInline || !v.visible || !edit.activeFocus || edit.selectedText !== "" || win.comp.length || v.extra.length || v.info.readOnly) return
+                    var at = edit.cursorPosition, t = edit.text
+                    if (t.trim() === "" || /\S/.test(t.substring(at, t.indexOf("\n", at) < 0 ? t.length : t.indexOf("\n", at)).replace(/[)\]}"';,]+$/, ""))) return   // (mid-line: only at its end)
+                    dropGhost()
+                    ghostAt = at; ghostText = t
+                    ghostJob = AI.ask("complete-code", t.substring(Math.max(0, at - 4000), at) + "<CURSOR>" + t.substring(at, at + 800), { lang: v.info.lang || "", limit: 160 })
+                }
+                function ghostReady() {
+                    if (edit.cursorPosition !== ghostAt || edit.text !== ghostText) { ghost = ""; return }
+                    var g = AI.clean(ghostBuf).replace(/\s+$/, ""), lineStart = ghostText.lastIndexOf("\n", ghostAt - 1) + 1, typed = ghostText.substring(lineStart, ghostAt)
+                    if (typed.trim() !== "" && g.indexOf(typed.trim()) === 0) g = g.substring(typed.trim().length)       // (it said the line again)
+                    else if (typed !== "" && g.indexOf(typed) === 0) g = g.substring(typed.length)
+                    ghost = g.replace(/^\n+/, typed.trim() === "" ? "" : "\n")
+                }
+                function acceptGhost() { var g = ghost, at = ghostAt; dropGhost(); edit.insert(at, g); edit.cursorPosition = at + g.length }
+                Timer { id: ghostTick; interval: 750; onTriggered: v.askGhost() }
+                Connections { target: win.aiInline ? AI : null
+                    function onChunk(id, piece) { if (id === v.ghostJob) v.ghostBuf += piece }
+                    function onDone(id, why) { if (id !== v.ghostJob) return; v.ghostJob = -1; if (!why) v.ghostReady() } }
                 property var marks: ({})
                 property var probs: []
                 property var starts: [0]
@@ -703,6 +760,7 @@ GlassWindow {
                 function selectRange(a, b) { edit.select(a, b); scroll.follow(edit.positionToRectangle(a)) }
                 function replaceRange(a, b, text) { edit.remove(a, b); edit.insert(a, text) }
                 function lineCol() { var before = edit.getText(0, edit.cursorPosition); var nl = before.lastIndexOf("\n"); return [before.split("\n").length - 1, edit.cursorPosition - nl - 1] }
+                function cursorTo(p) { edit.cursorPosition = p; edit.forceActiveFocus(); scroll.follow(edit.positionToRectangle(p)) }
                 function goTo(line, col) { lineStarts(); var p = posOf(line, col); edit.cursorPosition = p; edit.forceActiveFocus(); scroll.centreOn(edit.positionToRectangle(p)) }
                 function suggest() { var lc = lineCol(); Backend.complete(index, lc[0], lc[1]) }
                 function definition() { var lc = lineCol(); Backend.definition(index, lc[0], lc[1]) }
@@ -870,6 +928,31 @@ GlassWindow {
                 // ---- what the call wants; what can be fixed
                 function fixHere() { var lc = lineCol(); win.fixMenu = null; Backend.quickFixes(index, lc[0], lc[1]) }
                 function askSignature() { var lc = lineCol(); Backend.signatureAt(index, lc[0], lc[1]) }
+                // the bracket by the cursor and the one that closes (or opens) it
+                property var pair: []
+                function findPair() {
+                    var t = edit.text, at = edit.cursorPosition, opens = "([{", shuts = ")]}", k = -1
+                    if (at > 0 && (opens + shuts).indexOf(t[at - 1]) >= 0) k = at - 1
+                    else if (at < t.length && (opens + shuts).indexOf(t[at]) >= 0) k = at
+                    if (k < 0 || edit.selectedText !== "") { if (pair.length) pair = []; return }
+                    var c = t[k], o = opens.indexOf(c), fwd = o >= 0, mine = fwd ? c : opens[shuts.indexOf(c)], other = fwd ? shuts[o] : shuts[opens.indexOf(mine)], depth = 0
+                    for (var j = k + (fwd ? 1 : -1), n = 0; j >= 0 && j < t.length && n < 20000; j += fwd ? 1 : -1, n++) {
+                        if (t[j] === c) depth++
+                        else if (t[j] === (fwd ? other : mine)) { if (depth === 0) { pair = [k, j]; return } depth-- }
+                    }
+                    pair = [k]                                       // (nothing closes it: just the one, in red)
+                }
+                Timer { id: pairTick; interval: 40; onTriggered: { v.findPair(); if (v.visible) win.crumbs = Backend.crumbsAt(v.index, win.curLine - 1) } }
+                // is the cursor inside a call's brackets? (a rough look back, enough to know when the signature tip should go)
+                function inCall() {
+                    var t = edit.text, depth = 0
+                    for (var k = edit.cursorPosition - 1, stop = Math.max(0, k - 3000); k >= stop; k--) {
+                        var c = t[k]
+                        if (c === ")" || c === "]" || c === "}") depth++
+                        else if (c === "(" || c === "[" || c === "{") { if (depth === 0) return c === "("; depth-- }
+                    }
+                    return false
+                }
                 // ---- merge conflicts
                 property var conflicts: []
                 Timer { id: conflictTick; interval: 300; onTriggered: v.conflicts = Backend.conflictsOf(v.index) }
@@ -969,6 +1052,12 @@ GlassWindow {
                                     MouseArea { id: ma; anchors.fill: parent; anchors.margins: -3; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
                                         onClicked: Backend.resolveConflict(v.index, parent.parent.which, parent.modelData[0]) } } } } }
 
+                    // the matching bracket pair
+                    Repeater { model: v.index === Backend.current && edit.activeFocus ? v.pair : []
+                        Rectangle { required property var modelData; readonly property rect r: edit.positionToRectangle(modelData); readonly property rect r2: edit.positionToRectangle(modelData + 1)
+                            x: edit.x + r.x - 1; y: edit.y + r.y; width: Math.max(6, r2.y === r.y ? r2.x - r.x + 2 : widest.advanceWidth + 2); height: r.height; radius: 3
+                            color: v.pair.length === 1 ? Qt.alpha(win.delInk, 0.22) : Qt.alpha(Theme.t.accent, 0.14); border.width: 1
+                            border.color: v.pair.length === 1 ? win.delInk : Qt.alpha(Theme.t.accent, 0.7) } }
                     // the other cursors and what they've selected
                     Repeater { model: v.extra
                         Item { required property var modelData
@@ -1022,6 +1111,11 @@ GlassWindow {
                         readOnly: !!v.info.readOnly; selectByMouse: true; persistentSelection: true; tabStopDistance: 4 * widest.advanceWidth; focus: v.index === Backend.current
                         onActiveFocusChanged: if (activeFocus && win.split && v.index !== Backend.current) { var side = v.side; Backend.select(v.index); win.pane = side }
                         TextMetrics { id: widest; font: edit.font; text: " " }
+                        Row { visible: v.ghost !== "" && edit.cursorPosition === v.ghostAt; x: edit.cursorRectangle.x; y: edit.cursorRectangle.y; spacing: 8
+                            Text { text: v.ghost.split("\n")[0] === "" && v.ghost.indexOf("\n") >= 0 ? "↵" : v.ghost.split("\n")[0]; font: edit.font; color: Theme.t.text_tertiary; textFormat: Text.PlainText }
+                            Rectangle { readonly property int more: v.ghost.split("\n").length - 1; visible: more > 0; anchors.verticalCenter: parent.verticalCenter
+                                width: moreL.width + 12; height: 18; radius: 6; color: Qt.alpha(Theme.t.accent, 0.18)
+                                Label { id: moreL; anchors.centerIn: parent; text: "+" + parent.more + (parent.more === 1 ? " line" : " lines") + " · Tab"; font.pixelSize: 10; color: Theme.t.accent } } }
                         onTextChanged: {
                             if (v.loading || text === v.known) return      // colouring touches the text too: only real typing counts
                             if (v.snip && !v.multiBusy) v.snipShift(length - v.snip.len)
@@ -1032,10 +1126,14 @@ GlassWindow {
                             Backend.edit(v.index, text); v.lineStarts()
                             if (win.finding) win.refind()
                             if (win.comp.length) v.filterOffer()
+                            v.dropGhost(); if (win.aiInline) ghostTick.restart()
                             var c = getText(Math.max(0, cursorPosition - 1), cursorPosition)
                             if (/[A-Za-z_.]/.test(c)) suggestTimer.restart(); else if (!win.comp.length) suggestTimer.stop()
                         }
                         onCursorPositionChanged: { if (v.visible) { var lc = v.lineCol(); win.curLine = lc[0] + 1; win.curCol = lc[1] + 1 } if (win.tip) win.tip = ""
+                            if ((v.ghost !== "" || v.ghostJob >= 0) && cursorPosition !== v.ghostAt) v.dropGhost()
+                            if (win.sig && v.visible && !v.inCall()) win.sig = null
+                            if (v.visible) pairTick.restart()
                             if (v.snip && !v.multiBusy) Qt.callLater(v.checkSnip)    // after the text has caught up (the cursor moves first)
                             if (win.fixMenu) win.fixMenu = null }
                         TapHandler { acceptedModifiers: Qt.AltModifier; onTapped: function (p) { var at = edit.positionAt(p.position.x, p.position.y); if (!v.taken(at, at)) v.extra = v.extra.concat([{ a: at, p: at }]) } }
@@ -1044,6 +1142,10 @@ GlassWindow {
                         TapHandler { acceptedModifiers: Qt.ControlModifier; onTapped: function (p) { edit.cursorPosition = edit.positionAt(p.position.x, p.position.y); v.definition() } }
                         Keys.onPressed: function (e) {
                             var ctrl = (e.modifiers & Qt.ControlModifier), shift = (e.modifiers & Qt.ShiftModifier), t = edit.text, at = edit.cursorPosition
+                            if (v.ghost !== "" && at === v.ghostAt && !win.comp.length) {
+                                if (e.key === Qt.Key_Tab && !ctrl && !shift) { v.acceptGhost(); e.accepted = true; return }
+                                if (e.key === Qt.Key_Escape) { v.dropGhost(); e.accepted = true; return }
+                            }
                             if (win.comp.length) {
                                 if (e.key === Qt.Key_Down) { win.compAt = (win.compAt + 1) % win.comp.length; e.accepted = true; return }
                                 if (e.key === Qt.Key_Up) { win.compAt = (win.compAt - 1 + win.comp.length) % win.comp.length; e.accepted = true; return }
@@ -1301,7 +1403,7 @@ GlassWindow {
     // ================================================================ the status line
     Item { id: statusBar; objectName: "statusBar"; x: slab.x; width: slab.width; y: parent.height - 38; height: 28
         Row { x: 6; spacing: 14; anchors.verticalCenter: parent.verticalCenter
-            Pressable { visible: Backend.isGit; width: brRow.width + 12; height: 24; radius: 12; color: hovered ? Theme.t.hover : "transparent"; onClicked: win.showPanel("git")
+            Pressable { visible: Backend.isGit; width: brRow.width + 12; height: 24; radius: 12; color: hovered ? Theme.t.hover : "transparent"; onClicked: win.ask("branches")
                 Row { id: brRow; x: 6; spacing: 5; anchors.verticalCenter: parent.verticalCenter
                     Glyph { name: "route"; size: 12; anchors.verticalCenter: parent.verticalCenter }
                     Label { text: Backend.branch + (Backend.changes.length ? " · " + Backend.changes.length + " changed" : ""); font.pixelSize: 11 } } }
@@ -1309,6 +1411,11 @@ GlassWindow {
                 Row { id: prRow; x: 6; spacing: 5; anchors.verticalCenter: parent.verticalCenter
                     Rectangle { width: 7; height: 7; radius: 4; anchors.verticalCenter: parent.verticalCenter; color: Backend.problems.length ? win.delInk : win.addInk }
                     Label { text: Backend.problems.length ? Backend.problems.length + (Backend.problems.length === 1 ? " problem" : " problems") : "No problems"; font.pixelSize: 11 } } }
+            Row { objectName: "crumbs"; visible: !!win.tab && win.crumbs.length > 0; spacing: 2; anchors.verticalCenter: parent.verticalCenter
+                Repeater { model: win.crumbs
+                    Pressable { required property var modelData; required property int index; width: crL.width + 12; height: 22; radius: 11; color: hovered ? Theme.t.hover : "transparent"
+                        onClicked: { var v = win.view(); if (v) v.goTo(modelData.line, 0) }
+                        Label { id: crL; anchors.centerIn: parent; text: (index ? "› " : "") + modelData.name; font.pixelSize: 11; font.family: win.mono; secondary: index < win.crumbs.length - 1 } } } }
             Label { visible: Backend.busy !== ""; anchors.verticalCenter: parent.verticalCenter; text: Backend.busy + "…"; font.pixelSize: 11; secondary: true } }
         Row { visible: !!win.tab; anchors { right: parent.right; rightMargin: 6; verticalCenter: parent.verticalCenter } spacing: 16
             Label { text: "Ln " + win.curLine + ", Col " + win.curCol; font.pixelSize: 11; secondary: true }

@@ -1574,6 +1574,15 @@ Huginn AI in four more apps, each with its own switch in Settings › AI › Whe
   or a language the packs don't have. Without either, the empty screen says Huginn AI can do it.
 - The panel can now hold a question box (`AiPanel.question()`), for asking about something more than once.
 
+## Pro apps, round five (2026-11-19)
+
+### Code
+- **Branches**: click the branch in the status bar (or Git › Branches…, or "Git: Switch Branch…" in the palette) to see every branch with when it last changed, switch with a click, start a new one from where you are, or delete one (Git keeps a branch that isn't merged yet and says so). Unsaved files are saved before switching and every open file reloads; a merge or rebase under way, or changes that would be lost, are explained in plain words.
+- **Suggest as I type** (Huginn AI, off until you turn it on in the palette or Settings › AI): pause and a suggestion shows in grey after the cursor; Tab takes it, Escape or typing on drops it. A suggestion of several lines says how many. Only the part of the file around the cursor is sent, with a short limit on the answer.
+- **Matching brackets**: the bracket by the cursor and its partner are outlined (in red when nothing closes it); Ctrl+Shift+\\ jumps between them.
+- **Breadcrumbs** in the status bar: where the cursor is (Shop › add); click one to go to it.
+- The signature tip no longer stays up after the call's closing bracket, and messages now show over sheets in every app.
+
 ## Huginn, the browser
 
 Inside the Huginn repository (this kit is its `os/` folder) the image ships the repository's own browser. A kit used

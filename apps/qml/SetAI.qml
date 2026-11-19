@@ -142,7 +142,10 @@ Column {
                            ["feeds", "Feeds", "list", "Summarise a story."],
                            ["translate", "Translate", "translate", "Translate into any language, also ones with no pack on this computer."]]
             SetRow { required property var modelData; title: modelData[1]; glyph: modelData[2]; sub: modelData[3]
-                Toggle { on: !pg.st.where || pg.st.where[modelData[0]] !== false; onToggled: function (v) { AI.setWhere(modelData[0], v) } } } } }
+                Toggle { on: !pg.st.where || pg.st.where[modelData[0]] !== false; onToggled: function (v) { AI.setWhere(modelData[0], v) } } } }
+        SetRow { title: "Suggest code as you type"; glyph: "code"
+            sub: "In Code, when you pause: grey text after the cursor, Tab takes it." + (pg.st.provider === "local" ? "" : " Each pause sends the file you're in to the service.")
+            Toggle { on: !!pg.st.inline; onToggled: function (v) { AI.setInline(v) } } } }
 
     // ------------------------------------------------------------------ try it
     SetCard { visible: pg.have && !!pg.st.enabled && pg.st.provider !== ""; title: "Try it"

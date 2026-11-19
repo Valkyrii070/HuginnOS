@@ -30,5 +30,7 @@ The sparkle beside Forward: summarise the message, or draft a reply (saying yes,
 ## In Code
 In the command palette (Ctrl+Shift+P): AI: Explain This Code, Fix This Code (it's told about the problems Code found), Change This Code… and Write Code…. They work on what's selected, or the whole file. The code is shown first; Replace or Insert puts it in, and Undo takes it back.
 
+AI: Suggest as I Type (or Settings › AI › Suggest code as you type) shows a suggestion in grey when you pause: Tab takes it, Escape or carrying on typing drops it. It's off until you turn it on; with a service, each pause sends the file you're in.
+
 ## Turning it off here and there
 Settings › AI › Where it shows turns it off for Search, Writer, Mail or Code on their own. Turning Huginn AI off hides it everywhere.
