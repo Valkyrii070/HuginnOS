@@ -212,6 +212,112 @@ def item_xml(item: dict, sid: int, layout: str, look: dict, rel_for, placeholder
             f"<p:spPr>{xfrm_xml(item)}{sppr}</p:spPr>{text}</p:sp>")
 
 
+CHART_NS = "http://schemas.openxmlformats.org/drawingml/2006/chart"
+
+
+def table_xml(item: dict, sid: int, look: dict) -> str:
+    """A table as PowerPoint's own: a graphic frame with a:tbl, the heading row and stripes as its style options."""
+    cells = item.get("cells") or [[""]]
+    cols = max(len(r) for r in cells)
+    cw, rh = emu(item["w"] / cols), emu(item["h"] / len(cells))
+    accent = item.get("accent") or "accent1"
+    size = int(round(float(item.get("size") or 18) * 100))
+    band = sm.colour(accent, look)
+    from PySide6.QtGui import QColor
+    ground = QColor((look.get("bg") or {}).get("color") or (look.get("bg") or {}).get("from") or "#FFFFFF")
+    dark = ground.lightnessF() < 0.5
+    plain = ground.lighter(115).name() if dark else "#FFFFFF"           # as Slides draws it (huginn_slides_model.paint_table)
+    rows = []
+    for r, row in enumerate(cells):
+        tcs = []
+        for c in range(cols):
+            t = row[c] if c < len(row) else ""
+            head = item.get("header", True) and r == 0
+            striped = item.get("banded", True) and r % 2 == (1 if item.get("header", True) else 0)
+            fill = (f'<a:solidFill><a:schemeClr val="{accent}"/></a:solidFill>' if accent.startswith("accent") else f'<a:solidFill><a:srgbClr val="{hexval(band)}"/></a:solidFill>') if head \
+                else f'<a:solidFill><a:srgbClr val="{hexval(_mix(plain, band, 0.14 if dark else 0.10) if striped else plain)}"/></a:solidFill>'
+            ink = "FFFFFF" if head else hexval(look.get("text", "#2B3138"))
+            algn = ' algn="r"' if sm._is_number(t) and not head else ""
+            run = f'<a:r><a:rPr lang="en-US" sz="{size}"{" b=\"1\"" if head else ""}><a:solidFill><a:srgbClr val="{ink}"/></a:solidFill></a:rPr><a:t>{escape(t)}</a:t></a:r>' if t else ""
+            line = '<a:lnL w="9525"><a:solidFill><a:srgbClr val="BFBFBF"/></a:solidFill></a:lnL><a:lnR w="9525"><a:solidFill><a:srgbClr val="BFBFBF"/></a:solidFill></a:lnR>' \
+                   '<a:lnT w="9525"><a:solidFill><a:srgbClr val="BFBFBF"/></a:solidFill></a:lnT><a:lnB w="9525"><a:solidFill><a:srgbClr val="BFBFBF"/></a:solidFill></a:lnB>'
+            tcs.append(f'<a:tc><a:txBody><a:bodyPr/><a:lstStyle/><a:p><a:pPr{algn}/>{run}<a:endParaRPr lang="en-US" sz="{size}"/></a:p></a:txBody>'
+                       f'<a:tcPr anchor="ctr">{line}{fill}</a:tcPr></a:tc>')
+        rows.append(f'<a:tr h="{rh}">{"".join(tcs)}</a:tr>')
+    grid = "".join(f'<a:gridCol w="{cw}"/>' for _ in range(cols))
+    first = ' firstRow="1"' if item.get("header", True) else ""
+    banded = ' bandRow="1"' if item.get("banded", True) else ""
+    return (f'<p:graphicFrame><p:nvGraphicFramePr><p:cNvPr id="{sid}" name="Table {sid}"/><p:cNvGraphicFramePr><a:graphicFrameLocks noGrp="1"/></p:cNvGraphicFramePr>'
+            f'<p:nvPr/></p:nvGraphicFramePr>{xfrm_xml(item, "p:xfrm")}<a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/table">'
+            f'<a:tbl><a:tblPr{first}{banded}/><a:tblGrid>{grid}</a:tblGrid>{"".join(rows)}</a:tbl></a:graphicData></a:graphic></p:graphicFrame>')
+
+
+def _mix(a: str, b: str, t: float) -> str:
+    ca, cb = [int(a[i:i + 2], 16) for i in (1, 3, 5)], [int(b[i:i + 2], 16) for i in (1, 3, 5)]
+    return "#" + "".join(f"{round(x + (y - x) * t):02X}" for x, y in zip(ca, cb))
+
+
+def chart_frame_xml(item: dict, sid: int, rid: str) -> str:
+    return (f'<p:graphicFrame><p:nvGraphicFramePr><p:cNvPr id="{sid}" name="Chart {sid}"/><p:cNvGraphicFramePr/><p:nvPr/></p:nvGraphicFramePr>'
+            f'{xfrm_xml(item, "p:xfrm")}<a:graphic><a:graphicData uri="{CHART_NS}"><c:chart xmlns:c="{CHART_NS}" r:id="{rid}"/></a:graphicData></a:graphic></p:graphicFrame>')
+
+
+def chart_part_xml(item: dict, look: dict) -> str:
+    """A chart's own part, its numbers written in (literal data: PowerPoint shows it; there's no workbook behind it)."""
+    kind = item.get("chart", "column")
+    cats = item.get("cats") or []
+    series = item.get("series") or []
+    if kind == "pie":
+        series = series[:1]
+    accents = look.get("accents") or ["#1C7ED6"]
+    sers = []
+    for j, s_ in enumerate(series):
+        vals = list(s_.get("values", []))[:len(cats)] + [0] * max(0, len(cats) - len(s_.get("values", [])))
+        cat = "".join(f'<c:pt idx="{k}"><c:v>{escape(str(c))}</c:v></c:pt>' for k, c in enumerate(cats))
+        num = "".join(f'<c:pt idx="{k}"><c:v>{float(v)!r}</c:v></c:pt>' for k, v in enumerate(vals))
+        if kind == "pie":
+            look_xml = "".join(f'<c:dPt><c:idx val="{k}"/><c:bubble3D val="0"/><c:spPr><a:solidFill><a:srgbClr val="{hexval(accents[k % len(accents)])}"/></a:solidFill></c:spPr></c:dPt>'
+                               for k in range(len(cats)))
+        elif kind == "line":
+            look_xml = (f'<c:spPr><a:ln w="38100" cap="rnd"><a:solidFill><a:srgbClr val="{hexval(accents[j % len(accents)])}"/></a:solidFill></a:ln></c:spPr>'
+                        '<c:marker><c:symbol val="circle"/><c:size val="6"/></c:marker>')
+        else:
+            look_xml = f'<c:spPr><a:solidFill><a:srgbClr val="{hexval(accents[j % len(accents)])}"/></a:solidFill></c:spPr><c:invertIfNegative val="0"/>'
+        sers.append(f'<c:ser><c:idx val="{j}"/><c:order val="{j}"/><c:tx><c:v>{escape(str(s_.get("name", "")))}</c:v></c:tx>'
+                    + (look_xml if kind != "pie" else "") + (look_xml if kind == "pie" else "")
+                    + f'<c:cat><c:strLit><c:ptCount val="{len(cats)}"/>{cat}</c:strLit></c:cat>'
+                    f'<c:val><c:numLit><c:formatCode>General</c:formatCode><c:ptCount val="{len(cats)}"/>{num}</c:numLit></c:val>'
+                    + ('<c:smooth val="0"/>' if kind == "line" else "") + "</c:ser>")
+    axes = ('<c:axId val="111"/><c:axId val="222"/>' if kind != "pie" else "")
+    if kind in ("column", "bar"):
+        plot = f'<c:barChart><c:barDir val="{"bar" if kind == "bar" else "col"}"/><c:grouping val="clustered"/><c:varyColors val="0"/>{"".join(sers)}<c:gapWidth val="80"/>{axes}</c:barChart>'
+    elif kind == "line":
+        plot = f'<c:lineChart><c:grouping val="standard"/><c:varyColors val="0"/>{"".join(sers)}<c:marker val="1"/>{axes}</c:lineChart>'
+    else:
+        plot = f'<c:pieChart><c:varyColors val="1"/>{"".join(sers)}<c:firstSliceAng val="0"/></c:pieChart>'
+    ink = hexval(look.get("text", "#2B3138"))
+    txt = f'<c:txPr><a:bodyPr/><a:lstStyle/><a:p><a:pPr><a:defRPr sz="1400"><a:solidFill><a:srgbClr val="{ink}"/></a:solidFill></a:defRPr></a:pPr><a:endParaRPr lang="en-US"/></a:p></c:txPr>'
+    if kind != "pie":
+        cat_pos, val_pos = ("l", "b") if kind == "bar" else ("b", "l")
+        plot += (f'<c:catAx><c:axId val="111"/><c:scaling><c:orientation val="{"maxMin" if kind == "bar" else "minMax"}"/></c:scaling><c:delete val="0"/><c:axPos val="{cat_pos}"/>'
+                 f'<c:numFmt formatCode="General" sourceLinked="0"/><c:majorTickMark val="none"/><c:minorTickMark val="none"/><c:tickLblPos val="nextTo"/>{txt}'
+                 '<c:crossAx val="222"/><c:crosses val="autoZero"/><c:auto val="1"/><c:lblAlgn val="ctr"/><c:lblOffset val="100"/></c:catAx>'
+                 f'<c:valAx><c:axId val="222"/><c:scaling><c:orientation val="minMax"/></c:scaling><c:delete val="0"/><c:axPos val="{val_pos}"/>'
+                 '<c:majorGridlines><c:spPr><a:ln w="9525"><a:solidFill><a:srgbClr val="BFBFBF"><a:alpha val="50000"/></a:srgbClr></a:solidFill></a:ln></c:spPr></c:majorGridlines>'
+                 f'<c:numFmt formatCode="General" sourceLinked="0"/><c:majorTickMark val="none"/><c:minorTickMark val="none"/><c:tickLblPos val="nextTo"/>{txt}'
+                 '<c:crossAx val="111"/><c:crosses val="autoZero"/><c:crossBetween val="between"/></c:valAx>')
+    title = ""
+    if item.get("title"):
+        title = (f'<c:title><c:tx><c:rich><a:bodyPr/><a:lstStyle/><a:p><a:pPr><a:defRPr sz="1800" b="1"/></a:pPr><a:r><a:rPr lang="en-US" sz="1800" b="1">'
+                 f'<a:solidFill><a:srgbClr val="{hexval(look.get("title", "#101317"))}"/></a:solidFill></a:rPr><a:t>{escape(item["title"])}</a:t></a:r></a:p></c:rich></c:tx>'
+                 '<c:overlay val="0"/></c:title><c:autoTitleDeleted val="0"/>')
+    else:
+        title = '<c:autoTitleDeleted val="1"/>'
+    legend = f'<c:legend><c:legendPos val="b"/><c:overlay val="0"/>{txt}</c:legend>' if item.get("legend", True) else ""
+    return (f'{HEAD}<c:chartSpace xmlns:c="{CHART_NS}" xmlns:a="{A}" xmlns:r="{R}"><c:roundedCorners val="0"/><c:chart>{title}<c:plotArea><c:layout/>{plot}</c:plotArea>'
+            f'{legend}<c:plotVisOnly val="1"/><c:dispBlanksAs val="gap"/></c:chart><c:spPr><a:noFill/><a:ln><a:noFill/></a:ln></c:spPr></c:chartSpace>')
+
+
 TREE = ('<p:spTree><p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr><a:xfrm><a:off x="0" y="0"/>'
         '<a:ext cx="0" cy="0"/><a:chOff x="0" y="0"/><a:chExt cx="0" cy="0"/></a:xfrm></p:grpSpPr>')
 
@@ -224,7 +330,7 @@ def timing_xml(slide: dict, ids: dict) -> str:
         if not anim.get("kind") or item["id"] not in ids:
             continue
         paras = [n for n, p in enumerate(item.get("paras", [])) if any(r.get("t") for r in p.get("runs", []))]
-        targets = paras if anim.get("byPara") and paras and item["kind"] != "picture" else [None]
+        targets = paras if anim.get("byPara") and paras and item["kind"] in ("text", "shape") else [None]
         builds.append((float(anim.get("order") or 0), item, anim, targets))
     if not builds:
         return ""
@@ -266,10 +372,10 @@ def timing_xml(slide: dict, ids: dict) -> str:
             clicks.append(f'<p:par><p:cTn id="{outer}" fill="hold"><p:stCondLst><p:cond delay="indefinite"/></p:stCondLst><p:childTnLst>'
                           f'<p:par><p:cTn id="{inner}" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst>'
                           f'<p:par><p:cTn id="{eff}" presetID="{PRESET_IDS[kind]}" presetClass="entr" presetSubtype="{sub}" fill="hold"'
-                          f'{" grpId=" + chr(34) + "0" + chr(34) if item["kind"] != "picture" else ""} nodeType="clickEffect">'
+                          f'{" grpId=" + chr(34) + "0" + chr(34) if item["kind"] in ("text", "shape") else ""} nodeType="clickEffect">'
                           f'<p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst>{effects}</p:childTnLst></p:cTn></p:par>'
                           "</p:childTnLst></p:cTn></p:par></p:childTnLst></p:cTn></p:par>")
-        if item["kind"] != "picture":
+        if item["kind"] in ("text", "shape"):
             bld.append(f'<p:bldP spid="{spid}" grpId="0"' + (' build="p"' if targets != [None] else (' animBg="1"' if item["kind"] == "shape" else "")) + "/>")
     return ('<p:timing><p:tnLst><p:par><p:cTn id="1" dur="indefinite" restart="never" nodeType="tmRoot"><p:childTnLst>'
             '<p:seq concurrent="1" nextAc="seek"><p:cTn id="2" dur="indefinite" nodeType="mainSeq"><p:childTnLst>'
@@ -408,6 +514,7 @@ def write(deck: dict, path) -> None:
 
     # -- the slides
     slide_ids, pres_rels, notes_any = [], [], False
+    charts_n = [0]
     for n, slide in enumerate(deck["slides"], 1):
         lay = slide.get("layout", "content") if slide.get("layout") in sm.LAYOUTS else "content"
         frame = slide.get("frame") if slide.get("frame") in frames else ""
@@ -418,7 +525,17 @@ def write(deck: dict, path) -> None:
             role_ok = item.get("role") and item["role"] in [r[0] for r in sm.placeholders(lay)] and item["role"] not in roles
             roles.add(item.get("role"))
             ids[item["id"]] = sid
-            shapes += item_xml(item if role_ok else dict(item, role=""), sid, lay, look, lambda src: media_for(src, rels))
+            if item["kind"] == "table":
+                shapes += table_xml(item, sid, look)
+            elif item["kind"] == "chart":
+                charts_n[0] += 1
+                files[f"ppt/charts/chart{charts_n[0]}.xml"] = chart_part_xml(item, look)
+                ct.append(f'<Override PartName="/ppt/charts/chart{charts_n[0]}.xml" ContentType="application/vnd.openxmlformats-officedocument.drawingml.chart+xml"/>')
+                rid = f"rId{len(rels) + 1}"
+                rels.append(f'<Relationship Id="{rid}" Type="{R}/chart" Target="../charts/chart{charts_n[0]}.xml"/>')
+                shapes += chart_frame_xml(item, sid, rid)
+            else:
+                shapes += item_xml(item if role_ok else dict(item, role=""), sid, lay, look, lambda src: media_for(src, rels))
             sid += 1
         bg = bg_xml(slide["bg"], lambda src: media_for(src, rels)) if slide.get("bg") else ""
         trans = slide.get("transition") or {}
@@ -944,10 +1061,18 @@ def read(path) -> tuple:
                 base["_spid"] = cnv.get("id")
             if tag == "graphicFrame":
                 tbl = sp.find(f".//{a_('tbl')}")
+                chart = sp.find(f".//{{{CHART_NS}}}chart")
                 if tbl is not None:
-                    out += table_items(tbl, base, theme, layout_key)
+                    simple = simple_table(tbl, base, theme)
+                    out += [simple] if simple else table_items(tbl, base, theme, layout_key)
+                elif chart is not None:
+                    got = chart_item(part, chart.get(f"{{{R}}}id", ""), base)
+                    if got:
+                        out.append(got)
+                    else:
+                        rd.drop("charts Slides can't draw (kept out)")
                 else:
-                    rd.drop("charts and diagrams")
+                    rd.drop("diagrams (SmartArt)")
                 continue
             if tag == "pic":
                 blip = sp.find(f"{p_('blipFill')}/{a_('blip')}")
@@ -1026,6 +1151,87 @@ def read(path) -> tuple:
             item["fit"] = 1.0
             out.append(item)
         return out
+
+    def simple_table(tbl, base: dict, theme: Theme):
+        """A table without merged cells as one of Slides' own (its words, heading row, stripes and colour); None for
+        one with merged cells, which comes in as separate cells to keep its look."""
+        rows = tbl.findall(a_("tr"))
+        if not rows or len(rows) > 30:
+            return None
+        cells, size = [], 0.0
+        for tr in rows:
+            row = []
+            for tc in tr.findall(a_("tc")):
+                if any(tc.get(k) not in (None, "0", "1" if k in ("gridSpan", "rowSpan") else "") for k in ("gridSpan", "rowSpan", "hMerge", "vMerge")):
+                    return None
+                row.append("\n".join("".join(t.text or "" for t in para.iter(a_("t"))) for para in tc.iter(a_("p"))).strip())
+                for rpr in tc.iter(a_("rPr")):
+                    if rpr.get("sz") and not size:
+                        size = _int(rpr.get("sz")) / 100
+            cells.append(row[:12])
+        pr = tbl.find(a_("tblPr"))
+        header = pr is not None and pr.get("firstRow") in ("1", "true")
+        banded = pr is not None and pr.get("bandRow") in ("1", "true")
+        accent = "accent1"
+        first = rows[0].find(f"{a_('tc')}/{a_('tcPr')}")
+        if header and first is not None:
+            fill = theme.fill(first, True)
+            if fill:
+                accent = fill
+        item = dict(base, kind="table", cells=cells, header=header, banded=banded, accent=accent, size=round(size or 18, 1))
+        item.pop("paras", None)
+        return item
+
+    def chart_item(part: str, rid: str, base: dict):
+        """A chart from its own part (the numbers it keeps with it): columns, bars, lines and pies."""
+        target = rd.rels(part).get(rid, ("", ""))[0]
+        root = rd.part(target) if target else None
+        if root is None:
+            return None
+        c = lambda tag: f"{{{CHART_NS}}}{tag}"      # noqa: E731
+        plot = root.find(f"{c('chart')}/{c('plotArea')}")
+        if plot is None:
+            return None
+        kind, node = "", None
+        for tag, name in (("barChart", ""), ("bar3DChart", ""), ("lineChart", "line"), ("line3DChart", "line"), ("pieChart", "pie"),
+                          ("pie3DChart", "pie"), ("doughnutChart", "pie"), ("areaChart", "line")):
+            node = plot.find(c(tag))
+            if node is not None:
+                kind = name or ("bar" if (node.find(c("barDir")) is not None and node.find(c("barDir")).get("val") == "bar") else "column")
+                break
+        if node is None:
+            return None
+
+        def points(holder):
+            if holder is None:
+                return []
+            pts = {}
+            for pt in holder.iter(c("pt")):
+                v = pt.find(c("v"))
+                pts[_int(pt.get("idx"))] = v.text if v is not None and v.text is not None else ""
+            return [pts[k] for k in sorted(pts)]
+        cats, series = [], []
+        for ser in node.findall(c("ser")):
+            tx = ser.find(c("tx"))
+            name = (" ".join(points(tx)) if tx.find(f".//{c('pt')}") is not None else "".join(v.text or "" for v in tx.iter(c("v")))) if tx is not None else ""
+            vals = []
+            for v in points(ser.find(c("val"))):
+                try:
+                    vals.append(float(v))
+                except ValueError:
+                    vals.append(0.0)
+            if not cats:
+                cats = points(ser.find(c("cat")))
+            series.append({"name": name or f"Series {len(series) + 1}", "values": vals})
+        if not series:
+            return None
+        if not cats:
+            cats = [str(k + 1) for k in range(max(len(s_["values"]) for s_ in series))]
+        title_el = root.find(f"{c('chart')}/{c('title')}")
+        title = "".join(t.text or "" for t in title_el.iter(a_("t"))) if title_el is not None else ""
+        item = dict(base, kind="chart", chart=kind, cats=cats[:60], series=series[:12], title=title, legend=root.find(f"{c('chart')}/{c('legend')}") is not None)
+        item.pop("paras", None)
+        return item
 
     def table_items(tbl, base: dict, theme: Theme, layout_key: str) -> list:
         """A table as its cells: a rectangle with text for each, where it is."""

@@ -67,7 +67,8 @@ Item {
                 PathSvg { path: bit.pv ? Backend.shapePath(bit.it.shape || "rect", bit.iw, bit.ih, !!bit.it.flipH, !!bit.it.flipV) : (bit.it.path || "") } }
             ShapePath { fillColor: bit.it.shape === "arrowline" ? (bit.it.lineHex || bit.it.fillHex || "#000000") : "transparent"; strokeColor: "transparent"
                 PathSvg { path: bit.it.shape === "arrowline" && !bit.pv ? (bit.it.head || "") : "" } } }
-        Image { anchors.fill: parent; visible: bit.it.kind === "picture"; source: bit.it.kind === "picture" ? (bit.it.url || "") : ""
+        Image { anchors.fill: parent; visible: bit.it.kind === "picture" || bit.it.kind === "table" || bit.it.kind === "chart"
+            source: bit.it.kind === "picture" || bit.it.kind === "table" || bit.it.kind === "chart" ? (bit.it.url || "") : ""
             fillMode: Image.Stretch; asynchronous: true; smooth: true; mipmap: true }
         // the text: the item's own, a hint in an empty placeholder, or (presenting) as far as its paragraphs have been built
         Item { id: words; anchors.fill: parent; visible: face.hideText !== bit.it.id && bit.it.html !== undefined

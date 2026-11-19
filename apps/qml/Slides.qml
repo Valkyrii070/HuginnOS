@@ -41,6 +41,7 @@ GlassWindow {
     property bool timing: false
     property string typed: ""               // a slide number typed while presenting
     property real notesSize: 18
+    property var gridEdit: null             // a table's cells or a chart's data being edited: {id, kind, grid}
 
     function say(t) { notice = t; hide.restart() }
     function item(id) { var a = cur.items; for (var i = 0; i < a.length; i++) if (a[i].id === id) return a[i]; return null }
@@ -75,6 +76,18 @@ GlassWindow {
     function insertPicture() { if (Backend.current === "") return
         Picker.open("Put in a picture", [["Pictures", "*.png *.jpg *.jpeg *.webp *.gif *.bmp"]], function (paths) { if (paths.length) { var id = Backend.addItem("picture", paths[0]); if (id) win.sel = [id] } }) }
     function insertShape() { openPop("insertShape", fmtBar.visible ? addBtn2 : shapeBtn) }
+    function insertTable() { if (Backend.current !== "") openPop("insertTable", fmtBar.visible ? addBtn2 : tableBtn) }
+    function insertChart() { if (Backend.current !== "") openPop("insertChart", fmtBar.visible ? addBtn2 : chartBtn) }
+    function editGrid(id) { var it = item(id); if (!it || (it.kind !== "table" && it.kind !== "chart")) return; endEdit(); sel = [id]
+        gridEdit = { id: id, kind: it.kind, grid: Backend.gridOf(id) } }
+    function gridSet(r, c, text) { var g = gridEdit.grid; if (!g[r] || g[r][c] === text) return; g[r][c] = text; gridTick.restart() }
+    function gridShape(op) { var g = gridEdit.grid.map(function (row) { return row.slice() }), cols = g[0] ? g[0].length : 1
+        if (op === "row+") { var nr = []; for (var i = 0; i < cols; i++) nr.push(""); g.push(nr) }
+        else if (op === "row-" && g.length > 2) g.pop()
+        else if (op === "col+" && cols < 12) g.forEach(function (row) { row.push("") })
+        else if (op === "col-" && cols > 2) g.forEach(function (row) { row.pop() })
+        Backend.setGrid(gridEdit.id, g); gridEdit = { id: gridEdit.id, kind: gridEdit.kind, grid: Backend.gridOf(gridEdit.id) } }
+    Timer { id: gridTick; interval: 300; onTriggered: if (win.gridEdit) Backend.setGrid(win.gridEdit.id, win.gridEdit.grid) }
     function openLayouts() { openPop("layout", layoutBtn) }
     function openBackground() { openPop("bg", bgBtn) }
     function openTransition() { openPop("transition", trBtn) }
@@ -83,12 +96,14 @@ GlassWindow {
     function present() { start(0, false) }
     function presentHere() { start(Backend.index, false) }
     function presenterView() { start(Backend.index, true) }
-    function menuUndo() { if (editId) editor.undo(); else Backend.undo() }
-    function menuRedo() { if (editId) editor.redo(); else Backend.redo() }
-    function menuCut() { if (editId) editor.cut(); else if (sel.length) { Backend.copyItems(sel); Backend.removeItems(sel); sel = [] } }
-    function menuCopy() { if (editId) editor.copy(); else if (sel.length) Backend.copyItems(sel) }
-    function menuPaste() { if (editId) editor.paste(); else { var got = Backend.pasteItems(); if (got.length) sel = got } }
-    function menuSelectAll() { if (editId) editor.selectAll(); else sel = cur.items.filter(function (it) { return !it.locked }).map(function (it) { return it.id }) }
+    // the menus' Edit items go to a box being typed in (a table's cell, the notes, find) when there is one
+    function typing() { var f = win.activeFocusItem; return f && f !== editor && typeof f.selectAll === "function" && typeof f.paste === "function" ? f : null }
+    function menuUndo() { var t = typing(); if (t) t.undo(); else if (editId) editor.undo(); else Backend.undo() }
+    function menuRedo() { var t = typing(); if (t) t.redo(); else if (editId) editor.redo(); else Backend.redo() }
+    function menuCut() { var t = typing(); if (t) t.cut(); else if (editId) editor.cut(); else if (sel.length) { Backend.copyItems(sel); Backend.removeItems(sel); sel = [] } }
+    function menuCopy() { var t = typing(); if (t) t.copy(); else if (editId) editor.copy(); else if (sel.length) Backend.copyItems(sel) }
+    function menuPaste() { var t = typing(); if (t) t.paste(); else if (editId) editor.paste(); else { var got = Backend.pasteItems(); if (got.length) sel = got } }
+    function menuSelectAll() { var t = typing(); if (t) t.selectAll(); else if (editId) editor.selectAll(); else sel = cur.items.filter(function (it) { return !it.locked }).map(function (it) { return it.id }) }
     function duplicateItems() { if (sel.length) { var got = Backend.duplicateItems(sel); if (got.length) sel = got } else duplicateSlide() }
     function deleteItems() { if (sel.length && !editId) { Backend.removeItems(sel); sel = [] } }
     function arrange(how) { if (sel.length) Backend.order(sel, how) }
@@ -209,6 +224,12 @@ GlassWindow {
             Tool { icon: "type"; tip: "Text box"; onClicked: win.insertText() }
             Tool { id: shapeBtn; icon: "shapes"; tip: "Shape"; on: win.pop === "insertShape"; onClicked: win.openPop("insertShape", shapeBtn) }
             Tool { icon: "image"; tip: "Picture"; onClicked: win.insertPicture() }
+            Tool { id: tableBtn; tip: "Table"; on: win.pop === "insertTable"; onClicked: win.openPop("insertTable", tableBtn)
+                Grid { anchors.centerIn: parent; columns: 3; spacing: 1.5
+                    Repeater { model: 9; Rectangle { required property int index; width: 4.5; height: 3.5; radius: 0.8; color: index < 3 ? Theme.t.accent : Theme.t.icon } } } }
+            Tool { id: chartBtn; tip: "Chart"; on: win.pop === "insertChart"; onClicked: win.openPop("insertChart", chartBtn)
+                Row { anchors.centerIn: parent; anchors.verticalCenterOffset: 1; spacing: 2
+                    Repeater { model: [7, 12, 9, 15]; Rectangle { required property int modelData; width: 3; height: modelData; radius: 1; color: Theme.t.icon; anchors.bottom: parent.bottom } } } }
             Gap {}
             Tool { id: bgBtn; icon: "bucket"; tip: "Background"; on: win.pop === "bg"; onClicked: win.openPop("bg", bgBtn) }
             Tool { id: trBtn; icon: "layers"; tip: "Transition"; on: win.pop === "transition" || (win.cur.transition && win.cur.transition.kind !== "none"); onClicked: win.openPop("transition", trBtn) }
@@ -281,6 +302,10 @@ GlassWindow {
                 Rectangle { x: 8; y: 22; width: 14; height: 3; radius: 1.5; color: fmtBar.list.length && fmtBar.list[0].lineHex ? fmtBar.list[0].lineHex : "transparent"; border.width: 1; border.color: Theme.t.islandLine } }
             Pick { id: kindBtn; visible: fmtBar.shapey && fmtBar.list.length === 1 && !fmtBar.liney; span: 46; text: "◆"; onClicked: win.openPop("shape", kindBtn) }
             Tool { visible: fmtBar.picture; icon: "image"; tip: "Replace the picture"; onClicked: win.replacePicture() }
+            Seg { visible: fmtBar.list.length === 1 && (fmtBar.list[0].kind === "table" || fmtBar.list[0].kind === "chart"); text: fmtBar.list.length && fmtBar.list[0].kind === "chart" ? "Edit the Data" : "Edit the Cells"
+                onClicked: win.editGrid(fmtBar.list[0].id) }
+            Pick { id: chartKindBtn; visible: fmtBar.list.length === 1 && fmtBar.list[0].kind === "chart"; span: 96
+                text: fmtBar.list.length ? ({ column: "Columns", bar: "Bars", line: "Lines", pie: "Pie" })[fmtBar.list[0].chart] || "Columns" : ""; onClicked: win.openPop("chartKind", chartKindBtn) }
             Gap {}
             Tool { id: arrangeBtn; icon: "layers"; tip: "Arrange and align"; onClicked: win.openPop("arrange", arrangeBtn) }
             Tool { id: buildBtn; icon: "sparkle"; tip: "Build: how it comes in while presenting"; on: fmtBar.list.length > 0 && !!fmtBar.list[0].anim; onClicked: win.openPop("build", buildBtn) }
@@ -403,7 +428,8 @@ GlassWindow {
                             win.startEdit(it.id, m.x, m.y)
                     }
                     onDoubleClicked: function (m) { var it = win.hitAt(m.x, m.y); if (!it) return
-                        if (win.hasText(it)) win.startEdit(it.id, m.x, m.y); else if (it.kind === "picture") { win.sel = [it.id]; win.replacePicture() } } }
+                        if (win.hasText(it)) win.startEdit(it.id, m.x, m.y); else if (it.kind === "picture") { win.sel = [it.id]; win.replacePicture() }
+                        else if (it.kind === "table" || it.kind === "chart") win.editGrid(it.id) } }
                 // smart guides
                 Repeater { model: win.guides
                     Rectangle { required property var modelData; color: "#FF3B6B"; z: 30
@@ -595,7 +621,7 @@ GlassWindow {
     Rectangle { id: popBox; visible: win.pop !== "" && win.popFrom !== null; z: 60; radius: 14; color: Theme.t.menu_bg; border.width: 1; border.color: Theme.t.menu_border
         readonly property point at: win.popFrom ? win.popFrom.mapToItem(win.contentItem, 0, 0) : Qt.point(0, 0)
         readonly property bool below: at.y < win.height / 2
-        width: popGrid.visible ? Math.max(popGrid.width, win.pop === "bg" ? 230 : 0) + 16 : popSlides.visible ? popSlides.width + 16 : win.pop === "transition" || win.pop === "build" ? 360 : win.pop === "insertShape" || win.pop === "shape" ? 240 : 250
+        width: popGrid.visible ? Math.max(popGrid.width, win.pop === "bg" ? 230 : 0) + 16 : popSlides.visible ? popSlides.width + 16 : win.pop === "transition" || win.pop === "build" ? 360 : win.pop === "insertShape" || win.pop === "shape" ? 240 : win.pop === "insertTable" ? 8 * 26 + 28 : 250
         height: Math.min(win.height - 80, popCol.height + 12)
         x: Math.max(8, Math.min(win.width - width - 8, at.x + (win.popFrom ? win.popFrom.width / 2 : 0) - width / 2))
         y: below ? at.y + (win.popFrom ? win.popFrom.height : 0) + 12 : at.y - height - 12
@@ -619,6 +645,15 @@ GlassWindow {
                             Label { visible: parent.modelData[1] === "none" || parent.modelData[1] === "theme"; anchors.centerIn: parent; text: parent.modelData[1] === "none" ? "×" : "T"; font.pixelSize: 13 }
                             MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: win.popPick(parent.modelData[0]) } } } }
                 // shapes
+                Column { visible: win.pop === "insertTable"; spacing: 6; padding: 6
+                    id: tablePick; property int rows: 3; property int cols: 3
+                    Grid { columns: 8; spacing: 2
+                        Repeater { model: win.pop === "insertTable" ? 48 : 0
+                            Rectangle { required property int index; readonly property int r: Math.floor(index / 8) + 1; readonly property int c: index % 8 + 1
+                                width: 24; height: 18; radius: 3; color: r <= tablePick.rows && c <= tablePick.cols ? Qt.alpha(Theme.t.accent, 0.5) : Theme.t.group; border.width: 1; border.color: Theme.t.islandLine
+                                MouseArea { anchors.fill: parent; hoverEnabled: true; onEntered: { tablePick.rows = parent.r; tablePick.cols = parent.c }
+                                    onClicked: { var w = win, id = Backend.addItem("table", parent.r + "x" + parent.c); w.pop = ""; if (id) { w.sel = [id]; Qt.callLater(function () { w.editGrid(id) }) } } } } } }
+                    Label { text: tablePick.rows + " × " + tablePick.cols; font.pixelSize: 11; secondary: true } }
                 Grid { visible: win.pop === "insertShape" || win.pop === "shape"; columns: 6; spacing: 4; padding: 2
                     Repeater { model: (win.pop === "insertShape" || win.pop === "shape") ? Backend.shapes.filter(function (s) { return win.pop === "insertShape" || (s.key !== "line" && s.key !== "arrowline") }) : []
                         Pressable { id: shp; required property var modelData; width: 36; height: 32; radius: 8; color: hovered ? Theme.t.hover : "transparent"; onClicked: win.popPick(modelData.key)
@@ -690,7 +725,9 @@ GlassWindow {
                                      sel.length > 2 ? [["-", ""], ["a:hspread", "Spread Across", ""], ["a:vspread", "Spread Down", ""]] : []).concat(
                                      hasText(chosen()[0]) ? [["-", ""], ["v:top", "Text at the Top", ""], ["v:middle", "Text in the Middle", ""], ["v:bottom", "Text at the Bottom", ""]] : [])
         if (p === "line") return [["w:0", "No outline", ""], ["w:2", "Thin", "1 pt"], ["w:4", "Medium", "2 pt"], ["w:8", "Thick", "4 pt"], ["w:14", "Heavy", "7 pt"]]
-        if (p === "add") return [["text", "Text Box", ""], ["shape", "Shape…", ""], ["picture", "Picture…", ""]]
+        if (p === "add") return [["text", "Text Box", ""], ["shape", "Shape…", ""], ["picture", "Picture…", ""], ["table", "Table…", ""], ["chart", "Chart…", ""]]
+        if (p === "insertChart") return [["column", "Columns", "side by side"], ["bar", "Bars", "across"], ["line", "Lines", "over time"], ["pie", "Pie", "shares of a whole"]]
+        if (p === "chartKind") return [["column", "Columns", ""], ["bar", "Bars", ""], ["line", "Lines", ""], ["pie", "Pie", ""]]
         if (p === "present") return [["start", "From the Start", "F5"], ["here", "From This Slide", "Shift+F5"], ["presenter", "Presenter View", "Alt+F5"]]
         if (p === "bg") return [["theme", "The theme's own", ""]]
         return []
@@ -716,11 +753,68 @@ GlassWindow {
         else if (kind === "layout") { endEdit(); Backend.setLayout(key) }
         else if (kind === "addSlide") { endEdit(); Backend.add(key); sel = [] }
         else if (kind === "arrange") { if (key.indexOf("a:") === 0) Backend.align(sel, key.slice(2)); else if (key.indexOf("v:") === 0) Backend.setItems(sel, "valign", key.slice(2)); else arrange(key) }
-        else if (kind === "add") { pop = ""; if (key === "text") insertText(); else if (key === "picture") insertPicture(); else Qt.callLater(function () { win.openPop("insertShape", addBtn2) }); return }
+        else if (kind === "add") { pop = ""; if (key === "text") insertText(); else if (key === "picture") insertPicture()
+            else if (key === "table") Qt.callLater(function () { win.openPop("insertTable", addBtn2) })
+            else if (key === "chart") Qt.callLater(function () { win.openPop("insertChart", addBtn2) })
+            else Qt.callLater(function () { win.openPop("insertShape", addBtn2) }); return }
+        else if (kind === "insertChart") { var cid = Backend.addItem("chart", key); if (cid) { sel = [cid]; pop = ""; Qt.callLater(function () { win.editGrid(cid) }) } return }
+        else if (kind === "chartKind") Backend.setItems(sel, "chart", key)
         else if (kind === "present") { pop = ""; if (key === "start") present(); else if (key === "here") presentHere(); else presenterView(); return }
         else if (kind === "bg") Backend.setBackground((bgAll ? "all:" : "") + key)
         pop = ""
     }
+
+    // ------------------------------------------------------------------ a table's cells, or a chart's data
+    Rectangle { id: gridPanel; visible: win.gridEdit !== null && !win.presenting && !win.browsing; z: 55; radius: 18
+        width: Math.min(win.width - 40, Math.max(660, gridCols * 128 + 40)); height: Math.min(win.height - 140, gridCol.height + 28)
+        anchors { horizontalCenter: parent.horizontalCenter; bottom: parent.bottom; bottomMargin: 112 }
+        color: Theme.t.menu_bg; border.width: 1; border.color: Theme.t.menu_border
+        readonly property int gridCols: win.gridEdit && win.gridEdit.grid.length ? win.gridEdit.grid[0].length : 1
+        readonly property var it: win.gridEdit ? (win.tick, win.item(win.gridEdit.id)) : null
+        onItChanged: if (win.gridEdit && !it) win.gridEdit = null
+        MouseArea { anchors.fill: parent }
+        Flickable { anchors { fill: parent; margins: 14 } contentHeight: gridCol.height; contentWidth: width; clip: true; interactive: gridCol.height > height
+            Column { id: gridCol; width: parent.width; spacing: 10
+                Item { width: parent.width; height: 30
+                    Label { anchors.verticalCenter: parent.verticalCenter; font.pixelSize: 15; font.weight: Font.DemiBold
+                        text: win.gridEdit && win.gridEdit.kind === "chart" ? "The chart's data" : "The table" }
+                    Row { anchors { right: parent.right; verticalCenter: parent.verticalCenter } spacing: 2
+                        Seg { text: "+ Row"; onClicked: win.gridShape("row+") } Seg { text: "− Row"; onClicked: win.gridShape("row-") }
+                        Seg { text: "+ Column"; onClicked: win.gridShape("col+") } Seg { text: "− Column"; onClicked: win.gridShape("col-") }
+                        Seg { text: "Done"; on: true; onClicked: { gridTick.stop(); if (win.gridEdit) Backend.setGrid(win.gridEdit.id, win.gridEdit.grid); win.gridEdit = null; canvasKeys.forceActiveFocus() } } } }
+                Label { visible: !!win.gridEdit && win.gridEdit.kind === "chart"; width: parent.width; wrapMode: Text.WordWrap; secondary: true; font.pixelSize: 11
+                    text: "Each column after the first is a series (its name at the top); the first column holds the labels. A pie uses the first series." }
+                Grid { id: cellGrid; columns: gridPanel.gridCols; spacing: 3
+                    Repeater { model: win.gridEdit ? win.gridEdit.grid.length * gridPanel.gridCols : 0
+                        Rectangle { required property int index; readonly property int r: Math.floor(index / gridPanel.gridCols); readonly property int c: index % gridPanel.gridCols
+                            readonly property bool head: win.gridEdit && ((win.gridEdit.kind === "chart" && (r === 0 || c === 0)) || (win.gridEdit.kind === "table" && r === 0 && !!(gridPanel.it && gridPanel.it.header)))
+                            width: Math.max(80, Math.min(160, (gridPanel.width - 28) / gridPanel.gridCols - 3)); height: 30; radius: 7
+                            color: head ? Qt.alpha(Theme.t.accent, 0.16) : Theme.t.group; border.width: 1; border.color: cellIn.activeFocus ? Theme.t.accent : Theme.t.islandLine
+                            TextInput { id: cellIn; anchors { fill: parent; leftMargin: 8; rightMargin: 8 } verticalAlignment: TextInput.AlignVCenter; clip: true; color: Theme.t.text
+                                font.pixelSize: 12; font.weight: parent.head ? Font.DemiBold : Font.Normal; selectByMouse: true; activeFocusOnTab: true
+                                text: win.gridEdit && win.gridEdit.grid[parent.r] ? win.gridEdit.grid[parent.r][parent.c] : ""
+                                onTextEdited: win.gridSet(parent.r, parent.c, text)
+                                Keys.onReturnPressed: nextItemInFocusChain(true).forceActiveFocus() } } } }
+                // a table's look
+                Row { visible: !!win.gridEdit && win.gridEdit.kind === "table" && !!gridPanel.it; spacing: 8; height: 30
+                    Label { text: "Heading row"; anchors.verticalCenter: parent.verticalCenter; font.pixelSize: 12 }
+                    Toggle { anchors.verticalCenter: parent.verticalCenter; on: !!gridPanel.it && gridPanel.it.header !== false; onToggled: function (v) { Backend.setItems([win.gridEdit.id], "header", v) } }
+                    Label { text: "Stripes"; anchors.verticalCenter: parent.verticalCenter; font.pixelSize: 12 }
+                    Toggle { anchors.verticalCenter: parent.verticalCenter; on: !!gridPanel.it && gridPanel.it.banded !== false; onToggled: function (v) { Backend.setItems([win.gridEdit.id], "banded", v) } }
+                    Repeater { model: (Backend.look.accents || []).slice(0, 6)
+                        Rectangle { required property string modelData; required property int index; width: 22; height: 22; radius: 11; color: modelData; anchors.verticalCenter: parent.verticalCenter
+                            border.width: gridPanel.it && gridPanel.it.accent === "accent" + (index + 1) ? 3 : 1; border.color: gridPanel.it && gridPanel.it.accent === "accent" + (index + 1) ? Theme.t.text : Theme.t.islandLine
+                            MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: Backend.setItems([win.gridEdit.id], "accent", "accent" + (parent.index + 1)) } } }
+                    Repeater { model: [[14, "S"], [18, "M"], [24, "L"]]
+                        Seg { required property var modelData; text: modelData[1]; on: !!gridPanel.it && (gridPanel.it.size || 18) === modelData[0]; onClicked: Backend.setItems([win.gridEdit.id], "size", modelData[0]) } } }
+                // a chart's
+                Row { visible: !!win.gridEdit && win.gridEdit.kind === "chart" && !!gridPanel.it; spacing: 6; height: 30
+                    Repeater { model: [["column", "Columns"], ["bar", "Bars"], ["line", "Lines"], ["pie", "Pie"]]
+                        Seg { required property var modelData; text: modelData[1]; on: !!gridPanel.it && gridPanel.it.chart === modelData[0]; onClicked: Backend.setItems([win.gridEdit.id], "chart", modelData[0]) } }
+                    Label { text: "Key"; anchors.verticalCenter: parent.verticalCenter; font.pixelSize: 12; leftPadding: 8 }
+                    Toggle { anchors.verticalCenter: parent.verticalCenter; on: !!gridPanel.it && gridPanel.it.legend !== false; onToggled: function (v) { Backend.setItems([win.gridEdit.id], "legend", v) } }
+                    TextBox { width: 220; height: 30; placeholder: "Title (optional)"; text: gridPanel.it && gridPanel.it.title ? gridPanel.it.title : ""
+                        onEdited: Backend.setItems([win.gridEdit.id], "title", text) } } } } }
 
     // ------------------------------------------------------------------ the right-click menu
     Rectangle { visible: win.menu !== null; z: 61; x: Math.min(win.width - width - 8, win.menu ? win.menu.x : 0); y: Math.max(8, Math.min(win.height - height - 8, win.menu ? win.menu.y : 0))

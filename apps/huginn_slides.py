@@ -102,6 +102,9 @@ class Slides(FileList):
         v = {k: val for k, val in item.items() if k not in ("src", "paras")}
         if item["kind"] == "picture":
             v["url"] = self._file_for(item.get("src", ""))
+        if item["kind"] in ("table", "chart"):
+            v["url"] = self._drawn(item, look)
+            v.pop("cells", None)
         if item["kind"] in ("text", "shape") and item.get("shape") not in ("line", "arrowline"):
             v["html"] = sm.item_html(item, layout, look) if sm.has_text(item) else ""
             v["empty"] = not sm.has_text(item)
@@ -135,6 +138,19 @@ class Slides(FileList):
         if bg.get("picture"):
             bg["url"] = self._file_for(bg.pop("picture"))
         return bg
+
+    def _drawn(self, item: dict, look: dict) -> str:
+        """A table or chart drawn as a picture in the cache (named by what's in it and the design), for the window."""
+        key = hashlib.sha1(json.dumps([{k: v for k, v in item.items() if k not in ("x", "y", "anim", "id", "locked")}, look], sort_keys=True,
+                                      default=str).encode()).hexdigest()[:20]
+        path = self._cache / f"item-{key}.png"
+        if not path.exists():
+            try:
+                self._cache.mkdir(parents=True, exist_ok=True)
+                sm.render_item(item, look, 0.6).save(str(path), "PNG")
+            except OSError:
+                return ""
+        return path.as_uri()
 
     def _file_for(self, src: str) -> str:
         """Pictures reach the window as files in the cache (named by their content), not as long strings."""
@@ -573,6 +589,18 @@ class Slides(FileList):
             item = sm.new_item("shape", iid, (w - sw) / 2, (sm.SLIDE_H - sh) / 2, sw, sh, shape=shape)
             if line:
                 item.update({"fill": "", "line": "accent1", "lineW": 6})
+        elif kind == "table":
+            try:
+                rows, cols = (int(x) for x in (arg or "3x3").lower().split("x"))
+            except ValueError:
+                rows, cols = 3, 3
+            tw = min(w - 240, 300 * max(1, min(12, cols)))
+            item = sm.new_table(iid, (w - tw) / 2, 0, tw, rows, cols)
+            item["y"] = round(max(220.0, (sm.SLIDE_H - item["h"]) / 2), 2)
+            if item["header"]:
+                item["cells"][0] = [f"Heading {k + 1}" for k in range(len(item["cells"][0]))]
+        elif kind == "chart":
+            item = sm.new_chart(iid, (w - 1200) / 2, 260, 1200, 700, arg)
         else:
             item = sm.new_item("text", iid, (w - 800) / 2, sm.SLIDE_H / 2 - 40, 800, 80, grow=True)
         self._keep()
@@ -585,7 +613,8 @@ class Slides(FileList):
         """One property on the chosen items: fill, line, lineW, shape, valign, rot, anim, flipH, flipV, locked…"""
         items = self._ids(ids)
         value = value.toVariant() if hasattr(value, "toVariant") else value
-        if not items or key not in ("fill", "line", "lineW", "shape", "valign", "rot", "anim", "flipH", "flipV", "x", "y", "w", "h", "locked", "grow"):
+        if not items or key not in ("fill", "line", "lineW", "shape", "valign", "rot", "anim", "flipH", "flipV", "x", "y", "w", "h", "locked", "grow",
+                                    "header", "banded", "accent", "size", "chart", "title", "legend"):
             return
         self._keep(f"set:{key}:{','.join(it['id'] for it in items)}")
         if key == "anim":
@@ -604,6 +633,29 @@ class Slides(FileList):
                 it[key] = value
         if key in ("w", "h"):
             self._settle(items)
+        self._done()
+
+    @Slot(str, result="QVariantList")
+    def gridOf(self, iid: str) -> list:
+        """A table's cells or a chart's data, as rows of text (a chart's series along the top, labels down the side)."""
+        it = self._find(iid)
+        return sm.grid_of(it) if it is not None and it["kind"] in ("table", "chart") else []
+
+    @Slot(str, "QVariant")
+    def setGrid(self, iid: str, grid) -> None:
+        it = self._find(iid)
+        grid = grid.toVariant() if hasattr(grid, "toVariant") else grid
+        if it is None or it["kind"] not in ("table", "chart") or not isinstance(grid, list):
+            return
+        new = sm.with_grid(it, grid)
+        if new == it:
+            return
+        self._keep("grid:" + iid)
+        before = len(it.get("cells") or []) if it["kind"] == "table" else 0
+        it.clear()
+        it.update(new)
+        if before and len(it["cells"]) != before:  # a row more or less: the table grows or shrinks with it
+            it["h"] = round(it["h"] / before * len(it["cells"]), 2)
         self._done()
 
     @Slot("QVariant", float, float)

@@ -3,8 +3,10 @@
 The deck is plain JSON ("huginn-slides-2"):
     {"format", "theme", "look" (a design read from a PowerPoint file, until another theme is picked), "size": "16:9"|"4:3",
      "slides": [{"id", "layout", "items": [...], "notes", "bg", "transition": {"kind", "ms"}, "hidden"}]}
-An item: {"id", "kind": "text"|"shape"|"picture", "role": ""|"title"|"subtitle"|"body"|"body2", "x", "y", "w", "h", "rot",
+An item: {"id", "kind": "text"|"shape"|"picture"|"table"|"chart", "role": ""|"title"|"subtitle"|"body"|"body2", "x", "y", "w", "h", "rot",
           "shape", "fill", "line", "lineW", "flipH", "flipV", "arrow", "paras", "valign", "fit", "src", "anim", "locked"}
+A table also has "cells" (rows of strings), "header" and "banded" (bool), "accent" and "size" (points); a chart "chart"
+("column"|"bar"|"line"|"pie"), "cats" (its labels), "series" ([{"name", "values"}]), "title" and "legend".
 A paragraph: {"runs": [{"t", "b", "i", "u", "s", "color", "size" (points), "font"}], "lvl", "list": ""|"bullet"|"number", "align"}
 A run keeps only what differs from its place's defaults (the role, the level and the theme), so a new theme re-colours
 and re-fonts everything that wasn't set by hand. One slide unit is 6350 EMU: 1920 x 1080 is PowerPoint's 13.33 x 7.5 in.
@@ -124,6 +126,250 @@ def new_item(kind: str, iid: str, x: float, y: float, w: float, h: float, **extr
         item.update({"shape": "rect", "fill": "accent1", "line": "", "lineW": 0, "valign": "middle"})
     item.update(extra)
     return item
+
+
+def new_table(iid: str, x: float, y: float, w: float, rows: int, cols: int) -> dict:
+    rows, cols = max(1, min(30, rows)), max(1, min(12, cols))
+    item = new_item("table", iid, x, y, w, 70 * rows)
+    item.update({"cells": [["" for _ in range(cols)] for _ in range(rows)], "header": True, "banded": True, "accent": "accent1", "size": 18})
+    return item
+
+
+def new_chart(iid: str, x: float, y: float, w: float, h: float, kind: str) -> dict:
+    item = new_item("chart", iid, x, y, w, h)
+    item.update({"chart": kind if kind in CHARTS else "column", "title": "", "legend": True, "cats": ["North", "South", "East", "West"],
+                 "series": [{"name": "This year", "values": [42, 35, 28, 50]}, {"name": "Last year", "values": [36, 30, 31, 41]}]})
+    if item["chart"] == "pie":
+        item["series"] = item["series"][:1]
+    return item
+
+
+CHARTS = ("column", "bar", "line", "pie")
+
+
+def grid_of(item: dict) -> list:
+    """A table's cells, or a chart's data as a grid: the series' names along the top, the labels down the side."""
+    if item.get("kind") == "table":
+        return [list(r) for r in item.get("cells") or [[""]]]
+    series = item.get("series") or []
+    head = [""] + [s.get("name", "") for s in series]
+    rows = [head]
+    for k, cat in enumerate(item.get("cats") or []):
+        rows.append([str(cat)] + [_num_text(s.get("values", [])[k] if k < len(s.get("values", [])) else "") for s in series])
+    return rows
+
+
+def _num_text(v) -> str:
+    if v in ("", None):
+        return ""
+    v = float(v)
+    return str(int(v)) if v == int(v) else f"{v:g}"
+
+
+def with_grid(item: dict, grid: list) -> dict:
+    """The item with its cells, or its chart's data, from a grid (as grid_of gives it)."""
+    rows = [[str(c)[:500] for c in r] for r in grid if isinstance(r, list)][:60] or [[""]]
+    width = max(1, min(20, max(len(r) for r in rows)))
+    rows = [r + [""] * (width - len(r)) for r in rows]
+    out = dict(item)
+    if item.get("kind") == "table":
+        out["cells"] = [r[:12] for r in rows[:30]]
+        return out
+    out["series"] = []
+    for j in range(1, width):
+        vals = []
+        for r in rows[1:]:
+            try:
+                vals.append(float(r[j].replace(",", "").replace("%", "")) if r[j].strip() else 0.0)
+            except ValueError:
+                vals.append(0.0)
+        out["series"].append({"name": rows[0][j] or f"Series {j}", "values": vals})
+    out["cats"] = [r[0] for r in rows[1:]]
+    if not out["series"]:
+        out["series"] = [{"name": "Series 1", "values": [0.0] * len(out["cats"])}]
+    return out
+
+
+def paint_table(p: QPainter, item: dict, look: dict) -> None:
+    cells = item.get("cells") or [[""]]
+    rows, cols = len(cells), max(len(r) for r in cells)
+    w, h = item["w"], item["h"]
+    cw, rh = w / cols, h / rows
+    accent = QColor(colour(item.get("accent") or "accent1", look) or "#1C7ED6")
+    ground = QColor((look.get("bg") or {}).get("color") or (look.get("bg") or {}).get("from") or "#FFFFFF")
+    dark_bg = ground.lightnessF() < 0.5
+    text = QColor(look.get("text", "#2B3138"))
+    band = QColor(accent)
+    band.setAlphaF(0.14 if dark_bg else 0.10)
+    plain = QColor("#FFFFFF") if not dark_bg else ground.lighter(115)     # cells are solid: nothing shows through them
+    font = QFont(look.get("body") or "Inter")
+    font.setPixelSize(max(6, int(float(item.get("size") or 18) * PT)))
+    p.setFont(font)
+    for r in range(rows):
+        for c in range(cols):
+            rect = QRectF(c * cw, r * rh, cw, rh)
+            head = item.get("header", True) and r == 0
+            if head:
+                p.fillRect(rect, accent)
+            else:
+                p.fillRect(rect, plain)
+                if item.get("banded", True) and r % 2 == (1 if item.get("header", True) else 0):
+                    p.fillRect(rect, band)
+            p.setPen(QPen(QColor(255, 255, 255, 90) if dark_bg else QColor(0, 0, 0, 40), 1.5))
+            p.drawRect(rect)
+            f = QFont(font)
+            f.setBold(head)
+            p.setFont(f)
+            p.setPen(QColor("#FFFFFF") if head else text)
+            t = cells[r][c] if c < len(cells[r]) else ""
+            p.drawText(rect.adjusted(14, 4, -14, -4), int(Qt.AlignVCenter | Qt.TextWordWrap | (Qt.AlignRight if _is_number(t) and not head else Qt.AlignLeft)), t)
+
+
+def _is_number(t: str) -> bool:
+    try:
+        float(str(t).replace(",", "").replace("%", "").replace("$", "").replace("€", "").replace("£", "").strip())
+        return True
+    except ValueError:
+        return False
+
+
+def paint_chart(p: QPainter, item: dict, look: dict) -> None:
+    w, h = item["w"], item["h"]
+    series = item.get("series") or []
+    cats = item.get("cats") or []
+    kind = item.get("chart", "column")
+    accents = look.get("accents") or ["#1C7ED6"]
+    ink = QColor(look.get("text", "#2B3138"))
+    faint = QColor(ink)
+    faint.setAlphaF(0.25)
+    font = QFont(look.get("body") or "Inter")
+    font.setPixelSize(26)
+    p.setFont(font)
+    top = 0.0
+    if item.get("title"):
+        tf = QFont(font)
+        tf.setPixelSize(36)
+        tf.setBold(True)
+        p.setFont(tf)
+        p.setPen(QColor(look.get("title", "#101317")))
+        p.drawText(QRectF(0, 0, w, 54), int(Qt.AlignCenter), item["title"])
+        p.setFont(font)
+        top = 64.0
+    legend_h = 44.0 if item.get("legend", True) and (len(series) > 1 or kind == "pie") else 0.0
+    if legend_h:
+        names = [c for c in cats] if kind == "pie" else [s.get("name", "") for s in series]
+        x = 0.0
+        p.setPen(ink)
+        for k, name in enumerate(names[:12]):
+            p.fillRect(QRectF(x, h - 30, 22, 22), QColor(accents[k % len(accents)]))
+            tw = p.fontMetrics().horizontalAdvance(name) + 54
+            p.drawText(QRectF(x + 30, h - 38, tw, 38), int(Qt.AlignVCenter | Qt.AlignLeft), name)
+            x += tw
+    area = QRectF(0, top, w, h - top - legend_h - 6)
+    if kind == "pie":
+        vals = [max(0.0, float(v)) for v in ((series[0].get("values") if series else []) or [])]
+        total = sum(vals) or 1.0
+        d = min(area.width(), area.height())
+        box = QRectF(area.center().x() - d / 2, area.center().y() - d / 2, d, d)
+        start = 90 * 16
+        p.setPen(QPen(QColor("#FFFFFF"), 3))
+        for k, v in enumerate(vals):
+            span = -int(round(v / total * 360 * 16))
+            p.setBrush(QColor(accents[k % len(accents)]))
+            p.drawPie(box, start, span)
+            start += span
+        return
+    allv = [float(v) for s_ in series for v in s_.get("values", [])] or [0.0]
+    lo, hi = min(0.0, min(allv)), max(0.0, max(allv))
+    if hi == lo:
+        hi = lo + 1
+    step = _nice((hi - lo) / 5)
+    hi = math.ceil(hi / step) * step
+    lo = math.floor(lo / step) * step
+    label_w = max(p.fontMetrics().horizontalAdvance(_num_text(v)) for v in (lo, hi)) + 16
+    cat_h = 40.0
+    plot = QRectF(area.left() + label_w, area.top() + 10, area.width() - label_w - 10, area.height() - cat_h - 10) if kind != "bar" else \
+        QRectF(area.left() + 140, area.top() + 10, area.width() - 150, area.height() - cat_h - 10)
+    n = max(1, len(cats))
+    ticks = int(round((hi - lo) / step))
+    p.setPen(QPen(faint, 1.5))
+    for t in range(ticks + 1):
+        v = lo + t * step
+        if kind == "bar":
+            x = plot.left() + (v - lo) / (hi - lo) * plot.width()
+            p.drawLine(int(x), int(plot.top()), int(x), int(plot.bottom()))
+            p.setPen(ink)
+            p.drawText(QRectF(x - 60, plot.bottom() + 4, 120, cat_h), int(Qt.AlignHCenter | Qt.AlignTop), _num_text(v))
+        else:
+            y = plot.bottom() - (v - lo) / (hi - lo) * plot.height()
+            p.drawLine(int(plot.left()), int(y), int(plot.right()), int(y))
+            p.setPen(ink)
+            p.drawText(QRectF(area.left(), y - 20, label_w - 10, 40), int(Qt.AlignRight | Qt.AlignVCenter), _num_text(v))
+        p.setPen(QPen(faint, 1.5))
+    p.setPen(ink)
+    for k, cat in enumerate(cats):
+        if kind == "bar":
+            y = plot.top() + (k + 0.5) / n * plot.height()
+            p.drawText(QRectF(area.left(), y - 20, 130, 40), int(Qt.AlignRight | Qt.AlignVCenter), str(cat))
+        else:
+            x = plot.left() + (k + 0.5) / n * plot.width()
+            p.drawText(QRectF(x - plot.width() / n / 2, plot.bottom() + 6, plot.width() / n, cat_h), int(Qt.AlignHCenter | Qt.AlignTop), str(cat))
+    zero = (0 - lo) / (hi - lo)
+    m = max(1, len(series))
+    for j, s_ in enumerate(series):
+        colr = QColor(accents[j % len(accents)])
+        vals = [float(v) for v in s_.get("values", [])][:len(cats)]
+        if kind == "line":
+            pen = QPen(colr, 6)
+            pen.setCapStyle(Qt.RoundCap)
+            pen.setJoinStyle(Qt.RoundJoin)
+            p.setPen(pen)
+            pts = [(plot.left() + (k + 0.5) / n * plot.width(), plot.bottom() - (v - lo) / (hi - lo) * plot.height()) for k, v in enumerate(vals)]
+            for a, b in zip(pts, pts[1:]):
+                p.drawLine(int(a[0]), int(a[1]), int(b[0]), int(b[1]))
+            p.setBrush(colr)
+            for x, y in pts:
+                p.drawEllipse(QRectF(x - 8, y - 8, 16, 16))
+            continue
+        p.setPen(Qt.NoPen)
+        p.setBrush(colr)
+        for k, v in enumerate(vals):
+            frac = (v - lo) / (hi - lo)
+            if kind == "bar":
+                slot = plot.height() / n
+                bh = slot * 0.7 / m
+                y = plot.top() + k * slot + slot * 0.15 + j * bh
+                x0, x1 = plot.left() + zero * plot.width(), plot.left() + frac * plot.width()
+                p.drawRect(QRectF(min(x0, x1), y, abs(x1 - x0), bh))
+            else:
+                slot = plot.width() / n
+                bw = slot * 0.7 / m
+                x = plot.left() + k * slot + slot * 0.15 + j * bw
+                y0, y1 = plot.bottom() - zero * plot.height(), plot.bottom() - frac * plot.height()
+                p.drawRect(QRectF(x, min(y0, y1), bw, abs(y1 - y0)))
+
+
+def _nice(raw: float) -> float:
+    if raw <= 0:
+        return 1.0
+    mag = 10 ** math.floor(math.log10(raw))
+    for f in (1, 2, 2.5, 5, 10):
+        if raw <= f * mag:
+            return f * mag
+    return 10 * mag
+
+
+def render_item(item: dict, look: dict, scale: float = 0.5) -> QImage:
+    """A table or a chart as a picture (for the window, which shows them as pictures until they're edited)."""
+    img = QImage(max(1, int(item["w"] * scale)), max(1, int(item["h"] * scale)), QImage.Format_ARGB32_Premultiplied)
+    img.fill(Qt.transparent)
+    p = QPainter(img)
+    p.setRenderHint(QPainter.Antialiasing)
+    p.setRenderHint(QPainter.TextAntialiasing)
+    p.scale(scale, scale)
+    (paint_table if item["kind"] == "table" else paint_chart)(p, item, look)
+    p.end()
+    return img
 
 
 def placeholder_item(role: str, iid: str, rect: tuple, layout: str) -> dict:
@@ -493,6 +739,10 @@ def paint_item(p: QPainter, item: dict, layout: str, look: dict) -> None:
         img = image_of(item.get("src", ""))
         if not img.isNull():
             p.drawImage(QRectF(0, 0, w, h), img)
+    elif item["kind"] == "table":
+        paint_table(p, item, look)
+    elif item["kind"] == "chart":
+        paint_chart(p, item, look)
     elif item["kind"] == "shape":
         kind = item.get("shape", "rect")
         path = ops_path(shape_ops(kind, w, h, item.get("flipH"), item.get("flipV")))

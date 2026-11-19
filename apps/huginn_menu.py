@@ -79,7 +79,7 @@ APP_MENUS = {
                          item("Copy", "qml:menuCopy", "Ctrl+C"), item("Paste", "qml:menuPaste", "Ctrl+V"), item("Duplicate", "qml:duplicateItems", "Ctrl+D"),
                          item("Select All", "qml:menuSelectAll", "Ctrl+A"), SEP, item("Find and replace…", "qml:find", "Ctrl+F")]),
                ("Insert", [item("New slide", "qml:newSlide", "Ctrl+M"), item("Duplicate slide", "qml:duplicateSlide"), SEP, item("Text box", "qml:insertText"),
-                           item("Shape…", "qml:insertShape"), item("Picture…", "qml:insertPicture")]),
+                           item("Shape…", "qml:insertShape"), item("Picture…", "qml:insertPicture"), item("Table…", "qml:insertTable"), item("Chart…", "qml:insertChart")]),
                ("Format", [item("Bold", "qml:apply:bold", "Ctrl+B"), item("Italic", "qml:apply:italic", "Ctrl+I"), item("Underline", "qml:apply:underline", "Ctrl+U"),
                            SEP, item("Bigger", "qml:apply:bigger", "Ctrl+]"), item("Smaller", "qml:apply:smaller", "Ctrl+["), SEP,
                            item("Bullets", "qml:apply:bullet"), item("Numbering", "qml:apply:number"), SEP, item("Align left", "qml:apply:left", "Ctrl+L"),

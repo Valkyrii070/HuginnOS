@@ -1808,6 +1808,17 @@ Before the first start on a desktop PC (a Radeon RX 9070 XT and three screens):
   the table; Refresh (an island on the sheet, or Data › Refresh the pivot table) brings in new names and rows added
   under the table. Gaps are left empty, as in a pivot table.
 
+- **Slides: tables and charts.** A table (rows of text, a heading row, stripes, a theme colour and three text sizes)
+  and a chart (columns, bars, lines or a pie, with a title and a key) are items like the others: moved, sized, turned
+  and built in. They are drawn by `huginn_slides_model.paint_table`/`paint_chart` (the window shows them as pictures
+  from the cache, redrawn when they change; PDF export, thumbnails and the show draw them the same way), and edited
+  in a grid (double-click, or Edit the Cells / Edit the Data), a chart's series along the top and labels down the side.
+  PowerPoint gets real `a:tbl` tables and real charts (`ppt/charts/chartN.xml`, with the numbers written in rather
+  than a workbook behind them); from PowerPoint, tables without merged cells and column, bar, line, area and pie
+  charts come in as Slides' own (tables with merged cells still come in as separate cells, to keep their look).
+- The menus' Cut, Copy, Paste, Select All, Undo and Redo in Slides now go to a box being typed in (a table cell, the
+  notes, Find) before the slide's items.
+
 ## Huginn, the browser
 
 Inside the Huginn repository (this kit is its `os/` folder) the image ships the repository's own browser. A kit used
