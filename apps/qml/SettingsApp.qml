@@ -21,6 +21,7 @@ GlassWindow {
         { id: "sound", label: "Sound", glyph: "volume", a: "#FF6E97", b: "#C2185B", group: "THIS COMPUTER", sub: "Speakers, headphones, microphones and each app's volume." },
         { id: "power", label: "Battery & Power", glyph: "battery", a: "#4BDB97", b: "#109F5E", group: "THIS COMPUTER", sub: "Battery health, power mode and when to sleep." },
         { id: "input", label: "Keyboard & Mouse", glyph: "keyboard", a: "#A7B0BD", b: "#5A6474", group: "THIS COMPUTER", sub: "Layouts, typing, the touchpad and the mouse." },
+        { id: "keys", label: "Keyboard Shortcuts", glyph: "command", a: "#8E9BB0", b: "#465266", group: "THIS COMPUTER", sub: "Change Huginn's shortcuts, and make your own to open apps." },
         { id: "time", label: "Date & Time", glyph: "clock", a: "#FFAA55", b: "#E8590C", group: "SYSTEM", sub: "Time zone and how the clock is set." },
         { id: "language", label: "Language & Region", glyph: "globe", a: "#3DD1C3", b: "#118C7E", group: "SYSTEM", sub: "The language of the system and how dates and numbers look." },
         { id: "users", label: "Users", glyph: "user", a: "#B39BFF", b: "#6D28D9", group: "SYSTEM", sub: "Your account, and other people who use this computer." },
@@ -30,7 +31,7 @@ GlassWindow {
         { id: "about", label: "About", glyph: "info", a: "#A3B1C4", b: "#475569", group: "SYSTEM", sub: "This computer and the version of Huginn OS." }
     ]
     readonly property var files: ({ appearance: "SetAppearance", desktop: "SetDesktop", notifications: "SetNotifications", network: "SetNetwork", bluetooth: "SetBluetooth",
-                                    accounts: "SetAccounts", ai: "SetAI", displays: "SetDisplays", sound: "SetSound", power: "SetPower", input: "SetInput", time: "SetTime",
+                                    accounts: "SetAccounts", ai: "SetAI", displays: "SetDisplays", sound: "SetSound", power: "SetPower", input: "SetInput", keys: "SetKeys", time: "SetTime",
                                     language: "SetLanguage", users: "SetUsers", defaults: "SetDefaults", privacy: "SetPrivacy", updates: "SetUpdates", about: "SetAbout",
                                     a11y: "SetAccessibility" })
     readonly property var index: [
@@ -61,6 +62,7 @@ GlassWindow {
         ["power", "Battery", "charge health percentage cycles"], ["power", "Power mode", "performance balanced power saver"], ["power", "Sleep", "suspend idle screen off lid power button"],
         ["input", "Keyboard layout", "language typing input source"], ["input", "Key repeat", "delay rate typing"], ["input", "Caps Lock", "control escape compose"],
         ["input", "Touchpad", "tap to click natural scrolling trackpad"], ["input", "Mouse", "pointer speed left-handed"],
+        ["keys", "Keyboard shortcuts", "keys hotkeys super shortcut emoji files terminal show desktop move window monitor screen"], ["keys", "Your own shortcuts", "open app command run custom"],
         ["time", "Time zone", "clock region city"], ["time", "Set time automatically", "ntp network time"],
         ["language", "Language", "translation"], ["language", "Formats", "date numbers currency region week"],
         ["users", "Your name", "account full name"], ["users", "Picture", "avatar photo"], ["users", "Password", "change password security"],
@@ -103,7 +105,7 @@ GlassWindow {
     onPageChanged: refresh()
     Component.onCompleted: refresh()
     function refresh() {
-        if (["network", "bluetooth", "displays", "sound", "notifications", "power", "input", "time", "language", "users", "defaults", "privacy", "about", "a11y"].indexOf(page) >= 0) Backend.load(page)
+        if (["network", "bluetooth", "displays", "sound", "notifications", "power", "input", "keys", "time", "language", "users", "defaults", "privacy", "about", "a11y"].indexOf(page) >= 0) Backend.load(page)
         if (page === "accounts" && typeof Accounts !== "undefined") Accounts.refresh()
         if (page === "ai" && typeof AI !== "undefined" && AI) AI.refresh()
         if (page === "updates" && typeof Updates !== "undefined") Updates.look(false)

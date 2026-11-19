@@ -1132,6 +1132,13 @@ def main() -> int:
     except Exception as err:                                          # noqa: BLE001
         print("Clipboard history isn't available:", err, file=sys.stderr)
     ctx.setContextProperty("ClipHistory", clips)
+    emoji = None
+    try:                                                                # Super+.: its data is read the first time it opens
+        import huginn_chars
+        emoji = huginn_chars.EmojiPicker()
+    except Exception as err:                                          # noqa: BLE001
+        print("The emoji picker isn't available:", err, file=sys.stderr)
+    ctx.setContextProperty("EmojiPicker", emoji)
     ctx.setContextProperty("Settings", settings)
     ctx.setContextProperty("startOpen", args.open)
     ctx.setContextProperty("startMenus", args.menus)

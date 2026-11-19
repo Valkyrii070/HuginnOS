@@ -159,6 +159,16 @@ impl Compositor {
         let _ = self.to_loop.send(Request::Lock);
     }
 
+    /// Settings › Keyboard shortcuts changed: read ~/.config/huginn/shortcuts.json again.
+    fn reload_shortcuts(&self) {
+        crate::shortcuts::load();
+    }
+
+    /// Settings is listening for the keys of a shortcut (true) or done (false): shortcuts wait meanwhile.
+    fn pause_shortcuts(&self, on: bool) {
+        crate::shortcuts::pause(on);
+    }
+
     /// Clipboard history picked something: Ctrl+V into the window in front, once the history's panel has gone.
     fn paste(&self) {
         let _ = self.to_loop.send(Request::Paste);

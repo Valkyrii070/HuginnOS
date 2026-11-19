@@ -610,6 +610,96 @@ def xkb_layouts(path: Path = Path("/usr/share/X11/xkb/rules/evdev.lst")) -> list
 CAPS = [("", "Caps Lock"), ("caps:ctrl_modifier", "Another Control key"), ("caps:escape", "Escape"), ("caps:none", "Nothing")]
 
 
+# Keyboard shortcuts: the same names and keys as the compositor's (compositor/src/shortcuts.rs, DEFAULTS); kept in
+# ~/.config/huginn/shortcuts.json and read again by the compositor when they change.
+SHORTCUTS_FILE = CONFIG / "huginn" / "shortcuts.json"
+SHORTCUTS = [  # id, what it does, group, default keys ("|" between more than one)
+    ("search", "Search everything", "Finding and opening", "Super+Space"),
+    ("files", "Open Files", "Finding and opening", "Super+E"),
+    ("settings", "Open Settings", "Finding and opening", "Super+I"),
+    ("terminal", "Open Terminal", "Finding and opening", "Ctrl+Alt+T"),
+    ("emoji", "Emoji and symbols", "Finding and opening", "Super+period"),
+    ("clipboard", "Clipboard history", "Finding and opening", "Super+V"),
+    ("today", "Today", "Finding and opening", "Super+T"),
+    ("snap-left", "Snap to the left (again: a third, two-thirds)", "Windows", "Super+Left"),
+    ("snap-right", "Snap to the right (again: a third, two-thirds)", "Windows", "Super+Right"),
+    ("snap-up", "Fill the screen", "Windows", "Super+Up"),
+    ("snap-down", "Back to its size, then hide it", "Windows", "Super+Down"),
+    ("screen-left", "Move to the screen on the left", "Windows", "Super+Alt+Left"),
+    ("screen-right", "Move to the screen on the right", "Windows", "Super+Alt+Right"),
+    ("desktop", "Show the desktop (again: bring them back)", "Windows", "Super+D"),
+    ("close", "Close the window", "Windows", "Alt+F4"),
+    ("overview", "Overview of windows and spaces", "Windows", "Super+Tab"),
+    ("space-left", "The space on the left", "Spaces", "Super+Ctrl+Left"),
+    ("space-right", "The space on the right", "Spaces", "Super+Ctrl+Right"),
+    ("take-left", "Take the window to the space on the left", "Spaces", "Super+Shift+Left"),
+    ("take-right", "Take the window to the space on the right", "Spaces", "Super+Shift+Right"),
+    ("screenshot", "Screenshot of the screen", "Screen", "Print"),
+    ("screenshot-choose", "Screenshot of a part, or a window", "Screen", "Super+Shift+S|Shift+Print"),
+    ("zoom-in", "Zoom in", "Screen", "Super+equal|Super+plus|Super+KP_Add"),
+    ("zoom-out", "Zoom out", "Screen", "Super+minus|Super+KP_Subtract"),
+    ("zoom-reset", "Zoom back to the whole screen", "Screen", "Super+0|Super+KP_0"),
+    ("lock", "Lock the screen", "Screen", "Super+L"),
+]
+FIXED_SHORTCUTS = [("Start menu", "Super"), ("The app's menu", "Alt"), ("Go to space 1 to 9", "Super+1…9"), ("Switch between windows", "Alt+Tab")]
+MOD_ORDER = ("Super", "Ctrl", "Alt", "Shift")
+
+
+def combo_norm(text: str) -> str:
+    """'super+shift+s' -> 'Shift+Super+S' (one spelling, so two can be compared); '' when it isn't a key."""
+    parts = [p.strip() for p in (text or "").split("+")]
+    if len(parts) >= 3 and parts[-1] == "" and parts[-2] == "":
+        parts = parts[:-2] + ["plus"]
+    if not parts or not parts[-1]:
+        return ""
+    names = {"ctrl": "Ctrl", "control": "Ctrl", "alt": "Alt", "shift": "Shift", "super": "Super", "meta": "Super", "win": "Super", "logo": "Super"}
+    mods = set()
+    for m in parts[:-1]:
+        if m.lower() not in names:
+            return ""
+        mods.add(names[m.lower()])
+    key = parts[-1]
+    key = {".": "period", ",": "comma", "-": "minus", "=": "equal", "/": "slash", ";": "semicolon", "'": "apostrophe", "`": "grave",
+           "[": "bracketleft", "]": "bracketright", "\\": "backslash", " ": "space"}.get(key, key)
+    key = key.upper() if len(key) == 1 else key[:1].upper() + key[1:]
+    return "+".join([m for m in MOD_ORDER if m in mods] + [key])
+
+
+def read_shortcuts_file() -> dict:
+    try:
+        data = json.loads(SHORTCUTS_FILE.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def load_keys(apps: dict) -> dict:
+    saved = read_shortcuts_file()
+    keys = saved.get("keys") if isinstance(saved.get("keys"), dict) else {}
+    items = []
+    for ident, label, group, default in SHORTCUTS:
+        now = keys.get(ident, default) if isinstance(keys.get(ident, default), str) else default
+        items.append({"id": ident, "label": label, "group": group, "keys": [combo_norm(k) for k in now.split("|") if combo_norm(k)],
+                      "changed": now != default, "default": [combo_norm(k) for k in default.split("|")]})
+    own = []
+    for o in saved.get("own") or []:
+        if isinstance(o, dict) and o.get("run"):
+            run = str(o["run"])
+            app = apps.get(run[4:]) if run.startswith("app:") else None
+            own.append({"keys": combo_norm(str(o.get("keys", ""))), "run": run, "name": str(o.get("name") or (app or {}).get("name") or run),
+                        "icon": icon_url(app) if app else ""})
+    choices = [{"id": a["id"], "name": a["name"], "icon": icon_url(a)} for a in sorted(apps.values(), key=lambda a: a["name"].lower()) if not a["nodisplay"]]
+    return {"items": items, "own": own, "fixed": [{"label": l, "keys": k} for l, k in FIXED_SHORTCUTS], "apps": choices}
+
+
+def write_shortcuts_file(data: dict) -> None:
+    SHORTCUTS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    tmp = SHORTCUTS_FILE.with_suffix(".tmp")
+    tmp.write_text(json.dumps(data, indent=1), encoding="utf-8")
+    tmp.replace(SHORTCUTS_FILE)
+    own_compositor("ReloadShortcuts")
+
+
 def load_input() -> dict:
     rc, xkb = CONFIG / "kcminputrc", CONFIG / "kxkbrc"
     options = [o for o in kconfig_read(xkb, ["Layout"], "Options", "").split(",") if o]
@@ -1226,7 +1316,7 @@ def load_look() -> dict:
 
 
 # ---------------------------------------------------------------------------------------------- the backend Settings talks to
-PAGES = ("network", "bluetooth", "displays", "sound", "notifications", "power", "input", "time", "language", "users", "defaults", "privacy", "about", "a11y", "look")
+PAGES = ("network", "bluetooth", "displays", "sound", "notifications", "power", "input", "keys", "time", "language", "users", "defaults", "privacy", "about", "a11y", "look")
 
 
 class SystemSettings(QObject):
@@ -1251,7 +1341,7 @@ class SystemSettings(QObject):
     network, bluetooth, displays, sound = _page("network", changed), _page("bluetooth", changed), _page("displays", changed), _page("sound", changed)
     notifications, power, input, time = _page("notifications", changed), _page("power", changed), _page("input", changed), _page("time", changed)
     language, users, defaults, privacy, about = _page("language", changed), _page("users", changed), _page("defaults", changed), _page("privacy", changed), _page("about", changed)
-    a11y, look = _page("a11y", changed), _page("look", changed)
+    a11y, look, keys = _page("a11y", changed), _page("look", changed), _page("keys", changed)
     del _page
     busy = Property("QVariantList", lambda self: sorted(self._busy), notify=changed)
     reportChanged = Signal()
@@ -1269,13 +1359,18 @@ class SystemSettings(QObject):
                 "sound": load_sound, "notifications": lambda: load_notifications(self._known_apps()), "power": load_power,
                 "input": load_input, "time": load_time, "language": load_language, "users": load_users,
                 "defaults": lambda: load_defaults(self._known_apps()), "privacy": lambda: load_privacy(self._known_apps()), "about": load_about,
-                "a11y": load_a11y, "look": load_look}[page]
+                "a11y": load_a11y, "look": load_look, "keys": lambda: load_keys(self._known_apps())}[page]
 
     @Slot(str)
     def load(self, page: str) -> None:
         self._load(page)
 
     def _load(self, page: str, **kw) -> None:
+        if self._demo and page == "keys" and "keys" not in self._state:     # the preview: Huginn's shortcuts as they come
+            self._state["keys"] = dict(load_keys({}), own=[{"keys": "Super+G", "run": "steam", "name": "Steam", "icon": ""}])
+            for row in self._state["keys"]["items"]:
+                row["keys"], row["changed"] = row["default"], False
+            self.changed.emit()
         if self._demo or page not in PAGES or page in self._busy:
             return
         self._busy.add(page)
@@ -1983,6 +2078,94 @@ class SystemSettings(QObject):
         if path.parent != CONFIG / "autostart" and not self._demo:
             return
         self._act("defaults", lambda: path.unlink() or "", demo_change=lambda s: s.update(startup=[x for x in s["startup"] if x["file"] != file]))
+
+    # -------------------------------------------------------------- keyboard shortcuts
+    @Slot(bool)
+    def listenForKeys(self, on: bool) -> None:
+        """While a shortcut's new keys are being pressed, the compositor's shortcuts wait (so Super+E reaches us)."""
+        if not self._demo:
+            threading.Thread(target=own_compositor, args=("PauseShortcuts", (bool(on),), "(b)"), daemon=True).start()
+
+    def _shortcut_change(self, change) -> None:
+        """change(data) edits the file's {"keys": {...}, "own": [...]} and returns what to say."""
+        def work():
+            data = read_shortcuts_file()
+            data["keys"] = data.get("keys") if isinstance(data.get("keys"), dict) else {}
+            data["own"] = [o for o in data.get("own") or [] if isinstance(o, dict)]
+            note = change(data)
+            write_shortcuts_file(data)
+            return note
+        self._act("keys", work)
+
+    def _free(self, data: dict, combo: str, keep: str) -> str:
+        """Take a key away from whatever else had it (Huginn's or one's own); say which."""
+        taken = []
+        for ident, label, _, default in SHORTCUTS:
+            if ident == keep:
+                continue
+            now = data["keys"].get(ident, default)
+            parts = [k for k in now.split("|") if k.strip()]
+            left = [k for k in parts if combo_norm(k) != combo]
+            if len(left) != len(parts):
+                data["keys"][ident] = "|".join(left)
+                taken.append(label)
+        before = len(data["own"])
+        data["own"] = [o for o in data["own"] if combo_norm(str(o.get("keys", ""))) != combo or o.get("run") == keep]
+        if len(data["own"]) != before:
+            taken.append("your own shortcut")
+        return f" ({', '.join(taken)} no longer has it)" if taken else ""
+
+    @Slot(str, str)
+    def setShortcut(self, ident: str, combo: str) -> None:
+        """Huginn's shortcut `ident` gets these keys ("" turns it off)."""
+        row = next((r for r in SHORTCUTS if r[0] == ident), None)
+        if row is None:
+            return
+        if combo and not combo_norm(combo):
+            self.said.emit("Those keys can't be a shortcut.", True)
+            return
+        combo = combo_norm(combo) if combo else ""
+
+        def change(data):
+            freed = self._free(data, combo, ident) if combo else ""
+            data["keys"][ident] = combo
+            return f"{row[1]}: {combo.replace('+', ' + ') if combo else 'off'}{freed}."
+        self._shortcut_change(change)
+
+    @Slot(str)
+    def resetShortcut(self, ident: str) -> None:
+        row = next((r for r in SHORTCUTS if r[0] == ident), None)
+        if row is None:
+            return
+
+        def change(data):
+            data["keys"].pop(ident, None)
+            freed = "".join(self._free(data, combo_norm(k), ident) for k in row[3].split("|"))
+            return f"{row[1]}: back to {combo_norm(row[3].split('|')[0]).replace('+', ' + ')}{freed}."
+        self._shortcut_change(change)
+
+    @Slot()
+    def resetAllShortcuts(self) -> None:
+        self._shortcut_change(lambda data: data.update(keys={}) or "Huginn's shortcuts are as they came.")
+
+    @Slot(str, str, str)
+    def addOwnShortcut(self, run: str, name: str, combo: str) -> None:
+        """A shortcut of one's own: "app:<desktop id>" opens that app; anything else is run as a command."""
+        combo = combo_norm(combo)
+        if not combo or not run.strip():
+            self.said.emit("Choose what it opens and press its keys.", True)
+            return
+
+        def change(data):
+            freed = self._free(data, combo, run.strip())
+            data["own"] = [o for o in data["own"] if o.get("run") != run.strip()]
+            data["own"].append({"keys": combo, "run": run.strip(), "name": name.strip()[:80]})
+            return f"{name.strip() or run.strip()}: {combo.replace('+', ' + ')}{freed}."
+        self._shortcut_change(change)
+
+    @Slot(str)
+    def removeOwnShortcut(self, run: str) -> None:
+        self._shortcut_change(lambda data: data.update(own=[o for o in data["own"] if o.get("run") != run]) or "")
 
     # -------------------------------------------------------------- privacy and security
     @Slot(bool)

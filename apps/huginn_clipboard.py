@@ -171,6 +171,45 @@ def copy_back(ident: str, wait: bool = False) -> bool:
 
 
 # ---------------------------------------------------------------------------------------------- Super+V, in the shell
+def type_text(text: str) -> bool:
+    """Type some text into the window in front, by way of the clipboard (Ctrl+V from the compositor), then put back
+    what was on the clipboard before. Neither goes into clipboard history. Blocks for a second or two: run it off
+    the caller's thread."""
+    if not text or not shutil.which("wl-copy"):
+        return False
+    saved_type, saved = "", b""
+    try:
+        types = subprocess.run(["wl-paste", "--list-types"], capture_output=True, text=True, timeout=2).stdout.split()
+        saved_type = next((t for t in types if t.startswith(("text/plain;charset=utf-8", "image/png"))), next((t for t in types if not t.isupper()), ""))
+        if saved_type:
+            saved = subprocess.run(["wl-paste", "--no-newline", "--type", saved_type], capture_output=True, timeout=3).stdout
+    except (OSError, subprocess.SubprocessError):
+        saved_type, saved = "", b""
+    try:
+        PASSING.touch()
+        subprocess.run(["wl-copy", "--type", "text/plain;charset=utf-8", text], timeout=3, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        end = time.time() + 1.0
+        while time.time() < end:
+            got = subprocess.run(["wl-paste", "--no-newline", "--type", "text/plain;charset=utf-8"], capture_output=True, timeout=1).stdout
+            if got.decode("utf-8", "replace") == text:
+                break
+            time.sleep(0.04)
+        from gi.repository import Gio
+        bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
+        bus.call_sync("org.huginn.Compositor", "/org/huginn/Compositor", "org.huginn.Compositor", "Paste", None, None,
+                      Gio.DBusCallFlags.NO_AUTO_START, 1000, None)
+    except Exception:                                            # noqa: BLE001
+        return False
+    if saved_type and saved and len(saved) <= IMAGE_MAX:
+        time.sleep(0.9)                                         # long enough for the app to have read it
+        try:
+            PASSING.touch()
+            subprocess.run(["wl-copy", "--type", saved_type], input=saved, timeout=3, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except (OSError, subprocess.SubprocessError):
+            pass
+    return True
+
+
 def when_text(t: float) -> str:
     d = time.time() - t
     if d < 60:
@@ -275,8 +314,19 @@ def _png_size(data: bytes) -> tuple:
     return (0, 0)
 
 
+PASSING = Path(os.environ.get("XDG_RUNTIME_DIR") or "/tmp") / "huginn-clipboard-passing"
+
+
+def passing() -> bool:
+    """The clipboard is only being borrowed (an emoji typed in, the old clipboard put back): history leaves it."""
+    try:
+        return time.time() - PASSING.stat().st_mtime < 4
+    except OSError:
+        return False
+
+
 def store_from_stdin() -> int:
-    if not enabled() or os.environ.get("CLIPBOARD_STATE", "data") in ("sensitive", "nil", "clear"):
+    if not enabled() or os.environ.get("CLIPBOARD_STATE", "data") in ("sensitive", "nil", "clear") or passing():
         sys.stdin.buffer.read()
         return 0
     data = sys.stdin.buffer.read(IMAGE_MAX + 1)

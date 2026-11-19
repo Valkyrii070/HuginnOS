@@ -744,6 +744,47 @@ impl<B: Backend + 'static> HuginnState<B> {
         self.report_windows_now();
     }
 
+    /// Super+Alt+←/→: the window in front to the screen beside it (by where the screens are, going round), at the
+    /// same place on it, and snapped or full as it was.
+    pub fn move_to_screen(&mut self, dir: i32) {
+        let Some(window) = self.focused_window() else {
+            return;
+        };
+        let Some(from) = self.output_of(&window) else {
+            return;
+        };
+        let mut outs: Vec<(Output, Rectangle<i32, Logical>)> =
+            self.space.outputs().filter_map(|o| Some((o.clone(), self.space.output_geometry(o)?))).collect();
+        if outs.len() < 2 {
+            return;
+        }
+        outs.sort_by_key(|(_, g)| (g.loc.x, g.loc.y));
+        let i = outs.iter().position(|(o, _)| *o == from).unwrap_or(0) as i32;
+        let (to, to_geo) = outs[(i + dir).rem_euclid(outs.len() as i32) as usize].clone();
+        let from_geo = self.space.output_geometry(&from).unwrap_or_default();
+        let id = window_id(&window);
+        let snapped = self.huginn.wm.snapped.get(&id).copied();
+        let loc = self.space.element_location(&window).unwrap_or_default();
+        let size = window.geometry().size;
+        let fx = (loc.x - from_geo.loc.x) as f64 / from_geo.size.w.max(1) as f64;
+        let fy = (loc.y - from_geo.loc.y) as f64 / from_geo.size.h.max(1) as f64;
+        let x = (to_geo.loc.x + (fx * to_geo.size.w as f64) as i32).clamp(to_geo.loc.x, to_geo.loc.x + (to_geo.size.w - size.w).max(0));
+        let y = (to_geo.loc.y + (fy * to_geo.size.h as f64) as i32).clamp(to_geo.loc.y, to_geo.loc.y + (to_geo.size.h - size.h).max(0));
+        self.space.map_element(window.clone(), Point::from((x, y)), true);
+        match snapped {
+            Some(s) => self.snap_window(&window, s, false),
+            None if Self::is_maximised(&window) => {
+                if let Some(t) = window.0.toplevel().cloned() {
+                    smithay::wayland::shell::xdg::XdgShellHandler::maximize_request(self, t);
+                }
+                self.activate_window(&window);
+            }
+            None => self.activate_window(&window),
+        }
+        let _ = to;
+        self.report_windows_now();
+    }
+
     /// Super+←/→/↑/↓: through the sizes (half, a third, two-thirds), full, and back (then hidden).
     pub fn snap_step(&mut self, dir: &str) {
         let Some(window) = self.focused_window() else {

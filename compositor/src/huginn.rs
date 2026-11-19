@@ -57,6 +57,8 @@ pub struct Huginn {
     pub out: Option<mpsc::Sender<Outgoing>>,
     /// Minimised windows, with where they were.
     pub minimised: Vec<(WindowElement, Point<i32, Logical>)>,
+    /// Super+D put these windows out of the way (pressed again with nothing else open: they come back)
+    pub desktop_shown: Option<Vec<u64>>,
     /// Super is down and nothing else has been pressed since (on its release: the start menu).
     pub super_alone: bool,
     /// Screens turned off in Settings › Displays (displays.rs): kept, dark, out of the desktop
@@ -130,6 +132,7 @@ impl<B: Backend + 'static> HuginnState<B> {
     /// After the compositor's own set-up: the bus, and a timer for what is checked now and then.
     pub fn huginn_start(&mut self) {
         self.huginn.session = SESSION.get().cloned().unwrap_or_default();
+        crate::shortcuts::load();
         let (to_loop, from_bus) = channel::<Request>();
         self.handle
             .insert_source(from_bus, |event, _, state| {
@@ -267,7 +270,7 @@ impl<B: Backend + 'static> HuginnState<B> {
             .unwrap_or_default()
     }
 
-    fn is_maximised(window: &WindowElement) -> bool {
+    pub(crate) fn is_maximised(window: &WindowElement) -> bool {
         #[cfg(feature = "xwayland")]
         if let Some(x) = window.0.x11_surface() {
             return x.is_maximized();
@@ -391,6 +394,29 @@ impl<B: Backend + 'static> HuginnState<B> {
             }
             None => false,
         }
+    }
+
+    /// Super+D: every window on this space out of the way, to see the desktop; again, and they're back (unless
+    /// something was opened in the meantime: then that goes too).
+    pub fn show_desktop(&mut self) {
+        let open: Vec<WindowElement> = self.space.elements().cloned().collect();
+        if open.is_empty() {
+            if let Some(ids) = self.huginn.desktop_shown.take() {
+                for id in ids {
+                    let w = self.huginn.minimised.iter().map(|(w, _)| w).find(|w| window_id(w) == id).cloned();
+                    if let Some(w) = w {
+                        self.activate_window(&w);
+                    }
+                }
+                self.report_windows_now();
+            }
+            return;
+        }
+        self.huginn.desktop_shown = Some(open.iter().map(window_id).collect());
+        for w in &open {
+            self.minimise_window(w);
+        }
+        self.report_windows_now();
     }
 
     pub fn minimise_window(&mut self, window: &WindowElement) {

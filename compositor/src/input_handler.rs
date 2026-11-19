@@ -85,6 +85,9 @@ impl<BackendData: Backend> HuginnState<BackendData> {
             KeyAction::Screenshot(what) => self.say(crate::dbus::Outgoing::Screenshot(what.into())),
             KeyAction::Zoom(step) => self.zoom_by(step),
             KeyAction::Hardware(name) => self.say(crate::dbus::Outgoing::Key(name.into())),
+            KeyAction::Run(what) => self.say(crate::dbus::Outgoing::ShellKey(format!("run:{what}"))),
+            KeyAction::ShowDesktop => self.show_desktop(),
+            KeyAction::MoveToScreen(dir) => self.move_to_screen(dir),
         }
     }
 
@@ -129,7 +132,7 @@ impl<BackendData: Backend> HuginnState<BackendData> {
                 .input(self, keycode, state, serial, time, |_, modifiers, handle| {
                     let keysym = handle.modified_sym();
                     if let KeyState::Pressed = state {
-                        match process_keyboard_shortcut(*modifiers, keysym) {
+                        match process_keyboard_shortcut(*modifiers, keysym, handle.raw_latin_sym_or_raw_current_sym()) {
                             Some(action @ (KeyAction::VtSwitch(_) | KeyAction::Hardware(_))) => {
                                 return FilterResult::Intercept(action);
                             }
@@ -196,7 +199,7 @@ impl<BackendData: Backend> HuginnState<BackendData> {
                 // should be forwarded to the client or not.
                 if let KeyState::Pressed = state {
                     if !inhibited {
-                        let action = process_keyboard_shortcut(*modifiers, keysym);
+                        let action = process_keyboard_shortcut(*modifiers, keysym, handle.raw_latin_sym_or_raw_current_sym());
 
                         if action.is_some() {
                             suppressed_keys.push(keysym);
@@ -1286,6 +1289,12 @@ enum KeyAction {
     Zoom(i32),
     /// Volume, brightness, media and power keys, for the session daemon
     Hardware(&'static str),
+    /// A shortcut of the person's own, or one that opens an app: the shell runs it ("open:files", or a command)
+    Run(String),
+    /// Super+D: every window out of the way, and back again
+    ShowDesktop,
+    /// Super+Alt+←/→: the window in front to the screen beside
+    MoveToScreen(i32),
     /// Do nothing more
     None,
 }
@@ -1313,55 +1322,54 @@ fn hardware_key(keysym: Keysym) -> Option<&'static str> {
     })
 }
 
-fn process_keyboard_shortcut(modifiers: ModifiersState, keysym: Keysym) -> Option<KeyAction> {
+fn process_keyboard_shortcut(modifiers: ModifiersState, keysym: Keysym, raw: Option<Keysym>) -> Option<KeyAction> {
     let dev = std::env::var("HUGINN_DEV").is_ok_and(|v| v == "1");
     if dev && modifiers.ctrl && modifiers.alt && keysym == Keysym::BackSpace {
-        Some(KeyAction::Quit)
+        return Some(KeyAction::Quit);
     } else if (xkb::KEY_XF86Switch_VT_1..=xkb::KEY_XF86Switch_VT_12).contains(&keysym.raw()) {
-        Some(KeyAction::VtSwitch((keysym.raw() - xkb::KEY_XF86Switch_VT_1 + 1) as i32))
+        return Some(KeyAction::VtSwitch((keysym.raw() - xkb::KEY_XF86Switch_VT_1 + 1) as i32));
     } else if let Some(name) = hardware_key(keysym) {
-        Some(KeyAction::Hardware(name))
-    } else if modifiers.logo && matches!(keysym, Keysym::equal | Keysym::plus | Keysym::KP_Add) {
-        Some(KeyAction::Zoom(1))
-    } else if modifiers.logo && matches!(keysym, Keysym::minus | Keysym::KP_Subtract) {
-        Some(KeyAction::Zoom(-1))
-    } else if modifiers.logo && matches!(keysym, Keysym::_0 | Keysym::KP_0) {
-        Some(KeyAction::Zoom(0))
-    } else if modifiers.logo && keysym == Keysym::space {
-        Some(KeyAction::Search)
-    } else if modifiers.logo && (keysym == Keysym::l || keysym == Keysym::L) {
-        Some(KeyAction::Lock)
-    } else if modifiers.logo && !modifiers.shift && (keysym == Keysym::t || keysym == Keysym::T) {
-        Some(KeyAction::Shell("today"))
-    } else if modifiers.logo && !modifiers.shift && (keysym == Keysym::v || keysym == Keysym::V) {
-        Some(KeyAction::Shell("clipboard"))
-    } else if modifiers.logo && keysym == Keysym::Tab {
-        Some(KeyAction::Overview)
-    } else if modifiers.logo && modifiers.ctrl && (keysym == Keysym::Left || keysym == Keysym::Right) {
-        Some(KeyAction::SpaceStep(if keysym == Keysym::Left { -1 } else { 1 }, false))
-    } else if modifiers.logo && modifiers.shift && (keysym == Keysym::Left || keysym == Keysym::Right) {
-        Some(KeyAction::SpaceStep(if keysym == Keysym::Left { -1 } else { 1 }, true))
-    } else if modifiers.logo && !modifiers.shift && (Keysym::_1.raw()..=Keysym::_9.raw()).contains(&keysym.raw()) {
-        Some(KeyAction::SpaceGo((keysym.raw() - Keysym::_1.raw()) as usize))
-    } else if modifiers.logo && keysym == Keysym::Left {
-        Some(KeyAction::Snap("left"))
-    } else if modifiers.logo && keysym == Keysym::Right {
-        Some(KeyAction::Snap("right"))
-    } else if modifiers.alt && keysym == Keysym::F4 {
-        Some(KeyAction::CloseWindow)
-    } else if modifiers.logo && keysym == Keysym::Up {
-        Some(KeyAction::Snap("up"))
-    } else if modifiers.logo && keysym == Keysym::Down {
-        Some(KeyAction::Snap("down"))
-    } else if modifiers.alt && (keysym == Keysym::Tab || keysym == Keysym::ISO_Left_Tab) {
-        Some(KeyAction::Switch(!(modifiers.shift || keysym == Keysym::ISO_Left_Tab)))
-    } else if keysym == Keysym::Print {
-        Some(KeyAction::Screenshot(if modifiers.shift { "choose" } else { "screen" }))
-    } else if modifiers.logo && modifiers.shift && (keysym == Keysym::s || keysym == Keysym::S) {
-        Some(KeyAction::Screenshot("choose"))
-    } else {
-        None
+        return Some(KeyAction::Hardware(name));
+    } else if modifiers.alt && !modifiers.logo && !modifiers.ctrl && (keysym == Keysym::Tab || keysym == Keysym::ISO_Left_Tab) {
+        return Some(KeyAction::Switch(!(modifiers.shift || keysym == Keysym::ISO_Left_Tab)));
     }
+    // Super+1…9: that space (fixed; the number keys' own symbols when Shift is held don't matter)
+    let digit = raw.unwrap_or(keysym).raw();
+    if modifiers.logo && !modifiers.shift && !modifiers.ctrl && !modifiers.alt && (Keysym::_1.raw()..=Keysym::_9.raw()).contains(&digit) {
+        return Some(KeyAction::SpaceGo((digit - Keysym::_1.raw()) as usize));
+    }
+    // the rest: Settings › Keyboard shortcuts (shortcuts.rs)
+    let act = crate::shortcuts::lookup(modifiers.ctrl, modifiers.alt, modifiers.shift, modifiers.logo, raw, keysym)?;
+    Some(match act {
+        crate::shortcuts::Act::Run(cmd) => KeyAction::Run(cmd),
+        crate::shortcuts::Act::Own(name) => match name {
+            "search" => KeyAction::Search,
+            "lock" => KeyAction::Lock,
+            "today" => KeyAction::Shell("today"),
+            "clipboard" => KeyAction::Shell("clipboard"),
+            "emoji" => KeyAction::Shell("emoji"),
+            "overview" => KeyAction::Overview,
+            "desktop" => KeyAction::ShowDesktop,
+            "files" | "settings" | "terminal" => KeyAction::Run(format!("open:{name}")),
+            "space-left" => KeyAction::SpaceStep(-1, false),
+            "space-right" => KeyAction::SpaceStep(1, false),
+            "take-left" => KeyAction::SpaceStep(-1, true),
+            "take-right" => KeyAction::SpaceStep(1, true),
+            "screen-left" => KeyAction::MoveToScreen(-1),
+            "screen-right" => KeyAction::MoveToScreen(1),
+            "snap-left" => KeyAction::Snap("left"),
+            "snap-right" => KeyAction::Snap("right"),
+            "snap-up" => KeyAction::Snap("up"),
+            "snap-down" => KeyAction::Snap("down"),
+            "close" => KeyAction::CloseWindow,
+            "screenshot" => KeyAction::Screenshot("screen"),
+            "screenshot-choose" => KeyAction::Screenshot("choose"),
+            "zoom-in" => KeyAction::Zoom(1),
+            "zoom-out" => KeyAction::Zoom(-1),
+            "zoom-reset" => KeyAction::Zoom(0),
+            _ => return None,
+        },
+    })
 }
 
 impl<BackendData: Backend> VirtualKeyboardHandler for HuginnState<BackendData> {

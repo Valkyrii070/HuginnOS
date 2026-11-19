@@ -51,6 +51,11 @@ App Store installs apps from Flathub. Web apps you install from the Huginn brows
 ## Switch windows and keys to know
 Hold Alt and press Tab to see your open windows; let go of Alt to go to the one picked (Shift+Tab goes back, Escape stays put). Super on its own opens the start menu, Super+Tab the Overview, Super+T Today, Alt on its own the app's menu, Super+Space searches everything, Super+L locks, Print saves a screenshot of the whole screen to Pictures › Screenshots, and Shift+Print (or Super+Shift+S) opens Screenshot to choose what to take. Clicking an open app in the dock brings its window forward instead of opening another.
 
+Super+E opens Files, Super+I Settings and Ctrl+Alt+T Terminal. Super+D puts every window out of the way to show the desktop, and brings them back when pressed again. With more than one screen, Super+Alt+← / → moves the window in front to the screen beside it, snapped or full as it was. Settings › Keyboard Shortcuts lists them all: change any of them, turn one off, or make your own to open an app or run a command.
+
+## Emoji and symbols
+Press Super+. (full stop) wherever you're typing: type a word to find one (heart, party, arrow, euro), use the arrows or the pointer, and Enter types it in. The ones you used are first next time; the hands at the bottom set the skin tone. Whatever you'd copied stays on the clipboard.
+
 ## Clipboard history
 Super+V shows what you copied lately, text and pictures; pick one and it's pasted where you were typing. Type to find something, pin what you use often, Delete removes one. It's off until you turn it on (the first Super+V asks, or Settings › Privacy). Passwords copied from Passwords and Authenticator are never kept.
 

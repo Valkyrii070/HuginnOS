@@ -113,6 +113,8 @@ Canvas {
         case "code": line(8, 7, 3, 12, 8, 17); line(16, 7, 21, 12, 16, 17); line(13.5, 4.5, 10.5, 19.5); break
         case "bluetooth": line(7, 7.5, 16.5, 16, 12, 20.5, 12, 3.5, 16.5, 8, 7, 16.5); break
         case "battery": box(3, 7.5, 16, 9, 2.5); line(21, 10.5, 21, 13.5); c.fillRect(5.5, 10, 7, 4); break
+        case "command":   // ⌘-like loops: keyboard shortcuts
+            ring(7, 7, 2.6); ring(17, 7, 2.6); ring(7, 17, 2.6); ring(17, 17, 2.6); box(9.6, 9.6, 4.8, 4.8, 0.6); break
         case "keyboard": box(2.5, 6, 19, 12, 2.5); dot(6.5, 9.8, 0.9); dot(10, 9.8, 0.9); dot(13.5, 9.8, 0.9); dot(17, 9.8, 0.9); line(7.5, 14.2, 16.5, 14.2); break
         case "globe": ring(12, 12, 9); line(3, 12, 21, 12); c.beginPath(); c.ellipse(8, 3, 8, 18); c.stroke(); break
         case "refresh": c.beginPath(); c.arc(12, 12, 7.5, Math.PI * 1.15, Math.PI * 2.85); c.stroke(); line(4.4, 5.5, 4.6, 9.4, 8.5, 9.2); break

@@ -1819,6 +1819,27 @@ Before the first start on a desktop PC (a Radeon RX 9070 XT and three screens):
 - The menus' Cut, Copy, Paste, Select All, Undo and Redo in Slides now go to a box being typed in (a table cell, the
   notes, Find) before the slide's items.
 
+## Daily use, round two (2026-11-19)
+
+- **Keyboard shortcuts of one's own** (`compositor/src/shortcuts.rs`, new; Settings › Keyboard Shortcuts, `SetKeys.qml`):
+  the compositor's shortcuts now come from a table, `~/.config/huginn/shortcuts.json` over the defaults, read again when
+  Settings asks (`org.huginn.Compositor.ReloadShortcuts`). Every one of Huginn's can be given other keys or turned off;
+  a key taken from another shortcut is said. "Your own" open an app (`app:<desktop id>`) or run a command, through the
+  shell (`run:` keys), so the dock shows them starting. While Settings listens for new keys it pauses the shortcuts
+  (`PauseShortcuts`, 30 s at most), so Super+E reaches it. Keys are matched without Shift and in the Latin layout,
+  so Super+. is the same key in any layout. Fixed: Super and Alt on their own, Super+1…9, Alt+Tab, the consoles and the
+  hardware keys.
+- **New keys**: Super+E Files, Super+I Settings, Ctrl+Alt+T Terminal, Super+D shows the desktop (every window on the
+  space out of the way; again, and they're back), Super+Alt+←/→ moves the window in front to the screen beside it
+  (by where the screens are, going round), at the same place on it and snapped or full as it was.
+- **Emoji and symbols on Super+.** (`shell/qml/EmojiPanel.qml`, `huginn_chars.EmojiPicker`): Characters' emoji (from
+  Unicode's emoji-test.txt) and symbols, read the first time it opens; type to find, arrows and Enter, recent ones
+  first, skin tones. The one picked is typed into the window in front through the clipboard and Ctrl+V
+  (`huginn_clipboard.type_text`), and what was on the clipboard is put back after; clipboard history leaves both alone.
+- Checked: today's ISO in QEMU (no KVM): GRUB, the boot splash, the live session with the installer, then the
+  desktop, widgets and the Welcome tour. Without a graphics card the shell takes a few minutes to come up the first
+  time.
+
 ## Huginn, the browser
 
 Inside the Huginn repository (this kit is its `os/` folder) the image ships the repository's own browser. A kit used

@@ -219,3 +219,59 @@ class Characters(QObject):
         self._keep()
         self.changed.emit()
         self.pickedChanged.emit()
+
+
+class EmojiPicker(QObject):
+    """The shell's emoji picker (Super+.): Characters' emoji and symbols, read the first time it opens, and the one
+    picked typed into the window in front (huginn_clipboard.type_text)."""
+    changed = Signal()
+
+    def __init__(self):
+        super().__init__()
+        self._chars = None
+
+    def _c(self) -> "Characters":
+        if self._chars is None:
+            self._chars = Characters()
+            self._chars.changed.connect(self.changed)
+            self._chars.recentChanged.connect(self.changed)
+        return self._chars
+
+    ready = Property(bool, lambda self: self._chars is not None, notify=changed)
+    items = Property("QVariantList", lambda self: self._chars._get_items() if self._chars else [], notify=changed)
+    groups = Property("QVariantList", lambda self: self._chars._get_groups() if self._chars else [], notify=changed)
+    group = Property(str, lambda self: self._chars._group if self._chars else "", notify=changed)
+    tone = Property(int, lambda self: self._chars._tone if self._chars else 0, notify=changed)
+
+    @Slot()
+    def open(self) -> None:
+        c = self._c()
+        c._query = ""
+        c._group = "recent" if c._recent else "Smileys & Emotion"
+        self.changed.emit()
+
+    @Slot(str)
+    def search(self, text: str) -> None:
+        self._c().search(text)
+
+    @Slot(str)
+    def setGroup(self, g: str) -> None:
+        self._c()._query = ""
+        self._c().setGroup(g)
+
+    @Slot(int)
+    def setTone(self, n: int) -> None:
+        self._c().setTone(n)
+
+    @Slot(str)
+    def insert(self, ch: str) -> None:
+        """Typed into the window in front, once the picker has gone; kept among the recent ones."""
+        if not ch:
+            return
+        c = self._c()
+        c._recent = [ch] + [x for x in c._recent if x != ch]
+        del c._recent[24:]
+        c._keep()
+        import threading
+        import huginn_clipboard
+        threading.Thread(target=huginn_clipboard.type_text, args=(ch,), daemon=True).start()

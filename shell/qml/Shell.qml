@@ -92,8 +92,21 @@ QtObject {
         function onKeyWanted(what) {
             if (what === "today") shell.open = shell.open === "today" ? "" : "today"
             else if (what === "clipboard") shell.open = shell.open === "clipboard" ? "" : "clipboard"
+            else if (what === "emoji") shell.open = shell.open === "emoji" ? "" : "emoji"
             else if (what === "menu") shell.appMenu("")
+            else if (what.indexOf("run:") === 0) shell.runKey(what.slice(4))
         }
+    }
+    // A shortcut that opens something (Settings › Keyboard shortcuts): "open:files" (one of Huginn's apps by name),
+    // "app:<desktop id>" (any app), or a command of the person's own.
+    function runKey(what) {
+        var id = what.indexOf("open:") === 0 ? "huginn-" + what.slice(5) : what.indexOf("app:") === 0 ? what.slice(4).replace(/\.desktop$/, "") : ""
+        if (id) {
+            var app = Apps.all.filter(function (a) { return a.id === id })[0]
+            if (app && app.exec) Apps.launch(app.exec)
+            return
+        }
+        Apps.launch(what)
     }
     // The wallpaper, on every screen (screens plugged in later get one too); the widgets on the main screen, with the
     // bar and the dock.
@@ -432,6 +445,17 @@ QtObject {
         LayerShell.Window.keyboardInteractivity: shell.open === "clipboard" ? LayerShell.Window.KeyboardInteractivityExclusive : LayerShell.Window.KeyboardInteractivityNone
         Rectangle { anchors.fill: parent; color: "black"; opacity: clipPanel.presence * 0.25 }
         ClipPanel { id: clipPanel; anchors.fill: parent; shown: shell.open === "clipboard"; onDone: shell.open = "" }
+    },
+    Window {   // the emoji picker (Super+.): like clipboard history, over everything in the middle
+        visible: shell.open === "emoji" || emojiPanel.visible; color: "transparent"
+        LayerShell.Window.scope: "huginn-emoji"
+        LayerShell.Window.wantsToBeOnActiveScreen: true
+        LayerShell.Window.layer: LayerShell.Window.LayerOverlay
+        LayerShell.Window.anchors: LayerShell.Window.AnchorTop | LayerShell.Window.AnchorBottom | LayerShell.Window.AnchorLeft | LayerShell.Window.AnchorRight
+        LayerShell.Window.exclusionZone: -1
+        LayerShell.Window.keyboardInteractivity: shell.open === "emoji" ? LayerShell.Window.KeyboardInteractivityExclusive : LayerShell.Window.KeyboardInteractivityNone
+        Rectangle { anchors.fill: parent; color: "black"; opacity: emojiPanel.presence * 0.18 }
+        EmojiPanel { id: emojiPanel; anchors.fill: parent; shown: shell.open === "emoji"; onDone: shell.open = "" }
     },
     Window {   // an app's island, from the dock (right-click or a long press on its tile)
         id: islandWin

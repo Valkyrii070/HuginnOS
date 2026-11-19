@@ -19,6 +19,9 @@ Choose where sound plays and which microphone listens, and how loud each is. App
 ## Battery and power
 The ring shows the charge; under it, the battery's health (how much it holds compared with new) and its charge cycles. Power mode trades speed for battery. Choose when the screen turns off and the computer sleeps, plugged in and on battery, and what closing the lid and the power button do.
 
+## Keyboard shortcuts
+Every one of Huginn's shortcuts, grouped: Change, then press the new keys (Escape leaves it as it was, Backspace turns it off). A key already used by another shortcut moves to the new one, and Settings says which lost it. Under "Your own", choose an app or type a command and press its keys. Reset All puts Huginn's back as they came.
+
 ## Keyboard and mouse
 Add keyboard layouts and switch between them with Meta+Space. Make Caps Lock another Control or Escape, turn on the Compose key, and set how keys repeat. Each touchpad and mouse has its own speed, natural scrolling, tap to click and left-handed buttons.
 

@@ -24,6 +24,7 @@ pub mod input_handler;
 pub mod look;
 pub mod render;
 pub mod shell;
+pub mod shortcuts;
 pub mod state;
 #[cfg(feature = "udev")]
 pub mod udev;
