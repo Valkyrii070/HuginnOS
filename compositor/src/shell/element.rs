@@ -492,7 +492,9 @@ impl SpaceElement for WindowElement {
         }
     }
     fn z_index(&self) -> u8 {
-        SpaceElement::z_index(&self.0)
+        // kept on top (wm.rs: Above): over every other window, whatever comes forward
+        let base = SpaceElement::z_index(&self.0);
+        if self.0.user_data().get::<crate::wm::Above>().is_some_and(|a| a.0.get()) { base.saturating_add(1) } else { base }
     }
 
     fn set_activate(&self, activated: bool) {

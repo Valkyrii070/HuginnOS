@@ -281,7 +281,7 @@ impl<BackendData: Backend> WlrLayerShellHandler for HuginnState<BackendData> {
         let output = wl_output
             .as_ref()
             .and_then(Output::from_resource)
-            .or_else(|| pointer.and_then(|at| self.space.output_under(at).next().cloned()))
+            .or_else(|| pointer.and_then(|at| self.space.output_under(at).find(|o| crate::displays::mirror_of(o).is_none()).cloned()))
             .unwrap_or_else(|| self.space.outputs().next().unwrap().clone());
         let mut map = layer_map_for_output(&output);
         map.map_layer(&LayerSurface::new(surface, namespace)).unwrap();

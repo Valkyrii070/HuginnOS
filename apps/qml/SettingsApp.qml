@@ -106,6 +106,7 @@ GlassWindow {
     Component.onCompleted: refresh()
     function refresh() {
         if (["network", "bluetooth", "displays", "sound", "notifications", "power", "input", "keys", "time", "language", "users", "defaults", "privacy", "about", "a11y"].indexOf(page) >= 0) Backend.load(page)
+        if (page === "desktop") Backend.load("displays")            // (Where apps open names the screens)
         if (page === "accounts" && typeof Accounts !== "undefined") Accounts.refresh()
         if (page === "ai" && typeof AI !== "undefined" && AI) AI.refresh()
         if (page === "updates" && typeof Updates !== "undefined") Updates.look(false)

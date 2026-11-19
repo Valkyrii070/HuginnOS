@@ -371,7 +371,7 @@ def parse_screens(text: str) -> list:
                     "hdr": bool(o.get("hdr")), "sdr": int(o.get("sdr-brightness", 203) or 203),
                     "resolutions": [{"id": f"{w}x{h}", "label": f"{w} × {h}"} for w, h in sizes],
                     "rates": [{"id": str(r), "label": f"{r:g} Hz"} for r in rates], "modes": modes,
-                    "model": str(o.get("model") or "").strip(),
+                    "model": str(o.get("model") or "").strip(), "key": str(o.get("key") or name), "mirror": str(o.get("mirror") or ""),
                     "label": "Built-in screen" if name.startswith(("eDP", "LVDS", "DSI")) else name.replace("-", " ")})
     # a screen's model names it better than its socket ("DELL U2723QE"); two of the same model keep the socket too
     models = [s["model"] for s in out]
@@ -634,6 +634,7 @@ SHORTCUTS = [  # id, what it does, group, default keys ("|" between more than on
     ("screen-left", "Move to the screen on the left", "Windows", "Super+Alt+Left"),
     ("screen-right", "Move to the screen on the right", "Windows", "Super+Alt+Right"),
     ("desktop", "Show the desktop (again: bring them back)", "Windows", "Super+D"),
+    ("ontop", "Keep the window on top of the others (again: stop)", "Windows", "Super+Ctrl+T"),
     ("close", "Close the window", "Windows", "Alt+F4"),
     ("overview", "Overview of windows and spaces", "Windows", "Super+Tab"),
     ("space-left", "The space on the left", "Spaces", "Super+Ctrl+Left"),
@@ -646,6 +647,7 @@ SHORTCUTS = [  # id, what it does, group, default keys ("|" between more than on
     ("zoom-out", "Zoom out", "Screen", "Super+minus|Super+KP_Subtract"),
     ("zoom-reset", "Zoom back to the whole screen", "Screen", "Super+0|Super+KP_0"),
     ("lock", "Lock the screen", "Screen", "Super+L"),
+    ("frames", "Show frame times (again: hide them)", "Screen", "Super+Alt+F"),
 ]
 FIXED_SHORTCUTS = [("Start menu", "Super"), ("The app's menu", "Alt"), ("Go to space 1 to 9", "Super+1…9"), ("Switch between windows", "Alt+Tab")]
 MOD_ORDER = ("Super", "Ctrl", "Alt", "Shift")
@@ -1637,6 +1639,76 @@ class SystemSettings(QObject):
     def setMain(self, name: str) -> None:
         self._act("displays", lambda: self._kscreen(f"output.{name}.priority.1", what="Choosing the main screen") or "The dock and top bar move to that screen.",
                   demo_change=lambda s: [x.update(primary=x["name"] == name) for x in s["screens"]])
+
+    @Slot(str, str)
+    def setMirror(self, name: str, source: str) -> None:
+        """A screen shows the same as another (source), or its own desktop again ('')."""
+        self._act("displays", lambda: self._kscreen(f"output.{name}.mirror.{source}", what="Showing the same on both screens")
+                  or ("Both screens show the same now." if source else "It has its own desktop again."),
+                  demo_change=lambda s: [x.update(mirror=source) for x in s["screens"] if x["name"] == name])
+
+    # ---------------------------------------------------------------- where apps open (window rules)
+    def _rules_file(self):
+        return CONFIG / "huginn" / "window-rules.json"
+
+    def _read_rules(self) -> list:
+        try:
+            data = json.loads(self._rules_file().read_text(encoding="utf-8"))
+            return [r for r in data if isinstance(r, dict) and r.get("app")] if isinstance(data, list) else []
+        except (OSError, ValueError):
+            return []
+
+    rulesChanged = Signal()
+
+    @Property("QVariantList", notify=rulesChanged)
+    def windowRules(self) -> list:
+        apps = self._known_apps()
+        out = []
+        for r in self._read_rules():
+            a = apps.get(r["app"]) or apps.get(r["app"] + ".desktop") or next((x for k, x in apps.items() if k.lower().removesuffix(".desktop") == r["app"].lower()), None)
+            out.append({"app": r["app"], "name": (a or {}).get("name") or r["app"], "icon": icon_url(a) if a else "", "screen": r.get("screen", ""),
+                        "space": int(r.get("space", 0) or 0), "maximise": bool(r.get("maximise")), "ontop": bool(r.get("ontop")), "title": r.get("title", "")})
+        return out
+
+    @Slot(result="QVariantList")
+    def appChoices(self) -> list:
+        """Apps to choose from, by name: [{id (without .desktop), name, icon}]."""
+        apps = self._known_apps()
+        return [{"id": a["id"].removesuffix(".desktop"), "name": a["name"], "icon": icon_url(a)}
+                for a in sorted(apps.values(), key=lambda a: a["name"].lower()) if not a["nodisplay"]]
+
+    @Slot(str, "QVariant")
+    def setWindowRule(self, app: str, rule) -> None:
+        """An app's rule: {screen, space, maximise, ontop} (what else it says by hand, size or position, is kept)."""
+        rule = rule.toVariant() if hasattr(rule, "toVariant") else dict(rule or {})
+        app = app.strip().removesuffix(".desktop")
+        if not app:
+            return
+        rules = self._read_rules()
+        old = next((r for r in rules if r["app"].lower() == app.lower() and not r.get("title")), None)
+        new = dict(old or {}, app=app)
+        for k in ("screen", "space", "maximise", "ontop"):
+            v = rule.get(k)
+            if v in (None, "", 0, False):
+                new.pop(k, None)
+            else:
+                new[k] = int(v) if k == "space" else v
+        rules = [r for r in rules if r is not old] + ([new] if len(new) > 1 else [])
+        try:
+            self._rules_file().parent.mkdir(parents=True, exist_ok=True)
+            self._rules_file().write_text(json.dumps(rules, indent=1), encoding="utf-8")
+        except OSError as err:
+            self.said.emit(f"Couldn't keep that: {err.strerror or err}", True)
+        self.rulesChanged.emit()
+
+    @Slot(str)
+    def removeWindowRule(self, app: str) -> None:
+        rules = [r for r in self._read_rules() if not (r["app"].lower() == app.lower() and not r.get("title"))]
+        try:
+            self._rules_file().write_text(json.dumps(rules, indent=1), encoding="utf-8")
+        except OSError:
+            pass
+        self.rulesChanged.emit()
 
     @Slot()
     def identifyScreens(self) -> None:

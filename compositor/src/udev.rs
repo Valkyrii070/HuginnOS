@@ -157,7 +157,7 @@ pub struct UdevData {
     primary_gpu: DrmNode,
     gpus: GpuManager<GbmGlesBackend<GlesRenderer, DrmDeviceFd>>,
     backends: HashMap<DrmNode, BackendData>,
-    pointer_images: Vec<(xcursor::parser::Image, MemoryRenderBuffer)>,
+    pointer_images: Vec<(xcursor::parser::Image, u32, MemoryRenderBuffer)>,
     pointer_element: PointerElement,
     #[cfg(feature = "debug")]
     fps_texture: Option<MultiTexture>,
@@ -1443,6 +1443,7 @@ impl HuginnState<UdevData> {
 
         // fixup window coordinates; windows back on their own screens
         crate::shell::fixup_positions(&mut self.space, self.pointer.current_location());
+        self.update_mirrors();
         self.screens_changed();
     }
 
@@ -1482,6 +1483,7 @@ impl HuginnState<UdevData> {
         }
 
         crate::shell::fixup_positions(&mut self.space, self.pointer.current_location());
+        self.update_mirrors();
         self.screens_changed();
     }
 
@@ -1575,6 +1577,7 @@ impl HuginnState<UdevData> {
             return;
         }
         surface.last_presentation_time = Some(clock);
+        crate::frames::shown(&output.name(), 1_000_000.0 / frame_duration.as_micros().max(1) as f64);
 
         let submit_result = surface
             .drm_output
@@ -1752,11 +1755,14 @@ impl HuginnState<UdevData> {
 
         let start = Instant::now();
 
-        // TODO get scale from the rendersurface when supporting HiDPI
-        let frame = self
-            .backend_data
-            .pointer_image
-            .get_image(1 /*scale*/, self.clock.now().into());
+        // the pointer's picture: the shape asked for, sharp at this screen's size of things
+        let cursor_scale = output.current_scale().fractional_scale().ceil().max(1.0) as u32;
+        let icon = match &self.cursor_status {
+            CursorImageStatus::Named(icon) => *icon,
+            _ => smithay::input::pointer::CursorIcon::Default,
+        };
+        let frame = self.backend_data.pointer_image.get_image(icon, cursor_scale, self.clock.now().into());
+        let named_hotspot = Point::<i32, Logical>::from(((frame.xhot / cursor_scale) as i32, (frame.yhot / cursor_scale) as i32));
 
         let primary_gpu = self.backend_data.primary_gpu;
         let render_node = surface.render_node.unwrap_or(primary_gpu);
@@ -1773,8 +1779,8 @@ impl HuginnState<UdevData> {
         let pointer_images = &mut self.backend_data.pointer_images;
         let pointer_image = pointer_images
             .iter()
-            .find_map(|(image, texture)| {
-                if image == &frame {
+            .find_map(|(image, at, texture)| {
+                if image == &frame && *at == cursor_scale {
                     Some(texture.clone())
                 } else {
                     None
@@ -1785,11 +1791,11 @@ impl HuginnState<UdevData> {
                     &frame.pixels_rgba,
                     Fourcc::Argb8888,
                     (frame.width as i32, frame.height as i32),
-                    1,
+                    cursor_scale as i32,
                     Transform::Normal,
                     None,
                 );
-                pointer_images.push((frame, buffer.clone()));
+                pointer_images.push((frame, cursor_scale, buffer.clone()));
                 buffer
             });
 
@@ -1801,6 +1807,7 @@ impl HuginnState<UdevData> {
             &output,
             self.pointer.current_location(),
             &pointer_image,
+            named_hotspot,
             &mut self.backend_data.pointer_element,
             &self.dnd_icon,
             &mut self.cursor_status,
@@ -1896,6 +1903,7 @@ impl HuginnState<UdevData> {
                 }
             }
             let elapsed = start.elapsed();
+            crate::frames::drawn(&output.name(), elapsed);
             tracing::trace!(?elapsed, "rendered surface");
         }
 
@@ -1912,6 +1920,7 @@ fn render_surface<'a>(
     output: &Output,
     pointer_location: Point<f64, Logical>,
     pointer_image: &MemoryRenderBuffer,
+    named_hotspot: Point<i32, Logical>,
     pointer_element: &mut PointerElement,
     dnd_icon: &Option<DndIcon>,
     cursor_status: &mut CursorImageStatus,
@@ -1936,7 +1945,7 @@ fn render_surface<'a>(
                     .hotspot
             })
         } else {
-            (0, 0).into()
+            named_hotspot
         };
         let cursor_pos = pointer_location - output_geometry.loc.to_f64();
 

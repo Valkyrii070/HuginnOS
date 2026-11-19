@@ -71,6 +71,9 @@ pub static DARK: AtomicBool = AtomicBool::new(true);
 /// Settings › Desktop & Dock: adaptive sync off
 pub static NO_VRR: AtomicBool = AtomicBool::new(false);
 pub static FROST: AtomicBool = AtomicBool::new(true);
+/// Lighter glass (Settings › Displays › Glass › Light): the frost from a quarter of the pixels, three levels instead of
+/// four, for slower graphics or many fast screens.
+pub static LIGHT: AtomicBool = AtomicBool::new(false);
 
 /// Window corners, in logical pixels: the same as Huginn's own windows draw (tokens: radius.window).
 pub const RADIUS: f64 = 14.0;
@@ -952,9 +955,10 @@ unsafe fn blur_under(
         gl.Disable(ffi::SCISSOR_TEST);
         gl.ActiveTexture(ffi::TEXTURE0);
 
-        // the levels: a half, a quarter, an eighth, a sixteenth
-        let sizes: Vec<(i32, i32)> = (1..=LEVELS).map(|i| ((cw >> i).max(1), (ch >> i).max(1))).collect();
-        if st.levels.len() != LEVELS || st.levels.iter().zip(&sizes).any(|(l, s)| (l.w, l.h) != *s) {
+        // the levels: a half, a quarter, an eighth, a sixteenth (lighter glass: a quarter, an eighth, a sixteenth)
+        let (first, count) = if LIGHT.load(Ordering::Relaxed) { (2, LEVELS - 1) } else { (1, LEVELS) };
+        let sizes: Vec<(i32, i32)> = (first..first + count).map(|i| ((cw >> i).max(1), (ch >> i).max(1))).collect();
+        if st.levels.len() != count || st.levels.iter().zip(&sizes).any(|(l, s)| (l.w, l.h) != *s) {
             if let Ok(mut g) = GARBAGE.lock() {
                 g.extend(st.levels.drain(..).map(|l| (l.tex, l.fbo)));
             }
@@ -983,10 +987,10 @@ unsafe fn blur_under(
             gl.DrawArrays(ffi::TRIANGLE_STRIP, 0, 4);
             gl.DisableVertexAttribArray(pos);
         };
-        for i in 0..LEVELS - 1 {
+        for i in 0..count - 1 {
             pass(&k.down, &st.levels[i], &st.levels[i + 1]);
         }
-        for i in (0..LEVELS - 1).rev() {
+        for i in (0..count - 1).rev() {
             pass(&k.up, &st.levels[i + 1], &st.levels[i]);
         }
 

@@ -7,7 +7,9 @@
 //!  {"app": "huginn-terminal", "size": [900, 560], "position": [40, 60]},
 //!  {"app": "discord", "title": "Discord", "space": 2}]
 //! ```
-//! "app" is the app's id (as the window list gives it), "title" a part of the title; "space" counts from 1.
+//! "app" is the app's id (as the window list gives it), "title" a part of the title; "space" counts from 1. Settings ›
+//! Desktop & Dock › Where apps open writes them too, with "screen" (a screen's make, model and serial, its name, or
+//! "main") and "ontop" (kept on top of other windows).
 
 use std::{
     path::PathBuf,
@@ -71,18 +73,36 @@ impl<B: Backend + 'static> HuginnState<B> {
                 let to = space - 1;
                 self.handle.insert_idle(move |state| state.space_do(&format!("move:{id}:{to}")));
             }
+            if r.get("ontop").and_then(|v| v.as_bool()) == Some(true) {
+                let w = window.clone();
+                self.handle.insert_idle(move |state| state.set_above(&w, true));
+            }
+            // the screen it opens on (when that screen is here)
+            let area = r.get("screen").and_then(|v| v.as_str()).and_then(|want| self.rule_screen(want));
             if r.get("maximise").and_then(|v| v.as_bool()) == Some(true) {
                 if let Some(t) = window.0.toplevel().cloned() {
+                    if let Some(a) = area {
+                        self.space.map_element(window.clone(), a.loc, false);
+                    }
                     let state: &mut Self = self;
                     smithay::wayland::shell::xdg::XdgShellHandler::maximize_request(state, t);
-                    return None;
+                    // where the filled window is (place_window takes the window's own offset back off)
+                    return self.space.element_location(window).map(|l| l + window.geometry().loc);
                 }
             }
             if let (Some(w), Some(h)) = (n("size", 0), n("size", 1)) {
                 self.configure_size(window, Size::from((w.max(200), h.max(120))), false);
             }
             if let (Some(x), Some(y)) = (n("position", 0), n("position", 1)) {
-                return Some(self.on_a_screen(Point::from((x, y))));
+                let at = Point::from((x, y));
+                return Some(match area {
+                    Some(a) => a.loc + at,                       // a place on that screen
+                    None => self.on_a_screen(at),
+                });
+            }
+            if let Some(a) = area {                              // the middle of that screen
+                let size = window.geometry().size;
+                return Some(Point::from((a.loc.x + (a.size.w - size.w).max(0) / 2, a.loc.y + (a.size.h - size.h).max(0) / 2)));
             }
             return None;
         }
@@ -96,6 +116,18 @@ impl<B: Backend + 'static> HuginnState<B> {
         self.configure_size(window, was.size, false);
         let at = if taken { was.loc + Point::from((32, 32)) } else { was.loc };
         Some(self.on_a_screen(at))
+    }
+
+    /// A rule's screen, if it's here: its make, model and serial (displays::key), its name, or "main". Its work area.
+    fn rule_screen(&self, want: &str) -> Option<Rectangle<i32, Logical>> {
+        let main = crate::displays::main_name();
+        let o = self.space.outputs().find(|o| {
+            crate::displays::mirror_of(o).is_none()
+                && (crate::displays::key(o) == want || o.name() == want || (want == "main" && main.as_deref().is_none_or(|m| m == o.name())))
+        })?;
+        let geo = self.space.output_geometry(o)?;
+        let zone = smithay::desktop::layer_map_for_output(o).non_exclusive_zone();
+        Some(Rectangle::new(geo.loc + zone.loc, zone.size))
     }
 
     /// A point kept on one of the screens (a screen that's gone since).

@@ -167,7 +167,11 @@ where
 {
     let scale = output.current_scale().fractional_scale();
     let geo = space.output_geometry(output).unwrap_or_default();
-    let map = layer_map_for_output(output);
+    // a screen showing the same as another (displays.rs: MirrorOf) draws that one's bar, dock and wallpaper
+    let shown = crate::displays::mirror_of(output)
+        .and_then(|k| space.outputs().find(|x| crate::displays::key(x) == k || x.name() == k).cloned())
+        .unwrap_or_else(|| output.clone());
+    let map = layer_map_for_output(&shown);
     let mut out: Vec<OutputRenderElements<R, WindowRenderElement<R>>> = Vec::new();
     let layers = |out: &mut Vec<OutputRenderElements<R, WindowRenderElement<R>>>, renderer: &mut R, levels: &[WlrLayer]| {
         for level in levels {

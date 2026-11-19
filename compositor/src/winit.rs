@@ -273,6 +273,7 @@ pub fn run_winit() {
                     .current_mode()
                     .map(|mode| Duration::from_secs_f64(1_000f64 / mode.refresh as f64))
                     .unwrap_or_default();
+            let frame_started = std::time::Instant::now();
             state.pre_repaint(&output, frame_target);
             let view = state.scene_view(&output);
 
@@ -422,6 +423,10 @@ pub fn run_winit() {
                     {
                         warn!("Failed to submit buffer: {}", err);
                     }
+                    if has_rendered {
+                        crate::frames::shown(OUTPUT_NAME, 60.0);
+                        crate::frames::drawn(OUTPUT_NAME, frame_started.elapsed());
+                    }
 
                     #[cfg(feature = "debug")]
                     if let Some(renderdoc) = renderdoc.as_mut() {
@@ -442,6 +447,9 @@ pub fn run_winit() {
                     }
 
                     backend.window().set_cursor_visible(cursor_visible);
+                    if let CursorImageStatus::Named(icon) = &state.cursor_status {
+                        backend.window().set_cursor((*icon).into());   // (in a window: the host's own pointer, in that shape)
+                    }
 
                     let states = render_output_result.states;
 

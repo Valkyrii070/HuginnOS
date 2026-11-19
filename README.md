@@ -1904,6 +1904,40 @@ Before the first start on a desktop PC (a Radeon RX 9070 XT and three screens):
   from and a value turned away, a note shown on hover, the Choices panel, a group chosen and sized, the footer on a
   slide, a footnote written and shown at the bottom of its page.
 
+## Huginn's compositor, round six (2026-11-19)
+
+- **Keep on top** (Super+Ctrl+T, the app's menu › Window › Keep on Top, which reads "Stop Keeping on Top" while it is):
+  a window kept on top has a z-index one above the others (`shell/element.rs`), so whatever comes forward stays under
+  it; the window list says so (`above`). **Picture-in-picture** windows (Firefox's "Picture-in-Picture", Chromium's
+  "Picture in picture") are kept on top and on every space by themselves.
+- **Show the same on two screens** (Settings › Displays › Show: its own desktop, or the same as another): the screen
+  goes over the other on the desktop at a size of things that fits all of it, and draws that screen's bar, dock and
+  wallpaper (`displays.rs`: `MirrorOf`, `update_mirrors`; `render.rs`). Windows, the Overview, snapping, new panels
+  and the dock's edge never take it for a screen of its own. Kept in displays.json, so it comes back when plugged in
+  again; stopping puts it back at its own size, to the right of the others.
+- **Where apps open** (Settings › Desktop & Dock): an app's windows on a chosen screen (by make, model and serial, so
+  the same monitor whatever socket it's in, or "the main one"), on a space, filling the screen, kept on top. Written
+  to the window rules (`window-rules.json`), which now take `screen` and `ontop`.
+- **Dialogs**: a window with a parent (a dialog) opens over the middle of it, not where the app's main window last was
+  (which also sized dialogs like the main window); its dialogs stay over it when it comes forward, and a modal one
+  (xdg-dialog-v1, which Qt and GTK use) takes the keyboard when its window is clicked.
+- **Apps told you've stepped away** (ext-idle-notify-v1: chat apps' "away"), held off while something keeps the
+  screen awake.
+- **Pointer shapes**: apps can ask for them by name (cursor-shape-v1), and the compositor draws the shape asked for
+  (resize arrows, the text I-beam, the hand…) from the cursor theme instead of always the arrow, with its hotspot;
+  at the screen's size of things (a 150 % screen gets the 48-pixel pointer, not a blurry 24).
+- **Frame times** (Super+Alt+F, Settings › Displays › Frame times): each screen's frames a second, the time between
+  frames and the longest, how long drawing took, and frames that came late (over one and a half refreshes), over the
+  last second, in its top-right corner (`frames.rs`, `org.huginn.Compositor.FrameStats`). "Resting" when nothing
+  changes, because then nothing is drawn.
+- **Lighter glass** (Settings › Displays › Glass: Full, Light, Off): Light blurs from a quarter of the pixels with
+  three levels instead of four.
+- Dragging between X11 apps and Wayland apps was already wired in (Smithay's XWayland drag and drop); not tried here.
+- Checked in the compositor's window with a second screen: keep on top (the window stayed over one brought forward),
+  the menu's label, frame times on screen, Show the same (on and off, with the window list unchanged), a rule opening
+  Files on the second screen kept on top, Settings' rule editor writing it, a Qt dialog opening over its window and a
+  click on that window leaving the modal dialog in front with the keyboard.
+
 ## Huginn, the browser
 
 Inside the Huginn repository (this kit is its `os/` folder) the image ships the repository's own browser. A kit used

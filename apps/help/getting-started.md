@@ -24,6 +24,9 @@ When an app uses your screen, camera or microphone (sharing your screen in a cal
 ## Move and size a window
 Huginn windows have no title bar. Drag a window by its top strip or by its name island in the top-left corner (or anywhere, holding Super). Drag the bottom-right corner to resize it, and double-click the top strip to make it fill the screen.
 
+## Keep a window on top
+Super+Ctrl+T (or the app's menu › Window › Keep on Top) keeps the window in front over every other window, even when you click another; press it again to stop. A video's picture-in-picture window from the browser stays on top and on every space by itself.
+
 ## Snap windows side by side
 Drag a window to the left or right edge (or press Super+← / Super+→) and it fills that half; keep pressing for a third and two thirds. Drag it to the top, or Super+↑, to fill the screen, and to a corner for a quarter. When one half is taken, the other half offers your other windows: pick one to fill it. Hold the pointer on a window's green dot for all the layouts, halves, thirds and quarters, at once.
 

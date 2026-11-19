@@ -24,6 +24,8 @@ pub const DEFAULTS: &[(&str, &str)] = &[
     ("emoji", "Super+period"),
     ("overview", "Super+Tab"),
     ("desktop", "Super+D"),
+    ("ontop", "Super+Ctrl+T"),
+    ("frames", "Super+Alt+F"),
     ("files", "Super+E"),
     ("settings", "Super+I"),
     ("terminal", "Ctrl+Alt+T"),

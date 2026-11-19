@@ -1,4 +1,8 @@
-use std::{io::Read, time::Duration};
+//! The pointer's pictures, from the cursor theme: the arrow, and every shape apps and the compositor ask for by name
+//! (cursor-shape-v1, resizing a window's edge, a link's hand, text's I-beam), each loaded the first time and kept.
+use std::{collections::HashMap, io::Read, time::Duration};
+
+use smithay::input::pointer::CursorIcon;
 
 use tracing::warn;
 use xcursor::{
@@ -11,6 +15,8 @@ static FALLBACK_CURSOR_DATA: &[u8] = include_bytes!("../resources/cursor.rgba");
 pub struct Cursor {
     icons: Vec<Image>,
     size: u32,
+    theme: CursorTheme,
+    named: HashMap<&'static str, Vec<Image>>,
 }
 
 impl Cursor {
@@ -39,12 +45,25 @@ impl Cursor {
                 }]
             });
 
-        Cursor { icons, size }
+        Cursor { icons, size, theme, named: HashMap::new() }
     }
 
-    pub fn get_image(&self, scale: u32, time: Duration) -> Image {
-        let size = self.size * scale;
-        frame(time.as_millis() as u32, size, &self.icons)
+    /// The picture for a shape at a scale (whole numbers: 2 on a screen at 150 %), the frame for this moment of an
+    /// animated one. A shape the theme doesn't have is the arrow.
+    pub fn get_image(&mut self, icon: CursorIcon, scale: u32, time: Duration) -> Image {
+        let size = self.size * scale.max(1);
+        if icon == CursorIcon::Default {
+            return frame(time.as_millis() as u32, size, &self.icons);
+        }
+        let name = icon.name();
+        if !self.named.contains_key(name) {
+            let found = std::iter::once(name)
+                .chain(icon.alt_names().iter().copied())
+                .find_map(|n| load_named(&self.theme, n).ok())
+                .unwrap_or_else(|| self.icons.clone());
+            self.named.insert(name, found);
+        }
+        frame(time.as_millis() as u32, size, &self.named[name])
     }
 }
 
@@ -88,7 +107,11 @@ enum Error {
 }
 
 fn load_icon(theme: &CursorTheme) -> Result<Vec<Image>, Error> {
-    let icon_path = theme.load_icon("default").ok_or(Error::NoDefaultCursor)?;
+    load_named(theme, "default")
+}
+
+fn load_named(theme: &CursorTheme, name: &str) -> Result<Vec<Image>, Error> {
+    let icon_path = theme.load_icon(name).ok_or(Error::NoDefaultCursor)?;
     let mut cursor_file = std::fs::File::open(icon_path)?;
     let mut cursor_data = Vec::new();
     cursor_file.read_to_end(&mut cursor_data)?;

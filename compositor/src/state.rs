@@ -165,6 +165,8 @@ pub struct HuginnState<BackendData: Backend + 'static> {
     pub single_pixel_buffer_state: SinglePixelBufferState,
     pub fifo_manager_state: FifoManagerState,
     pub commit_timing_manager_state: CommitTimingManagerState,
+    /// ext-idle-notify: apps (chat, presence) told when the person has stepped away and come back.
+    pub idle_notifier_state: smithay::wayland::idle_notify::IdleNotifierState<HuginnState<BackendData>>,
     pub image_capture_source_state: ImageCaptureSourceState,
     pub output_capture_source_state: OutputCaptureSourceState,
     pub image_copy_capture_state: ImageCopyCaptureState,
@@ -613,6 +615,22 @@ impl<BackendData: Backend + 'static> XWaylandKeyboardGrabHandler for HuginnState
     }
 }
 
+impl<BackendData: Backend> smithay::wayland::idle_notify::IdleNotifierHandler for HuginnState<BackendData> {
+    fn idle_notifier_state(&mut self) -> &mut smithay::wayland::idle_notify::IdleNotifierState<Self> {
+        &mut self.idle_notifier_state
+    }
+}
+
+impl<BackendData: Backend> smithay::wayland::shell::xdg::dialog::XdgDialogHandler for HuginnState<BackendData> {
+    /// A dialog that's modal: it stays over its window, and a click on that window brings the dialog forward.
+    fn dialog_hint_changed(&mut self, toplevel: ToplevelSurface, hint: smithay::wayland::shell::xdg::dialog::ToplevelDialogHint) {
+        if let Some(w) = self.window_for_surface(toplevel.wl_surface()) {
+            let modal = matches!(hint, smithay::wayland::shell::xdg::dialog::ToplevelDialogHint::Modal);
+            w.0.user_data().get_or_insert(|| crate::wm::Modal(std::cell::Cell::new(false))).0.set(modal);
+        }
+    }
+}
+
 impl<BackendData: Backend> XdgForeignHandler for HuginnState<BackendData> {
     fn xdg_foreign_state(&mut self) -> &mut XdgForeignState {
         &mut self.xdg_foreign_state
@@ -769,6 +787,10 @@ impl<BackendData: Backend + 'static> HuginnState<BackendData> {
         let single_pixel_buffer_state = SinglePixelBufferState::new::<Self>(&dh);
         let fifo_manager_state = FifoManagerState::new::<Self>(&dh);
         let commit_timing_manager_state = CommitTimingManagerState::new::<Self>(&dh);
+        let idle_notifier_state = smithay::wayland::idle_notify::IdleNotifierState::<Self>::new(&dh, handle.clone());
+        // apps ask for pointer shapes by name (cursor.rs draws them from the theme), and say which windows are dialogs
+        smithay::wayland::cursor_shape::CursorShapeManagerState::new::<Self>(&dh);
+        smithay::wayland::shell::xdg::dialog::XdgDialogState::new::<Self>(&dh);
         TextInputManagerState::new::<Self>(&dh);
         InputMethodManagerState::new::<Self, _>(&dh, |_client| true);
         VirtualKeyboardManagerState::new::<Self, _>(&dh, |_client| true);
@@ -851,6 +873,7 @@ impl<BackendData: Backend + 'static> HuginnState<BackendData> {
             single_pixel_buffer_state,
             fifo_manager_state,
             commit_timing_manager_state,
+            idle_notifier_state,
             image_capture_source_state,
             output_capture_source_state,
             image_copy_capture_state,
@@ -914,8 +937,8 @@ impl<BackendData: Backend + 'static> HuginnState<BackendData> {
                         X11Wm::start_wm(data.handle.clone(), &display_handle, x11_socket, client.clone())
                             .expect("Failed to attach X11 Window Manager");
 
-                    let cursor = Cursor::load();
-                    let image = cursor.get_image(1, Duration::ZERO);
+                    let mut cursor = Cursor::load();
+                    let image = cursor.get_image(smithay::input::pointer::CursorIcon::Default, 1, Duration::ZERO);
                     wm.set_cursor(
                         &image.pixels_rgba,
                         Size::from((image.width as u16, image.height as u16)),

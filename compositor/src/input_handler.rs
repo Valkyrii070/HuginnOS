@@ -86,6 +86,11 @@ impl<BackendData: Backend> HuginnState<BackendData> {
             KeyAction::Zoom(step) => self.zoom_by(step),
             KeyAction::Hardware(name) => self.say(crate::dbus::Outgoing::Key(name.into())),
             KeyAction::Run(what) => self.say(crate::dbus::Outgoing::ShellKey(format!("run:{what}"))),
+            KeyAction::KeepOnTop => {
+                if let Some(w) = self.focused_window() {
+                    self.toggle_above(&w);
+                }
+            }
             KeyAction::ShowDesktop => self.show_desktop(),
             KeyAction::MoveToScreen(dir) => self.move_to_screen(dir),
         }
@@ -510,7 +515,11 @@ impl<BackendData: Backend> HuginnState<BackendData> {
                 if let Some(surface) = window.0.x11_surface() {
                     self.xwm.as_mut().unwrap().raise_window(surface).unwrap();
                 }
-                keyboard.set_focus(self, Some(window.into()), serial);
+                // its dialogs stay over it, and one that waits for an answer takes the click's focus
+                self.raise_dialogs(&window);
+                let target = self.modal_of(&window).unwrap_or(window);
+                self.space.raise_element(&target, true);
+                keyboard.set_focus(self, Some(target.into()), serial);
                 return;
             }
 
@@ -1284,6 +1293,8 @@ enum KeyAction {
     Run(String),
     /// Super+D: every window out of the way, and back again
     ShowDesktop,
+    /// Super+Ctrl+T: the window in front kept on top of the others, or not any more
+    KeepOnTop,
     /// Super+Alt+←/→: the window in front to the screen beside
     MoveToScreen(i32),
     /// Do nothing more
@@ -1341,6 +1352,8 @@ fn process_keyboard_shortcut(modifiers: ModifiersState, keysym: Keysym, raw: Opt
             "emoji" => KeyAction::Shell("emoji"),
             "overview" => KeyAction::Overview,
             "desktop" => KeyAction::ShowDesktop,
+            "ontop" => KeyAction::KeepOnTop,
+            "frames" => KeyAction::Shell("frames"),
             "files" | "settings" | "terminal" => KeyAction::Run(format!("open:{name}")),
             "space-left" => KeyAction::SpaceStep(-1, false),
             "space-right" => KeyAction::SpaceStep(1, false),

@@ -376,7 +376,8 @@ class AppMenu(QObject):
             groups.append({"name": "View", "items": [item("Full screen", "win:fullscreen", "F11", enabled=True)]})
         else:
             next(g for g in groups if g["name"] == "View")["items"] += [SEP, item("Full screen", "win:fullscreen", "F11", enabled=True)]
-        groups.append({"name": "Window", "items": [item("Minimise", "win:minimise", "Super+Down", enabled=True), item("Zoom", "win:zoom", "Super+Up", enabled=True)]})
+        groups.append({"name": "Window", "items": [item("Minimise", "win:minimise", "Super+Down", enabled=True), item("Zoom", "win:zoom", "Super+Up", enabled=True),
+                                                   item("Keep on Top", "shell:ontop", "Super+Ctrl+T", enabled=True)]})
         groups.append({"name": "Help", "items": [item(f"{self._title} Help", "app:help", "F1", enabled=True)]})
         return {"app": self._title, "key": self._key, "settings": self._has_qml("openSettings"), "groups": groups,
                 "top": [item(f"About {self._title}", "app:about", enabled=True), item(f"{self._title} Settings…", "app:settings", "Ctrl+,", enabled=self._has_qml("openSettings"))],

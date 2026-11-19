@@ -62,8 +62,18 @@ Column {
             Toggle { on: pg.cur ? pg.cur.hdr : false; onToggled: function (v) { Backend.setHdr(pg.cur.name, v) } } }
         SetRow { visible: pg.cur && pg.cur.hdrCapable && pg.cur.hdr; title: "Brightness of everyday things"; sub: "How bright windows and text are while HDR is on"
             SetChoice { each: 80; options: [["160", "Dim"], ["203", "Normal"], ["280", "Bright"], ["400", "Brighter"]]; value: pg.cur ? String(pg.cur.sdr) : "203"; onPicked: function (v) { Backend.setSdr(pg.cur.name, Number(v)) } } }
+        SetRow { visible: pg.screens.filter(function (x) { return x.enabled }).length > 1 && pg.cur && pg.cur.enabled; title: "Show"
+            sub: pg.cur && pg.cur.mirror ? "The same as another screen: for a projector or a TV" : "Its own part of the desktop"
+            SetChoice { each: 150; value: pg.cur ? pg.cur.mirror : ""
+                options: pg.cur ? [["", "Its own desktop"]].concat(pg.screens.filter(function (x) { return x.name !== pg.cur.name && x.enabled && !x.mirror }).map(function (x) { return [x.name, "Same as " + x.label] })) : []
+                onPicked: function (v) { Backend.setMirror(pg.cur.name, v) } } }
         SetRow { title: "Turn"; sub: "For a screen on its side"
             SetChoice { each: 70; options: [["normal", "None"], ["left", "Left"], ["right", "Right"], ["inverted", "Upside"]]; value: pg.cur ? pg.cur.rotation : "normal"; onPicked: function (v) { Backend.setRotation(pg.cur.name, v) } } } }
+    SetCard { title: "Drawing"
+        SetRow { title: "Glass"; sub: "The frosted glass behind the bar, the dock and panels. Light is quicker to draw, for many fast screens or slower graphics."
+            SetChoice { each: 70; options: [["full", "Full"], ["light", "Light"], ["off", "Off"]]; value: Settings.glass; onPicked: function (v) { Settings.set("glass", v) } } }
+        SetRow { title: "Frame times"; sub: "How smoothly each screen draws, in its top-right corner (Super+Alt+F)."
+            Toggle { on: Settings.frameTimes; onToggled: function (v) { Settings.set("frameTimes", v ? "true" : "false") } } } }
     SetCard { title: "Older apps"
         SetRow { title: "Sharp older apps"; sub: "Apps made for X11 draw themselves at the size of things you chose, instead of being stretched (Huginn's own compositor; opening them again shows the change)."
             Toggle { on: Settings.sharpX11; onToggled: function (v) { Settings.set("sharpX11", v ? "true" : "false") } } } }

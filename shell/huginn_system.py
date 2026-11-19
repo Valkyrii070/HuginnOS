@@ -226,7 +226,8 @@ if (!w || w.normalWindow || w.dialog)
             rows.append({"id": str(w.get("id", "")), "appId": app_id, "pid": pid, "cls": w.get("cls", ""),
                          "name": self.app_for_window(app_id, w.get("cls", ""), pid),
                          "title": w.get("title", ""), "minimised": bool(w.get("minimised")), "active": bool(w.get("active") or w.get("focused")),
-                         "space": int(w.get("space", 0)), "full": bool(w.get("full")), "x": w.get("x", 0), "y": w.get("y", 0), "w": w.get("w", 0), "h": w.get("h", 0)})
+                         "space": int(w.get("space", 0)), "full": bool(w.get("full")), "x": w.get("x", 0), "y": w.get("y", 0), "w": w.get("w", 0), "h": w.get("h", 0),
+                         "above": bool(w.get("above"))})
         self._windows = rows
         self._others = self._other_apps(rows)
         self._spaces = {"current": int(data.get("current", 0)), "names": list(data.get("spaces") or ["Main"])}
@@ -372,7 +373,8 @@ for (var i = 0; i < all.length; i++) {{ var w = all[i]; if (String(w.internalId)
         return {"app": name, "key": "", "groups": [],
                 "top": [it(f"About {name}", "shell:aboutApp"), it(f"{name} Settings…", "", "Ctrl+,", False)],
                 "middle": [it("Show all its windows", "shell:appWindows"), it("Keep in the dock", "shell:pin")],
-                "bottom": [it("Minimise", "shell:minimise"), it("Close window", "shell:close", "Ctrl+W"), it(f"Quit {name}", "shell:quit", "Ctrl+Q")]}
+                "bottom": [it("Keep on Top", "shell:ontop", "Super+Ctrl+T"), it("Minimise", "shell:minimise"), it("Close window", "shell:close", "Ctrl+W"),
+                           it(f"Quit {name}", "shell:quit", "Ctrl+Q")]}
 
     def _front_window(self):
         """The window whose app is in the bar (the shell's own panels can have the keyboard meanwhile). The bar's app
@@ -395,7 +397,7 @@ for (var i = 0; i < all.length; i++) {{ var w = all[i]; if (String(w.internalId)
             self._menus = self._huginn_menus()
             self.menusChanged.emit()
             return
-        self._menus = self._basic_menus(name)
+        self._menus = self._on_top_label(self._basic_menus(name), front)
         self._menu_bus = ""
         self.menusChanged.emit()
         pid = (front or {}).get("pid", 0)
@@ -411,11 +413,33 @@ for (var i = 0; i < all.length; i++) {{ var w = all[i]; if (String(w.internalId)
                 return
             if data.get("groups") is not None:
                 data.setdefault("middle", [])
-                self._menus = data
+                self._menus = self._on_top_label(data, front)
                 self._menu_bus = bus
                 self.menusChanged.emit()
         self.sb.call(bus, "/org/huginn/App", "org.huginn.App", "Menus", None, GLib.VariantType("(s)"),
                      Gio.DBusCallFlags.NO_AUTO_START, 1500, None, got)
+
+    @staticmethod
+    def _on_top_label(menus: dict, front) -> dict:
+        """"Keep on Top" says "Stop Keeping on Top" while the window in front is kept on top."""
+        above = bool((front or {}).get("above"))
+        for key in ("top", "middle", "bottom"):
+            for it in menus.get(key) or []:
+                if it.get("id") == "shell:ontop":
+                    it["label"] = "Stop Keeping on Top" if above else "Keep on Top"
+        for g in menus.get("groups") or []:
+            for it in g.get("items") or []:
+                if isinstance(it, dict) and it.get("id") == "shell:ontop":
+                    it["label"] = "Stop Keeping on Top" if above else "Keep on Top"
+        return menus
+
+    @Slot(result=str)
+    def frameStats(self) -> str:
+        """Frame times on each screen over the last second (Huginn's compositor), as JSON."""
+        if not self.sb or not self._own_compositor():
+            return "[]"
+        got = self._compositor("FrameStats", None, "(s)")
+        return got[0] if got else "[]"
 
     @Slot(str)
     def menuTrigger(self, act: str) -> None:
@@ -428,6 +452,8 @@ for (var i = 0; i < all.length; i++) {{ var w = all[i]; if (String(w.internalId)
                 self.windowAction("minimise")
             elif what == "close":
                 self.windowAction("close")
+            elif what == "ontop":
+                self.windowAction("ontop")
             elif what == "quit" and front:
                 for w in [w for w in self._windows if w.get("name") == front.get("name")]:
                     self.windowDo(w["id"], "close")
@@ -1011,10 +1037,13 @@ callDBus("org.huginn.Shell", "/org/huginn/Shell", "org.huginn.Shell", "Activated
     @Slot(str)
     def windowAction(self, action: str) -> None:
         """The app menu in the top bar: minimise or close the window in front."""
-        if action not in ("minimise", "close") or self._demo or not self.sb:
+        if action not in ("minimise", "close", "ontop") or self._demo or not self.sb:
             return
         if self._own_compositor():
             self._compositor("WindowAction", GLib.Variant("(s)", (action,)), None)
+            return
+        if action == "ontop":
+            self.kwin("if (workspace.activeWindow) workspace.activeWindow.keepAbove = !workspace.activeWindow.keepAbove;")
             return
         js = {"minimise": "if (workspace.activeWindow) workspace.activeWindow.minimized = true;",
               "close": "if (workspace.activeWindow) workspace.activeWindow.closeWindow();"}.get(action)

@@ -11,7 +11,7 @@ Turn Wi‑Fi on or off, pick a network and type its password once (the system ke
 Put the device in pairing mode (usually by holding its button), choose Look for devices, then Pair. My devices shows what's paired, whether it's connected and its battery.
 
 ## Displays
-A screen you plug in starts at its own resolution and its fastest refresh rate, with a size of things to suit how sharp it is. With two screens or more, drag them on the map to match your desk, and choose the main one (it has the dock and the widgets; every screen has a top bar, unless you turn that off in Desktop & Dock). Identify puts each screen's name on it for a moment, so you can tell which is which. When a screen is unplugged, turned off or drops away while asleep, its windows move to the main screen, and go back when it returns. For each screen: resolution, size of things (scaling), refresh rate and turning. Night light makes colours warmer in the evening, from sunset to sunrise, at set hours, or always.
+A screen you plug in starts at its own resolution and its fastest refresh rate, with a size of things to suit how sharp it is. With two screens or more, drag them on the map to match your desk, and choose the main one (it has the dock and the widgets; every screen has a top bar, unless you turn that off in Desktop & Dock). Identify puts each screen's name on it for a moment, so you can tell which is which. When a screen is unplugged, turned off or drops away while asleep, its windows move to the main screen, and go back when it returns. For each screen: resolution, size of things (scaling), refresh rate, turning, and Show: its own part of the desktop, or the same as another screen (for a projector or a TV). Under Drawing, Glass sets how the frosted glass is drawn (Light is quicker, for many fast screens or slower graphics), and Frame times shows how smoothly each screen draws, in its top-right corner (Super+Alt+F). Night light makes colours warmer in the evening, from sunset to sunrise, at set hours, or always.
 
 ## Sound
 Choose where sound plays and which microphone listens, and how loud each is. Apps playing now lets you turn one app down without touching the rest.
@@ -39,6 +39,9 @@ The firewall keeps everything outside from reaching this computer unless you all
 
 ## Notifications
 Do Not Disturb holds every banner and sound; quiet hours turn it on by itself at night. Each app has three switches: allowed, banners, sounds.
+
+## Where apps open
+In Desktop & Dock, Where apps open: choose an app, then the screen its windows open on, the space, and whether they fill the screen or stay on top of other windows.
 
 ## Appearance and wallpaper
 Light or dark, and the realm. Each realm has its own living scene for a wallpaper: Aurora's northern lights,

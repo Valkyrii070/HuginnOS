@@ -200,6 +200,11 @@ impl Compositor {
         rx.recv_timeout(Duration::from_secs(15)).unwrap_or_default()
     }
 
+    /// Frame times on each screen over the last second (frames.rs), for the frame-time display.
+    fn frame_stats(&self) -> String {
+        crate::frames::report()
+    }
+
     /// The screens, in kscreen-doctor's JSON (`kscreen-doctor -j`), for Settings › Displays.
     fn displays(&self) -> String {
         let (tx, rx) = mpsc::channel();

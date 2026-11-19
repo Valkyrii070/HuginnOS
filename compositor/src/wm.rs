@@ -118,6 +118,30 @@ pub struct HomeAt {
 }
 pub struct Home(pub std::cell::RefCell<Option<HomeAt>>);
 
+/// A window kept on top of the others (Super+Ctrl+T, the app's menu, a window rule, a video's picture-in-picture):
+/// its z-index is one above the others' (shell/element.rs), so whatever comes forward stays under it.
+pub struct Above(pub Cell<bool>);
+/// A window on every space (picture-in-picture): it moves along when the space changes.
+pub struct Sticky(pub Cell<bool>);
+/// A window already seen to be picture-in-picture (so taking it off the top isn't undone).
+pub struct PipSeen;
+/// A dialog that asks to be answered before its window is used again (xdg-dialog's modal hint).
+pub struct Modal(pub Cell<bool>);
+
+pub fn is_above(w: &WindowElement) -> bool {
+    w.0.user_data().get::<Above>().is_some_and(|a| a.0.get())
+}
+
+fn is_sticky(w: &WindowElement) -> bool {
+    w.0.user_data().get::<Sticky>().is_some_and(|a| a.0.get())
+}
+
+/// A video's own little window: Firefox's "Picture-in-Picture", Chromium's "Picture in picture".
+fn looks_like_pip(title: &str) -> bool {
+    let t = title.to_lowercase();
+    t == "picture-in-picture" || t == "picture in picture" || t.starts_with("picture-in-picture ") || t.ends_with(" - picture in picture")
+}
+
 pub struct Overview {
     start: Instant,
     pub opening: bool,
@@ -239,6 +263,11 @@ impl<B: Backend + 'static> HuginnState<B> {
             return;
         }
         wm.current = n;
+        // windows on every space (picture-in-picture) come along
+        let along: Vec<WindowElement> = self.space.elements().filter(|w| is_sticky(w)).cloned().collect();
+        for w in along {
+            Self::set_window_space(&w, n);
+        }
         // Settings › Desktop & Dock › "Spaces on every screen" off: only the main screen has spaces; windows on the
         // other screens stay where they are whichever space is in front (they move along to it).
         if !SPACES_ALL_SCREENS.load(Ordering::Relaxed) && self.space.outputs().count() > 1 {
@@ -437,12 +466,16 @@ impl<B: Backend + 'static> HuginnState<B> {
 
     fn overview_output(&self) -> Option<Output> {
         let pointer = self.pointer.current_location();
-        self.space.output_under(pointer).next().or_else(|| self.space.outputs().next()).cloned()
+        self.space
+            .output_under(pointer)
+            .find(|o| crate::displays::mirror_of(o).is_none())
+            .or_else(|| self.space.outputs().next())
+            .cloned()
     }
 
     /// Every screen's windows spread out on it (a window belongs to the screen its middle is on).
     fn overview_layout_all(&self) -> Vec<(WindowElement, Rectangle<i32, Logical>, Output)> {
-        let outputs: Vec<Output> = self.space.outputs().cloned().collect();
+        let outputs: Vec<Output> = self.space.outputs().filter(|o| crate::displays::mirror_of(o).is_none()).cloned().collect();
         let mut out = Vec::new();
         for o in outputs {
             out.extend(self.overview_layout(&o).into_iter().map(|(w, r)| (w, r, o.clone())));
@@ -799,8 +832,12 @@ impl<B: Backend + 'static> HuginnState<B> {
         }) else {
             return;
         };
-        let mut outs: Vec<(Output, Rectangle<i32, Logical>)> =
-            self.space.outputs().filter_map(|o| Some((o.clone(), self.space.output_geometry(o)?))).collect();
+        let mut outs: Vec<(Output, Rectangle<i32, Logical>)> = self
+            .space
+            .outputs()
+            .filter(|o| crate::displays::mirror_of(o).is_none())
+            .filter_map(|o| Some((o.clone(), self.space.output_geometry(o)?)))
+            .collect();
         if outs.len() < 2 {
             return;
         }
@@ -824,6 +861,7 @@ impl<B: Backend + 'static> HuginnState<B> {
         let edge = self
             .space
             .outputs()
+            .filter(|o| crate::displays::mirror_of(o).is_none())
             .find_map(|o| {
                 let g = self.space.output_geometry(o)?.to_f64();
                 (at.x >= g.loc.x && at.x < g.loc.x + g.size.w && at.y >= g.loc.y + g.size.h - 2.0 && at.y < g.loc.y + g.size.h + 1.0)
@@ -836,12 +874,83 @@ impl<B: Backend + 'static> HuginnState<B> {
         }
     }
 
+    // ------------------------------------------------------------------------- dialogs
+    /// The windows whose parent this one is (its dialogs), back to front.
+    pub fn dialogs_of(&self, w: &WindowElement) -> Vec<WindowElement> {
+        let Some(surface) = w.0.toplevel().map(|t| t.wl_surface().clone()) else {
+            return vec![];
+        };
+        self.space
+            .elements()
+            .filter(|x| *x != w && x.0.toplevel().and_then(|t| t.parent()).is_some_and(|p| p == surface))
+            .cloned()
+            .collect()
+    }
+
+    /// A modal dialog of this window, waiting for an answer.
+    pub fn modal_of(&self, w: &WindowElement) -> Option<WindowElement> {
+        self.dialogs_of(w).into_iter().rev().find(|d| d.0.user_data().get::<Modal>().is_some_and(|m| m.0.get()))
+    }
+
+    pub fn raise_dialogs(&mut self, w: &WindowElement) {
+        for d in self.dialogs_of(w) {
+            self.space.raise_element(&d, false);
+        }
+    }
+
+    /// Where a dialog goes: over the middle of its window (kept on that window's screen), or None if it has none.
+    pub fn dialog_place(&self, w: &WindowElement) -> Option<Point<i32, Logical>> {
+        let parent = w.0.toplevel()?.parent()?;
+        let p = self.space.elements().find(|x| x.0.toplevel().is_some_and(|t| *t.wl_surface() == parent))?;
+        let loc = self.space.element_location(p)?;
+        let pg = p.geometry();
+        let size = w.geometry().size;
+        let x = loc.x + pg.loc.x + (pg.size.w - size.w) / 2;
+        let y = loc.y + pg.loc.y + ((pg.size.h - size.h) / 3).max(0);
+        let (_, area) = self.screen_at(p, loc)?;
+        Some(Point::from((
+            x.clamp(area.loc.x, (area.loc.x + area.size.w - size.w).max(area.loc.x)),
+            y.clamp(area.loc.y + 30, (area.loc.y + area.size.h - size.h).max(area.loc.y + 30)),
+        )))
+    }
+
+    // ------------------------------------------------------------------------- kept on top
+    /// Keep a window over the others, or stop.
+    pub fn set_above(&mut self, w: &WindowElement, on: bool) {
+        w.0.user_data().get_or_insert(|| Above(Cell::new(false))).0.set(on);
+        if self.space.elements().any(|x| x == w) {
+            self.space.raise_element(w, false);              // (sorted again by z-index)
+        }
+        self.report_windows_now();
+    }
+
+    pub fn toggle_above(&mut self, w: &WindowElement) {
+        let on = !is_above(w);
+        self.set_above(w, on);
+    }
+
+    /// Picture-in-picture windows: kept on top, on every space, at a corner of the screen the first time.
+    pub fn check_pip(&mut self) {
+        let fresh: Vec<WindowElement> = self
+            .space
+            .elements()
+            .filter(|w| w.0.user_data().get::<PipSeen>().is_none() && looks_like_pip(&Self::window_names(w).0))
+            .cloned()
+            .collect();
+        for w in fresh {
+            w.0.user_data().insert_if_missing(|| PipSeen);
+            w.0.user_data().get_or_insert(|| Sticky(Cell::new(false))).0.set(true);
+            tracing::info!(title = Self::window_names(&w).0, "Picture-in-picture: kept on top, on every space");
+            self.set_above(&w, true);
+        }
+    }
+
     // ------------------------------------------------------------------------- screens coming and going
     /// The screen a window's middle is on, and where that screen is.
     pub(crate) fn screen_at(&self, w: &WindowElement, loc: Point<i32, Logical>) -> Option<(Output, Rectangle<i32, Logical>)> {
         let g = w.geometry();
         let c = loc + g.loc + Point::from((g.size.w / 2, g.size.h / 2));
-        self.space.outputs().find_map(|o| {
+        self.space.outputs().filter(|o| crate::displays::mirror_of(o).is_none()).find_map(|o| {
             let r = self.space.output_geometry(o)?;
             r.contains(c).then(|| (o.clone(), r))
         })
@@ -921,6 +1030,7 @@ impl<B: Backend + 'static> HuginnState<B> {
         let outs: Vec<(String, String, Rectangle<i32, Logical>)> = self
             .space
             .outputs()
+            .filter(|o| crate::displays::mirror_of(o).is_none())
             .filter_map(|o| Some((o.name(), crate::displays::key(o), self.space.output_geometry(o)?)))
             .collect();
         if outs.is_empty() {
@@ -1141,6 +1251,13 @@ impl<B: Backend + 'static> HuginnState<B> {
         if let Some(f) = v.get("frost").and_then(|s| s.as_bool()) {
             crate::look::FROST.store(f, std::sync::atomic::Ordering::Relaxed);
         }
+        // Settings › Displays › Glass: "full", "light" (cheaper frost) or "off" (none)
+        if let Some(g) = v.get("glass").and_then(|s| s.as_str()) {
+            crate::look::LIGHT.store(g == "light", std::sync::atomic::Ordering::Relaxed);
+            if g == "off" {
+                crate::look::FROST.store(false, std::sync::atomic::Ordering::Relaxed);
+            }
+        }
     }
 
     fn tile_for(&self, window: &WindowElement, output: &Output) -> Rectangle<f64, Logical> {
@@ -1190,8 +1307,12 @@ impl<B: Backend + 'static> HuginnState<B> {
             Some(o) => {
                 let p = o.progress();
                 view.dim = (0.42 * p) as f32;
-                let geo = self.space.output_geometry(output).unwrap_or_default();
-                for (w, to, _) in o.slots.iter().filter(|s| &s.2 == output) {
+                // a screen showing another: that one's Overview
+                let shown = crate::displays::mirror_of(output)
+                    .and_then(|k| self.space.outputs().find(|x| crate::displays::key(x) == k || x.name() == k).cloned())
+                    .unwrap_or_else(|| output.clone());
+                let geo = self.space.output_geometry(&shown).unwrap_or_default();
+                for (w, to, _) in o.slots.iter().filter(|s| s.2 == shown) {
                     let Some(loc) = self.space.element_location(w) else {
                         continue;
                     };

@@ -41,6 +41,19 @@ fn load() -> Value {
 }
 
 /// Which screen this is, wherever it's plugged in: its make, model and serial number (else its connector).
+/// A screen showing the same as another (Settings › Displays › Show): the other's key (make, model, serial).
+pub struct MirrorOf(pub std::cell::RefCell<Option<String>>);
+
+/// The key of the screen this one shows the same as, if it does.
+pub fn mirror_of(output: &Output) -> Option<String> {
+    output.user_data().get::<MirrorOf>().and_then(|m| m.0.borrow().clone())
+}
+
+fn set_mirror_of(output: &Output, source: Option<String>) {
+    output.user_data().insert_if_missing(|| MirrorOf(std::cell::RefCell::new(None)));
+    *output.user_data().get::<MirrorOf>().unwrap().0.borrow_mut() = source;
+}
+
 pub fn key(output: &Output) -> String {
     let p = output.physical_properties();
     if p.serial_number == "Unknown" && p.model == "Unknown" {
@@ -118,11 +131,19 @@ fn remember(output: &Output) {
     let mode = output.current_mode();
     let loc = output.current_location();
     let rot = ROTATIONS.iter().find(|r| r.0 == output.current_transform()).map_or("normal", |r| r.2);
+    let was = all.get(key(output)).cloned().unwrap_or(Value::Null);
+    let mirrored = mirror_of(output).is_some();
     all[key(output)] = json!({
         "w": mode.map(|m| m.size.w), "h": mode.map(|m| m.size.h), "mhz": mode.map(|m| m.refresh),
-        "scale": output.current_scale().fractional_scale(), "rotation": rot, "x": loc.x, "y": loc.y,
+        "scale": if mirrored { was.get("scale").cloned().unwrap_or(json!(1.0)) } else { json!(output.current_scale().fractional_scale()) },
+        "rotation": rot,
+        "x": if mirrored { was.get("x").cloned().unwrap_or(json!(0)) } else { json!(loc.x) },
+        "y": if mirrored { was.get("y").cloned().unwrap_or(json!(0)) } else { json!(loc.y) },
         "hdr": hdr_sdr(output).is_some(), "sdr": hdr_sdr(output).unwrap_or(203.0),
     });
+    if let Some(m) = was.get("mirror") {
+        all[key(output)]["mirror"] = m.clone();
+    }
     save(&all);
 }
 
@@ -218,6 +239,10 @@ impl<B: Backend + 'static> HuginnState<B> {
         if let Some(loc) = loc {
             self.space.map_output(output, loc);
         }
+        if let Some(src) = s.get("mirror").and_then(|v| v.as_str()) {
+            set_mirror_of(output, Some(src.to_string()));
+            self.update_mirrors();
+        }
         self.xwayland_rescale();
         if s.get("hdr").and_then(|v| v.as_bool()) == Some(true) && self.backend_data.hdr_capable(output) {
             let sdr = s.get("sdr").and_then(|v| v.as_f64()).unwrap_or(203.0).clamp(80.0, 500.0);
@@ -250,6 +275,8 @@ impl<B: Backend + 'static> HuginnState<B> {
                 json!({
                     "id": i + 1, "name": o.name(), "connected": true, "enabled": on,
                     "make": if p.make == "Unknown" { "" } else { p.make.as_str() }, "model": if p.model == "Unknown" { "" } else { p.model.as_str() },
+                    "key": key(o),
+                    "mirror": mirror_of(o).and_then(|k| self.space.outputs().find(|x| key(x) == k || x.name() == k).map(|x| x.name())).unwrap_or_default(),
                     "priority": if main.as_ref().map_or(i == 0, |m| *m == o.name()) { 1 } else { 2 },
                     "modes": modes.iter().map(|m| json!({"id": id(m), "size": {"width": m.size.w, "height": m.size.h},
                                                           "refreshRate": m.refresh as f64 / 1000.0})).collect::<Vec<_>>(),
@@ -282,6 +309,7 @@ impl<B: Backend + 'static> HuginnState<B> {
             self.space.map_output(&output, output.current_location());
             self.backend_data.reset_buffers(&output);
             crate::shell::fixup_positions(&mut self.space, self.pointer.current_location());
+            self.update_mirrors();
             return String::new();
         }
         let Some(output) = self.space.outputs().find(|o| o.name() == name).cloned() else {
@@ -354,6 +382,55 @@ impl<B: Backend + 'static> HuginnState<B> {
                 }
                 _ => return "That isn't a brightness for SDR white.".into(),
             },
+            // show the same as another screen ("mirror.NAME"), or its own desktop again ("mirror.")
+            "mirror" => {
+                if value.is_empty() {
+                    if mirror_of(&output).is_none() {
+                        return String::new();
+                    }
+                    set_mirror_of(&output, None);
+                    let mut all = load();
+                    if let Some(entry) = all.get_mut(key(&output)).and_then(|v| v.as_object_mut()) {
+                        entry.remove("mirror");
+                    }
+                    save(&all);
+                    // back at its own size of things, to the right of the others
+                    let scale = saved(&output).and_then(|s| s.get("scale").and_then(|v| v.as_f64())).or_else(|| auto_scale(&output)).unwrap_or(1.0);
+                    let right = self
+                        .space
+                        .outputs()
+                        .filter(|o| **o != output && mirror_of(o).is_none())
+                        .filter_map(|o| self.space.output_geometry(o))
+                        .map(|g| g.loc.x + g.size.w)
+                        .max()
+                        .unwrap_or(0);
+                    output.change_current_state(None, None, Some(Scale::Fractional(scale)), Some((right, 0).into()));
+                    self.space.map_output(&output, (right, 0));
+                    smithay::desktop::layer_map_for_output(&output).arrange();
+                } else {
+                    let Some(src) = self.space.outputs().find(|o| o.name() == value).cloned() else {
+                        return format!("There's no screen called {value} to show.");
+                    };
+                    if src == output {
+                        return "A screen can't show itself.".into();
+                    }
+                    if mirror_of(&src).is_some() {
+                        return "That screen is showing another one itself.".into();
+                    }
+                    set_mirror_of(&output, Some(key(&src)));
+                    let mut all = load();
+                    if !all.get(key(&output)).is_some_and(|v| v.is_object()) {
+                        all[key(&output)] = json!({});
+                    }
+                    all[key(&output)]["mirror"] = json!(key(&src));
+                    save(&all);
+                    self.update_mirrors();
+                }
+                self.xwayland_rescale();
+                self.backend_data.reset_buffers(&output);
+                self.refit_windows();
+                return String::new();
+            }
             "disable" => {
                 if self.space.outputs().count() <= 1 {
                     return "That's the only screen that's on, so it stays on.".into();
@@ -370,8 +447,32 @@ impl<B: Backend + 'static> HuginnState<B> {
         self.xwayland_rescale();
         self.backend_data.reset_buffers(&output);
         crate::shell::fixup_positions(&mut self.space, self.pointer.current_location());
+        self.update_mirrors();
         self.refit_windows();
         String::new()
+    }
+
+    /// Screens showing the same as another: over it on the desktop, sized so all of it fits on them (the screens'
+    /// shapes differing, a strip of the desktop beside it shows too).
+    pub fn update_mirrors(&mut self) {
+        let outs: Vec<Output> = self.space.outputs().cloned().collect();
+        for o in &outs {
+            let Some(src) = mirror_of(o) else {
+                continue;
+            };
+            let Some(s) = outs.iter().find(|x| *x != o && (key(x) == src || x.name() == src)) else {
+                continue;
+            };
+            let (Some(sg), Some(mode)) = (self.space.output_geometry(s), o.current_mode()) else {
+                continue;
+            };
+            let size = o.current_transform().transform_size(mode.size);
+            let scale = (size.w as f64 / sg.size.w.max(1) as f64).min(size.h as f64 / sg.size.h.max(1) as f64).clamp(0.25, 4.0);
+            o.change_current_state(None, None, Some(Scale::Fractional(scale)), Some(sg.loc));
+            self.space.map_output(o, sg.loc);
+            smithay::desktop::layer_map_for_output(o).arrange();
+            tracing::info!(screen = o.name(), shows = s.name(), scale, "Showing the same as another screen");
+        }
     }
 }
 

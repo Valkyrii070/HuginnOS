@@ -42,7 +42,7 @@ QtObject {
             var text = JSON.stringify({ tiles: out, style: Theme.t.openMs > 0 ? Settings.hideStyle : "none", glow: Theme.t.glowA.toString(), gaps: Settings.snapGaps,
                                        dark: Theme.t.dark, frost: !Settings.reduceTransparency && !Settings.contrast,
                                        remember: Settings.rememberPlaces, vrr: Settings.adaptiveSync, x11sharp: Settings.sharpX11, tearing: Settings.allowTearing,
-                                       keepSnapped: Settings.keepSnapped, spacesAllScreens: Settings.spacesAllScreens })
+                                       keepSnapped: Settings.keepSnapped, spacesAllScreens: Settings.spacesAllScreens, glass: Settings.glass })
             if (text !== last) { last = text; Status.dockLayout(text) }
         }
     }
@@ -103,6 +103,44 @@ QtObject {
     }
     onMainScreenChanged: moveTo(topBarWin, mainScreen)
     onDockScreenChanged: moveTo(dockWin, dockScreen)
+    // the frame-time display (Super+Alt+F, Settings › Displays): each screen's frames over the last second
+    property var frameStats: ({})
+    property Timer frameTick: Timer {
+        interval: 500; repeat: true; running: Settings.frameTimes; triggeredOnStart: true
+        onTriggered: { var m = {}; try { JSON.parse(Status.frameStats()).forEach(function (r) { m[r.screen] = r }) } catch (e) {} shell.frameStats = m }
+    }
+    property Instantiator frameIslands: Instantiator {
+        model: Settings.frameTimes ? Status.screenList : []
+        delegate: Window {
+            required property var modelData
+            readonly property var st: shell.frameStats[modelData.name] || null
+            visible: true; width: fcol.width + 40; height: fcol.height + 56; color: "transparent"     // (room above it for the top bar)
+            flags: Qt.WindowTransparentForInput
+            LayerShell.Window.screen: modelData
+            LayerShell.Window.wantsToBeOnActiveScreen: false
+            LayerShell.Window.scope: "huginn-frames"
+            LayerShell.Window.layer: LayerShell.Window.LayerOverlay
+            LayerShell.Window.anchors: LayerShell.Window.AnchorTop | LayerShell.Window.AnchorRight
+            LayerShell.Window.exclusionZone: -1
+            LayerShell.Window.keyboardInteractivity: LayerShell.Window.KeyboardInteractivityNone
+            Rectangle {
+                x: 0; y: 38; width: parent.width - 12; height: parent.height - 38; radius: 12; color: Qt.rgba(0.04, 0.05, 0.07, 0.82); border.width: 1
+                border.color: st && st.late > 0 ? "#E5484D" : Qt.rgba(1, 1, 1, 0.14)
+                Column {
+                    id: fcol; x: 14; y: 9; spacing: 2
+                    Text { text: modelData.name + (st && st.hz ? "  ·  " + Math.round(st.hz) + " Hz" : ""); color: "#B9C2CC"; font.pixelSize: 11; font.family: Theme.t.font }
+                    Text { text: !st || st.fps === 0 ? "Resting: nothing new to draw" : st.fps + " frames a second"
+                           color: "#F5F7FA"; font.pixelSize: 15; font.weight: Font.DemiBold; font.family: Theme.t.font }
+                    Text { visible: !!st && st.fps > 1; text: st ? "Between frames " + st.frameMs.toFixed(1) + " ms, longest " + st.worstMs.toFixed(1) + " ms" : ""
+                           color: "#D5DAE0"; font.pixelSize: 11; font.family: Theme.t.font }
+                    Text { visible: !!st && st.fps > 0; text: st ? "Drawing " + st.drawMs.toFixed(2) + " ms, longest " + st.drawWorstMs.toFixed(2) + " ms" : ""
+                           color: "#D5DAE0"; font.pixelSize: 11; font.family: Theme.t.font }
+                    Text { visible: !!st && st.late > 0; text: st ? st.late + (st.late === 1 ? " frame came late" : " frames came late") : ""
+                           color: "#FF8A8D"; font.pixelSize: 11; font.family: Theme.t.font }
+                }
+            }
+        }
+    }
     // Settings › Displays › Identify: each screen's name over it for a few seconds
     property var identify: ({})
     property Timer identifyEnd: Timer { interval: 3500; onTriggered: shell.identify = ({}) }
@@ -150,6 +188,7 @@ QtObject {
             else if (what === "menu") shell.appMenu("")
             else if (what.indexOf("run:") === 0) shell.runKey(what.slice(4))
             else if (what.indexOf("edge:") === 0) shell.pointerAtEdge(what.slice(5))
+            else if (what === "frames") Settings.set("frameTimes", Settings.frameTimes ? "false" : "true")
             else if (what.indexOf("identify:") === 0) { try { shell.identify = JSON.parse(what.slice(9)) } catch (e) { shell.identify = ({}) } identifyEnd.restart() }
         }
     }

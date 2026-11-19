@@ -180,14 +180,14 @@ class Settings(QObject):
     Each process watches the file, so a change made anywhere (realm, dark mode, menu style) shows everywhere."""
     changed = Signal()
     DEFAULTS = {"menuStyle": "one", "dark": "true", "realm": "aurora", "clock24": "true", "barDate": "true", "batteryPercent": "false", "barEverywhere": "true",
-                "dockMakeRoom": "true", "dockDots": "true", "dockFollows": "true", "autoUpdate": "true", "liveWallpaper": "false",
+                "dockMakeRoom": "true", "dockDots": "true", "dockFollows": "true", "glass": "full", "frameTimes": "false", "autoUpdate": "true", "liveWallpaper": "false",
                 "contrast": "false", "reduceTransparency": "false", "reduceMotion": "false", "uiScale": "1",       # accessibility
                 # Settings › Desktop & Dock
                 "dockSize": "44", "hideStyle": "drop", "dockClickHides": "true", "overviewOpen": "glide", "hotCorner": "false",
                 "spacesAllScreens": "true", "inAppMotion": "grow", "fillButtonLayouts": "true", "snapGaps": "true", "keepSnapped": "true",
                 # windows and screens on Huginn's own compositor
                 "reopenApps": "true", "rememberPlaces": "true", "adaptiveSync": "auto", "sharpX11": "true", "allowTearing": "true"}
-    SWITCHES = ("clock24", "barDate", "batteryPercent", "barEverywhere", "dockMakeRoom", "dockDots", "dockFollows", "autoUpdate", "liveWallpaper", "contrast", "reduceTransparency", "reduceMotion",
+    SWITCHES = ("clock24", "barDate", "batteryPercent", "barEverywhere", "dockMakeRoom", "dockDots", "dockFollows", "frameTimes", "autoUpdate", "liveWallpaper", "contrast", "reduceTransparency", "reduceMotion",
                 "dockClickHides", "hotCorner", "spacesAllScreens", "fillButtonLayouts", "snapGaps", "keepSnapped", "reopenApps", "rememberPlaces", "sharpX11", "allowTearing")
     SCALES = ("1", "1.25", "1.5", "1.75", "2")
 
@@ -196,7 +196,7 @@ class Settings(QObject):
         self._path, self._persist, self._values = path, persist, dict(self.DEFAULTS)
         self._choices = {"menuStyle": ("one", "row", "dropdown", "inline"), "dark": ("true", "false"), "realm": tuple(realms), "uiScale": self.SCALES,
                          "dockSize": ("36", "40", "44", "52", "60"), "hideStyle": ("drop", "line", "comet"), "overviewOpen": ("glide", "light"),
-                         "inAppMotion": ("grow", "slide"), "adaptiveSync": ("auto", "off"),
+                         "inAppMotion": ("grow", "slide"), "adaptiveSync": ("auto", "off"), "glass": ("full", "light", "off"),
                          **{k: ("true", "false") for k in self.SWITCHES}}
         self._load()
         self._watcher = QFileSystemWatcher(self)
@@ -238,6 +238,8 @@ class Settings(QObject):
     batteryPercent = Property(bool, lambda self: self._values["batteryPercent"] == "true", notify=changed)
     barEverywhere = Property(bool, lambda self: self._values["barEverywhere"] == "true", notify=changed)   # a top bar on every screen, not just the main one
     dockFollows = Property(bool, lambda self: self._values["dockFollows"] == "true", notify=changed)       # the dock comes to the screen whose bottom the pointer rests at
+    glass = Property(str, lambda self: self._values["glass"], notify=changed)                               # the frosted glass: full, light (cheaper) or off
+    frameTimes = Property(bool, lambda self: self._values["frameTimes"] == "true", notify=changed)          # the frame-time display (Super+Alt+F)
     # "Make room for windows": the dock slides away while a window covers its place (a filled one, or one dragged
     # over it), and comes back when the pointer reaches the bottom edge. (Was "dockHide", which nothing read.)
     dockMakeRoom = Property(bool, lambda self: self._values["dockMakeRoom"] == "true", notify=changed)

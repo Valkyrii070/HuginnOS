@@ -8,6 +8,11 @@ Column {
     property string playing: "hide:" + Settings.hideStyle          // what the preview plays (pointing at a choice changes it)
     function show(what) { playing = what; stage.replay() }
     function sw(key) { return function (v) { Settings.set(key, v ? "true" : "false") } }
+    // Where apps open: the rule being changed, and the screens to choose from
+    property var rule: null
+    function setRule(k, v) { var r = Object.assign({}, rule); r[k] = v; rule = r }
+    readonly property var displayScreens: ((Backend.displays || {}).screens || []).filter(function (x) { return x.enabled && !x.mirror })
+    function screenLabel(k) { if (k === "main") return "the main screen"; var x = displayScreens.filter(function (s) { return s.key === k || s.name === k })[0]; return x ? x.label : "a screen that isn't here" }
 
     // ---------------------------------------------------------------- the live preview
     Rectangle {
@@ -166,6 +171,39 @@ Column {
         SetRow { title: "Adaptive sync for games and videos"; sub: "Smoother motion on screens that support FreeSync or G-Sync, while something fills the screen."
             SetChoice { each: 90; options: [["auto", "On"], ["off", "Off"]]; value: Settings.adaptiveSync; onPicked: function (v) { Settings.set("adaptiveSync", v) } } }
         SetRow { title: "Let games tear"; sub: "A game with V-Sync off shows each frame at once, for the lowest delay (where the graphics card can)."; Toggle { on: Settings.allowTearing; onToggled: function (v) { pg.sw("allowTearing")(v) } } }
+    }
+    // ---------------------------------------------------------------- where apps open (window rules)
+    SetCard { title: "Where apps open"; note: "An app's windows can open on a screen of your choosing, on a space, filling the screen, or kept on top of other windows."
+        Repeater { model: Backend.windowRules
+            SetRow { required property var modelData; title: modelData.name + (modelData.title ? " (“" + modelData.title + "”)" : "")
+                sub: [modelData.screen ? "On " + pg.screenLabel(modelData.screen) : "", modelData.space ? "Space " + modelData.space : "",
+                      modelData.maximise ? "Filling the screen" : "", modelData.ontop ? "Kept on top" : ""].filter(function (x) { return x }).join("  ·  ") || "As usual"
+                Row { spacing: 6
+                    Btn { text: "Change"; onClicked: pg.rule = { app: modelData.app, name: modelData.name, screen: modelData.screen, space: modelData.space, maximise: modelData.maximise, ontop: modelData.ontop } }
+                    Btn { text: "Remove"; onClicked: Backend.removeWindowRule(modelData.app) } } } }
+        SetRow { title: "Add an app"
+            Btn { text: "Choose…"; onClicked: win.pick("Where an app opens", Backend.appChoices().map(function (a) { return { id: a.id, label: a.name, icon: a.icon } }), "",
+                                                       function (v) { var a = Backend.appChoices().filter(function (x) { return x.id === v })[0]
+                                                           pg.rule = { app: v, name: a ? a.name : v, screen: "", space: 0, maximise: false, ontop: false } }) } }
+        Column { visible: pg.rule !== null; x: 16; width: parent.width - 32; spacing: 8; bottomPadding: 12
+            Label { text: pg.rule ? pg.rule.name : ""; font.weight: Font.DemiBold }
+            Flow { width: parent.width; spacing: 4
+                Label { text: "Screen"; width: 70; secondary: true; font.pixelSize: 12 }
+                Repeater { model: [["", "Any (where the pointer is)"], ["main", "The main one"]].concat(pg.displayScreens.map(function (x) { return [x.key, x.label] }))
+                    Seg { required property var modelData; text: modelData[1]; on: !!pg.rule && pg.rule.screen === modelData[0]; onClicked: pg.setRule("screen", modelData[0]) } } }
+            Flow { width: parent.width; spacing: 4
+                Label { text: "Space"; width: 70; secondary: true; font.pixelSize: 12 }
+                Repeater { model: [0, 1, 2, 3, 4, 5, 6]
+                    Seg { required property int modelData; text: modelData ? String(modelData) : "Any"; on: !!pg.rule && pg.rule.space === modelData; onClicked: pg.setRule("space", modelData) } } }
+            Row { spacing: 8; height: 30
+                Toggle { on: !!pg.rule && pg.rule.maximise; anchors.verticalCenter: parent.verticalCenter; onToggled: function (v) { pg.setRule("maximise", v) } }
+                Label { text: "Fill the screen"; anchors.verticalCenter: parent.verticalCenter; font.pixelSize: 12 }
+                Item { width: 16; height: 1 }
+                Toggle { on: !!pg.rule && pg.rule.ontop; anchors.verticalCenter: parent.verticalCenter; onToggled: function (v) { pg.setRule("ontop", v) } }
+                Label { text: "Keep on top"; anchors.verticalCenter: parent.verticalCenter; font.pixelSize: 12 } }
+            Row { spacing: 8
+                Btn { primary: true; text: "Done"; onClicked: { var r = pg.rule; Backend.setWindowRule(r.app, { screen: r.screen, space: r.space, maximise: r.maximise, ontop: r.ontop }); pg.rule = null } }
+                Btn { text: "Cancel"; onClicked: pg.rule = null } } }
     }
     // ---------------------------------------------------------------- the Overview and spaces
     SetCard { title: "Overview & spaces"

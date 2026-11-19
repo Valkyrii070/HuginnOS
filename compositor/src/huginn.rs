@@ -163,6 +163,8 @@ impl<B: Backend + 'static> HuginnState<B> {
     /// A key, the mouse or the screen was touched: not idle any more, and a screen switched off comes back on.
     pub fn touched(&mut self) {
         self.huginn.shared.touched();
+        let seat = self.seat.clone();
+        self.idle_notifier_state.notify_activity(&seat);
         if self.huginn.blank {
             self.huginn.blank = false;
             self.backend_data.set_blank(false);
@@ -187,6 +189,8 @@ impl<B: Backend + 'static> HuginnState<B> {
             .shared
             .inhibited
             .store(!self.huginn.inhibitors.is_empty(), Ordering::Relaxed);
+        let inhibited = !self.huginn.inhibitors.is_empty();
+        self.idle_notifier_state.set_is_inhibited(inhibited);
     }
 
     fn bus_request(&mut self, request: Request) {
@@ -358,8 +362,14 @@ impl<B: Backend + 'static> HuginnState<B> {
         {
             let _ = xwm.raise_window(surface);
         }
+        // its dialogs stay over it; one waiting for an answer gets the keyboard
+        self.raise_dialogs(window);
+        let target = self.modal_of(window).unwrap_or_else(|| window.clone());
+        if target != *window {
+            self.space.raise_element(&target, true);
+        }
         if let Some(keyboard) = self.seat.get_keyboard() {
-            keyboard.set_focus(self, Some(window.clone().into()), SERIAL_COUNTER.next_serial());
+            keyboard.set_focus(self, Some(target.into()), SERIAL_COUNTER.next_serial());
         }
     }
 
@@ -516,6 +526,7 @@ impl<B: Backend + 'static> HuginnState<B> {
         match action {
             "minimise" | "minimize" => self.minimise_window(&window),
             "close" => Self::close_window(&window),
+            "ontop" => self.toggle_above(&window),
             "maximise" | "maximize" => {
                 if let Some(t) = window.0.toplevel().cloned() {
                     if Self::is_maximised(&window) {
@@ -549,7 +560,8 @@ impl<B: Backend + 'static> HuginnState<B> {
         let size = w.geometry().size;
         let at = at.unwrap_or_default();
         serde_json::json!({"id": window_id(w).to_string(), "app": app, "title": title, "minimised": minimised,
-                           "active": !minimised && Some(w) == focused, "space": Self::window_space(w).unwrap_or(0), "pid": pid, "full": full, "x": at.x, "y": at.y, "w": size.w, "h": size.h})
+                           "active": !minimised && Some(w) == focused, "space": Self::window_space(w).unwrap_or(0), "pid": pid, "full": full, "x": at.x, "y": at.y, "w": size.w, "h": size.h,
+                           "above": crate::wm::is_above(w)})
     }
 
     /// Every window (bottom to top, then the hidden ones) and the spaces, for the shell.
@@ -567,6 +579,7 @@ impl<B: Backend + 'static> HuginnState<B> {
 
     /// The shell's dock and Overview keep their own list of windows; tell them when it changes.
     fn report_windows(&mut self) {
+        self.check_pip();
         let now = self.windows_json();
         if now != self.huginn.last_windows {
             self.huginn.last_windows = now.clone();
@@ -595,6 +608,7 @@ impl<B: Backend + 'static> HuginnState<B> {
             "toggle" if in_front => self.minimise_window(&window),
             "toggle" => self.activate_window(&window),
             "close" => Self::close_window(&window),
+            "ontop" => self.toggle_above(&window),
             "maximise" | "maximize" => {
                 self.activate_window(&window);
                 self.window_action("maximise");
@@ -671,7 +685,7 @@ impl<B: Backend + 'static> HuginnState<B> {
         let Some(output) = self
             .space
             .output_under(pointer)
-            .next()
+            .find(|o| crate::displays::mirror_of(o).is_none())
             .or_else(|| self.space.outputs().next())
             .cloned()
         else {
@@ -682,6 +696,15 @@ impl<B: Backend + 'static> HuginnState<B> {
             let zone = layer_map_for_output(&output).non_exclusive_zone();
             Rectangle::new(geo.loc + zone.loc, zone.size)
         };
+        // a dialog: over its window (not where the app's main window last was)
+        if let Some(at) = self.dialog_place(window) {
+            self.space.map_element(window.clone(), at - window.geometry().loc, true);
+            self.tell_x11_where(window);
+            if !self.is_locked() {
+                self.activate_window(window);
+            }
+            return;
+        }
         // a rule for the app, or where its window last was (places.rs)
         if let Some(at) = self.place_from_memory(window) {
             let offset = window.geometry().loc;
