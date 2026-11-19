@@ -1982,8 +1982,8 @@ def _vlq(n: int) -> bytes:
 
 
 def write_midi(tracks: list, tempo: float, sig=(4, 4), in_seconds: bool = False, names: list = None, project: dict = None) -> bytes:
-    """A Standard MIDI File (type 1). tracks: [{channel, program, notes: [(start, dur, pitch, vel)]}] in beats
-    (or seconds with in_seconds). With `project`, its tempo changes (a glide as small steps, an eighth of a beat
+    """A Standard MIDI File (type 1). tracks: [{channel, program, notes: [(start, dur, pitch, vel)], cc: [(start,
+    kind, value)]}] in beats (or seconds with in_seconds); cc kinds: sustain (0 or 1), mod (0..1), bend (−1..1). With `project`, its tempo changes (a glide as small steps, an eighth of a beat
     apart: MIDI has no glides) and time-signature changes go in too."""
     ppq = 480
     conv = (lambda x: x * tempo / 60.0) if in_seconds else (lambda x: x)
@@ -2016,8 +2016,17 @@ def write_midi(tracks: list, tempo: float, sig=(4, 4), in_seconds: bool = False,
         for st, d, p, v in t["notes"]:
             a = int(round(conv(st) * ppq))
             b = int(round(conv(st + d) * ppq))
-            events.append((a, 1, bytes([0x90 | ch, int(p) & 0x7F, max(1, int(v)) & 0x7F])))
+            events.append((a, 2, bytes([0x90 | ch, int(p) & 0x7F, max(1, int(v)) & 0x7F])))
             events.append((max(a + 1, b), 0, bytes([0x80 | ch, int(p) & 0x7F, 0])))
+        for st, kind, v in t.get("cc") or []:                   # the pedal, the mod wheel and pitch bend
+            tick = int(round(conv(st) * ppq))
+            if kind == "sustain":
+                events.append((tick, 1, bytes([0xB0 | ch, 64, 127 if float(v) > 0.5 else 0])))
+            elif kind == "mod":
+                events.append((tick, 1, bytes([0xB0 | ch, 1, max(0, min(127, int(round(float(v) * 127))))])))
+            elif kind == "bend":
+                val = max(0, min(16383, 8192 + int(round(float(v) * 8191))))
+                events.append((tick, 1, bytes([0xE0 | ch, val & 0x7F, val >> 7])))
         events.sort(key=lambda e: (e[0], e[1]))
         body = b""
         if names and k < len(names):
@@ -2035,7 +2044,8 @@ def write_midi(tracks: list, tempo: float, sig=(4, 4), in_seconds: bool = False,
 
 def read_midi(data: bytes) -> dict:
     """A Standard MIDI File -> {tempo, sig, tempoChanges, sigChanges, tracks: [{name, channel, program, notes:
-    [(start, dur, pitch, vel)]}]} with times in beats: the first tempo and signature, and the changes after them."""
+    [(start, dur, pitch, vel)], cc: {sustain, mod, bend: [[beat, value]]}}]} with times in beats: the first tempo
+    and signature, and the changes after them."""
     if data[:4] != b"MThd":
         raise ValueError("not a MIDI file")
     _, fmt, ntrk, div = struct.unpack(">IHHH", data[4:14])
@@ -2054,6 +2064,7 @@ def read_midi(data: bytes) -> dict:
         name, program, chans = "", 0, {}
         on = {}
         notes = []
+        cc = {}
         while i < len(chunk):
             delta = 0
             while True:
@@ -2103,6 +2114,12 @@ def read_midi(data: bytes) -> dict:
                 chans[ch] = chans.get(ch, 0) + 1
                 if hi == 0xC0:
                     program = d[0]
+                elif hi == 0xB0 and d[0] == 64:
+                    cc.setdefault("sustain", []).append([round(tick / ppq, 4), 1.0 if d[1] >= 64 else 0.0])
+                elif hi == 0xB0 and d[0] == 1:
+                    cc.setdefault("mod", []).append([round(tick / ppq, 4), round(d[1] / 127, 3)])
+                elif hi == 0xE0:
+                    cc.setdefault("bend", []).append([round(tick / ppq, 4), round(max(-1.0, min(1.0, ((d[0] | d[1] << 7) - 8192) / 8191)), 3)])
                 elif hi == 0x90 and d[1] > 0:
                     on.setdefault((ch, d[0]), []).append((tick, d[1]))
                 elif hi == 0x80 or (hi == 0x90 and d[1] == 0):
@@ -2111,7 +2128,7 @@ def read_midi(data: bytes) -> dict:
                         notes.append((t0 / ppq, max(1, tick - t0) / ppq, d[0], v))
         if notes:
             ch = max(chans, key=chans.get) if chans else 0
-            out.append({"name": name, "channel": ch, "program": program, "notes": sorted(notes)})
+            out.append({"name": name, "channel": ch, "program": program, "notes": sorted(notes), "cc": cc})
     tempos.sort(key=lambda x: x[0])
     sigs.sort(key=lambda x: x[0])
     if tempos and tempos[0][0] < 1e-6:

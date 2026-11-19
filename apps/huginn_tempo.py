@@ -264,6 +264,7 @@ class Tempo(QObject):
     clockChanged = Signal()
     pluginsChanged = Signal()
     said = Signal(str, bool)
+    tapped = Signal(int)
     _midi_in = Signal(str, int, int)
     _back = Signal(object)
 
@@ -2007,6 +2008,77 @@ class Tempo(QObject):
                 notes[index]["to"] = int(round(max(0.0, min(127.0, float(to)))))
             self._keep()
 
+    @Slot(str, result=str)
+    def notesToMidi(self, rid: str) -> str:
+        """The notes found in a recording, as a MIDI region on a new instrument track under it (where they were
+        tuned to, when they were). Returns the new region's id."""
+        r = self._r(rid)
+        tune = (r or {}).get("tune") or {}
+        if r is None or not tune.get("notes"):
+            self.said.emit("Find the notes first.", True)
+            return ""
+        start, length = float(r["start"]), float(r["length"])
+        here = self._tm().tempo_at(start)
+        ratio = float(r.get("srcTempo") or here) / here if r.get("follow") else 1.0
+        tm, off = self._tm(), float(r.get("offset", 0))
+        sec0 = tm.seconds(start)
+        key, mode = int(self._p.get("key", 0)), self._p.get("mode", "major")
+        tuned = float(tune.get("amount", 0)) > 0
+        notes = []
+        for n in tune["notes"]:
+            a, b = (float(n["s"]) - off) * ratio, (float(n["e"]) - off) * ratio
+            if b <= 0:
+                continue
+            ba, bb = tm.beat(sec0 + max(0.0, a)) - start, tm.beat(sec0 + b) - start
+            if ba >= length:
+                continue
+            pitch = se.tune_target(n, tune, key, mode) if (tuned or "to" in n) else float(n["p"])
+            notes.append({"t": round(ba, 4), "d": round(max(1 / 32, min(bb, length) - ba), 4), "p": int(round(pitch)) & 0x7F, "v": 96})
+        if not notes:
+            self.said.emit("None of the notes are inside the region.", True)
+            return ""
+        self._before()
+        src_track = self._t(r["track"]) or {}
+        t = self._add_track("instrument", "grand", f"{src_track.get('name', 'Recording')[:18]} notes")
+        order = [x["id"] for x in self._p["tracks"]]                   # just under the recording
+        self._p["tracks"].insert(order.index(r["track"]) + 1, self._p["tracks"].pop(order.index(t["id"])))
+        reg = {"id": self._id("r"), "track": t["id"], "start": start, "length": length, "kind": "midi", "name": "Notes", "notes": sorted(notes, key=lambda x: x["t"])}
+        self._p["regions"].append(reg)
+        self._sel_region, self._sel_track = reg["id"], t["id"]
+        self._keep()
+        self.said.emit(f"{len(notes)} notes on a piano under the recording: pick any instrument for them.", False)
+        return reg["id"]
+
+    @Slot()
+    def tapTempo(self) -> None:
+        """Tap along: from the third tap, the tempo where the playhead is follows the taps (the last few)."""
+        now = time.monotonic()
+        taps = [x for x in getattr(self, "_taps", []) if now - x < 2.5]
+        if taps and now - taps[-1] > 2.0:
+            taps = []
+        taps = (taps + [now])[-7:]
+        self._taps = taps
+        if len(taps) >= 3 and self._p is not None:
+            gaps = np.diff(np.array(taps))
+            bpm = round(max(30.0, min(300.0, 60.0 / float(np.median(gaps)))), 1)
+            self.setTempoHere(bpm)                        # (a run of taps is one undo step: tempo changes run together)
+        self.tapped.emit(len(taps))
+
+    @Slot(str)
+    def legato(self, rid: str) -> None:
+        """Each note held until the next one starts (chords together); the last keeps its length."""
+        self._before()
+        r, notes = self._notes(rid)
+        if r is None or not notes:
+            self._undo.pop()
+            return
+        starts = sorted({float(n["t"]) for n in notes})
+        for n in notes:
+            later = [x for x in starts if x > float(n["t"]) + 1e-6]
+            if later:
+                n["d"] = round(later[0] - float(n["t"]), 4)
+        self._keep()
+
     @Slot(str)
     def resetTune(self, rid: str) -> None:
         r = self._r(rid)
@@ -2396,8 +2468,12 @@ class Tempo(QObject):
             end = max(a + d for a, d, _p, _v in tr["notes"])
             bars = [b for b, _n, _s in self._mm().bars(end + 64)]
             length = next((b for b in bars if b > end), end)
-            self._p["regions"].append({"id": self._id("r"), "track": t["id"], "start": 0.0, "length": length, "kind": "midi", "name": tr["name"] or "MIDI",
-                                       "notes": [{"t": round(a, 4), "d": round(d, 4), "p": p, "v": v} for a, d, p, v in tr["notes"]]})
+            region = {"id": self._id("r"), "track": t["id"], "start": 0.0, "length": length, "kind": "midi", "name": tr["name"] or "MIDI",
+                      "notes": [{"t": round(a, 4), "d": round(d, 4), "p": p, "v": v} for a, d, p, v in tr["notes"]]}
+            ccs = {k: [pt for pt in v if 0 <= pt[0] <= length] for k, v in (tr.get("cc") or {}).items()}
+            if any(ccs.values()):                            # the pedal, the mod wheel and bends, as drawn in the region
+                region["cc"] = {k: v for k, v in ccs.items() if v}
+            self._p["regions"].append(region)
         self._keep()
         self.said.emit(f"Brought in {len(song['tracks'])} track{'s' if len(song['tracks']) != 1 else ''} from {Path(path).name}.", False)
 
@@ -2429,9 +2505,12 @@ class Tempo(QObject):
             for k, t in enumerate(self._p["tracks"]):
                 notes = [(r["start"] + n["t"] + rep * r["length"], n["d"], n["p"], n.get("v", 100)) for r in self._p["regions"] if r["track"] == t["id"] and r.get("kind") != "audio"
                          for rep in range(int(r.get("loops", 1))) for n in r.get("notes") or [] if n["t"] < r["length"]]
+                ccs = [(r["start"] + pt[0] + rep * r["length"], kind, pt[1]) for r in self._p["regions"] if r["track"] == t["id"] and r.get("kind") != "audio"
+                       for rep in range(int(r.get("loops", 1))) for kind, pts in (r.get("cc") or {}).items() for pt in pts if pt[0] <= r["length"]]
                 if notes:
                     kit = se.settings(t.get("instrument") or {}).get("engine") == "kit"
-                    tracks.append({"channel": 9 if kit else min(15, len(tracks) + (1 if len(tracks) >= 9 else 0)), "program": se.INSTRUMENTS.get((t.get("instrument") or {}).get("id"), {}).get("program", 0), "notes": notes})
+                    tracks.append({"channel": 9 if kit else min(15, len(tracks) + (1 if len(tracks) >= 9 else 0)), "program": se.INSTRUMENTS.get((t.get("instrument") or {}).get("id"), {}).get("program", 0),
+                                   "notes": notes, "cc": sorted(ccs)})
                     names.append(t["name"])
             target = self._free(folder, name, ".mid")
             target.write_bytes(se.write_midi(tracks, float(self._p["tempo"]), tuple(self._p["sig"]), names=names, project=self._p))

@@ -1597,6 +1597,13 @@ Huginn AI in four more apps, each with its own switch in Settings › AI › Whe
 - **Cut Pauses**: takes the pauses out of the picked clip's speech and closes up its track. The bar between quiet and voice comes from the clip itself (a quarter of the way, in decibels, from its quietest tenth to its loudest), pauses shorter than half a second stay, and a little of each pause is kept so words aren't clipped.
 - Tested (23 checks, real ffmpeg and melt): the pauses in a made-up talk found to within 80 ms and a short one left alone, the clip cut into three with no gaps and one undo; slips and their limits; the marked part made into a video two seconds long.
 
+### Tempo
+- **Make MIDI** from a recording (Region › Pitch, after Find the Notes): the notes sung or played, as tuned, on a new instrument track just under it, timed through the song's tempo map (and a recording that follows the tempo).
+- **Tap tempo**: click TEMPO · TAP in the display along with the music; from the third tap the tempo where the playhead is follows (the middle of the last few taps), and a run of taps is one undo step.
+- Piano roll: **Legato** (each note held until the next starts, chords together) and **Key** (the song's key shaded on the rows, its root stronger, and new notes put on the nearest row of the key).
+- **Controllers in MIDI files**, both ways: the sustain pedal (CC 64), the mod wheel (CC 1) and pitch bend go out with the notes (loops repeated) and come in as the region's drawn controllers.
+- Tested (17 checks): pedal, wheel and bend through a MIDI file and back, into a region and out again; legato with a chord; taps at 120 and 100 a minute and a lone late tap ignored; three sung notes (A3, E4, C4) found and made into MIDI at the right beats, under the recording, and tuned into C major when asked.
+
 ## Huginn, the browser
 
 Inside the Huginn repository (this kit is its `os/` folder) the image ships the repository's own browser. A kit used

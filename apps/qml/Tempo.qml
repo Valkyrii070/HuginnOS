@@ -24,6 +24,9 @@ GlassWindow {
     property bool tempoOn: (Backend.song.tempoChanges || []).length > 0 || (Backend.song.sigChanges || []).length > 0   // the Tempo lane
     property int tempoSel: -1                     // the tempo change picked in it
     property string ccKind: "velocity"            // the piano roll's lane: velocity | sustain | bend | mod
+    property bool keyRows: false                  // the piano roll shows the song's key on its rows
+    function inKey(pitch) { var steps = (Backend.song.mode === "minor") ? [0, 2, 3, 5, 7, 8, 10] : [0, 2, 4, 5, 7, 9, 11]
+        return steps.indexOf(((pitch - (Backend.song.key || 0)) % 12 + 12) % 12) >= 0 }
     property string masterChar: "clean"           // the mastering assistant's choices before it has listened
     property string masterTarget: "streaming"
     readonly property int tracksTop: 98 + (tempoOn ? 54 : 0)
@@ -132,7 +135,12 @@ GlassWindow {
                             MouseArea { anchors.fill: parent; anchors.margins: -6; cursorShape: Qt.SizeVerCursor; property real y0: 0; property real t0: 120
                                 onPressed: function (m) { y0 = m.y; t0 = Backend.tempoNow } onPositionChanged: function (m) { Backend.setTempoHere(Math.round(t0 + (y0 - m.y) / 3)) }
                                 onWheel: function (w) { Backend.setTempoHere(Backend.tempoNow + (w.angleDelta.y > 0 ? 1 : -1)) } } }
-                        Text { text: "TEMPO"; color: "#8A5A3C"; font.pixelSize: 7; font.letterSpacing: 1; anchors.horizontalCenter: parent.horizontalCenter } }
+                        Text { id: tapLabel; objectName: "tapTempo"; text: tapFlash.running ? "TAP · " + tapLabel.taps : "TEMPO · TAP"; color: tapFlash.running ? win.lcd : "#8A5A3C"
+                            font.pixelSize: 7; font.letterSpacing: 1; anchors.horizontalCenter: parent.horizontalCenter
+                            property int taps: 0
+                            Timer { id: tapFlash; interval: 2200 }
+                            Connections { target: Backend; function onTapped(n) { tapLabel.taps = n; tapFlash.restart() } }
+                            MouseArea { anchors.fill: parent; anchors.margins: -5; cursorShape: Qt.PointingHandCursor; onPressed: Backend.tapTempo() } } }
                     Column { anchors.verticalCenter: parent.verticalCenter
                         Text { text: (Backend.sigNow || [4, 4]).join("/"); color: win.lcd; font.family: Theme.t.fontMono; font.pixelSize: 13; anchors.horizontalCenter: parent.horizontalCenter
                             MouseArea { anchors.fill: parent; anchors.margins: -6; onClicked: { var opts = [[4, 4], [3, 4], [6, 8], [2, 4], [5, 4], [7, 8]], cur = (Backend.sigNow || [4, 4]).join("/"), k = 0
@@ -436,6 +444,8 @@ GlassWindow {
                     Seg { required property var modelData; text: modelData[1]; on: Math.abs(win.grid - modelData[0]) < 1e-3; onClicked: win.grid = modelData[0] } }
                 IslandGap {}
                 Seg { text: "Quantize"; onClicked: Backend.quantize(win.reg.id, win.grid, 1.0) }
+                Seg { objectName: "legatoBtn"; text: "Legato"; tip: "Hold each note until the next one starts"; onClicked: Backend.legato(win.reg.id) }
+                Seg { objectName: "keyRowsBtn"; text: "Key"; tip: "Show the song's key on the rows, and put new notes on them"; on: win.keyRows; onClicked: win.keyRows = !win.keyRows }
                 Seg { text: "−12"; onClicked: Backend.transpose(win.reg.id, -12) }
                 Seg { text: "+12"; onClicked: Backend.transpose(win.reg.id, 12) } }
             Flickable { id: rollView; visible: !!win.reg.id && win.reg.trackKind !== "audio"; anchors { fill: parent; bottomMargin: 78 } clip: true; boundsBehavior: Flickable.StopAtBounds
@@ -451,12 +461,16 @@ GlassWindow {
                 // the grid
                 Item { x: 50; width: (win.reg.length || 16) * roll.bpp; height: rollView.contentHeight
                     Repeater { model: roll.topPitch - 24
-                        Rectangle { required property int index; y: index * roll.nh; width: parent.width; height: roll.nh; color: [1, 3, 6, 8, 10].indexOf((roll.topPitch - 1 - index) % 12) >= 0 ? (Theme.t.dark ? "#0DFFFFFF" : "#08000000") : "transparent" } }
+                        Rectangle { required property int index; readonly property int pitch: roll.topPitch - 1 - index; y: index * roll.nh; width: parent.width; height: roll.nh
+                            color: win.keyRows ? (win.inKey(pitch) ? (pitch % 12 === (Backend.song.key || 0) ? Qt.alpha(Theme.t.accent, 0.16) : Qt.alpha(Theme.t.accent, 0.07)) : (Theme.t.dark ? "#26000000" : "#0D000000"))
+                                 : [1, 3, 6, 8, 10].indexOf(pitch % 12) >= 0 ? (Theme.t.dark ? "#0DFFFFFF" : "#08000000") : "transparent" } }
                     Repeater { model: Math.ceil((win.reg.length || 16) / win.grid)
                         Rectangle { required property int index; readonly property real b: index * win.grid; x: b * roll.bpp; width: 1; height: parent.height; color: Theme.t.text
                             opacity: Math.abs(b % win.bpb) < 1e-3 ? 0.25 : Math.abs(b % 1) < 1e-3 ? 0.12 : 0.05 } }
                     MouseArea { anchors.fill: parent
-                        onClicked: function (m) { var t = Math.floor(m.x / roll.bpp / win.grid) * win.grid, p = roll.topPitch - 1 - Math.floor(m.y / roll.nh); Backend.addNote(win.reg.id, t, p, win.grid, 100) } }
+                        onClicked: function (m) { var t = Math.floor(m.x / roll.bpp / win.grid) * win.grid, p = roll.topPitch - 1 - Math.floor(m.y / roll.nh)
+                            if (win.keyRows && !win.inKey(p)) p = win.inKey(p + 1) ? p + 1 : p - 1          // (onto the key: the nearest row of it)
+                            Backend.addNote(win.reg.id, t, p, win.grid, 100) } }
                     Repeater { model: roll.notes
                         Rectangle { id: nt; required property var modelData
                             property real dx: 0; property real dy: 0; property real dw: 0
@@ -507,7 +521,8 @@ GlassWindow {
                         Label { anchors.verticalCenter: parent.verticalCenter; width: 150; font.pixelSize: 11; text: "Tune to the key  " + Math.round((parent.parent.tune ? parent.parent.tune.amount : 0) * 100) + " %" }
                         Meter { objectName: "tuneMeter"; anchors.verticalCenter: parent.verticalCenter; width: 180; interactive: true; value: parent.parent.tune ? parent.parent.tune.amount : 0
                             onMoved: function (v) { Backend.setTuneAmount(win.reg.id, v) } }
-                        Seg { text: "Reset"; onClicked: Backend.resetTune(win.reg.id) } }
+                        Seg { text: "Reset"; onClicked: Backend.resetTune(win.reg.id) }
+                        Seg { objectName: "toMidiBtn"; text: "Make MIDI"; tip: "The notes, as they're tuned, on a new instrument track under this one"; onClicked: Backend.notesToMidi(win.reg.id) } }
                     Rectangle { id: pitchView; objectName: "pitchView"; visible: !!parent.tune; width: 420; height: Math.max(70, regionPane.height - 92); radius: 10; clip: true
                         color: Theme.t.dark ? "#0CFFFFFF" : "#06000000"
                         readonly property var notes: parent.tune ? parent.tune.notes : []
