@@ -1786,6 +1786,28 @@ Before the first start on a desktop PC (a Radeon RX 9070 XT and three screens):
   waiting to print were already listed with Cancel. The first user is in the `lpadmin` group, so no password.
 - Tab now moves between text boxes everywhere (`TextBox.qml`).
 
+## Office, round two (2026-11-19)
+
+- **Writer: comments and tracked changes** (`apps/huginn_review.py`, new). Select words and Ctrl+Alt+M (or right-click
+  › Comment): comments, with replies, Resolve and Delete, in a Review tab on the left. Track changes (Ctrl+Shift+R, or
+  the Review tab): what is typed is underlined in blue and what is deleted stays, struck through in red, signed with
+  the account's name, until accepted or rejected one at a time (the tab, the right-click menu, Review › Next change)
+  or all at once; deleting your own unaccepted insertion just removes it. The marks live in the characters' format
+  (the tool tip, Qt's HTML title attribute) with who and when in a `huginn-review` meta tag; because Qt 6.10 reads
+  title attributes but doesn't write them, the saved file also lists where each mark is, with a checksum of the text,
+  and puts them back on opening. Word's `w:ins`, `w:del`, `w:moveFrom`/`w:moveTo`, comments (`comments.xml`, replies
+  as further paragraphs) and `trackRevisions` come in from .docx and go out to it; Writer no longer reports them as
+  dropped.
+- **Sheets: Highlight cells** (conditional formatting, `apps/huginn_sheet_rules.py`, new): greater/less than, between,
+  equal to, text that contains, duplicates and unique values, top and bottom N, above and below average, empty,
+  errors, colour scales (two or three colours) and data bars, the first matching rule colouring a cell (scales and
+  bars add to it); rules follow inserted and deleted rows and columns, can be reordered, and go to Excel's
+  `conditionalFormatting` with `dxfs` and come back (icon sets and formula rules are reported as not come across).
+- **Sheets: Pivot tables** (Data › Pivot table): rows by one column, optional columns by another, and the sum, count,
+  average, smallest or largest of a third, on a new sheet built from SUMIFS-family formulas, so its numbers follow
+  the table; Refresh (an island on the sheet, or Data › Refresh the pivot table) brings in new names and rows added
+  under the table. Gaps are left empty, as in a pivot table.
+
 ## Huginn, the browser
 
 Inside the Huginn repository (this kit is its `os/` folder) the image ships the repository's own browser. A kit used

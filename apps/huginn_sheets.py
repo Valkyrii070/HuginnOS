@@ -17,6 +17,7 @@ from PySide6.QtCore import Property, QAbstractTableModel, QLocale, QModelIndex, 
 from PySide6.QtGui import QFont, QFontMetrics
 
 import huginn_sheet_engine as se
+import huginn_sheet_rules as rules_
 import huginn_xlsx as xlsx
 from huginn_office import FileList, fresh_path, note_recent, write_atomic
 
@@ -61,7 +62,7 @@ def parse_span(text: str):
 
 
 def blank_sheet(name: str) -> dict:
-    return {"name": name, "raw": {}, "fmt": {}, "widths": {}, "heights": {}, "freeze": [0, 0], "filter": None, "charts": [], "merges": []}
+    return {"name": name, "raw": {}, "fmt": {}, "widths": {}, "heights": {}, "freeze": [0, 0], "filter": None, "charts": [], "merges": [], "rules": [], "pivot": None}
 
 
 # ------------------------------------------------------------------------------------------------ the grid, for TableView
@@ -149,6 +150,7 @@ class Sheets(FileList):
         self.book = se.Book()
         self.book.day_first = QLocale.system().dateFormat(QLocale.ShortFormat).lower().startswith("d")
         self.book.sheets = [blank_sheet("Sheet 1")]
+        self.looks = rules_.Rules(self.book)
         self._at = 0
         self._undo, self._redo = [], []
         self.historyChanged.emit()
@@ -213,6 +215,7 @@ class Sheets(FileList):
 
     def _refresh(self) -> None:
         self.book.changed()
+        self.looks.forget()
         old = (self.rows, self.cols)
         self._size()
         if (self.rows, self.cols) == old:
@@ -254,6 +257,8 @@ class Sheets(FileList):
             out.update({k: f[k] for k in ("b", "i", "u", "s", "color", "fill", "align", "wrap", "size", "font") if k in f})
         if "align" not in out:
             out["align"] = "right" if number else ("center" if isinstance(v, (bool, se.Err)) else "left")
+        if self.sh.get("rules"):
+            out.update(self.looks.look(self._at, self.sh["rules"], r, c))
         return out
 
     @Slot(int, int, result=str)
@@ -561,16 +566,232 @@ class Sheets(FileList):
         self.sh["heights" if axis == "r" else "widths"] = moved_sizes
         for ch in self.sh["charts"]:
             ch["range"] = se.move_refs("=" + ch["range"], name, name, axis, at, count)[1:]
-        if self.sh.get("filter"):
-            r0, c0, r1, c1 = self.sh["filter"]["range"]
-            span = [r0, c0, r1, c1]
-            lo, hi = (0, 2) if axis == "r" else (1, 3)
+        lo, hi = (0, 2) if axis == "r" else (1, 3)
+
+        def shifted(span):
+            span = list(span)
             if span[lo] >= at:
                 span[lo] = max(at, span[lo] + count)
             if span[hi] >= at:
                 span[hi] = max(span[lo], span[hi] + count)
-            self.sh["filter"]["range"] = span
+            return span
+        if self.sh.get("filter"):
+            self.sh["filter"]["range"] = shifted(self.sh["filter"]["range"])
+        kept = []
+        for rule in self.sh.get("rules") or []:
+            span = shifted(rule["range"])
+            if span[hi] >= span[lo] and not (count < 0 and rule["range"][lo] >= at and rule["range"][hi] < at - count):
+                rule["range"] = span
+                kept.append(rule)
+        self.sh["rules"] = kept
         self._done()
+
+    # ------------------------------------------------------------------ conditional formatting
+    @Property("QVariantList", notify=historyChanged)
+    def rules(self):
+        out = []
+        for rule in self.sh.get("rules") or []:
+            look = rules_.look_of(rule) if rule["kind"] not in ("scale", "bar") else {}
+            out.append({"id": rule["id"], "kind": rule["kind"], "range": list(rule["range"]), "where": span_name(*rule["range"]),
+                        "what": rules_.describe(rule), "fill": look.get("fill", rule.get("high") or rule.get("color") or ""), "color": look.get("color", ""),
+                        "low": rule.get("low", ""), "high": rule.get("high", rule.get("color", ""))})
+        return out
+
+    @Slot(int, int, int, int, str, str, str, int, str, result=str)
+    def addRule(self, r0: int, c0: int, r1: int, c1: int, kind: str, a: str, b: str, n: int, style: str) -> str:
+        """Colour the cells between (r0, c0) and (r1, c1) by a rule (huginn_sheet_rules); it goes first. Returns why
+        not, or ""."""
+        if (kind in rules_.COMPARE or kind in ("text", "starts")) and not a.strip():
+            return "Say what to compare with."
+        if kind == "between" and (not a.strip() or not b.strip()):
+            return "Give both ends."
+        ident = "c" + str(1 + max([int(x["id"][1:]) for s in self.book.sheets for x in s.get("rules") or [] if x["id"][1:].isdigit()] or [0]))
+        extra = {}
+        if kind == "scale":
+            extra = {"low": "#F8696B", "high": "#63BE7B"} if style != "blue" else {"low": "#FFFFFF", "high": "#5A8AC6"}
+            if style == "three":
+                extra = {"low": "#F8696B", "mid": "#FFEB84", "high": "#63BE7B"}
+        if kind == "bar":
+            extra = {"color": {"green": "#63C384", "red": "#FF555A", "yellow": "#FFB628"}.get(style, "#638EC6")}
+        rule = rules_.clean_rule({"id": ident, "range": [r0, c0, r1, c1], "kind": kind, "a": a.strip(), "b": b.strip(), "n": n, "style": style, **extra})
+        if rule is None:
+            return "That rule can't be used."
+        self._keep("conditional formatting")
+        self.sh.setdefault("rules", []).insert(0, rule)
+        self._done()
+        return ""
+
+    @Slot(str)
+    def removeRule(self, ident: str) -> None:
+        rules = self.sh.get("rules") or []
+        if any(x["id"] == ident for x in rules):
+            self._keep("conditional formatting")
+            self.sh["rules"] = [x for x in rules if x["id"] != ident]
+            self._done()
+
+    @Slot(str, bool)
+    def moveRule(self, ident: str, up: bool) -> None:
+        rules = self.sh.get("rules") or []
+        i = next((k for k, x in enumerate(rules) if x["id"] == ident), -1)
+        j = i - 1 if up else i + 1
+        if i >= 0 and 0 <= j < len(rules):
+            self._keep("conditional formatting")
+            rules[i], rules[j] = rules[j], rules[i]
+            self._done()
+
+    @Slot(int, int, int, int, result=int)
+    def clearRules(self, r0: int, c0: int, r1: int, c1: int) -> int:
+        """Take off the rules that touch these cells; returns how many."""
+        rules = self.sh.get("rules") or []
+        keep = [x for x in rules if x["range"][2] < r0 or x["range"][0] > r1 or x["range"][3] < c0 or x["range"][1] > c1]
+        if len(keep) != len(rules):
+            self._keep("conditional formatting")
+            self.sh["rules"] = keep
+            self._done()
+        return len(rules) - len(keep)
+
+    # ------------------------------------------------------------------ summaries (pivot tables)
+    PIVOT_FNS = {"sum": ("SUMIFS", "Sum"), "count": ("COUNTIFS", "Count"), "average": ("AVERAGEIFS", "Average"), "min": ("MINIFS", "Smallest"), "max": ("MAXIFS", "Largest")}
+
+    @Slot(int, int, int, int, result="QVariantList")
+    def headings(self, r0: int, c0: int, r1: int, c1: int) -> list:
+        """The first row of a block, as the names of its columns: [{col, name}]."""
+        return [{"col": c, "name": self.shown(r0, c) or f"Column {se.col_name(c)}"} for c in range(c0, c1 + 1)]
+
+    def _pivot_cells(self, spec: dict) -> tuple:
+        """What a summary sheet holds: (raw cells, formats, widths), worked out from its source (formulas, so the
+        numbers follow the source; new names in it come in when the summary is refreshed)."""
+        src = self.book.sheet_index(spec["source"])
+        if src is None or src < 0:
+            raise ValueError("The sheet it summarises isn't there any more.")
+        r0, c0, r1, c1 = spec["range"]
+        sheet = self.book.sheets[src]
+        last = self.book.used(src)[0]
+        while r1 < last and any(sheet["raw"].get((r1 + 1, c), "") != "" for c in range(c0, c1 + 1)):
+            r1 += 1                                     # rows added under the table since are in it too
+        r1 = max(r0 + 1, min(r1, last))
+        spec["range"] = [r0, c0, r1, c1]
+        rc, cc, vc, fn = spec["rows"], spec["cols"], spec["values"], spec["fn"]
+        fx, word = self.PIVOT_FNS[fn]
+
+        def key(r, c):
+            v = se.scalar(self.book.value(src, r, c)) if sheet["raw"].get((r, c), "") != "" else None
+            return None if v is None or isinstance(v, se.Err) or v == "" else v
+
+        def order(v):
+            return (0, v, "") if isinstance(v, (int, float)) and not isinstance(v, bool) else (1, 0, str(v).lower())
+        rows = sorted({k for r in range(r0 + 1, r1 + 1) if (k := key(r, rc)) is not None}, key=order)
+        cols = sorted({k for r in range(r0 + 1, r1 + 1) if (k := key(r, cc)) is not None}, key=order) if cc >= 0 else []
+        if not rows:
+            raise ValueError("The column for the rows has nothing in it.")
+        if len(rows) > 5000 or len(cols) > 200:
+            raise ValueError("Too many different names to summarise (more than 5,000 rows or 200 columns).")
+        q = se.quote_sheet(sheet["name"]) + "!"
+
+        def col_range(c):
+            return f"{q}${se.col_name(c)}${r0 + 2}:${se.col_name(c)}${r1 + 1}"
+        vals, rrng = col_range(vc), col_range(rc)
+        crng = col_range(cc) if cc >= 0 else ""
+
+        def lit(v):
+            if isinstance(v, bool):
+                return "TRUE" if v else "FALSE"
+            if isinstance(v, (int, float)):
+                return se.general(float(v))
+            t = str(v)
+            return "'" + t if t[:1] in ("=", "'") or se.literal(t)[1] or isinstance(se.literal(t)[0], (int, float)) else t
+
+        def formula(row_ref, col_ref):
+            parts = [] if fn == "count" else [vals]
+            if row_ref:
+                parts += [rrng, row_ref]
+            if col_ref:
+                parts += [crng, col_ref]
+            if not row_ref and not col_ref:
+                return {"sum": f"=SUM({vals})", "count": f"=COUNTA({vals})", "average": f"=AVERAGE({vals})", "min": f"=MIN({vals})", "max": f"=MAX({vals})"}[fn]
+            body = f"{fx}({','.join(parts)})"
+            if row_ref and col_ref:                     # nothing for that pair: left empty, as a pivot table does
+                return f'=IF(COUNTIFS({rrng},{row_ref},{crng},{col_ref})=0,"",{body})'
+            return "=" + body
+        raw, fmt = {}, {}
+        head = {"b": True, "fill": "#E7F1FB"}
+        value_name = self.shown(r0, vc) or se.col_name(vc)
+        raw[(0, 0)] = lit(self.shown(r0, rc) or se.col_name(rc))
+        fmt[(0, 0)] = dict(head)
+        num = (sheet["fmt"].get((r0 + 1, vc)) or {}).get("num", "") if fn != "count" else ""
+        columns = cols or [None]
+        for j, ck in enumerate(columns):
+            raw[(0, 1 + j)] = lit(ck) if ck is not None else f"{word} of {value_name}"
+            fmt[(0, 1 + j)] = dict(head, align="right")
+        if cols:
+            raw[(0, 1 + len(cols))] = "Total"
+            fmt[(0, 1 + len(cols))] = dict(head, align="right")
+        for i, rk in enumerate(rows):
+            r = 1 + i
+            raw[(r, 0)] = lit(rk)
+            for j, ck in enumerate(columns):
+                ref_c = f"{se.col_name(1 + j)}$1" if ck is not None else ""
+                raw[(r, 1 + j)] = formula(f"$A{r + 1}", ref_c)
+                if num:
+                    fmt[(r, 1 + j)] = {"num": num}
+            if cols:
+                raw[(r, 1 + len(cols))] = formula(f"$A{r + 1}", "")
+                fmt[(r, 1 + len(cols))] = {"b": True, **({"num": num} if num else {})}
+        total = 1 + len(rows)
+        raw[(total, 0)] = "Total"
+        fmt[(total, 0)] = {"b": True, "fill": "#F1F3F5"}
+        for j, ck in enumerate(columns + ([None] if cols else [])):
+            ref_c = f"{se.col_name(1 + j)}$1" if ck is not None else ""
+            raw[(total, 1 + j)] = formula("", ref_c)
+            fmt[(total, 1 + j)] = {"b": True, "fill": "#F1F3F5", **({"num": num} if num else {})}
+        widths = {0: 160.0, **{1 + j: 120.0 for j in range(len(columns) + (1 if cols else 0))}}
+        return raw, fmt, widths
+
+    @Slot(int, int, int, int, int, int, int, str, result=str)
+    def makePivot(self, r0: int, c0: int, r1: int, c1: int, rows: int, cols: int, values: int, fn: str) -> str:
+        """A summary of a block (its first row the column names) on a new sheet: a row for each name in one column,
+        optionally a column for each name in another, and the sum (or count, average, smallest, largest) of a third.
+        Returns why not, or ""."""
+        if fn not in self.PIVOT_FNS:
+            return "Choose how to sum it up."
+        if r0 == r1 and c0 == c1:                       # one cell: the table round it
+            r0, c0, r1, c1 = self.dataBlock(r0, c0, r0, c0)
+        if r1 <= r0 or not (c0 <= rows <= c1 and c0 <= values <= c1 and (cols < 0 or c0 <= cols <= c1)):
+            return "Select the table to summarise, its column names along the top."
+        if cols == rows:
+            cols = -1
+        spec = {"source": self.sh["name"], "range": [r0, c0, r1, c1], "rows": rows, "cols": cols, "values": values, "fn": fn}
+        try:
+            raw, fmt, widths = self._pivot_cells(spec)
+        except (ValueError, se.Err) as err:
+            return str(err)
+        if len(self.book.sheets) >= self.MAX_SHEETS:
+            return "This file has as many sheets as it can."
+        sh = blank_sheet(self._fresh_name(f"Summary of {self.sh['name']}")[:31])
+        sh["raw"], sh["fmt"], sh["widths"], sh["pivot"] = raw, fmt, widths, spec
+        sh["freeze"] = [1, 0]
+        self._undo.clear()
+        self._redo.clear()
+        self.book.sheets.insert(self._at + 1, sh)
+        self._front(self._at + 1)
+        self._done()
+        return ""
+
+    isPivot = Property(bool, lambda self: bool(self.sh.get("pivot")), notify=sheetsChanged)
+
+    @Slot(result=str)
+    def refreshPivot(self) -> str:
+        spec = self.sh.get("pivot")
+        if not spec:
+            return "This sheet isn't a summary."
+        try:
+            raw, fmt, widths = self._pivot_cells(spec)
+        except (ValueError, se.Err) as err:
+            return str(err)
+        self._keep("refresh the summary")
+        self.sh["raw"], self.sh["fmt"] = raw, fmt
+        self._done()
+        return ""
 
     # ------------------------------------------------------------------ sizes
     @Slot(int, result=float)
@@ -852,6 +1073,7 @@ class Sheets(FileList):
     def _front(self, index: int) -> None:
         self._at = max(0, min(index, len(self.book.sheets) - 1))
         self.book.changed()
+        self.looks.forget()
         self.rows, self.cols = 0, 0
         self._size()
         self._panes()
@@ -889,6 +1111,8 @@ class Sheets(FileList):
                 for k, t in list(s["raw"].items()):
                     if t.startswith("=") and "!" in t:
                         s["raw"][k] = se.rename_sheet_refs(t, old, new)
+                if s.get("pivot") and s["pivot"].get("source") == old:   # and a summary of it
+                    s["pivot"]["source"] = new
             self._refresh()
             self.touch()
 
@@ -1100,7 +1324,8 @@ def write_hsheet(sheets: list, front: int) -> str:
                     "formats": {a1(r, c): f for (r, c), f in sorted(sh["fmt"].items()) if f},
                     "widths": {se.col_name(int(c)): w for c, w in sorted(sh["widths"].items())},
                     "heights": {str(int(r) + 1): h for r, h in sorted(sh["heights"].items())},
-                    "freeze": sh["freeze"], "filter": sh.get("filter"), "charts": sh["charts"], "merges": sh.get("merges", [])})
+                    "freeze": sh["freeze"], "filter": sh.get("filter"), "charts": sh["charts"], "merges": sh.get("merges", []),
+                    **({"rules": sh["rules"]} if sh.get("rules") else {}), **({"pivot": sh["pivot"]} if sh.get("pivot") else {})})
     return json.dumps({"format": "huginn-sheet-3", "front": front, "sheets": out}, indent=1, ensure_ascii=False)
 
 
@@ -1129,6 +1354,8 @@ def read_hsheet(text: str) -> list:
             sh["filter"] = {"range": [int(x) for x in flt["range"]], "hide": {int(k): list(v) for k, v in (flt.get("hide") or {}).items()}}
         sh["charts"] = [c for c in entry.get("charts") or [] if isinstance(c, dict) and c.get("range")]
         sh["merges"] = entry.get("merges") or []
+        sh["rules"] = [r for r in (rules_.clean_rule(x) for x in entry.get("rules") or []) if r]
+        sh["pivot"] = entry.get("pivot") if isinstance(entry.get("pivot"), dict) else None
         sheets.append(sh)
     return sheets, int(data.get("front", 0) or 0)
 

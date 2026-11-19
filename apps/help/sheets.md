@@ -19,6 +19,12 @@ The island at the bottom: bold, italic, underline, colours, alignment, wrapping,
 ## Sorting and filtering
 A↓ and Z↓ sort the table by the column you're in (a heading row stays put). The filter button puts arrows on the heading row: choose which values show. Freeze (❄) keeps the top row, the first column, or everything above and left of the chosen cell in view.
 
+## Highlight cells
+The button with three coloured lines (or Format › Highlight cells) colours cells by what's in them: greater or less than a number, between two, equal to, text that contains some words, duplicates, the top or bottom few, above or below the average, empty cells and errors. Colour scales shade a range from low to high, and data bars draw a bar in each cell. The first rule that fits a cell colours it; change their order or take one off in the same panel. They go to Excel and come back from it.
+
+## Pivot tables
+Choose a table with names of its columns along the top (or a cell in it), then Data › Pivot table: a row for each name in one column, a column for each name in another if you like, and the sum, count, average, smallest or largest of a third, on a new sheet. Its numbers follow the table; Refresh brings in names added since.
+
 ## Charts
 Choose the cells with the numbers (and their labels), then the chart button: columns, bars, lines, area or a pie. Click a chart to move it, resize it from its corner, change its kind, title and cells, or delete it.
 

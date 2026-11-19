@@ -63,6 +63,7 @@ class _Styles:
         self.numfmts = {}                                      # code -> id (164+)
         self.xfs = [None]
         self.index = {}
+        self.dxfs = []                                         # (fill, color, bold): conditional formatting's looks
 
     def xf(self, f: dict) -> int:
         if not f:
@@ -90,6 +91,12 @@ class _Styles:
         self.index[key] = len(self.xfs) - 1
         return self.index[key]
 
+    def dxf(self, look: dict) -> int:
+        key = (look.get("fill", ""), look.get("color", ""), bool(look.get("b")))
+        if key not in self.dxfs:
+            self.dxfs.append(key)
+        return self.dxfs.index(key)
+
     def xml(self) -> str:
         nf = "".join(f'<numFmt numFmtId="{i}" formatCode="{_attr(code)}"/>' for code, i in self.numfmts.items())
         fonts = []
@@ -114,7 +121,149 @@ class _Styles:
                 + '<borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders>'
                 + '<cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>'
                 + f'<cellXfs count="{len(xfs)}">{"".join(xfs)}</cellXfs>'
-                + '<cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles></styleSheet>')
+                + '<cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles>'
+                + (f'<dxfs count="{len(self.dxfs)}">' + "".join(
+                    "<dxf>" + ("<font>" + ("<b/>" if b else "") + (f'<color rgb="FF{color.lstrip("#").upper()}"/>' if color else "") + "</font>" if b or color else "")
+                    + (f'<fill><patternFill><bgColor rgb="FF{fill.lstrip("#").upper()}"/></patternFill></fill>' if fill else "") + "</dxf>"
+                    for fill, color, b in self.dxfs) + "</dxfs>" if self.dxfs else "")
+                + '</styleSheet>')
+
+
+CF_OPS = {"gt": "greaterThan", "ge": "greaterThanOrEqual", "lt": "lessThan", "le": "lessThanOrEqual", "eq": "equal", "ne": "notEqual", "between": "between"}
+
+
+def _cf_value(text: str) -> str:
+    """A rule's value as a formula Excel reads: a number as it is, anything else as text in quotes."""
+    v, _ = se.literal(text)
+    if isinstance(v, (int, float)) and not isinstance(v, bool):
+        return se.general(float(v))
+    return '"' + str(text).replace('"', '""') + '"'
+
+
+def _cf_xml(rules: list, styles) -> str:
+    """Sheets' highlight rules (huginn_sheet_rules) as Excel's conditionalFormatting, in their order."""
+    import huginn_sheet_rules as hr
+    out = []
+    for k, rule in enumerate(rules):
+        r0, c0, r1, c1 = rule["range"]
+        ref = se.ref_name(r0, c0) + (f":{se.ref_name(r1, c1)}" if (r1, c1) != (r0, c0) else "")
+        first = se.ref_name(r0, c0)
+        kind, pri = rule["kind"], k + 1
+        dxf = f' dxfId="{styles.dxf(hr.look_of(rule))}"' if kind not in ("scale", "bar") else ""
+        if kind in CF_OPS:
+            body = "".join(f"<formula>{escape(_cf_value(rule.get(x, '')))}</formula>" for x in (("a", "b") if kind == "between" else ("a",)))
+            cf = f'<cfRule type="cellIs"{dxf} priority="{pri}" operator="{CF_OPS[kind]}">{body}</cfRule>'
+        elif kind == "text":
+            t = rule.get("a", "")
+            cf = (f'<cfRule type="containsText"{dxf} priority="{pri}" operator="containsText" text="{_attr(t)}">'
+                  f'<formula>{escape(f"NOT(ISERROR(SEARCH({_cf_value(t)},{first})))")}</formula></cfRule>')
+        elif kind == "starts":
+            t = rule.get("a", "")
+            cf = (f'<cfRule type="beginsWith"{dxf} priority="{pri}" operator="beginsWith" text="{_attr(t)}">'
+                  f'<formula>{escape(f"LEFT({first},LEN({_cf_value(t)}))={_cf_value(t)}")}</formula></cfRule>')
+        elif kind in ("dup", "unique"):
+            cf = f'<cfRule type="{"duplicateValues" if kind == "dup" else "uniqueValues"}"{dxf} priority="{pri}"/>'
+        elif kind in ("top", "bottom"):
+            cf = f'<cfRule type="top10"{dxf} priority="{pri}" rank="{rule.get("n", 10)}"{" bottom=\"1\"" if kind == "bottom" else ""}/>'
+        elif kind in ("above", "below"):
+            cf = f'<cfRule type="aboveAverage"{dxf} priority="{pri}"{" aboveAverage=\"0\"" if kind == "below" else ""}/>'
+        elif kind in ("blank", "notblank"):
+            cf = (f'<cfRule type="{"containsBlanks" if kind == "blank" else "notContainsBlanks"}"{dxf} priority="{pri}">'
+                  f'<formula>{escape(f"LEN(TRIM({first})){"=" if kind == "blank" else ">"}0")}</formula></cfRule>')
+        elif kind == "error":
+            cf = f'<cfRule type="containsErrors"{dxf} priority="{pri}"><formula>ISERROR({first})</formula></cfRule>'
+        elif kind == "scale":
+            stops = [rule["low"]] + ([rule["mid"]] if rule.get("mid") else []) + [rule["high"]]
+            cfvo = '<cfvo type="min"/>' + ('<cfvo type="percentile" val="50"/>' if rule.get("mid") else "") + '<cfvo type="max"/>'
+            cf = f'<cfRule type="colorScale" priority="{pri}"><colorScale>{cfvo}' + "".join(f'<color rgb="FF{c.lstrip("#")}"/>' for c in stops) + "</colorScale></cfRule>"
+        elif kind == "bar":
+            cf = f'<cfRule type="dataBar" priority="{pri}"><dataBar><cfvo type="min"/><cfvo type="max"/><color rgb="FF{rule["color"].lstrip("#")}"/></dataBar></cfRule>'
+        else:
+            continue
+        out.append(f'<conditionalFormatting sqref="{ref}">{cf}</conditionalFormatting>')
+    return "".join(out)
+
+
+def _read_dxfs(root) -> list:
+    """Excel's looks for conditional formatting: [{fill, ink, bold}]."""
+    out = []
+    dx = root.find(_q("dxfs")) if root is not None else None
+    for d in (dx if dx is not None else []):
+        look = {}
+        font = d.find(_q("font"))
+        if font is not None:
+            if font.find(_q("b")) is not None and font.find(_q("b")).get("val", "1") not in ("0", "false"):
+                look["bold"] = True
+            col = font.find(_q("color"))
+            if col is not None and re.fullmatch(r"[0-9A-Fa-f]{8}", col.get("rgb", "")):
+                look["ink"] = "#" + col.get("rgb")[2:].upper()
+        bg = d.find(f"{_q('fill')}/{_q('patternFill')}/{_q('bgColor')}")
+        if bg is None:
+            bg = d.find(f"{_q('fill')}/{_q('patternFill')}/{_q('fgColor')}")
+        if bg is not None and re.fullmatch(r"[0-9A-Fa-f]{8}", bg.get("rgb", "")):
+            look["fill"] = "#" + bg.get("rgb")[2:].upper()
+        out.append(look)
+    return out
+
+
+def _read_cf(root, dxfs: list) -> tuple:
+    """Excel's conditional formatting as Sheets' rules, in priority order; and how many couldn't come across."""
+    import huginn_sheet_rules as hr
+    back = {v: k for k, v in CF_OPS.items()}
+    found, skipped = [], 0
+    for cfe in root.iter(_q("conditionalFormatting")):
+        spans = []
+        for part in (cfe.get("sqref") or "").split():
+            a, _, b = part.partition(":")
+            p, q = se.parse_cell(a), se.parse_cell(b or a)
+            if p and q:
+                spans.append([p[0], p[1], q[0], q[1]])
+        for rule in cfe.findall(_q("cfRule")):
+            t, op = rule.get("type", ""), rule.get("operator", "")
+            formulas = [(f.text or "").strip() for f in rule.findall(_q("formula"))]
+
+            def value(text):
+                text = text or ""
+                return text[1:-1].replace('""', '"') if len(text) >= 2 and text[0] == text[-1] == '"' else text
+            want = {}
+            if t == "cellIs" and op in back:
+                want = {"kind": back[op], "a": value(formulas[0] if formulas else ""), "b": value(formulas[1] if len(formulas) > 1 else "")}
+                if want["kind"] == "between" and not want["b"]:
+                    want = {}
+            elif t == "containsText" or (t == "beginsWith"):
+                want = {"kind": "text" if t == "containsText" else "starts", "a": rule.get("text", "")}
+            elif t in ("duplicateValues", "uniqueValues"):
+                want = {"kind": "dup" if t == "duplicateValues" else "unique"}
+            elif t == "top10" and rule.get("percent") not in ("1", "true"):
+                want = {"kind": "bottom" if rule.get("bottom") in ("1", "true") else "top", "n": int(rule.get("rank", "10") or 10)}
+            elif t == "aboveAverage" and rule.get("equalAverage") not in ("1", "true") and not rule.get("stdDev"):
+                want = {"kind": "below" if rule.get("aboveAverage") in ("0", "false") else "above"}
+            elif t in ("containsBlanks", "notContainsBlanks", "containsErrors"):
+                want = {"kind": {"containsBlanks": "blank", "notContainsBlanks": "notblank", "containsErrors": "error"}[t]}
+            elif t == "colorScale":
+                cols = [c.get("rgb", "") for c in rule.iter(_q("color"))]
+                cols = ["#" + c[2:].upper() for c in cols if re.fullmatch(r"[0-9A-Fa-f]{8}", c)]
+                if len(cols) in (2, 3):
+                    want = {"kind": "scale", "low": cols[0], "high": cols[-1], **({"mid": cols[1]} if len(cols) == 3 else {})}
+            elif t == "dataBar":
+                col = next((c.get("rgb", "") for c in rule.iter(_q("color"))), "")
+                want = {"kind": "bar", "color": "#" + col[2:].upper() if re.fullmatch(r"[0-9A-Fa-f]{8}", col) else "#638EC6"}
+            if not want or not spans:
+                skipped += 1
+                continue
+            dxf_id = rule.get("dxfId")
+            look = dxfs[int(dxf_id)] if dxf_id and dxf_id.isdigit() and int(dxf_id) < len(dxfs) else {}
+            pri = int(rule.get("priority", "999") or 999)
+            for span in spans:
+                made = hr.clean_rule({"id": "", "range": span, **want, **look})
+                if made:
+                    found.append((pri, made))
+    found.sort(key=lambda x: x[0])
+    rules = []
+    for k, (_, r) in enumerate(found):
+        r["id"] = f"c{k + 1}"
+        rules.append(r)
+    return rules, skipped
 
 
 def _formula_out(src: str) -> str:
@@ -278,6 +427,8 @@ def write(book, path, shown=None) -> None:
             extra += f'<autoFilter ref="{se.ref_name(r0, c0)}:{se.ref_name(r1, c1)}"/>'
         if sh.get("merges"):
             extra += f'<mergeCells count="{len(sh["merges"])}">' + "".join(f'<mergeCell ref="{_attr(m)}"/>' for m in sh["merges"]) + "</mergeCells>"
+        if sh.get("rules"):
+            extra += _cf_xml(sh["rules"], styles)
         rels = []
         if sh.get("charts"):
             anchors = []
@@ -426,6 +577,7 @@ def read(path) -> tuple:
                 sst.append("".join(t.text or "" for t in si.iter(_q("t")) if id(t) not in phonetic))
         styles = _part(z, next((t for t, k in wrels.values() if k.endswith("/styles")), "xl/styles.xml"))
         fmts = _read_styles(styles)
+        dxfs = _read_dxfs(styles)
         sheets = []
         names = set(z.namelist())
         unknown = set()
@@ -437,14 +589,14 @@ def read(path) -> tuple:
             if root is None:
                 continue
             sh = blank_sheet((el.get("name") or f"Sheet {len(sheets) + 1}")[:31])
-            _read_sheet(z, target, root, sh, sst, fmts, unknown, lost, names)
+            _read_sheet(z, target, root, sh, sst, fmts, unknown, lost, names, dxfs)
             sheets.append(sh)
         if len(sheets) > 64:
             dropped.append(f"{len(sheets) - 64} sheets past the first 64")
             sheets = sheets[:64]
     if unknown:
         dropped.append("formulas using " + ", ".join(sorted(unknown)[:6]) + (" and others" if len(unknown) > 6 else "") + " (they show #NAME? for now)")
-    for key, words in (("cf", "conditional formatting"), ("dv", "lists to pick from (data validation)"), ("comments", "comments"),
+    for key, words in (("cf", "some conditional formatting (icon sets and rules by formula)"), ("dv", "lists to pick from (data validation)"), ("comments", "comments"),
                        ("pictures", "pictures and shapes"), ("pivots", "pivot tables (their last results are kept as values)"),
                        ("merges", "merged cells (shown as separate cells; they're merged again in Excel files Sheets makes)")):
         if lost[key]:
@@ -517,7 +669,7 @@ def _formula_in(text: str) -> str:
     return "=" + re.sub(r"_xlfn\.|_xlws\.", "", text, flags=re.I)
 
 
-def _read_sheet(z, target, root, sh, sst, fmts, unknown, lost, names):
+def _read_sheet(z, target, root, sh, sst, fmts, unknown, lost, names, dxfs=()):
     shared = {}                       # si -> (row, col, formula text)
     for c in root.iter(_q("c")):
         ref = c.get("r")
@@ -595,7 +747,8 @@ def _read_sheet(z, target, root, sh, sst, fmts, unknown, lost, names):
     if merges:
         sh["merges"] = merges
         lost["merges"] += 1
-    lost["cf"] += sum(1 for _ in root.iter(_q("conditionalFormatting")))
+    sh["rules"], skipped = _read_cf(root, list(dxfs))
+    lost["cf"] += skipped
     lost["dv"] += sum(1 for _ in root.iter(_q("dataValidation")))
     rels = _rels(z, target)
     for rid, (part, kind) in rels.items():

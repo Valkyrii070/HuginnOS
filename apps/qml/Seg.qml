@@ -11,7 +11,7 @@ Pressable {
     property bool danger: false
     property bool tipAbove: false              // for islands at the bottom of the window
     width: fill && parent ? parent.width : (text !== "" ? row.width + 22 : 30); height: 30; radius: 11
-    anchors.verticalCenter: fill ? undefined : (parent ? parent.verticalCenter : undefined)
+    anchors.verticalCenter: fill || !parent || parent.flow !== undefined ? undefined : parent.verticalCenter    // (a Flow or Grid places it itself)
     color: on ? Theme.t.accent : (hovered ? Theme.t.hover : "transparent")
     Row { id: row; x: s.fill ? 10 : (s.width - width) / 2; anchors.verticalCenter: parent.verticalCenter; spacing: 6
         Glyph { visible: s.icon !== ""; name: s.icon; size: 15; ink: s.on ? Theme.t.onAccent : s.danger ? Theme.t.danger : Theme.t.icon; anchors.verticalCenter: parent.verticalCenter }

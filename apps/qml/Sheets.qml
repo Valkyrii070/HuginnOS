@@ -28,6 +28,10 @@ GlassWindow {
     property bool finding: false
     property string chartSel: ""
     property var filterAt: null             // the filter list that's open: {c, x, y, values}
+    property bool ruling: false             // the Highlight cells panel (conditional formatting)
+    property string ruleKind: "gt"
+    property string ruleStyle: "red"
+    property var summing: null              // the Summarise panel: {block: [r0, c0, r1, c1], heads, rows, cols, values, fn}
     property int naming: -1
     property var fz: Backend.frozen
     property int tick: 0                    // a change that cells drawn from Python can't see
@@ -40,6 +44,20 @@ GlassWindow {
     readonly property var fmt: { tick; return Backend.current !== "" ? Backend.fmtAt(ar, ac) : ({}) }
 
     function say(t) { notice = t; hide.restart() }
+    function highlightCells() { if (Backend.current === "") return; ruling = !ruling; if (ruling) ruleA.focusIn() }
+    function addRule() {
+        var why = Backend.addRule(r0, c0, r1, c1, ruleKind, ruleA.text, ruleB.text, parseInt(ruleN.text) || 10, ruleStyle)
+        if (why) say(why); else { ruleA.text = ""; ruleB.text = ""; tick++ } }
+    function summarise() { if (Backend.current === "") return; if (summing) { summing = null; return }
+        var b = Backend.dataBlock(r0, c0, r1, c1), heads = Backend.headings(b[0], b[1], b[2], b[3])
+        if (b[2] <= b[0] || heads.length < 2) { say("Select a table with names of its columns along the top, or a cell in it."); return }
+        var numeric = heads.length - 1
+        summing = { block: b, heads: heads, rows: heads[0].col, cols: -1, values: heads[numeric].col, fn: "sum" } }
+    function makeSummary() { var m = summing, why = Backend.makePivot(m.block[0], m.block[1], m.block[2], m.block[3], m.rows, m.cols, m.values, m.fn)
+        if (why) say(why); else { summing = null; ar = cr = ac = cc = 0; tick++ } }
+    function refreshSummary() { var why = Backend.refreshPivot(); say(why || "The summary is up to date."); tick++ }
+    function setSum(k, v) { var m = Object.assign({}, summing); m[k] = v; summing = m }
+    function clearRules() { var n = Backend.clearRules(r0, c0, r1, c1); say(n ? n + (n === 1 ? " rule taken off." : " rules taken off.") : "No rules on these cells."); tick++ }
     function name(r, c) { return Backend.name(r, c) }
     function spanText() { return r0 === r1 && c0 === c1 ? name(ar, ac) : name(r0, c0) + ":" + name(r1, c1) }
     property int tabStart: -1               // Tab across a row, then Enter: back to the column it began in, one row down
@@ -219,6 +237,9 @@ GlassWindow {
             Tool { text: "A↓"; span: 36; tip: "Sort, smallest first (by this column)"; onClicked: win.sortBy(false) }
             Tool { visible: bar.roomy; text: "Z↓"; span: 36; tip: "Sort, largest first"; onClicked: win.sortBy(true) }
             Tool { icon: "filter"; tip: "Filter"; on: Backend.filterRange.length > 0; onClicked: win.filter() }
+            Tool { tip: "Highlight cells by what's in them"; on: win.ruling; onClicked: win.highlightCells()
+                Column { anchors.centerIn: parent; spacing: 2
+                    Rectangle { width: 14; height: 3; radius: 1.5; color: "#E5484D" } Rectangle { width: 9; height: 3; radius: 1.5; color: "#F5B83D" } Rectangle { width: 12; height: 3; radius: 1.5; color: "#30A46C" } } }
             Tool { id: chartBtn; icon: "shapes"; tip: "Chart"; onClicked: win.openPop("chart", chartBtn) }
             Tool { id: freezeBtn; visible: bar.roomy; text: "❄"; tip: "Freeze rows and columns"; on: win.fz[0] > 0 || win.fz[1] > 0; onClicked: win.openPop("freeze", freezeBtn) }
             Item { width: 2; height: 1 } },
@@ -247,6 +268,86 @@ GlassWindow {
             TextBox { id: replaceBox; width: 160; height: 30; placeholder: "Replace with"; anchors.verticalCenter: parent.verticalCenter }
             Seg { text: "Replace All"; onClicked: { var n = Backend.replaceAll(findBox.text, replaceBox.text, false); win.say(n + " replaced"); win.tick++ } }
             Seg { icon: "x"; onClicked: { win.finding = false; gridKeys.forceActiveFocus() } } },
+        // ---- Summarise: a pivot table of the selected table, on a new sheet
+        Rectangle { id: sumPanel; visible: win.summing !== null && Backend.current !== ""; z: 18; width: 500; height: sumCol.height + 28; radius: 18
+            anchors { right: parent.right; rightMargin: 12; bottom: bar.top; bottomMargin: 10 }
+            color: Theme.t.menu_bg; border.width: 1; border.color: Theme.t.menu_border
+            MouseArea { anchors.fill: parent }
+            Column { id: sumCol; x: 14; y: 14; width: parent.width - 28; spacing: 10
+                Item { width: parent.width; height: 24
+                    Label { anchors.verticalCenter: parent.verticalCenter; font.pixelSize: 15; font.weight: Font.DemiBold
+                        text: "Pivot table  ·  " + (win.summing ? win.name(win.summing.block[0], win.summing.block[1]) + ":" + win.name(win.summing.block[2], win.summing.block[3]) : "") }
+                    Seg { anchors { right: parent.right; verticalCenter: parent.verticalCenter } icon: "x"; tip: "Close"; onClicked: win.summing = null } }
+                Label { width: parent.width; wrapMode: Text.WordWrap; secondary: true; font.pixelSize: 11
+                    text: "A new sheet with a row for each name in one column (and a column for each name in another, if you like), adding up a third. Its numbers follow the table; new names come in with Refresh." }
+                Repeater { model: [["rows", "A row for each"], ["cols", "A column for each"], ["values", "Adding up"]]
+                    Row { id: sumRow; required property var modelData; spacing: 6; width: sumCol.width
+                        Label { text: modelData[1]; width: 122; anchors.verticalCenter: parent.verticalCenter; font.pixelSize: 12 }
+                        Flow { width: parent.width - 128; spacing: 4
+                            Seg { visible: modelData[0] === "cols"; text: "Nothing"; on: !!win.summing && win.summing.cols < 0; onClicked: win.setSum("cols", -1) }
+                            Repeater { model: win.summing ? win.summing.heads : []
+                                Seg { required property var modelData; property string k: sumRow.modelData[0]
+                                    text: modelData.name; on: !!win.summing && win.summing[k] === modelData.col; onClicked: win.setSum(k, modelData.col) } } } } }
+                Row { spacing: 6
+                    Label { text: "How"; width: 122; anchors.verticalCenter: parent.verticalCenter; font.pixelSize: 12 }
+                    Repeater { model: [["sum", "Sum"], ["count", "Count"], ["average", "Average"], ["min", "Smallest"], ["max", "Largest"]]
+                        Seg { required property var modelData; text: modelData[1]; on: !!win.summing && win.summing.fn === modelData[0]; onClicked: win.setSum("fn", modelData[0]) } } }
+                Btn { primary: true; text: "Make the Pivot Table"; onClicked: win.makeSummary() } } },
+        Island { visible: Backend.current !== "" && Backend.isPivot; x: win.gridX; anchors { bottom: parent.bottom; bottomMargin: 64 } z: 6
+            Label { leftPadding: 10; rightPadding: 4; font.pixelSize: 12; secondary: true; anchors.verticalCenter: parent.verticalCenter; text: "A pivot table: its numbers follow the table it sums up" }
+            Seg { text: "Refresh"; tip: "Bring in names added to the table since"; onClicked: win.refreshSummary() } },
+        // ---- Highlight cells: conditional formatting for the selection, and the sheet's rules
+        Rectangle { id: rulesPanel; visible: win.ruling && Backend.current !== ""; z: 18; width: 470; height: Math.min(win.height - 160, rulesCol.height + 28); radius: 18
+            anchors { right: parent.right; rightMargin: 12; bottom: bar.top; bottomMargin: 10 }
+            color: Theme.t.menu_bg; border.width: 1; border.color: Theme.t.menu_border
+            MouseArea { anchors.fill: parent }
+            Flickable { anchors { fill: parent; margins: 14 } contentHeight: rulesCol.height; clip: true; interactive: rulesCol.height > height
+                Column { id: rulesCol; width: parent.width; spacing: 10
+                    Item { width: parent.width; height: 24
+                        Label { anchors.verticalCenter: parent.verticalCenter; text: "Highlight cells  ·  " + win.name(win.r0, win.c0) + (win.r1 !== win.r0 || win.c1 !== win.c0 ? ":" + win.name(win.r1, win.c1) : "")
+                            font.pixelSize: 15; font.weight: Font.DemiBold }
+                        Seg { anchors { right: parent.right; verticalCenter: parent.verticalCenter } icon: "x"; tip: "Close"; onClicked: win.ruling = false } }
+                    Flow { width: parent.width; spacing: 4
+                        Repeater { model: [["gt", "Greater than"], ["lt", "Less than"], ["between", "Between"], ["eq", "Equal to"], ["text", "Text that contains"], ["dup", "Duplicates"],
+                                           ["top", "Top"], ["bottom", "Bottom"], ["above", "Above average"], ["below", "Below average"], ["blank", "Empty"], ["error", "Errors"],
+                                           ["scale", "Colour scale"], ["bar", "Data bars"]]
+                            Seg { required property var modelData; text: modelData[1]; on: win.ruleKind === modelData[0]
+                                onClicked: { win.ruleKind = modelData[0]; if (modelData[0] === "scale") win.ruleStyle = "green"; else if (modelData[0] === "bar") win.ruleStyle = "blue"; else if (["green", "blue", "three"].indexOf(win.ruleStyle) >= 0 && modelData[0] !== "scale" && modelData[0] !== "bar") win.ruleStyle = "red"; ruleA.focusIn() } } } }
+                    Row { spacing: 8; visible: ["gt", "lt", "between", "eq", "text", "top", "bottom"].indexOf(win.ruleKind) >= 0
+                        TextBox { id: ruleA; visible: win.ruleKind !== "top" && win.ruleKind !== "bottom"; width: win.ruleKind === "between" ? 140 : 220; height: 32
+                            placeholder: win.ruleKind === "text" ? "Words" : "A number, a date or words"; onAccepted: win.addRule() }
+                        Label { visible: win.ruleKind === "between"; text: "and"; anchors.verticalCenter: parent.verticalCenter }
+                        TextBox { id: ruleB; visible: win.ruleKind === "between"; width: 140; height: 32; onAccepted: win.addRule() }
+                        TextBox { id: ruleN; visible: win.ruleKind === "top" || win.ruleKind === "bottom"; width: 70; height: 32; text: "10"; onAccepted: win.addRule() }
+                        Label { visible: win.ruleKind === "top" || win.ruleKind === "bottom"; text: "values"; anchors.verticalCenter: parent.verticalCenter } }
+                    Row { spacing: 6
+                        Label { text: win.ruleKind === "scale" ? "Colours" : win.ruleKind === "bar" ? "Bar" : "Look"; width: 52; anchors.verticalCenter: parent.verticalCenter; secondary: true; font.pixelSize: 12 }
+                        Repeater { model: win.ruleKind === "scale" ? [["green", "#F8696B", "#63BE7B", "Red to green"], ["three", "#F8696B", "#63BE7B", "Red, yellow, green"], ["blue", "#FFFFFF", "#5A8AC6", "White to blue"]]
+                                        : win.ruleKind === "bar" ? [["blue", "#638EC6", "#638EC6", "Blue"], ["green", "#63C384", "#63C384", "Green"], ["red", "#FF555A", "#FF555A", "Red"], ["yellow", "#FFB628", "#FFB628", "Orange"]]
+                                        : [["red", "#FFC7CE", "#9C0006", "Light red"], ["yellow", "#FFEB9C", "#9C5700", "Yellow"], ["green", "#C6EFCE", "#006100", "Green"], ["blue", "#DDEBF7", "#1F4E78", "Blue"],
+                                           ["redtext", "#FFFFFF", "#C00000", "Red text"], ["bold", "#FFFFFF", "#15181C", "Bold"]]
+                            Rectangle { required property var modelData; width: 46; height: 30; radius: 8; border.width: win.ruleStyle === modelData[0] ? 2 : 1
+                                border.color: win.ruleStyle === modelData[0] ? Theme.t.accent : Theme.t.islandLine
+                                gradient: Gradient { orientation: Gradient.Horizontal; GradientStop { position: 0; color: modelData[1] } GradientStop { position: 1; color: win.ruleKind === "scale" ? modelData[2] : modelData[1] } }
+                                Label { anchors.centerIn: parent; visible: win.ruleKind !== "scale" && win.ruleKind !== "bar"; text: "12"; color: modelData[2]; font.pixelSize: 12; font.weight: modelData[0] === "bold" ? Font.Bold : Font.Normal }
+                                MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: win.ruleStyle = parent.modelData[0] } } } }
+                    Row { spacing: 8
+                        Btn { primary: true; text: "Add the Rule"; onClicked: win.addRule() }
+                        Btn { text: "Clear These Cells' Rules"; onClicked: win.clearRules() } }
+                    Rectangle { width: parent.width; height: 1; color: Theme.t.islandLine; visible: Backend.rules.length > 0 }
+                    Label { visible: Backend.rules.length > 0; text: "ON THIS SHEET (the first that fits a cell colours it)"; secondary: true; font.pixelSize: 10; font.weight: Font.DemiBold }
+                    Repeater { model: Backend.rules
+                        Item { required property var modelData; required property int index; width: rulesCol.width; height: 34
+                            Rectangle { width: 26; height: 20; radius: 5; anchors.verticalCenter: parent.verticalCenter; border.width: 1; border.color: Theme.t.islandLine
+                                gradient: Gradient { orientation: Gradient.Horizontal
+                                    GradientStop { position: 0; color: modelData.kind === "scale" ? modelData.low : modelData.fill || "#FFFFFF" }
+                                    GradientStop { position: 1; color: modelData.kind === "scale" ? modelData.high : modelData.fill || "#FFFFFF" } }
+                                Label { anchors.centerIn: parent; visible: !!modelData.color; text: "a"; color: modelData.color || "black"; font.pixelSize: 11 } }
+                            Label { x: 36; width: parent.width - 36 - 104; elide: Text.ElideRight; anchors.verticalCenter: parent.verticalCenter; text: modelData.what + "  ·  " + modelData.where; font.pixelSize: 12 }
+                            Row { anchors { right: parent.right; verticalCenter: parent.verticalCenter } spacing: 0
+                                Seg { icon: "up"; tip: "Earlier"; enabled: index > 0; opacity: enabled ? 1 : 0.35; onClicked: { Backend.moveRule(modelData.id, true); win.tick++ } }
+                                Seg { icon: "down"; tip: "Later"; enabled: index < Backend.rules.length - 1; opacity: enabled ? 1 : 0.35; onClicked: { Backend.moveRule(modelData.id, false); win.tick++ } }
+                                Seg { icon: "trash"; tip: "Take it off"; onClicked: { Backend.removeRule(modelData.id); win.tick++ } } } } } } } },
         // ---- the little menus over the formatting island
         Rectangle { id: popBox; visible: win.pop !== "" && win.popFrom !== null; z: 20; radius: 14; color: Theme.t.menu_bg; border.width: 1; border.color: Theme.t.menu_border
             readonly property point at: win.popFrom ? win.popFrom.mapToItem(parent, 0, 0) : Qt.point(0, 0)
@@ -449,6 +550,9 @@ GlassWindow {
         Rectangle { anchors.fill: parent; visible: cellItem.inSel && !cellItem.active; color: Qt.alpha(Theme.t.accent, 0.13) }
         Rectangle { anchors.right: parent.right; width: 1; height: parent.height; color: "#E3E6EA" }
         Rectangle { anchors.bottom: parent.bottom; width: parent.width; height: 1; color: "#E3E6EA" }
+        Rectangle { visible: cellItem.cell.bar !== undefined; x: 2; y: 3; height: parent.height - 7; radius: 2; width: Math.max(0, (parent.width - 5) * (cellItem.cell.bar || 0))   // a data bar
+            gradient: Gradient { orientation: Gradient.Horizontal
+                GradientStop { position: 0; color: Qt.alpha(cellItem.cell.barColor || "#638EC6", 0.85) } GradientStop { position: 1; color: Qt.alpha(cellItem.cell.barColor || "#638EC6", 0.25) } } }
         Text { anchors { fill: parent; leftMargin: 5; rightMargin: cellItem.flt.length && cellItem.r === cellItem.flt[0] && cellItem.c >= cellItem.flt[1] && cellItem.c <= cellItem.flt[3] ? 22 : 5 }
             text: cellItem.cell.t; textFormat: Text.PlainText; verticalAlignment: cellItem.cell.wrap ? Text.AlignTop : Text.AlignVCenter; topPadding: cellItem.cell.wrap ? 4 : 0
             horizontalAlignment: cellItem.cell.align === "right" ? Text.AlignRight : cellItem.cell.align === "center" ? Text.AlignHCenter : Text.AlignLeft

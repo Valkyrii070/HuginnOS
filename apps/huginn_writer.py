@@ -20,7 +20,7 @@ import subprocess
 import tempfile
 from pathlib import Path
 
-from PySide6.QtCore import (Property, QBuffer, QByteArray, QIODevice, QLocale, QMarginsF, QObject, QRectF, QSizeF, Qt, QTimer,
+from PySide6.QtCore import (Property, QBuffer, QByteArray, QDateTime, QIODevice, QLocale, QMarginsF, QObject, QRectF, QSizeF, Qt, QTimer,
                             QUrl, Signal, Slot)
 from PySide6.QtGui import (QAbstractTextDocumentLayout, QBrush, QColor, QFont, QFontDatabase, QImage, QPageLayout, QPageSize,
                            QPainter, QPdfWriter, QSyntaxHighlighter, QTextBlockFormat, QTextCharFormat, QTextCursor, QTextDocument,
@@ -28,6 +28,7 @@ from PySide6.QtGui import (QAbstractTextDocumentLayout, QBrush, QColor, QFont, Q
                            QTextOption, QTextTableFormat)
 
 import huginn_docx as docx
+import huginn_review as rv
 from huginn_office import FileList, fresh_path, note_recent, write_atomic
 
 PX_PER_MM = 96 / 25.4
@@ -45,6 +46,33 @@ NUMBERS = (QTextListFormat.ListDecimal, QTextListFormat.ListLowerAlpha, QTextLis
 WORD = re.compile(r"[^\W\d_]+(?:['’][^\W\d_]+)*")
 FAVOURITE_FONTS = ("Inter", "Noto Sans", "Noto Serif", "Carlito", "Caladea", "Liberation Sans", "Liberation Serif", "Liberation Mono",
                    "DejaVu Sans", "DejaVu Serif", "Ubuntu", "JetBrains Mono")
+
+
+REVIEW_META = re.compile(r'<meta name="huginn-review" content="([^"]*)"\s*/?>')
+
+
+def me() -> str:
+    """The name changes and comments are signed with: the account's full name, else its user name."""
+    try:
+        import pwd
+        entry = pwd.getpwuid(os.getuid())
+        return (entry.pw_gecos or "").split(",")[0].strip() or entry.pw_name
+    except (ImportError, KeyError):
+        return os.environ.get("USER", "") or "Me"
+
+
+def ago(when: int) -> str:
+    if not when:
+        return ""
+    import time as _t
+    d = _t.time() - when
+    if d < 60:
+        return "just now"
+    if d < 3600:
+        return f"{int(d // 60)} min ago"
+    if d < 86400:
+        return f"{int(d // 3600)} h ago"
+    return QDateTime.fromSecsSinceEpoch(int(when)).toString("d MMM yyyy")
 
 
 def default_setup() -> dict:
@@ -196,6 +224,7 @@ class Writer(FileList):
     loaded = Signal()
     pageChanged = Signal()
     wordsChanged = Signal()
+    reviewChanged = Signal()
     BASE_CSS = "body { font-family: 'Inter', sans-serif; font-size: 11pt; color: #15181C; }"
 
     def __init__(self, target: Path = None):
@@ -207,6 +236,12 @@ class Writer(FileList):
         self._spell_on = True
         self._pages = 1
         self._fixing = False
+        self._review, self._own, self._fix, self._mine, self._plain = rv.clean_review(None), False, [], set(), ""
+        self._me = me()
+        self._review_tick = QTimer(self)
+        self._review_tick.setSingleShot(True)
+        self._review_tick.setInterval(250)
+        self._review_tick.timeout.connect(self.reviewChanged)
         self.changed.connect(self.wordsChanged)
         if self._extra:
             self.open(str(self._extra))
@@ -233,6 +268,8 @@ class Writer(FileList):
             self._pending = None
         self._apply_page()
         self._doc.contentsChanged.connect(self._edited)
+        self._plain = self._doc.toRawText()
+        self._doc.contentsChange.connect(self._typed)
 
     def _apply_page(self) -> None:
         """The page size and margins on the live document (the gap between sheets goes into the bottom margin)."""
@@ -332,12 +369,24 @@ class Writer(FileList):
                     setup = None
         self._setup = clean_setup(setup) if setup else (clean_setup(self._incoming_setup) if self._incoming_setup else default_setup())
         self._incoming_setup = None
+        review = None
+        if kind == "html":
+            m = REVIEW_META.search(text)
+            if m:
+                try:
+                    review = json.loads(html.unescape(m.group(1)))
+                except ValueError:
+                    review = None
+        marks, mark_sum = (review.pop("marks", None), review.pop("sum", None)) if isinstance(review, dict) else (None, None)
+        self._review, self._mine = rv.clean_review(review), set()
         if kind == "md":
             self._doc.setMarkdown(text)
         elif kind == "txt":
             self._doc.setPlainText(text)
         else:
             self._doc.setHtml(text)
+            if marks and mark_sum == rv.text_sum(self._doc.toPlainText()):
+                rv.put_marks(self._doc, marks)
         self._doc.setModified(False)
         self._doc.clearUndoRedoStacks()
         self._loading = False
@@ -346,6 +395,7 @@ class Writer(FileList):
         self._apply_page()
         self.loaded.emit()
         self.changed.emit()
+        self.reviewChanged.emit()
 
     _incoming_setup = None
 
@@ -394,6 +444,20 @@ class Writer(FileList):
         """The document as Writer keeps it: HTML with the page setup inside."""
         out = self._doc.toHtml()
         meta = f'<meta name="huginn-writer" content="{html.escape(json.dumps(self._setup), quote=True)}" />'
+        if self._review.get("changes") or self._review.get("notes") or self._review.get("track"):
+            self._tidy_review()
+            # where the marks are, as well as in the text's title attributes: Qt before 6.11 reads those but
+            # doesn't write them (checked against the text, so a file changed elsewhere isn't marked wrongly)
+            marks = []
+            for p, n, cf in rv.fragments(self._doc):
+                tip = cf.toolTip()
+                if tip.startswith("hw "):
+                    if marks and marks[-1][1] == p and marks[-1][2] == tip:
+                        marks[-1][1] = p + n
+                    else:
+                        marks.append([p, p + n, tip])
+            out_review = dict(self._review, marks=marks, sum=rv.text_sum(self._doc.toPlainText()))
+            meta += f'<meta name="huginn-review" content="{html.escape(json.dumps(out_review), quote=True)}" />'
         return out.replace("<head>", "<head>" + meta, 1) if "<head>" in out else meta + out
 
     @Slot()
@@ -408,6 +472,288 @@ class Writer(FileList):
         except OSError as err:
             self.failed.emit(f"Couldn't save: {err.strerror or err}")
         self.changed.emit()
+
+    # ------------------------------------------------------------------ comments and tracked changes
+    tracking = Property(bool, lambda self: bool(self._review.get("track")), notify=reviewChanged)
+    author = Property(str, lambda self: self._me, constant=True)
+
+    @Slot(bool)
+    def setTracking(self, on: bool) -> None:
+        if bool(self._review.get("track")) != bool(on):
+            self._review["track"] = bool(on)
+            self._mine = set()
+            self.touch()
+            self.reviewChanged.emit()
+
+    def _new_id(self) -> int:
+        n = self._review["next"]
+        self._review["next"] = n + 1
+        return n
+
+    def _typed(self, position: int, removed: int, added: int) -> None:
+        """Something typed or pasted: once it's in, it takes no comment or deletion from the text beside it, and while
+        changes are tracked it's marked as inserted (signed by whoever is at the keyboard)."""
+        if self._doc is None:
+            return
+        text, before = self._doc.toRawText(), self._plain
+        self._plain = text
+        if self._own or self._loading or self._fixing:
+            return
+        if added > 0 and not (removed == added and before[position:position + removed] == text[position:position + added]):  # (not just its look)
+            self._fix.append((position, position + added))
+            QTimer.singleShot(0, self._fix_typed)
+        self._review_tick.start()
+
+    def _fix_typed(self) -> None:
+        todo, self._fix = self._fix, []
+        if self._doc is None or not todo:
+            return
+        tracking = bool(self._review.get("track"))
+        last = self._doc.characterCount() - 1
+        for a, b in todo:
+            a, b = max(0, min(a, last)), max(0, min(b, last))
+            if b <= a:
+                continue
+            marked = any(rv.parse(cf.toolTip()) for p, n, cf in rv.fragments(self._doc) if p < b and p + n > a)
+            if not marked and not tracking:
+                continue
+            ident = 0
+            if tracking:
+                before = self._marks_at(a - 1).get("ins") if a > 0 else None
+                ident = int(before[0]) if before and int(before[0]) in self._mine else self._new_id()
+                if ident not in self._mine:
+                    self._mine.add(ident)
+                    self._review["changes"][str(ident)] = {"by": self._me, "when": rv.now()}
+
+            def fix(cf, ident=ident):
+                cf = rv.without_mark(rv.without_mark(cf, "note"), "del")
+                if tracking:
+                    m = rv.parse(cf.toolTip()).get("ins")
+                    if m and m[0] != str(ident):
+                        cf = rv.without_mark(cf, "ins")
+                    return rv.with_mark(cf, "ins", ident)
+                return rv.without_mark(cf, "ins")
+            self._restyle(a, b, fix, join=True)
+        self._review_tick.start()
+
+    def _marks_at(self, position: int) -> dict:
+        if self._doc is None or position < 0:
+            return {}
+        for p, n, cf in rv.fragments(self._doc):
+            if p <= position < p + n:
+                return rv.parse(cf.toolTip())
+        return {}
+
+    def _restyle(self, a: int, b: int, change, join: bool = False) -> None:
+        cur = QTextCursor(self._doc)
+        self._own = True
+        if join:
+            cur.joinPreviousEditBlock()
+        else:
+            cur.beginEditBlock()
+        try:
+            rv.restyle(self._doc, a, b, change)
+        finally:
+            cur.endEditBlock()
+            self._own = False
+
+    def _remove(self, ranges) -> None:
+        """Take these stretches of text out, last first (the caller holds an edit block)."""
+        cur = QTextCursor(self._doc)
+        for a, b in sorted(ranges, reverse=True):
+            cur.setPosition(a)
+            cur.setPosition(b, QTextCursor.KeepAnchor)
+            cur.removeSelectedText()
+
+    @Slot(int, int, bool, result=int)
+    def trackDelete(self, start: int, end: int, back: bool) -> int:
+        """Delete (Backspace when back, Delete when not) while changes are tracked: the text stays, struck through,
+        except what was itself inserted and not yet accepted, which goes. Returns where the cursor goes; -1 when
+        changes aren't tracked (the editor deletes as usual)."""
+        if self._doc is None or not self._review.get("track"):
+            return -1
+        last = self._doc.characterCount() - 1
+        if start == end:
+            if back:
+                if start <= 0:
+                    return 0
+                start -= 1
+            else:
+                if end >= last:
+                    return end
+                end += 1
+        text = self._doc.toPlainText()[start:end] if end <= last else ""
+        if text and all(ch in "\u2029\n" for ch in text):              # a paragraph's end: step over it, it stays
+            return start if back else end
+        pieces = [(max(p, start), min(p + n, end), cf) for p, n, cf in rv.fragments(self._doc) if p < end and p + n > start]
+        gone = [(a, b) for a, b, cf in pieces if "ins" in rv.parse(cf.toolTip())]
+        before = self._marks_at(start - 1).get("del") if start > 0 else None
+        after = self._marks_at(end).get("del")
+        reuse = [int(m[0]) for m in (before, after) if m and int(m[0]) in self._mine]
+        ident = reuse[0] if reuse else self._new_id()
+        if ident not in self._mine:
+            self._mine.add(ident)
+            self._review["changes"][str(ident)] = {"by": self._me, "when": rv.now()}
+        cur = QTextCursor(self._doc)
+        self._own = True
+        cur.beginEditBlock()
+        try:
+            rv.restyle(self._doc, start, end, lambda cf: cf if "ins" in rv.parse(cf.toolTip()) or "del" in rv.parse(cf.toolTip()) else rv.with_mark(cf, "del", ident))
+            self._remove(gone)
+        finally:
+            cur.endEditBlock()
+            self._own = False
+        removed = sum(b - a for a, b in gone)
+        self._review_tick.start()
+        return start if back else end - removed
+
+    def _tidy_review(self) -> None:
+        """Forget changes and comments whose text is gone (a comment stays while it has words of its own)."""
+        if self._doc is None:
+            return
+        have = {str(i) for k in ("ins", "del") for i in rv.spans(self._doc, k)}
+        self._review["changes"] = {i: v for i, v in self._review["changes"].items() if i in have}
+
+    @Property("QVariantList", notify=reviewChanged)
+    def changes(self):
+        if self._doc is None:
+            return []
+        text = self._doc.toPlainText()
+        out = []
+        for kind in ("ins", "del"):
+            for ident, (a, b) in rv.spans(self._doc, kind).items():
+                info = self._review["changes"].get(str(ident), {})
+                words = text[a:b].replace("\u2029", " ").replace("\n", " ").strip()
+                out.append({"id": ident, "kind": kind, "start": a, "end": b, "by": info.get("by") or "Someone", "when": ago(info.get("when", 0)),
+                            "text": words[:80] + ("…" if len(words) > 80 else "")})
+        return sorted(out, key=lambda c: c["start"])
+
+    @Slot(int, bool, result=int)
+    def settle(self, ident: int, accept: bool) -> int:
+        """Accept or reject one change. Returns where it was (-1 when it's gone already)."""
+        if self._doc is None:
+            return -1
+        mine = str(ident)
+        found = [(p, p + n, k) for p, n, cf in rv.fragments(self._doc) for k, m in rv.parse(cf.toolTip()).items() if k in ("ins", "del") and m[0] == mine]
+        if not found:
+            return -1
+        kind = found[0][2]
+        cur = QTextCursor(self._doc)
+        self._own = True
+        cur.beginEditBlock()
+        try:
+            if (kind == "ins") == accept:             # the text stays: only the mark goes
+                rv.restyle(self._doc, found[0][0], found[-1][1], lambda cf: rv.without_mark(cf, kind) if (rv.parse(cf.toolTip()).get(kind) or [""])[0] == mine else cf)
+            else:
+                self._remove([(a, b) for a, b, _ in found])
+        finally:
+            cur.endEditBlock()
+            self._own = False
+        self._review["changes"].pop(mine, None)
+        self.touch()
+        self.reviewChanged.emit()
+        return found[0][0]
+
+    @Slot(bool, result=int)
+    def settleAll(self, accept: bool) -> int:
+        if self._doc is None:
+            return 0
+        ids = [c["id"] for c in self.changes]
+        cur = QTextCursor(self._doc)
+        cur.beginEditBlock()
+        try:
+            for ident in ids:
+                self.settle(ident, accept)
+        finally:
+            cur.endEditBlock()
+        return len(ids)
+
+    @Slot(int, bool, result="QVariantList")
+    def nextChange(self, position: int, back: bool) -> list:
+        """[start, end] of the change after (or before) a place, going round; [] when there are none."""
+        found = self.changes
+        if not found:
+            return []
+        if back:
+            earlier = [c for c in found if c["start"] < position]
+            c = earlier[-1] if earlier else found[-1]
+        else:
+            later = [c for c in found if c["start"] > position]
+            c = later[0] if later else found[0]
+        return [c["start"], c["end"], c["id"]]
+
+    # comments
+    @Property("QVariantList", notify=reviewChanged)
+    def notes(self):
+        if self._doc is None:
+            return []
+        text = self._doc.toPlainText()
+        where = rv.spans(self._doc, "note")
+        out = []
+        for ident, v in self._review["notes"].items():
+            a, b = where.get(int(ident), (-1, -1))
+            quote = text[a:b].replace("\u2029", " ").replace("\n", " ").strip() if a >= 0 else ""
+            out.append({"id": int(ident), "start": a, "end": b, "quote": quote[:120] + ("…" if len(quote) > 120 else ""), "gone": a < 0,
+                        "by": v.get("by") or "Someone", "when": ago(v.get("when", 0)), "text": v.get("text", ""), "done": bool(v.get("done")),
+                        "replies": [{"by": r.get("by") or "Someone", "when": ago(r.get("when", 0)), "text": r.get("text", "")} for r in v.get("replies", [])]})
+        return sorted(out, key=lambda n: (n["gone"], n["start"], n["id"]))
+
+    @Slot(int, int, str, result=int)
+    def addNote(self, start: int, end: int, text: str) -> int:
+        """A comment on the text between start and end. Returns its number (0 when there's nothing to comment on)."""
+        if self._doc is None or not text.strip():
+            return 0
+        start, end = min(start, end), max(start, end)
+        if start == end:
+            w = self.wordAt(start)
+            start, end = (w.get("start", start), w.get("end", end)) if w else (start, end)
+        if start == end:
+            return 0
+        ident = self._new_id()
+        self._review["notes"][str(ident)] = {"by": self._me, "when": rv.now(), "text": text.strip()[:4000], "done": False, "replies": []}
+        self._restyle(start, end, lambda cf: rv.with_mark(cf, "note", ident))
+        self.touch()
+        self.reviewChanged.emit()
+        return ident
+
+    @Slot(int, str)
+    def replyNote(self, ident: int, text: str) -> None:
+        note = self._review["notes"].get(str(ident))
+        if note is not None and text.strip():
+            note["replies"].append({"by": self._me, "when": rv.now(), "text": text.strip()[:4000]})
+            note["done"] = False
+            self.touch()
+            self.reviewChanged.emit()
+
+    @Slot(int, str)
+    def editNote(self, ident: int, text: str) -> None:
+        note = self._review["notes"].get(str(ident))
+        if note is not None and text.strip() and note["text"] != text.strip():
+            note["text"] = text.strip()[:4000]
+            self.touch()
+            self.reviewChanged.emit()
+
+    @Slot(int, bool)
+    def resolveNote(self, ident: int, done: bool) -> None:
+        note = self._review["notes"].get(str(ident))
+        if note is not None:
+            note["done"] = bool(done)
+            self.touch()
+            self.reviewChanged.emit()
+
+    @Slot(int)
+    def deleteNote(self, ident: int) -> None:
+        if self._review["notes"].pop(str(ident), None) is None or self._doc is None:
+            return
+        mine = str(ident)
+        self._restyle(0, self._doc.characterCount() - 1, lambda cf: rv.without_mark(cf, "note") if (rv.parse(cf.toolTip()).get("note") or [""])[0] == mine else cf)
+        self.touch()
+        self.reviewChanged.emit()
+
+    @Slot(int, result=int)
+    def noteAt(self, position: int) -> int:
+        m = self._marks_at(position).get("note") or (self._marks_at(position - 1).get("note") if position > 0 else None)
+        return int(m[0]) if m else 0
 
     # ------------------------------------------------------------------ cursors
     def _cursor(self, start: int, end: int) -> QTextCursor:
@@ -1300,7 +1646,8 @@ class Writer(FileList):
             elif kind == "html":
                 out.write_text(self._doc.toHtml(), encoding="utf-8")
             elif kind == "docx":
-                docx.document_to_docx(self._doc, self._setup, out, self.title)
+                self._tidy_review()
+                docx.document_to_docx(self._doc, self._setup, out, self.title, self._review)
             else:
                 return ""
         except (OSError, docx.ConvertError) as err:

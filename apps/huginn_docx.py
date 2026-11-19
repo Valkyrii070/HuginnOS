@@ -17,6 +17,8 @@ from xml.etree import ElementTree as ET
 from xml.sax.saxutils import escape
 
 from PySide6.QtCore import Qt, QUrl
+
+import huginn_review as rv
 from PySide6.QtGui import QFont, QTextBlockFormat, QTextCharFormat, QTextDocument, QTextFormat, QTextListFormat
 
 W = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
@@ -94,6 +96,8 @@ class _Out:
         self.lists = {}                # QTextList key -> numId
         self.next_num = 2
         self.pic = 0
+        self.review = {"changes": {}, "notes": {}}
+        self.note_starts, self.note_ends = {}, {}       # position -> [comment ids]
 
     def rel(self, kind: str, target: str, external: bool = False) -> str:
         rid = f"rId{len(self.rels) + 10}"
@@ -248,8 +252,25 @@ def _paragraph(o: _Out, block, default_family: str, in_cell: bool = False) -> st
             for _ in frag.text():
                 runs.append(_picture(o, imf.name(), imf.width(), imf.height()))
             continue
-        rpr = _run_props(cf, default_family)
+        marks = rv.parse(cf.toolTip())
+        if marks:                                       # the text's own look, without the review's colours
+            plain = cf
+            for kind in rv.KINDS:
+                plain = rv.without_mark(plain, kind)
+            rpr = _run_props(plain, default_family)
+        else:
+            rpr = _run_props(cf, default_family)
         piece = _text_runs(frag.text(), rpr)
+        if "del" in marks or "ins" in marks:
+            kind = "del" if "del" in marks else "ins"
+            ident = marks[kind][0]
+            info = o.review["changes"].get(ident, {})
+            if kind == "del":
+                piece = piece.replace("<w:t ", "<w:delText ").replace("</w:t>", "</w:delText>")
+            piece = f'<w:{kind} w:id="{ident}" w:author="{_attr(info.get("by") or "Huginn Writer")}" w:date="{_word_date(info.get("when", 0))}">{piece}</w:{kind}>'
+        start, end = frag.position(), frag.position() + frag.length()
+        piece = ("".join(f'<w:commentRangeStart w:id="{i}"/>' for i in o.note_starts.get(start, [])) + piece
+                 + "".join(f'<w:commentRangeEnd w:id="{i}"/><w:r><w:commentReference w:id="{i}"/></w:r>' for i in o.note_ends.get(end, [])))
         href = cf.anchorHref() if cf.isAnchor() else ""
         if href:
             if link_open != href:
@@ -393,9 +414,43 @@ def _thumbnail(doc: QTextDocument, w_mm: float, h_mm: float, margins) -> bytes:
         return b""
 
 
-def document_to_docx(doc: QTextDocument, setup: dict, path, title: str = "") -> None:
-    """Write a QTextDocument and Writer's page setup as a .docx."""
+def _word_date(when) -> str:
+    import datetime as _dt
+    try:
+        return _dt.datetime.fromtimestamp(int(when) or 0, _dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    except (OverflowError, OSError, ValueError, TypeError):
+        return "2026-01-01T00:00:00Z"
+
+
+def _comments_xml(notes: dict, ids) -> str:
+    out = []
+    for ident in ids:
+        n = notes.get(str(ident))
+        if not n:
+            continue
+        by = n.get("by") or "Huginn Writer"
+        lines = (n.get("text") or "").split("\n")
+        for r in n.get("replies") or []:
+            more = (r.get("text") or "").split("\n")
+            more[0] = (f"{r.get('by')}: " if r.get("by") else "") + more[0]
+            lines += more
+        body = [f'<w:p>{"<w:r><w:annotationRef/></w:r>" if k == 0 else ""}<w:r><w:t xml:space="preserve">{escape(line)}</w:t></w:r></w:p>'
+                for k, line in enumerate(lines)]
+        initials = "".join(w[0] for w in by.split()[:2]).upper() or "H"
+        out.append(f'<w:comment w:id="{ident}" w:author="{_attr(by)}" w:date="{_word_date(n.get("when", 0))}" w:initials="{_attr(initials)}">{"".join(body)}</w:comment>')
+    return f'<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:comments xmlns:w="{W}">{"".join(out)}</w:comments>'
+
+
+def document_to_docx(doc: QTextDocument, setup: dict, path, title: str = "", review: dict = None) -> None:
+    """Write a QTextDocument and Writer's page setup as a .docx (with its tracked changes and comments, from
+    Writer's review: huginn_review)."""
     o = _Out(doc)
+    if review:
+        o.review = review
+        for ident, (a, b) in rv.spans(doc, "note").items():
+            if str(ident) in (review.get("notes") or {}):
+                o.note_starts.setdefault(a, []).append(ident)
+                o.note_ends.setdefault(b, []).append(ident)
     family = doc.defaultFont().family() or "Inter"
     w_mm, h_mm = PAPERS_MM.get(setup.get("paper"), PAPERS_MM["a4"])
     if setup.get("landscape"):
@@ -431,6 +486,13 @@ def document_to_docx(doc: QTextDocument, setup: dict, path, title: str = "") -> 
     parts["word/document.xml"] = document
     parts["word/styles.xml"] = STYLES_XML % {"W": W, "font": _attr(family), "lang": _attr(lang)}
     parts["word/numbering.xml"] = _numbering_xml(o.next_num - 2)
+    noted = sorted({i for ids in o.note_starts.values() for i in ids})
+    if noted:
+        parts["word/comments.xml"] = _comments_xml(o.review.get("notes") or {}, noted)
+        o.rel(f"{REL}/comments", "comments.xml")
+    if (review or {}).get("track"):
+        parts["word/settings.xml"] = f'<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:settings xmlns:w="{W}"><w:trackRevisions/></w:settings>'
+        o.rel(f"{REL}/settings", "settings.xml")
     rels = [f'<Relationship Id="rId1" Type="{REL}/styles" Target="styles.xml"/>', f'<Relationship Id="rId2" Type="{REL}/numbering" Target="numbering.xml"/>']
     for rid, kind, target, external in o.rels:
         rels.append(f'<Relationship Id="{rid}" Type="{kind}" Target="{_attr(target)}"{" TargetMode=\"External\"" if external else ""}/>')
@@ -441,6 +503,10 @@ def document_to_docx(doc: QTextDocument, setup: dict, path, title: str = "") -> 
                  '<Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/>',
                  '<Override PartName="/word/numbering.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.numbering+xml"/>',
                  '<Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/>']
+    if "word/comments.xml" in parts:
+        overrides.append('<Override PartName="/word/comments.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.comments+xml"/>')
+    if "word/settings.xml" in parts:
+        overrides.append('<Override PartName="/word/settings.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.settings+xml"/>')
     if "word/header1.xml" in parts:
         overrides.append('<Override PartName="/word/header1.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.header+xml"/>')
     if "word/footer1.xml" in parts:
@@ -542,9 +608,18 @@ def docx_to_html(path) -> tuple:
         body = doc.find(_q("body"))
         if body is None:
             raise ConvertError("The Word document has no text body.")
+        reader.read_comments(_part(z, "word/comments.xml") if "word/comments.xml" in names else None)
         markup = reader.body(body)
         setup, extra = reader.setup(body, z, names)
-    return "<html><head><meta charset=\"utf-8\"/></head><body>" + markup + "</body></html>", setup, reader.dropped(doc, names) + extra
+        settings = _part(z, "word/settings.xml") if "word/settings.xml" in names else None
+        if settings is not None and settings.find(_q("trackRevisions")) is not None and _val(settings, "trackRevisions") not in ("0", "false"):
+            reader.review["track"] = True
+    head = '<meta charset="utf-8"/>'
+    if reader.review["changes"] or reader.review["notes"] or reader.review.get("track"):
+        import json as _json
+        reader.review["next"] = reader.next_id
+        head += f'<meta name="huginn-review" content="{html.escape(_json.dumps(reader.review), quote=True)}" />'
+    return "<html><head>" + head + "</head><body>" + markup + "</body></html>", setup, reader.dropped(doc, names) + extra
 
 
 def _bad():
@@ -558,6 +633,8 @@ class _Reader:
         self.style_rpr = {}             # styleId -> its run properties (font, size, bold...)
         self.style_based = {}
         self.pictures = self.anchored = 0
+        self.review, self.ids, self.next_id = {"next": 1, "changes": {}, "notes": {}}, {}, 1
+        self.comments, self.open_notes = {}, []
         self.after = 8                 # px after a paragraph when it doesn't say (Word's default, from the styles below)
         if styles is not None:
             dflt = styles.find(f"{_q('docDefaults')}/{_q('pPrDefault')}/{_q('pPr')}/{_q('spacing')}")
@@ -596,6 +673,77 @@ class _Reader:
                 abstract[an.get(_q("abstractNumId"))] = levels
             for n in numbering.findall(_q("num")):
                 self.num[n.get(_q("numId"))] = abstract.get(_val(n, "abstractNumId"), {})
+
+    # ---- tracked changes and comments (Writer's own marks: huginn_review)
+    def our_id(self, kind: str, word_id: str) -> int:
+        key = (kind, word_id)
+        if key not in self.ids:
+            self.ids[key] = self.next_id
+            self.next_id += 1
+        return self.ids[key]
+
+    @staticmethod
+    def _when(text: str) -> int:
+        import datetime as _dt
+        try:
+            return int(_dt.datetime.fromisoformat((text or "").replace("Z", "+00:00")).timestamp())
+        except ValueError:
+            return 0
+
+    def change(self, el, kind: str) -> tuple:
+        ident = self.our_id("change", el.get(_q("id")) or str(id(el)))
+        self.review["changes"].setdefault(str(ident), {"by": el.get(_q("author")) or "", "when": self._when(el.get(_q("date")) or "")})
+        return (kind, ident)
+
+    def read_comments(self, part) -> None:
+        if part is None:
+            return
+        for c in part.findall(_q("comment")):
+            paras = ["".join(t.text or "" for t in p.iter(_q("t"))) for p in c.iter(_q("p"))]
+            self.comments[c.get(_q("id")) or ""] = {"by": c.get(_q("author")) or "", "when": self._when(c.get(_q("date")) or ""),
+                                                   "text": "\n".join(paras).strip(), "done": False, "replies": []}
+
+    def note_start(self, word_id: str) -> None:
+        info = self.comments.get(word_id)
+        if info is None:
+            return
+        ident = self.our_id("note", word_id)
+        self.review["notes"].setdefault(str(ident), dict(info))
+        self.open_notes.append(ident)
+
+    def note_end(self, word_id: str) -> None:
+        if ("note", word_id) in self.ids and self.ids[("note", word_id)] in self.open_notes:
+            self.open_notes.remove(self.ids[("note", word_id)])
+
+    def marked(self, css: list, mark) -> tuple:
+        """The run's CSS with the review's look added, and its title (Writer's marks), when it's in a change or a comment."""
+        if mark is None and not self.open_notes:
+            return css, ""
+        deco, colour, back, rest = [], "", "", []
+        for c in css:
+            k, _, v = c.partition(":")
+            if k == "text-decoration":
+                deco = v.split()
+            elif k == "color":
+                colour = v
+            elif k == "background-color":
+                back = v
+            else:
+                rest.append(c)
+        marks = {}
+        if mark and mark[0] == "ins":
+            marks["ins"] = [str(mark[1]), "1" if "underline" in deco else "0"]
+            deco = sorted(set(deco) | {"underline"})
+            rest.append("text-decoration-color:" + rv.INS_LINE)
+        elif mark and mark[0] == "del":
+            marks["del"] = [str(mark[1]), colour.lstrip("#").lower() if colour else "-", "1" if "line-through" in deco else "0"]
+            deco = sorted(set(deco) | {"line-through"})
+            colour = rv.DEL_INK
+        if self.open_notes:
+            marks["note"] = [str(self.open_notes[-1]), back.lstrip("#").lower() if back else "-"]
+            back = rv.NOTE_BG
+        out = rest + ([f"text-decoration:{' '.join(deco)}"] if deco else []) + ([f"color:{colour}"] if colour else []) + ([f"background-color:{back}"] if back else [])
+        return out, rv.unparse(marks)
 
     def kind_of(self, sid: str) -> str:
         seen = 0
@@ -648,27 +796,35 @@ class _Reader:
             wrap.append("caps")
         return css, wrap
 
-    def runs(self, par) -> str:
+    def runs(self, par, mark=None) -> str:
         out = []
         for child in par:
             tag = child.tag
             if tag == _q("r"):
-                out.append(self.run(child))
+                out.append(self.run(child, mark))
+            elif tag in (_q("ins"), _q("moveTo")):
+                out.append(self.runs(child, self.change(child, "ins")))
+            elif tag in (_q("del"), _q("moveFrom")):
+                out.append(self.runs(child, self.change(child, "del")))
+            elif tag == _q("commentRangeStart"):
+                self.note_start(child.get(_q("id")) or "")
+            elif tag == _q("commentRangeEnd"):
+                self.note_end(child.get(_q("id")) or "")
             elif tag == _q("hyperlink"):
                 rid = child.get(_q("id", R))
-                inner = "".join(self.run(r) for r in child.iter(_q("r")))
+                inner = "".join(self.run(r, mark) for r in child.iter(_q("r")))
                 target = self.rels.get(rid, ("", "", False))
                 if target[2] and re.match(r"^(https?|mailto|ftp):", target[0]):
                     out.append(f'<a href="{_attr(target[0])}">{inner}</a>')
                 else:
                     out.append(inner)
-            elif tag in (_q("ins"), _q("smartTag"), _q("sdt"), _q("customXml"), _q("fldSimple")):
+            elif tag in (_q("smartTag"), _q("sdt"), _q("customXml"), _q("fldSimple")):
                 content = child.find(_q("sdtContent")) if tag == _q("sdt") else child
                 if content is not None:
-                    out.append(self.runs(content))
+                    out.append(self.runs(content, mark))
         return "".join(out)
 
-    def run(self, run) -> str:
+    def run(self, run, mark=None) -> str:
         rpr = run.find(_q("rPr"))
         style_rpr = self.style_rpr.get(_val(rpr, "rStyle") or "") if rpr is not None else None
         css, wrap = self.run_css(style_rpr)
@@ -676,7 +832,7 @@ class _Reader:
         css += css2
         text = []
         for child in run:
-            if child.tag == _q("t"):
+            if child.tag == _q("t") or (child.tag == _q("delText") and mark and mark[0] == "del"):
                 piece = html.escape(child.text or "")
                 text.append(piece.upper() if "caps" in wrap + wrap2 else piece)
             elif child.tag == _q("tab"):
@@ -695,7 +851,9 @@ class _Reader:
         piece = "".join(text)
         if not piece:
             return ""
-        return f'<span style="{";".join(css)}">{piece}</span>' if css else piece
+        css, title = self.marked(css, mark)
+        tip = f' title="{_attr(title)}"' if title else ""
+        return f'<span style="{";".join(css)}"{tip}>{piece}</span>' if css or tip else piece
 
     def picture(self, el) -> str:
         blip = next((b for b in el.iter(_q("blip", A))), None)
@@ -925,10 +1083,6 @@ class _Reader:
     def dropped(self, doc, names) -> list:
         count = lambda tag, ns=W: sum(1 for _ in doc.iter(_q(tag, ns)))      # noqa: E731
         out = []
-        if count("ins") or count("del"):
-            out.append("tracked changes (shown as if all were accepted)")
-        if count("commentReference"):
-            out.append(_plural(count("commentReference"), "comment"))
         if count("footnoteReference") or count("endnoteReference"):
             out.append("footnotes and endnotes")
         if any(el.tag.endswith("}oMath") for el in doc.iter()):

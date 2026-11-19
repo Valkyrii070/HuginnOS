@@ -18,7 +18,8 @@ GlassWindow {
     property bool finding: false
     property bool replacing: false
     property int found: 0
-    property string railTab: "docs"         // docs | outline
+    property string railTab: "docs"         // docs | outline | review
+    property int replying: 0                // the comment being answered (its number)
     property var ctx: null                  // the right-click menu: {x, y, word, pos}
     property var pending: []                // formatting asked for with nothing selected: it goes on what's typed next
     property int pendingAt: -1
@@ -85,6 +86,36 @@ GlassWindow {
     function zoomIn() { zoomBy(1.15) }
     function zoomOut() { zoomBy(1 / 1.15) }
     function showHeadings() { railTab = "outline"; outlineList.model = Backend.outline() }
+    // review: comments and tracked changes (huginn_review)
+    function showReview() { if (Backend.current !== "") railTab = "review" }
+    function toggleTrack() { if (Backend.current === "") return; Backend.setTracking(!Backend.tracking); say(Backend.tracking ? "Changes are tracked: what you type and delete is marked." : "Changes aren't tracked any more.") }
+    function newNote() { if (Backend.current === "") return
+        var a = editor.selectionStart, b = editor.selectionEnd
+        if (a === b) { var w = Backend.wordAt(editor.cursorPosition); if (w && w.end > w.start) { a = w.start; b = w.end } }
+        if (a === b) { say("Select the words to comment on first."); return }
+        ask("note", { a: a, b: b, quote: Backend.textOf(a, b) }) }
+    function nextChange(back) { if (Backend.current === "") return
+        var hit = Backend.nextChange(back ? editor.selectionStart : editor.selectionEnd, back)
+        if (!hit.length) { say("No changes to go through."); return }
+        editor.select(hit[0], hit[1]); follow(editor.positionToRectangle(hit[0])) }
+    function settleHere(accept) { if (Backend.current === "") return
+        var hit = Backend.nextChange(Math.max(0, editor.selectionStart - 1), false), here = editor.selectionStart
+        var list = Backend.changes, pick = null
+        for (var i = 0; i < list.length; i++) if (here >= list[i].start && here <= list[i].end) { pick = list[i]; break }
+        if (!pick) { if (hit.length) { editor.select(hit[0], hit[1]); follow(editor.positionToRectangle(hit[0])) } else say("No changes to go through."); return }
+        var at = Backend.settle(pick.id, accept); if (at >= 0) editor.cursorPosition = Math.min(at, editor.length)
+        nextChange(false) }
+    function nextChangeOn() { nextChange(false) }
+    function prevChange() { nextChange(true) }
+    function acceptHere() { settleHere(true) }
+    function rejectHere() { settleHere(false) }
+    function acceptAll() { settleAll(true) }
+    function rejectAll() { settleAll(false) }
+    function settleAll(accept) { if (Backend.current === "") return; var n = Backend.settleAll(accept); say(n ? (n + (n === 1 ? " change " : " changes ") + (accept ? "accepted." : "rejected.")) : "No changes to go through.") }
+    function wordBack(p) { var t = editor.getText(Math.max(0, p - 200), p), i = t.length
+        while (i > 0 && /\s/.test(t.charAt(i - 1))) i--
+        while (i > 0 && /\w/.test(t.charAt(i - 1))) i--
+        return p - (t.length - i) }
     function zoomBy(f) { zoomSet = Math.max(0.4, Math.min(3, Math.round(zoom * f * 20) / 20)) }
     function fitWidth() { zoomSet = Math.max(0.4, Math.min(2.5, (scroll.width - 80) / pg.w)) }
     function runFind() { found = Backend.findAll(findBox.text, caseBtn.on, wholeBtn.on) }
@@ -148,6 +179,8 @@ GlassWindow {
         },
         Island { id: toolsIsland; visible: Backend.current !== ""; anchors { right: parent.right; rightMargin: 12 } y: 12; z: 8
             Seg { icon: "search"; tip: "Find and replace (Ctrl+F)"; on: win.finding; onClicked: win.finding ? (win.finding = false) : win.find() }
+            Seg { text: Backend.tracking ? "Tracking" : "Review"; on: Backend.tracking || win.railTab === "review"; tip: "Comments and tracked changes"
+                onClicked: win.railTab = win.railTab === "review" ? "docs" : "review" }
             Seg { icon: "doc"; tip: "Page: size, margins, header and footer"; on: win.sheet === "page"; onClicked: win.pageSetup() }
             Seg { icon: "printer"; tip: "Print (Ctrl+P)"; onClicked: win.printIt() }
             ExportMenu {
@@ -176,9 +209,12 @@ GlassWindow {
             Seg { icon: "x"; tip: "Close (Esc)"; onClicked: { win.finding = false; Backend.findAll("", false, false); editor.forceActiveFocus() } } },
         // the left: documents, or this one's headings
         Rail { id: docRail; x: 12; y: 64; width: win.railW - 12; maxHeight: win.height - 64 - 14
-            Row { visible: Backend.current !== ""; spacing: 4; height: 34
-                Seg { text: "Documents"; on: win.railTab === "docs"; onClicked: win.railTab = "docs" }
-                Seg { text: "Headings"; on: win.railTab === "outline"; onClicked: { win.railTab = "outline"; outlineList.model = Backend.outline() } } }
+            Row { id: railTabs; visible: Backend.current !== ""; spacing: 2; height: 34
+                readonly property real each: (docRail.width - 14) / 3
+                Seg { width: railTabs.each; text: "Documents"; on: win.railTab === "docs"; onClicked: win.railTab = "docs" }
+                Seg { width: railTabs.each; text: "Headings"; on: win.railTab === "outline"; onClicked: { win.railTab = "outline"; outlineList.model = Backend.outline() } }
+                Seg { width: railTabs.each; text: "Review" + (Backend.changes.length + Backend.notes.length ? " · " + (Backend.changes.length + Backend.notes.length) : ""); on: win.railTab === "review"
+                    onClicked: win.railTab = "review" } }
             DocList { visible: win.railTab === "docs" || Backend.current === ""; newLabel: "New Document"; icon: "doc"; empty: "Documents you write appear here. Word files in your Documents folder do too." }
             Column { visible: win.railTab === "outline" && Backend.current !== ""; width: parent.width; spacing: 1
                 Timer { running: win.railTab === "outline"; interval: 1500; repeat: true; onTriggered: outlineList.model = Backend.outline() }
@@ -190,7 +226,58 @@ GlassWindow {
                         Label { anchors { right: parent.right; rightMargin: 8; verticalCenter: parent.verticalCenter } text: modelData.page; font.pixelSize: 10; secondary: true } } }
                 Label { visible: outlineList.count === 0; width: parent.width; leftPadding: 8; wrapMode: Text.WordWrap; secondary: true; font.pixelSize: 12
                     text: "Headings show here. Make one with the Style menu (Title, Heading, Subheading), then click to go to it." }
-                Seg { visible: outlineList.count > 0; text: "Put Contents at the Cursor"; fill: true; onClicked: { var at = Backend.insertContents(editor.cursorPosition); editor.cursorPosition = at } } } },
+                Seg { visible: outlineList.count > 0; text: "Put Contents at the Cursor"; fill: true; onClicked: { var at = Backend.insertContents(editor.cursorPosition); editor.cursorPosition = at } } }
+            // review: tracking, the changes, the comments
+            Column { visible: win.railTab === "review" && Backend.current !== ""; width: parent.width; spacing: 6
+                Item { width: parent.width; height: 34
+                    Label { x: 8; anchors.verticalCenter: parent.verticalCenter; text: "Track changes"; font.weight: Font.DemiBold }
+                    Toggle { anchors { right: parent.right; rightMargin: 6; verticalCenter: parent.verticalCenter } on: Backend.tracking; onToggled: function (v) { Backend.setTracking(v) } } }
+                Label { width: parent.width; leftPadding: 8; rightPadding: 8; wrapMode: Text.WordWrap; secondary: true; font.pixelSize: 11
+                    text: Backend.tracking ? "What you type is underlined in blue and what you delete stays, struck through, until someone accepts it. Signed " + Backend.author + "."
+                                           : "Turn it on before handing the document round: everyone's additions and deletions are kept for you to accept or reject." }
+                Label { visible: Backend.changes.length > 0; leftPadding: 8; topPadding: 6; text: "CHANGES · " + Backend.changes.length; secondary: true; font.pixelSize: 10; font.weight: Font.DemiBold }
+                Row { visible: Backend.changes.length > 0; spacing: 2; height: 30
+                    Seg { text: "Accept All"; onClicked: win.settleAll(true) } Seg { text: "Reject All"; onClicked: win.settleAll(false) }
+                    Seg { icon: "up"; tip: "Previous change"; onClicked: win.nextChange(true) } Seg { icon: "down"; tip: "Next change"; onClicked: win.nextChange(false) } }
+                Repeater { model: win.railTab === "review" ? Backend.changes : []
+                    Pressable { required property var modelData; width: parent.width; height: 50; radius: 9; color: hovered ? Theme.t.hover : "transparent"
+                        onClicked: { editor.select(modelData.start, modelData.end); win.follow(editor.positionToRectangle(modelData.start)); editor.forceActiveFocus() }
+                        Rectangle { x: 4; y: 9; width: 3; height: parent.height - 18; radius: 1.5; color: modelData.kind === "ins" ? "#1A73E8" : "#D93025" }
+                        Label { x: 14; y: 7; width: parent.width - 84; elide: Text.ElideRight; font.pixelSize: 10; secondary: true
+                            text: (modelData.kind === "ins" ? "Added" : "Deleted") + " · " + modelData.by + (modelData.when ? " · " + modelData.when : "") }
+                        Label { x: 14; y: 24; width: parent.width - 84; elide: Text.ElideRight; font.pixelSize: 12; font.strikeout: modelData.kind === "del"; text: modelData.text || "(a line break)" }
+                        Row { anchors { right: parent.right; rightMargin: 4; verticalCenter: parent.verticalCenter } spacing: 0
+                            Seg { icon: "check"; tip: "Accept"; onClicked: { Backend.settle(modelData.id, true); editor.forceActiveFocus() } }
+                            Seg { icon: "x"; tip: "Reject"; onClicked: { Backend.settle(modelData.id, false); editor.forceActiveFocus() } } } } }
+                Item { width: parent.width; height: 30
+                    Label { x: 8; anchors.verticalCenter: parent.verticalCenter; text: "COMMENTS" + (Backend.notes.length ? " · " + Backend.notes.length : ""); secondary: true; font.pixelSize: 10; font.weight: Font.DemiBold }
+                    Seg { anchors { right: parent.right; rightMargin: 2; verticalCenter: parent.verticalCenter } text: "+ New"; tip: "Comment on what's selected (Ctrl+Alt+M)"; onClicked: win.newNote() } }
+                Label { visible: Backend.notes.length === 0; width: parent.width; leftPadding: 8; rightPadding: 8; wrapMode: Text.WordWrap; secondary: true; font.pixelSize: 11
+                    text: "Select some words and press Ctrl+Alt+M (or right-click › Comment) to leave a note on them." }
+                Repeater { model: win.railTab === "review" ? Backend.notes : []
+                    Rectangle { id: noteCard; required property var modelData; width: parent.width; height: noteCol.height + 16; radius: 11
+                        color: Theme.t.group; border.width: 1; border.color: Backend.noteAt(editor.cursorPosition) === modelData.id ? Theme.t.accent : Theme.t.islandLine
+                        opacity: modelData.done ? 0.62 : 1
+                        MouseArea { anchors.fill: parent; enabled: !modelData.gone; onClicked: { editor.select(modelData.start, modelData.end); win.follow(editor.positionToRectangle(modelData.start)) } }
+                        Column { id: noteCol; x: 10; y: 8; width: parent.width - 20; spacing: 4
+                            Label { width: parent.width; elide: Text.ElideRight; font.pixelSize: 11; font.italic: true; secondary: true
+                                text: modelData.gone ? "(the words it was on are gone)" : "“" + modelData.quote + "”" }
+                            Label { width: parent.width; elide: Text.ElideRight; font.pixelSize: 10; font.weight: Font.DemiBold; color: Theme.t.accent
+                                text: modelData.by + (modelData.when ? "  ·  " + modelData.when : "") + (modelData.done ? "  ·  resolved" : "") }
+                            Label { width: parent.width; wrapMode: Text.WordWrap; font.pixelSize: 12; text: modelData.text }
+                            Repeater { model: modelData.replies
+                                Column { required property var modelData; width: noteCol.width; spacing: 1; topPadding: 4
+                                    Label { width: parent.width; elide: Text.ElideRight; font.pixelSize: 10; font.weight: Font.DemiBold; secondary: true; text: modelData.by + (modelData.when ? "  ·  " + modelData.when : "") }
+                                    Label { width: parent.width; wrapMode: Text.WordWrap; font.pixelSize: 12; text: modelData.text } } }
+                            TextBox { id: replyBox; visible: win.replying === noteCard.modelData.id; width: parent.width; height: 32; placeholder: "Reply"
+                                onAccepted: { Backend.replyNote(noteCard.modelData.id, text); text = ""; win.replying = 0 }
+                                Keys.onEscapePressed: win.replying = 0 }
+                            Row { spacing: 0
+                                Seg { text: win.replying === noteCard.modelData.id ? "Send" : "Reply"
+                                    onClicked: { if (win.replying === noteCard.modelData.id) { Backend.replyNote(noteCard.modelData.id, replyBox.text); replyBox.text = ""; win.replying = 0 }
+                                                 else { win.replying = noteCard.modelData.id; replyBox.focusIn() } } }
+                                Seg { text: noteCard.modelData.done ? "Reopen" : "Resolve"; onClicked: Backend.resolveNote(noteCard.modelData.id, !noteCard.modelData.done) }
+                                Seg { icon: "trash"; tip: "Delete the comment"; onClicked: Backend.deleteNote(noteCard.modelData.id) } } } } } } },
         // a table at the cursor: its own island over the formatting one
         Island { id: tableIsland; visible: !!win.st.table && Backend.current !== ""; x: bar.x + (bar.width - width) / 2; anchors { bottom: bar.top; bottomMargin: 8 } z: 6
             Label { text: "Table"; font.pixelSize: 11; font.weight: Font.DemiBold; leftPadding: 8; rightPadding: 4; anchors.verticalCenter: parent.verticalCenter }
@@ -369,6 +456,20 @@ GlassWindow {
                     onTextChanged: { win.checkPending(); typingTick.restart(); spellTick.restart() }
                     Keys.onPressed: function (e) {
                         var ctrl = e.modifiers & Qt.ControlModifier, shift = e.modifiers & Qt.ShiftModifier
+                        if (ctrl && (e.modifiers & Qt.AltModifier) && e.key === Qt.Key_M) { win.newNote(); e.accepted = true; return }
+                        if (ctrl && shift && e.key === Qt.Key_R) { win.toggleTrack(); e.accepted = true; return }
+                        if (Backend.tracking) {     // changes tracked: deleting strikes through, typing over a selection keeps it, struck through
+                            var a = editor.selectionStart, b = editor.selectionEnd, at = -1
+                            if (e.key === Qt.Key_Backspace || e.key === Qt.Key_Delete) {
+                                if (a === b && ctrl) { if (e.key === Qt.Key_Backspace) a = win.wordBack(a); else { var t = editor.getText(b, Math.min(editor.length, b + 200)), m = /^\s*\w*/.exec(t); b += m ? m[0].length : 0 } }
+                                at = Backend.trackDelete(a, b, e.key === Qt.Key_Backspace)
+                                if (at >= 0) { editor.cursorPosition = at; e.accepted = true; return }
+                            } else if (a !== b && ctrl && e.key === Qt.Key_X) {
+                                editor.copy(); at = Backend.trackDelete(a, b, true); if (at >= 0) { editor.cursorPosition = at; e.accepted = true; return }
+                            } else if (a !== b && ((ctrl && e.key === Qt.Key_V) || (!ctrl && e.text !== "" && e.text.charCodeAt(0) >= 32) || e.key === Qt.Key_Return || e.key === Qt.Key_Enter)) {
+                                at = Backend.trackDelete(a, b, false); if (at >= 0) editor.cursorPosition = at      // (not taken: the editor puts the new text after it)
+                            }
+                        }
                         if (ctrl && (e.key === Qt.Key_Return || e.key === Qt.Key_Enter)) { win.pageBreak(); e.accepted = true; return }
                         if ((e.key === Qt.Key_Return || e.key === Qt.Key_Enter) && !shift && editor.selectedText === "") {     // after a heading or a quote: back to body text
                             var at = Backend.newParagraph(editor.cursorPosition); if (at >= 0) { editor.cursorPosition = at; e.accepted = true; return } }
@@ -395,7 +496,8 @@ GlassWindow {
                         onTapped: function (pt) { var p = editor.positionAt(pt.position.x, pt.position.y)
                             if (editor.selectedText === "" || p < editor.selectionStart || p > editor.selectionEnd) editor.cursorPosition = p
                             var g = editor.mapToItem(win.contentItem, pt.position.x, pt.position.y)
-                            win.ctx = { x: g.x, y: g.y, pos: p, word: Backend.wordAt(p), href: Backend.linkAt(p) } } } } } } }
+                            var here = Backend.changes.filter(function (c) { return p >= c.start && p <= c.end })[0]
+                            win.ctx = { x: g.x, y: g.y, pos: p, word: Backend.wordAt(p), href: Backend.linkAt(p), change: here ? here.id : 0 } } } } } } }
 
     // ---------------------------------------------------------------- the right-click menu: spelling, then the usual
     Rectangle { visible: win.ctx !== null; z: 30; x: Math.min(parent.width - width - 8, win.ctx ? win.ctx.x : 0); y: Math.min(parent.height - height - 8, win.ctx ? win.ctx.y : 0)
@@ -415,17 +517,20 @@ GlassWindow {
             CtxItem { label: "Paste"; enabled: editor.canPaste; onClicked: { win.ctx = null; editor.paste() } }
             Rectangle { width: parent.width; height: 1; color: Theme.t.islandLine }
             CtxItem { label: "Link…"; onClicked: win.link() }
+            CtxItem { label: "Comment…"; onClicked: { win.ctx = null; win.newNote() } }
+            CtxItem { visible: !!(win.ctx && win.ctx.change); label: "Accept the Change"; onClicked: { var c = win.ctx.change; win.ctx = null; Backend.settle(c, true) } }
+            CtxItem { visible: !!(win.ctx && win.ctx.change); label: "Reject the Change"; onClicked: { var c = win.ctx.change; win.ctx = null; Backend.settle(c, false) } }
             CtxItem { visible: aiPanel.on("writer") && editor.selectedText !== ""; label: "Huginn AI…"; onClicked: { win.ctx = null; aiMenu.visible = true } } } }
     component CtxItem: Pressable { property string label: ""; width: parent ? parent.width : 200; height: visible ? 30 : 0; radius: 9; color: hovered ? Theme.t.hover : "transparent"; opacity: enabled ? 1 : 0.45
         Label { x: 10; anchors.verticalCenter: parent.verticalCenter; text: parent.label; font.pixelSize: 13 } }
     MouseArea { anchors.fill: parent; z: 19; visible: win.pop !== "" || win.ctx !== null; acceptedButtons: Qt.AllButtons; onPressed: { win.pop = ""; win.ctx = null } }
 
     // ---------------------------------------------------------------- sheets: page setup, printing, a link
-    Item { anchors.fill: parent; z: 40; visible: win.sheet !== ""
+    Item { anchors.fill: parent; z: 40; visible: win.sheet !== ""; onVisibleChanged: if (visible && win.sheet === "note") noteBox.focusIn()
         Rectangle { anchors.fill: parent; radius: win.r; color: "#66000000"; MouseArea { anchors.fill: parent; onClicked: win.sheet = "" } }
-        Rectangle { id: card; anchors.centerIn: parent; width: 520; height: col.height + 84; radius: 20; color: Theme.t.menu_bg; border.width: 1; border.color: Theme.t.menu_border
+        Rectangle { id: card; anchors.centerIn: parent; width: 520; height: col.height + (win.sheet === "note" ? 124 : 84); radius: 20; color: Theme.t.menu_bg; border.width: 1; border.color: Theme.t.menu_border
             MouseArea { anchors.fill: parent }
-            Label { x: 24; y: 20; font.pixelSize: 17; font.weight: Font.DemiBold; text: ({ page: "Page", print: "Print", link: "Link" })[win.sheet] || "" }
+            Label { x: 24; y: 20; font.pixelSize: 17; font.weight: Font.DemiBold; text: ({ page: "Page", print: "Print", link: "Link", note: "Comment" })[win.sheet] || "" }
             Column { id: col; x: 24; y: 56; width: parent.width - 48; spacing: 12
                 // page setup
                 Row { visible: win.sheet === "page"; spacing: 10
@@ -481,6 +586,9 @@ GlassWindow {
                     TextBox { id: pagesBox; width: 140; placeholder: "All, or 1-3,5" }
                     Toggle { id: sidesBox; anchors.verticalCenter: parent.verticalCenter }
                     Label { text: "Both sides"; anchors.verticalCenter: parent.verticalCenter; font.pixelSize: 12 } }
+                // a comment
+                Label { visible: win.sheet === "note"; width: parent.width; elide: Text.ElideRight; font.italic: true; secondary: true; text: "On “" + (win.sheetData.quote || "") + "”" }
+                TextBox { id: noteBox; visible: win.sheet === "note"; width: parent.width; lines: 4; placeholder: "What do you want to say about it?" }
                 // a link
                 TextBox { id: urlBox; visible: win.sheet === "link"; width: parent.width; placeholder: "https://…"; text: win.sheetData.url || ""; onAccepted: linkOk.clicked() }
                 TextBox { id: linkText; visible: win.sheet === "link" && !win.sheetData.text; width: parent.width; placeholder: "The words to show (the address, when empty)" } }
@@ -489,6 +597,8 @@ GlassWindow {
                 Btn { visible: win.sheet === "link" && !!win.sheetData.url; text: "Remove the Link"; onClicked: { Backend.link(win.sheetData.a, win.sheetData.b, "", ""); win.sheet = "" } }
                 Btn { text: win.sheet === "page" ? "Done" : "Cancel"; onClicked: { win.sheet = ""; editor.forceActiveFocus() } }
                 Btn { id: linkOk; visible: win.sheet === "link"; primary: true; text: "Link"; onClicked: { Backend.link(win.sheetData.a, win.sheetData.b, urlBox.text, linkText.text); win.sheet = ""; editor.forceActiveFocus() } }
+                Btn { visible: win.sheet === "note"; primary: true; text: "Comment"; opacity: noteBox.many.trim() ? 1 : 0.5
+                    onClicked: { if (!noteBox.many.trim()) return; Backend.addNote(win.sheetData.a, win.sheetData.b, noteBox.many); noteBox.many = ""; noteBox.focusIn(); win.sheet = ""; win.railTab = "review"; editor.forceActiveFocus() } }
                 Btn { visible: win.sheet === "print" && (win.sheetData.printers || []).length > 0; primary: true; text: "Print"
                     onClicked: { var ps = win.sheetData.printers, pr = win.sheetData.printer || (ps.filter(function (p) { return p["default"] })[0] || ps[0]).id
                         var why = Backend.printTo(pr, parseInt(copiesBox.text) || 1, pagesBox.text, sidesBox.on); win.sheet = ""; win.say(why || "Sent to " + pr.replace(/_/g, " ") + ".") } } } } }
