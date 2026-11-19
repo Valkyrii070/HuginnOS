@@ -5344,7 +5344,8 @@ def main() -> int:
             import huginn_sheets
             backend = huginn_sheets.Sheets(target)
         else:
-            backend = huginn_office.Slides(target)
+            import huginn_slides
+            backend = huginn_slides.Slides(target)
     else:
         backend = System()                               # settings and welcome
 

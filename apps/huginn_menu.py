@@ -69,8 +69,23 @@ APP_MENUS = {
                ("Data", [item("Sort smallest first", "qml:apply:sortUp"), item("Sort largest first", "qml:apply:sortDown"), item("Filter", "qml:filter"), SEP,
                          item("Freeze the top row", "qml:apply:freezeTop"), item("Freeze the first column", "qml:apply:freezeLeft"), item("Unfreeze", "qml:apply:unfreeze")]),
                ("Sheet", [item("Rows: delete", "qml:deleteRow"), item("Columns: delete", "qml:deleteColumn")])],
-    "slides": [("File", OFFICE_FILE), ("Edit", EDIT), ("Slide", [item("New slide", "qml:newSlide", "Ctrl+M"), item("Duplicate slide", "qml:duplicateSlide"), item("Delete slide", "qml:deleteSlide")]),
-               ("View", [item("Present", "qml:present", "F5")])],
+    "slides": [("File", OFFICE_FILE),
+               ("Edit", [item("Undo", "qml:menuUndo", "Ctrl+Z"), item("Redo", "qml:menuRedo", "Ctrl+Shift+Z"), SEP, item("Cut", "qml:menuCut", "Ctrl+X"),
+                         item("Copy", "qml:menuCopy", "Ctrl+C"), item("Paste", "qml:menuPaste", "Ctrl+V"), item("Duplicate", "qml:duplicateItems", "Ctrl+D"),
+                         item("Select All", "qml:menuSelectAll", "Ctrl+A"), SEP, item("Find and replace…", "qml:find", "Ctrl+F")]),
+               ("Insert", [item("New slide", "qml:newSlide", "Ctrl+M"), item("Duplicate slide", "qml:duplicateSlide"), SEP, item("Text box", "qml:insertText"),
+                           item("Shape…", "qml:insertShape"), item("Picture…", "qml:insertPicture")]),
+               ("Format", [item("Bold", "qml:apply:bold", "Ctrl+B"), item("Italic", "qml:apply:italic", "Ctrl+I"), item("Underline", "qml:apply:underline", "Ctrl+U"),
+                           SEP, item("Bigger", "qml:apply:bigger", "Ctrl+]"), item("Smaller", "qml:apply:smaller", "Ctrl+["), SEP,
+                           item("Bullets", "qml:apply:bullet"), item("Numbering", "qml:apply:number"), SEP, item("Align left", "qml:apply:left", "Ctrl+L"),
+                           item("Centre", "qml:apply:center", "Ctrl+E"), item("Align right", "qml:apply:right", "Ctrl+R")]),
+               ("Arrange", [item("Bring to front", "qml:arrange:front"), item("Bring forward", "qml:arrange:forward"), item("Send backward", "qml:arrange:backward"),
+                            item("Send to back", "qml:arrange:back")]),
+               ("Slide", [item("Layout…", "qml:openLayouts"), item("Background…", "qml:openBackground"), item("Transition…", "qml:openTransition"), SEP,
+                          item("Hide in the show", "qml:toggleHidden"), item("Move earlier", "qml:moveSlideUp"), item("Move later", "qml:moveSlideDown"), SEP,
+                          item("Delete slide", "qml:deleteSlide")]),
+               ("View", [item("Present from the start", "qml:present", "F5"), item("Present from this slide", "qml:presentHere", "Shift+F5"),
+                         item("Presenter view", "qml:presenterView", "Alt+F5"), SEP, item("Speaker notes", "qml:toggleNotes")])],
     "files": [("File", [item("New window", "app:newWindow", "Ctrl+N"), item("New folder", "qml:newFolder", "Ctrl+Shift+N"), item("New tab", "qml:newTab", "Ctrl+T"), SEP,
                         item("Open", "qml:openSelected", "Return"), item("Show in a new tab", "qml:openInTab"), SEP, item("Move to the Bin", "qml:trashSelected", "Delete")]),
               ("Edit", EDIT + [SEP, item("Find…", "qml:find", "Ctrl+F")]),
@@ -210,7 +225,8 @@ class AppMenu(QObject):
             key, act = it.get("keys", ""), it.get("id", "")
             if not key or not act or act.split(":")[0] in ("short", "edit", "recent") or not it.get("enabled", True):
                 continue
-            if "Super" in key or not ("Ctrl" in key or "Alt" in key or (key.startswith("F") and key[1:].isdigit())):
+            last = key.split("+")[-1]
+            if "Super" in key or not ("Ctrl" in key or "Alt" in key or (last.startswith("F") and last[1:].isdigit())):
                 continue
             if self._key == "terminal" and "Shift" not in key and not key.startswith("F"):
                 continue                                     # Ctrl+W, Ctrl+Q… belong to the program in the terminal

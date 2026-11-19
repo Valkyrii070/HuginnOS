@@ -1,24 +1,22 @@
-"""Huginn Office: the engines behind Writer, Sheets and Slides.
+"""Huginn Office: what Writer, Sheets and Slides share: the list of documents, saving, and files from other suites.
 
 Each app keeps its work in an open, readable format (Writer: HTML, Sheets: JSON, Slides: JSON) and can export to
 PDF and to the usual open formats.
 
 Files from other suites (hybrid): .docx, .xlsx and .pptx are read and written by Huginn's own converters
-(huginn_convert.py). Older or rarer formats (.doc, .odt, .rtf, .xls, .ods, .ppt, .odp) are first turned into the
+(huginn_docx, huginn_xlsx, huginn_pptx). Older or rarer formats (.doc, .odt, .rtf, .xls, .ods, .ppt, .odp) are first turned into the
 modern format by LibreOffice running invisibly, if it is installed, and then read by the same converters. Either way
 the file opens here, as a copy, and the app says what could not be carried over. LibreOffice's window never opens.
 """
 import datetime as dt
-import json
 import os
 import shutil
 import subprocess
 import tempfile
 from pathlib import Path
 
-from PySide6.QtCore import Property, QMarginsF, QObject, QSizeF, QStandardPaths, QTimer, QUrl, Signal, Slot
-import huginn_convert as convert
-from PySide6.QtGui import QDesktopServices, QImage, QPageSize, QPainter, QPdfWriter
+from PySide6.QtCore import Property, QObject, QStandardPaths, QTimer, QUrl, Signal, Slot
+from PySide6.QtGui import QDesktopServices
 
 
 def documents_dir() -> Path:
@@ -155,174 +153,3 @@ class FileList(QObject):
     @Slot(str)
     def reveal(self, path: str) -> None:
         QDesktopServices.openUrl(QUrl.fromLocalFile(str(Path(path).parent)))
-
-
-# ============================================================================================== Slides
-class Slides(FileList):
-    NATIVE, OWN, VIA_BRIDGE, MODERN, STEM = (".hslides",), (".pptx",), (".odp", ".ppt"), "pptx", "Untitled Talk"
-    LAYOUTS = ("title", "content", "section", "blank")
-    THEMES = ("realm", "paper", "night")
-
-    def __init__(self, target: Path = None):
-        super().__init__(target)
-        self._deck = {"theme": "realm", "slides": []}
-        self._index = 0
-        self.changed.connect(self.deckChanged)
-        if self._extra:
-            self.open(str(self._extra))
-
-    deckChanged = Signal()        # a subclass property needs a signal declared in the same class
-    slides = Property("QVariantList", lambda self: self._deck["slides"], notify=deckChanged)
-    theme = Property(str, lambda self: self._deck["theme"], notify=deckChanged)
-    index = Property(int, lambda self: self._index, notify=deckChanged)
-    count = Property(int, lambda self: len(self._deck["slides"]), notify=deckChanged)
-
-    @Slot(str)
-    def open(self, path: str) -> None:
-        note_recent(path)
-        if self._dirty:
-            self.save()
-        source, target, dropped = Path(path), Path(path), None
-        try:
-            if source.suffix.lower() in self.FOREIGN:
-                found, dropped = convert.pptx_to_slides(self._modern(source))
-                data, target = {"theme": "realm", "slides": found}, fresh_path(source.parent, source.stem, ".hslides")
-            else:
-                data = json.loads(source.read_text(encoding="utf-8"))
-            slides = [{"layout": s.get("layout", "content") if s.get("layout") in self.LAYOUTS else "content",
-                       "title": str(s.get("title", "")), "body": str(s.get("body", "")), "notes": str(s.get("notes", ""))}
-                      for s in data.get("slides", []) if isinstance(s, dict)]
-        except (OSError, ValueError, AttributeError, convert.ConvertError) as err:
-            self.failed.emit(f"Couldn't open “{source.name}”: {getattr(err, 'strerror', None) or err}")
-            return
-        self._deck = {"theme": data.get("theme") if data.get("theme") in self.THEMES else "realm", "slides": slides or [self._blank("title")]}
-        self._path, self._dirty, self._index = target, False, 0
-        if target != source:
-            self.touch()
-            self.imported.emit(source.name, dropped or [])
-        self.changed.emit()
-
-    @staticmethod
-    def _blank(layout: str) -> dict:
-        return {"layout": layout, "title": "", "body": "", "notes": ""}
-
-    @Slot()
-    def create(self) -> None:
-        if self._dirty:
-            self.save()
-        try:
-            path = fresh_path(self._folder, self.STEM, ".hslides")
-            path.write_text(json.dumps({"theme": "realm", "slides": [self._blank("title")]}), encoding="utf-8")
-        except OSError as err:
-            self.failed.emit(f"Couldn't create a presentation: {err.strerror or err}")
-            return
-        self.open(str(path))
-
-    @Slot()
-    def save(self) -> None:
-        if not self._dirty or self._path is None:
-            return
-        try:
-            write_atomic(self._path, json.dumps({"format": "huginn-slides-1", **self._deck}, indent=1, ensure_ascii=False))
-            self._dirty = False
-        except OSError as err:
-            self.failed.emit(f"Couldn't save: {err.strerror or err}")
-        self.changed.emit()
-
-    @Slot(int)
-    def select(self, index: int) -> None:
-        if 0 <= index < len(self._deck["slides"]) and index != self._index:
-            self._index = index
-            self.changed.emit()
-
-    @Slot(str)
-    def add(self, layout: str) -> None:
-        if self._path is None:
-            return
-        self._deck["slides"].insert(self._index + 1, self._blank(layout if layout in self.LAYOUTS else "content"))
-        self._index += 1
-        self.touch()
-
-    @Slot()
-    def duplicate(self) -> None:
-        if self._path is None or not self._deck["slides"]:
-            return
-        self._deck["slides"].insert(self._index + 1, json.loads(json.dumps(self._deck["slides"][self._index])))
-        self._index += 1
-        self.touch()
-
-    @Slot()
-    def remove(self) -> None:
-        if len(self._deck["slides"]) > 1:
-            del self._deck["slides"][self._index]
-            self._index = min(self._index, len(self._deck["slides"]) - 1)
-            self.touch()
-
-    @Slot(int)
-    def move(self, delta: int) -> None:
-        target = self._index + delta
-        if 0 <= target < len(self._deck["slides"]):
-            s = self._deck["slides"]
-            s[self._index], s[target] = s[target], s[self._index]
-            self._index = target
-            self.touch()
-
-    @Slot(int, str, str)
-    def write(self, index: int, field: str, text: str) -> None:
-        if 0 <= index < len(self._deck["slides"]) and field in ("title", "body", "notes", "layout") and self._deck["slides"][index][field] != text:
-            if field == "layout" and text not in self.LAYOUTS:
-                return
-            self._deck["slides"][index][field] = text
-            self.touch()
-
-    @Slot(str)
-    def setTheme(self, name: str) -> None:
-        if name in self.THEMES and name != self._deck["theme"]:
-            self._deck["theme"] = name
-            self.touch()
-
-    @Slot(result=str)
-    def exportPowerPoint(self) -> str:
-        if self._path is None:
-            return ""
-        self.save()
-        try:
-            out = fresh_path(self._path.parent, self._path.stem, ".pptx")
-            convert.slides_to_pptx(self._deck["slides"], out, self._deck["theme"])
-        except OSError as err:
-            self.failed.emit(f"Couldn't export: {err.strerror or err}")
-            return ""
-        return str(out)
-
-    @Slot(result=str)
-    def scratch(self) -> str:
-        """A temporary folder for the slide pictures an export is made from."""
-        return tempfile.mkdtemp(prefix="huginn-slides-")
-
-    @Slot("QVariantList", result=str)
-    def pdf(self, pictures: list) -> str:
-        """Bind one picture per slide into a PDF beside the presentation. Returns its path ('' on failure)."""
-        if self._path is None or not pictures:
-            return ""
-        try:
-            out = fresh_path(self._path.parent, self._path.stem, ".pdf")
-            writer = QPdfWriter(str(out))
-            writer.setPageSize(QPageSize(QSizeF(338.67, 190.5), QPageSize.Millimeter))          # 16:9
-            writer.setPageMargins(QMarginsF(0, 0, 0, 0))
-            writer.setResolution(144)
-            writer.setTitle(self._path.stem)
-            painter = QPainter(writer)
-            for n, picture in enumerate(pictures):
-                image = QImage(str(picture))
-                if image.isNull():
-                    painter.end()
-                    raise OSError("a slide picture is missing")
-                if n:
-                    writer.newPage()
-                painter.drawImage(painter.viewport(), image)
-            painter.end()
-            shutil.rmtree(Path(str(pictures[0])).parent, ignore_errors=True)
-        except OSError as err:
-            self.failed.emit(f"Couldn't export: {err.strerror or err}")
-            return ""
-        return str(out)

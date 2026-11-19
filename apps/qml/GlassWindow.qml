@@ -74,8 +74,10 @@ Window {
                               leftMargin: win.bare ? 0 : Math.max(win.padLeft, win.sidebarWidth > 0 ? win.sidebarWidth + 24 : 0) } }
     Item { id: over; anchors.fill: parent; z: 5; visible: !win.bare }
     Rail { id: sideRail; visible: win.sidebarWidth > 0 && !win.bare; x: 12; y: 64; z: 6; width: Math.max(win.sidebarWidth, 60); maxHeight: win.height - 64 - 14 }
-    Island { id: toolIsland; visible: width > 12 && !win.bare; z: 7; rtl: true; anchors { right: parent.right; rightMargin: 12 } y: 12 }
+    // (shown by opacity: hiding an island whose width comes from what's showing in it would hide what's in it for good)
+    Island { id: toolIsland; visible: !win.bare; opacity: width > 12 ? 1 : 0; enabled: width > 12; z: 7; rtl: true; anchors { right: parent.right; rightMargin: 12 } y: 12 }
     readonly property real titleEnd: titleIsland.x + titleIsland.width      // where the top left island ends, for islands beside it
+    readonly property real toolStart: toolIsland.opacity > 0 ? toolIsland.x : width - 12     // and where the toolbar begins
     Island {   // close, minimise, maximise and the app's name: always top left
         id: titleIsland; x: 12; y: 12; z: 6; drags: true; visible: !win.bare
         Item { width: 4; height: 1 }

@@ -102,13 +102,13 @@ every screen. Not tested: anything needing a click or a real desktop session.
 | --- | --- | --- |
 | Writer | Real pages (Letter, A4, Legal, A5; margins; headers, footers, page numbers), styles, fonts, lists with levels and checklists, tables, pictures, links, find and replace, spelling, printing, Word in and out (see "Office, pro round one") | Comments, tracked changes, footnotes, columns, text wrapping round pictures |
 | Sheets | An Excel-compatible engine with about 120 functions; several sheets; frozen panes; formats; fill handle; sort, filters and charts; Excel files both ways with formulas, formats and charts | Conditional formatting, data validation, pivot tables, comments |
-| Slides | Four layouts, three themes, slide navigator, add / delete / reorder, speaker notes, full-screen presenting, export to PDF and PowerPoint | Pictures, free text boxes, bullets, transitions, presenter view with notes on a second screen |
+| Slides | A free canvas: text boxes, shapes and pictures anywhere, sized and turned, with smart guides; six layouts, six themes, backgrounds; bullets with levels; transitions and builds; presenter view; PowerPoint both ways and vector PDF | Tables as real tables, charts, SmartArt, motion paths, audio and video |
 
 Each app keeps its own work in an open format: Writer in HTML, Sheets and Slides in JSON (`.hsheet`, `.hslides`).
 
 ### Other suites' files (the hybrid)
 
-- `.docx`, `.xlsx` and `.pptx` are read and written by our own converters (`apps/huginn_convert.py`, Python standard library only).
+- `.docx`, `.xlsx` and `.pptx` are read and written by our own converters (`apps/huginn_docx.py`, `apps/huginn_xlsx.py`, `apps/huginn_pptx.py`).
 - Older or rarer formats (`.doc`, `.odt`, `.rtf`, `.xls`, `.ods`, `.ppt`, `.odp`) appear only if LibreOffice is installed. It runs invisibly to
   turn them into the modern format, and our converters take it from there. LibreOffice's window never opens, and it is not in the package lists.
 - A foreign file always opens as a copy in our format; the original is never written to. A notice lists what was not carried over.
@@ -1607,7 +1607,7 @@ Huginn AI in four more apps, each with its own switch in Settings › AI › Whe
 ## Office, pro round one (2026-11-19)
 
 Writer, Sheets and Slides get the treatment the pro apps had: measured against Word, Excel and PowerPoint, the
-biggest gaps first.
+biggest gaps first. (`huginn_convert.py`, the old converters, is gone: each app has its own now.)
 
 ### Writer (`apps/huginn_writer.py`, `apps/huginn_docx.py`, both new; `apps/qml/Writer.qml`)
 - **Real pages.** The editor's own text document is laid out in pages: Qt's text layout moves a paragraph that
@@ -1689,6 +1689,47 @@ biggest gaps first.
   frozen pane, widths, filter, chart) and in LibreOffice. On screen: an Excel file with a frozen heading row,
   filter arrows and a chart; a formula typed with suggestions and pointed cells; the fill handle; the filter list;
   the right-click menu; number formats; a narrow window.
+
+### Slides (`apps/huginn_slides.py`, `apps/huginn_slides_model.py`, `apps/huginn_pptx.py`, all new; `apps/qml/Slides.qml`, `apps/qml/SlideFace.qml`)
+- **Free canvas.** A slide is 1920 by 1080 units (1440 for 4:3; one unit is 6350 EMU, so 13.33 by 7.5 inches as in
+  PowerPoint) with items anywhere on it: text boxes, 17 shapes (with text in them), pictures, lines and arrows.
+  Click to choose, click again (or type) to write; drag to move with smart guides to the slide's middle and edges and
+  to other items' edges and middles; eight handles to size (pictures keep their shape), a handle to turn, two ends on
+  a line; Shift to keep straight; rubber-band and Shift-click to choose several; arrows to nudge; Ctrl+D, copy and
+  paste (between presentations too, and pictures or text from other apps).
+- **Layouts with placeholders** (title, title and text, section, two columns, title only, blank) that keep their text
+  when the layout changes; empty placeholders say what goes in them. Titles and text shrink to fit, as PowerPoint's
+  placeholders do; text boxes grow with their text.
+- **Text** in Qt's rich text: fonts, sizes, bold, italic, underline, strike, colours, alignment, line spacing, bullets
+  and numbering with nine levels (Tab, Shift+Tab), sizes that step down by level. A run keeps only what differs from
+  its place's defaults, so a new theme re-colours and re-fonts everything not set by hand.
+- **Six themes** (Realm, Paper, Night, Dawn, Ocean, Chalk: colours, heading and body fonts, a decoration) and slide
+  backgrounds (theme, colour, gradient, picture; one slide or all). Shapes filled with a theme colour follow the theme.
+- **Arrange**: forward, back, to the front or the back; align left, centre, right, top, middle, bottom (to the slide or
+  to each other) and spread evenly.
+- **Transitions** (fade, push, wipe, zoom, cover, with their time) and **builds** (appear, fade, rise, zoom; whole items
+  or one paragraph at a time, in an order shown beside each item). Hidden slides.
+- **Presenting**: full screen with transitions and builds; click, Space and arrows, B and W to blank, a number and Enter
+  to jump, Esc to stop. With two screens the show goes to the other one and this one has the **presenter view** (the
+  slide as shown, what comes next, notes in a size you choose, a timer and the clock, every slide to jump to);
+  Alt+F5 opens it on one screen to rehearse.
+- **PowerPoint files, both ways** (`huginn_pptx`). Out: a master, a layout for each layout used, the theme's colours and
+  fonts, every item where it is (text runs, bullets, levels, alignment, autofit; preset shapes; pictures), slide
+  backgrounds, notes, transitions, builds as entrance effects (by paragraph too) and hidden slides. In: placeholders
+  take their place and text styles through the layout and the master; theme colours (with their tints and shades) and
+  fonts; shape styles; groups flattened; pictures cropped; tables as cells; the master's and layout's own shapes (logos,
+  bands) kept as the deck's design frame; backgrounds, notes, transitions and entrance builds; the file's design kept
+  until another theme is picked. Footers, charts, SmartArt and other effects are listed as not carried over.
+- **PDF** drawn by Qt's painter from the same model the window uses: vector shapes and real text.
+- Tested: 75 checks of the model and the backend (placeholders, typing and formatting through the editor, lists and
+  levels, numbering toggles, alignment, shapes and theme fills, pictures, text boxes growing, moves as one undo step,
+  aligning and ordering, lines both ways, duplicate, copy and paste, builds, transitions, notes, backgrounds, layout
+  changes keeping text, shrink to fit, hidden slides, themes, find and replace, saving and opening, the first format
+  upgraded, PDF, and PowerPoint out and back in with all of it), checked in python-pptx and rendered by LibreOffice;
+  17 checks reading a deck made with python-pptx's PowerPoint template (layouts, inherited places and bullets, theme
+  fills, white text from a shape's style, pictures, a text box, notes, a table). On screen: typing into placeholders,
+  bullets and levels, the shapes menu, dragging with guides, builds by paragraph while presenting, the presenter view,
+  a PowerPoint file opened and re-themed.
 
 ## Huginn, the browser
 
