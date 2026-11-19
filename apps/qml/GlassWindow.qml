@@ -75,8 +75,9 @@ Window {
     Item { id: over; anchors.fill: parent; z: 5; visible: !win.bare }
     Rail { id: sideRail; visible: win.sidebarWidth > 0 && !win.bare; x: 12; y: 64; z: 6; width: Math.max(win.sidebarWidth, 60); maxHeight: win.height - 64 - 14 }
     Island { id: toolIsland; visible: width > 12 && !win.bare; z: 7; rtl: true; anchors { right: parent.right; rightMargin: 12 } y: 12 }
+    readonly property real titleEnd: titleIsland.x + titleIsland.width      // where the top left island ends, for islands beside it
     Island {   // close, minimise, maximise and the app's name: always top left
-        x: 12; y: 12; z: 6; drags: true; visible: !win.bare
+        id: titleIsland; x: 12; y: 12; z: 6; drags: true; visible: !win.bare
         Item { width: 4; height: 1 }
         Repeater {
             model: [["#FF5F57", "Close"], ["#FEBC2E", "Minimize"], ["#28C840", "Maximize"]]

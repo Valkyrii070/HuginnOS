@@ -101,7 +101,7 @@ every screen. Not tested: anything needing a click or a real desktop session.
 | App | Works now | Not yet |
 | --- | --- | --- |
 | Writer | Real pages (Letter, A4, Legal, A5; margins; headers, footers, page numbers), styles, fonts, lists with levels and checklists, tables, pictures, links, find and replace, spelling, printing, Word in and out (see "Office, pro round one") | Comments, tracked changes, footnotes, columns, text wrapping round pictures |
-| Sheets | 26 x 200 grid; numbers, text, percentages; formulas with cell and range references and 20 functions (SUM, AVERAGE, MIN, MAX, COUNT, ROUND, IF ...); clear error marks; column summary; export to Excel and CSV | Several sheets, cell formatting, charts, sorting and filtering, selecting a range with the mouse, column resizing |
+| Sheets | An Excel-compatible engine with about 120 functions; several sheets; frozen panes; formats; fill handle; sort, filters and charts; Excel files both ways with formulas, formats and charts | Conditional formatting, data validation, pivot tables, comments |
 | Slides | Four layouts, three themes, slide navigator, add / delete / reorder, speaker notes, full-screen presenting, export to PDF and PowerPoint | Pictures, free text boxes, bullets, transitions, presenter view with notes on a second screen |
 
 Each app keeps its own work in an open format: Writer in HTML, Sheets and Slides in JSON (`.hsheet`, `.hslides`).
@@ -1650,6 +1650,45 @@ biggest gaps first.
   picture, the page and footer) and in LibreOffice, whose rendering matches ours. On screen: pages with header,
   footer and number, a picture moving to the next page, spelling waves and suggestions, Find, Headings, the page
   setup, a table from the grid with Tab and a header row, formatting typed on.
+
+### Sheets (`apps/huginn_sheet_engine.py`, `apps/huginn_sheets.py`, `apps/huginn_xlsx.py`, all new; `apps/qml/Sheets.qml`)
+- **An Excel-compatible engine** (`huginn_sheet_engine`): a tokenizer and parser for Excel's formula language
+  (precedence, percent, ranges, whole rows and columns, other sheets with quoted names, `$` anchors, array arguments),
+  error values that travel like Excel's (#DIV/0!, #N/A, #REF!, #NAME?, #VALUE!), dates as Excel's serial numbers, and
+  about 120 functions: SUMIFS/COUNTIFS/AVERAGEIFS, XLOOKUP, VLOOKUP/HLOOKUP, INDEX/MATCH, IF/IFS/IFERROR/SWITCH,
+  text (TEXTJOIN, TEXT, SUBSTITUTE…), dates (EDATE, EOMONTH, NETWORKDAYS, WEEKDAY…), rounding, statistics and money
+  (PMT, FV, PV, NPV, IRR). References shift when copied or filled and follow rows and columns that are inserted or
+  deleted, in every sheet; renaming a sheet renames it in formulas.
+- **Four panes** (frozen rows and columns above and left, each a TableView of the same cells) with headers that stay
+  in step, so a frozen heading row stays put while the rest scrolls. Rows and columns grow as you scroll.
+- **Excel's way of working**: typing replaces, F2 edits, Enter/Tab (and Enter back to the row's first column),
+  arrows finish a cell typed from scratch; Ctrl+arrows, Ctrl+Home/End, Page Up/Down, Shift to extend, Ctrl+A twice;
+  Ctrl+C/X/V as tab-separated text with other apps (formulas shift when pasted); Ctrl+D/R, Ctrl+;, Alt+= (sum),
+  Ctrl+B/I/U, Ctrl+Z/Y; a right-click menu. Function names are suggested as a formula is typed, with their arguments;
+  cells are pointed at with the mouse or the arrows, and each reference is outlined in its own colour.
+- **Fill handle**: drag to carry numbers, dates, months and days on as series and formulas along; double-click to
+  fill down beside a column.
+- **Formatting**: bold, italic, underline, strike, text and fill colours, alignment, wrapping, size and font, number
+  formats (number, whole, currency, percent, dates, ISO date, long date, time, scientific, text) and decimal places;
+  column widths by dragging (double-click to fit) and row heights.
+- **Sort** by a column (a heading row recognised), **filters** with each column's values to show or hide (the hidden
+  rows skipped by the arrows and left out of the sum), **freeze** panes, and a summary (sum, average, count) of the
+  chosen cells beside the formula.
+- **Charts** over the cells: columns, bars, lines, area and pie, with title and legend, drawn from the cells and
+  redrawn when they change; move, resize, change the kind or the cells.
+- **Several sheets** in a file: add, rename, duplicate, reorder, delete; formulas reach across them.
+- **Excel files, both ways** (`huginn_xlsx`): values, formulas (with the `_xlfn.` names newer functions need, and the
+  cached results so other apps show numbers before calculating), shared formulas, fonts, colours, fills, alignment,
+  wrapping, number formats, column widths and row heights, frozen panes, filters, merged cells and charts (as
+  DrawingML bar, line, area and pie charts). Reading says what didn't come across (functions Sheets doesn't know,
+  conditional formatting, data validation, comments, pictures, pivot tables). CSV in and out, and PDF.
+- Tested: 79 engine checks (parsing, precedence, errors, every family of functions, dates, reference shifting and
+  moving, formats, series) and 47 checks of the app (typing and guessing formats, formulas across sheets, fill,
+  copy and paste, insert and delete with references and charts following, sort, filter, freeze, find and replace,
+  undo, sheets, charts, and Excel out and back in). Our .xlsx opened in openpyxl (formulas, formats, bold, fill,
+  frozen pane, widths, filter, chart) and in LibreOffice. On screen: an Excel file with a frozen heading row,
+  filter arrows and a chart; a formula typed with suggestions and pointed cells; the fill handle; the filter list;
+  the right-click menu; number formats; a narrow window.
 
 ## Huginn, the browser
 

@@ -5340,8 +5340,11 @@ def main() -> int:
         if args.app == "writer":
             import huginn_writer
             backend = huginn_writer.Writer(target)
+        elif args.app == "sheets":
+            import huginn_sheets
+            backend = huginn_sheets.Sheets(target)
         else:
-            backend = {"sheets": huginn_office.Sheets, "slides": huginn_office.Slides}[args.app](target)
+            backend = huginn_office.Slides(target)
     else:
         backend = System()                               # settings and welcome
 
