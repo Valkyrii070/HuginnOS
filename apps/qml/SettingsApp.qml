@@ -69,7 +69,7 @@ GlassWindow {
         ["privacy", "Firewall", "ufw block incoming"], ["privacy", "App permissions", "camera microphone location flatpak"], ["privacy", "Screen lock", "lock password idle"],
         ["privacy", "Recent files", "history forget"], ["privacy", "Empty the Trash", "days automatically"],
         ["updates", "Software Update", "upgrade security patches flatpak automatic huginn browser"],
-        ["about", "About this computer", "model processor memory storage version graphics"]
+        ["about", "About this computer", "model processor memory storage version graphics problem report logs crash bug"]
     ]
     readonly property var results: {
         var q = query.trim().toLowerCase()

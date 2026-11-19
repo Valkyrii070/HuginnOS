@@ -73,7 +73,7 @@ use smithay::{
         },
         drm::{
             Device as _,
-            control::{Device, ModeTypeFlags, connector, crtc},
+            control::{Device, ModeFlags, ModeTypeFlags, connector, crtc},
         },
         input::{DeviceCapability, Libinput},
         rustix::fs::OFlags,
@@ -1214,6 +1214,16 @@ impl HuginnState<UdevData> {
                 .unwrap_or(0);
 
             let mut drm_mode = connector.modes()[mode_id];
+            // the screen's own resolution at the fastest refresh it offers: many 144 Hz screens name a 60 Hz mode as
+            // the one they prefer (a saved choice from Settings › Displays still wins, below)
+            if let Some(fast) = connector
+                .modes()
+                .iter()
+                .filter(|m| m.size() == drm_mode.size() && !m.flags().contains(ModeFlags::INTERLACE))
+                .max_by_key(|m| WlMode::from(**m).refresh)
+            {
+                drm_mode = *fast;
+            }
 
             let (phys_w, phys_h) = connector.size().unwrap_or((0, 0));
             let output = Output::new(

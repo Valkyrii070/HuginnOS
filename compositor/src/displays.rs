@@ -92,6 +92,27 @@ pub fn pick(modes: &[Mode], (w, h, mhz): (i32, i32, i32)) -> Option<Mode> {
         .copied()
 }
 
+/// A first guess at the size of things on a screen nobody has set up yet: from how many pixels it has to the inch
+/// (a desktop screen is seen from further away than a laptop's), in quarter steps, much as Windows suggests:
+/// a 27" 4K screen gets 150 %, a 27" 1440p one 100 %, a 14" laptop with 2880 pixels across 250 %.
+/// None when the screen's size is missing or only gives its shape (projectors, many TVs).
+pub fn auto_scale(output: &Output) -> Option<f64> {
+    let mode = output.current_mode()?;
+    let size = output.physical_properties().size;
+    let (w_mm, h_mm) = (size.w as f64, size.h as f64);
+    if !(100.0..=2000.0).contains(&w_mm) || !(60.0..=1200.0).contains(&h_mm) || mode.size.h <= 0 {
+        return None;
+    }
+    let shape_px = mode.size.w as f64 / mode.size.h as f64;
+    if (shape_px / (w_mm / h_mm) - 1.0).abs() > 0.15 {
+        return None;
+    }
+    let dpi = mode.size.w as f64 / (w_mm / 25.4);
+    let inches = w_mm.hypot(h_mm) / 25.4;
+    let s = (dpi / if inches >= 20.0 { 110.0 } else { 96.0 } * 4.0).round() / 4.0;
+    Some(if s < 1.2 { 1.0 } else { s.min(3.0) })
+}
+
 fn remember(output: &Output) {
     let mut all = load();
     let mode = output.current_mode();
@@ -174,7 +195,15 @@ impl<B: Backend + 'static> HuginnState<B> {
 
     /// A screen just plugged in: put back its saved rotation, size of things and place.
     pub fn restore_display(&mut self, output: &Output) {
-        let Some(s) = saved(output) else { return };
+        let Some(s) = saved(output) else {
+            // never set up here: a size of things to suit how sharp it is
+            if let Some(scale) = auto_scale(output).filter(|s| (s - 1.0).abs() > 0.01) {
+                tracing::info!(name = output.name(), scale, "size of things, from the screen's size");
+                output.change_current_state(None, None, Some(Scale::Fractional(scale)), None);
+                self.xwayland_rescale();
+            }
+            return;
+        };
         let transform = s
             .get("rotation")
             .and_then(|r| r.as_str())

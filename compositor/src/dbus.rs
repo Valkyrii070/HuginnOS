@@ -28,6 +28,12 @@ use erased::Body as _;
 /// What the bus asks of the compositor's event loop.
 pub enum Request {
     Lock,
+    /// The computer is about to sleep: lock, and say so once the lock screen is on screen (logind waits for that,
+    /// so waking shows the lock screen at once instead of starting it then).
+    LockForSleep(mpsc::Sender<()>),
+    /// Awake again: someone woke it on purpose, so the screen comes on (it may have been switched off before the
+    /// computer slept, and the key that woke it never reaches us) and the idle time starts again.
+    Woke,
     /// logind's "unlock the session" (`loginctl unlock-session`, from a text console if the lock screen ever can't).
     Unlock,
     Blank(bool),
@@ -368,6 +374,20 @@ pub fn start(to_loop: LoopSender<Request>, shared: Shared) -> mpsc::Sender<Outgo
     tx
 }
 
+/// A "delay" inhibitor: logind waits (up to its InhibitDelayMaxSec, 5 s) for us to let go before the computer sleeps.
+fn sleep_delay(system: &zbus::blocking::Connection) -> Option<zbus::zvariant::OwnedFd> {
+    system
+        .call_method(
+            Some("org.freedesktop.login1"),
+            "/org/freedesktop/login1",
+            Some("org.freedesktop.login1.Manager"),
+            "Inhibit",
+            &("sleep", "Huginn", "The lock screen comes up before the computer sleeps", "delay"),
+        )
+        .ok()
+        .and_then(|reply| reply.body().deserialize::<zbus::zvariant::OwnedFd>().ok())
+}
+
 /// logind: "lock the session" (`loginctl lock-session`, and anything else that asks logind) and going to sleep lock;
 /// "unlock the session" unlocks.
 fn watch_logind(to_loop: LoopSender<Request>) {
@@ -407,6 +427,7 @@ fn watch_logind(to_loop: LoopSender<Request>) {
             return;
         }
     };
+    let mut delay = sleep_delay(&system);
     for msg in messages.flatten() {
         let header = msg.header();
         let (Some(member), Some(path)) = (header.member(), header.path()) else {
@@ -416,12 +437,22 @@ fn watch_logind(to_loop: LoopSender<Request>) {
         let request = match member.as_str() {
             "Lock" if ours => Some(Request::Lock),
             "Unlock" if ours => Some(Request::Unlock),
-            // going to sleep: locked first, unless Settings › Privacy & Security says not to (kscreenlockerrc, as KDE's)
-            "PrepareForSleep"
-                if msg.body().deserialize::<bool>().unwrap_or(false)
-                    && crate::input::kconfig("kscreenlockerrc", "Daemon", "LockOnResume").is_none_or(|v| v != "false") =>
-            {
-                Some(Request::Lock)
+            // going to sleep: locked first, unless Settings › Privacy & Security says not to (kscreenlockerrc, as KDE's);
+            // the computer waits until the lock screen is up, then sleeps
+            "PrepareForSleep" => {
+                if msg.body().deserialize::<bool>().unwrap_or(false) {
+                    if crate::input::kconfig("kscreenlockerrc", "Daemon", "LockOnResume").is_none_or(|v| v != "false") {
+                        let (tx, rx) = mpsc::channel();
+                        if to_loop.send(Request::LockForSleep(tx)).is_ok() {
+                            let _ = rx.recv_timeout(Duration::from_millis(3500));
+                        }
+                    }
+                    drop(delay.take()); // let go: sleep now
+                } else {
+                    delay = sleep_delay(&system); // awake again: ready for the next time
+                    let _ = to_loop.send(Request::Woke);
+                }
+                None
             }
             _ => None,
         };

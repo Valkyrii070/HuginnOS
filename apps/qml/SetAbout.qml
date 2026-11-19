@@ -18,6 +18,15 @@ Column {
     SetCard { title: "This computer"
         Repeater { model: pg.a.rows || []
             SetRow { required property var modelData; title: modelData.name; Label { text: modelData.value; secondary: true; width: Math.min(implicitWidth, 420); elide: Text.ElideRight } } } }
+    SetCard { id: report; title: "Something not right?"
+        readonly property var r: Backend.report
+        SetRow { title: "Make a Problem Report"; sub: report.r.busy ? report.r.step + "…"
+                   : report.r.path ? "Saved in " + report.r.path.split("/").slice(-2, -1)[0] + ": " + report.r.path.split("/").pop()
+                   : report.r.error ? report.r.error
+                   : "The logs, the hardware and any crashes, in one file to look over and send. Your name, networks and addresses are left out."
+            Row { spacing: 8
+                Btn { visible: !!report.r.path; text: "Show in Files"; onClicked: Backend.revealFile(report.r.path) }
+                Btn { text: report.r.busy ? "Making It…" : "Make Report"; primary: !report.r.path; enabled: !report.r.busy; onClicked: Backend.makeReport() } } } }
     SetCard { visible: (pg.a.used || 0) > 0; title: "Storage"
         SetRow { title: "Your files and apps"; sub: Math.round(pg.a.used * 100) + "% used"; Meter { width: 260; value: pg.a.used; fill: pg.a.used > 0.9 ? Theme.t.danger : Theme.t.accent } } }
 }

@@ -1234,6 +1234,7 @@ class SystemSettings(QObject):
         self._busy = set()
         self._zones = None
         self._apps = None
+        self._report = {}
         self._back.connect(self._take)
 
     def _page(name, sig):                                       # noqa: N805  (a helper for the class body)
@@ -1245,6 +1246,8 @@ class SystemSettings(QObject):
     a11y, look = _page("a11y", changed), _page("look", changed)
     del _page
     busy = Property("QVariantList", lambda self: sorted(self._busy), notify=changed)
+    reportChanged = Signal()
+    report = Property("QVariantMap", lambda self: self._report, notify=reportChanged)
     demo = Property(bool, lambda self: self._demo, constant=True)
 
     # -------------------------------------------------------------- loading
@@ -1287,6 +1290,10 @@ class SystemSettings(QObject):
         if page == "!apps":
             self._apps = None
             return
+        if page == "!report":
+            self._report = data
+            self.reportChanged.emit()
+            return
         self._busy.discard(page)
         if isinstance(data, dict):
             self._state[page] = data
@@ -1318,6 +1325,34 @@ class SystemSettings(QObject):
                 except Exception:                                # noqa: BLE001
                     pass
         threading.Thread(target=work, daemon=True).start()
+
+    # -------------------------------------------------------------- a problem report (About)
+    @Slot()
+    def makeReport(self) -> None:
+        """Logs, hardware and crashes in one .zip in Documents (huginn_report.py), with names and addresses left out."""
+        if self._report.get("busy"):
+            return
+        self._report = {"busy": True, "step": "Starting", "path": "", "error": ""}
+        self.reportChanged.emit()
+        if self._demo:
+            self._report = {"busy": False, "step": "", "path": str(Path.home() / "Documents" / "Huginn OS report.zip"), "error": ""}
+            self.reportChanged.emit()
+            return
+
+        def work():
+            import huginn_report
+            try:
+                path = huginn_report.make(say=lambda step: self._back.emit("!report", {"busy": True, "step": step, "path": "", "error": ""}))
+                self._back.emit("!report", {"busy": False, "step": "", "path": str(path), "error": ""})
+            except Exception as err:                             # noqa: BLE001
+                self._back.emit("!report", {"busy": False, "step": "", "path": "", "error": f"The report couldn't be made: {err}"})
+        threading.Thread(target=work, daemon=True).start()
+
+    @Slot(str)
+    def revealFile(self, path: str) -> None:
+        from PySide6.QtCore import QUrl
+        from PySide6.QtGui import QDesktopServices
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(Path(path).parent)))
 
     # -------------------------------------------------------------- the sign-in screen
     @Slot(str)

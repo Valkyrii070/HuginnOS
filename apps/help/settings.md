@@ -11,7 +11,7 @@ Turn Wi‑Fi on or off, pick a network and type its password once (the system ke
 Put the device in pairing mode (usually by holding its button), choose Look for devices, then Pair. My devices shows what's paired, whether it's connected and its battery.
 
 ## Displays
-With two screens or more, drag them on the map to match your desk. For each screen: resolution, size of things (scaling), refresh rate and turning. Night light makes colours warmer in the evening, from sunset to sunrise, at set hours, or always.
+A screen you plug in starts at its own resolution and its fastest refresh rate, with a size of things to suit how sharp it is. With two screens or more, drag them on the map to match your desk, and choose the main one (it has the top bar and the dock). For each screen: resolution, size of things (scaling), refresh rate and turning. Night light makes colours warmer in the evening, from sunset to sunrise, at set hours, or always.
 
 ## Sound
 Choose where sound plays and which microphone listens, and how loud each is. Apps playing now lets you turn one app down without touching the rest.
@@ -46,3 +46,6 @@ changes it to yours, after the administrator password.
 
 ## Accessibility
 Seeing: the screen reader (Orca) reads out what's on the screen; Zoom magnifies around the pointer (follow it, keep it centred, or push at the edges); Make everything bigger; High contrast; Solid surfaces instead of glass; Reduce motion; colour filters for colour blindness, or grey; and the pointer's size. Hearing: flash the screen instead of the alert sound. Moving and typing: sticky keys (shortcuts one key at a time), slow keys (a key must be held a moment), bounce keys (ignore quick repeats), moving the pointer with the number keys, and the on-screen keyboard.
+
+## A problem report
+About › Make a Problem Report gathers what helps someone find out what went wrong (the logs, the hardware, crashes) into one .zip in Documents. Names and addresses are left out; open it to see everything that's in it before you send it.

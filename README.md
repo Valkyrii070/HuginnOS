@@ -1731,6 +1731,33 @@ biggest gaps first. (`huginn_convert.py`, the old converters, is gone: each app 
   bullets and levels, the shapes menu, dragging with guides, builds by paragraph while presenting, the presenter view,
   a PowerPoint file opened and re-themed.
 
+## Ready for real hardware (2026-11-19)
+
+Before the first start on a desktop PC (a Radeon RX 9070 XT and three screens):
+
+- **Waking from sleep.** The lock screen used to start when the computer was already going to sleep, so it was
+  still starting when the computer woke (a black screen for a second or two). The compositor now holds a logind
+  "delay" inhibitor: going to sleep, it locks, waits until the lock screen has been on screen for a couple of frames
+  (3 s at most), then lets the computer sleep; waking shows the lock screen at once. Waking also counts as someone
+  being there: a screen switched off before the computer slept comes back on (the key that wakes it never reaches the
+  compositor), and the idle time starts again.
+- **Screens.** A screen plugged in for the first time runs at its own resolution and the fastest refresh rate it
+  offers at that resolution (many 144 Hz screens name a 60 Hz mode as the one they prefer), and gets a size of things
+  from how sharp it is: pixels to the inch, a desktop screen seen from further away than a laptop's, in quarter steps
+  (a 27" 4K screen 150 %, a 27" 1440p one 100 %); screens that report only their shape are left at 100 %. Anything
+  set in Settings › Displays still wins. The graphics stack in the image already covers the RX 9070 XT (RDNA 4):
+  Linux 7.0, Mesa 26.0.8 with RADV, and linux-firmware 2026-03 with its gc_12_0_1, psp_14_0_3, smu_14_0_3 and
+  dcn_4_0_1 firmware.
+- **A problem report** (`apps/huginn_report.py`, Settings › About › Make a Problem Report, or `huginn-report` from a
+  terminal or a text console): the system's log since the computer started, its warnings and errors and the errors of
+  the start before, the kernel's messages, the desktop session's own log, crashes of the last week with their stacks,
+  the hardware (PCI and USB devices, the graphics drivers through glxinfo and vulkaninfo, the screen connectors and
+  the screens as the compositor has them, sound, network devices, Bluetooth, temperatures), services that failed and
+  Huginn OS's version, as plain text files in one .zip in Documents. Your name, user name and computer's name,
+  network and Bluetooth device names, IP and MAC addresses and e-mail addresses are replaced before anything is
+  written; nothing from your own files goes in. `usbutils`, `mesa-utils`, `vulkan-tools`, `rfkill` and `lm-sensors`
+  are in the image for it (`57-huginn-report.list`).
+
 ## Huginn, the browser
 
 Inside the Huginn repository (this kit is its `os/` folder) the image ships the repository's own browser. A kit used

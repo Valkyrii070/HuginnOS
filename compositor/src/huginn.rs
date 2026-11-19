@@ -189,6 +189,8 @@ impl<B: Backend + 'static> HuginnState<B> {
     fn bus_request(&mut self, request: Request) {
         match request {
             Request::Lock => self.lock_now(),
+            Request::LockForSleep(done) => self.lock_for_sleep(done),
+            Request::Woke => self.touched(),
             Request::Unlock => self.unlock_now(),
             Request::Blank(off) => {
                 self.huginn.blank = off;
@@ -739,6 +741,26 @@ impl<B: Backend + 'static> HuginnState<B> {
             keyboard.set_focus(self, None, SERIAL_COUNTER.next_serial());
         }
         self.start_locker();
+    }
+
+    /// Going to sleep: lock, then say so once the lock screen has been on screen for a frame or two (or after 3 s,
+    /// whatever it's doing: sleep can't wait for ever).
+    fn lock_for_sleep(&mut self, done: std::sync::mpsc::Sender<()>) {
+        use smithay::reexports::calloop::timer::{TimeoutAction, Timer};
+        self.lock_now();
+        let started = Instant::now();
+        let mut seen: Option<Instant> = None;
+        let _ = self.handle.insert_source(Timer::from_duration(Duration::from_millis(30)), move |_, _, state| {
+            if seen.is_none() && state.lock_surface().is_some() {
+                seen = Some(Instant::now());
+            }
+            let up = seen.is_some_and(|t| t.elapsed() >= Duration::from_millis(120));
+            if up || started.elapsed() >= Duration::from_secs(3) || !state.is_locked() {
+                let _ = done.send(());
+                return TimeoutAction::Drop;
+            }
+            TimeoutAction::ToDuration(Duration::from_millis(30))
+        });
     }
 
     fn start_locker(&mut self) {
