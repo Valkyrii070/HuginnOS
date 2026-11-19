@@ -26,6 +26,7 @@ GlassWindow {
     property bool bgAll: false
     property bool trAll: false
     property int tick: 0
+    readonly property bool narrowTop: titleEnd + 624 > toolStart        // too narrow for the formatting in the top row: it gets a row of its own
     readonly property var cur: Backend.count > 0 ? Backend.slides[Math.min(Backend.index, Backend.count - 1)] : ({ items: [], frameItems: [], bg: ({}) })
     readonly property real k: face.k
     // presenting
@@ -189,8 +190,8 @@ GlassWindow {
                      Backend.converter ? [["odp", "OpenDocument", "An .odp file for LibreOffice Impress"]] : [])
             onChosen: function (key) { win.doExport(key) } },
         Seg { id: themeBtn; visible: !win.browsing; icon: "palette"; tip: "Theme and slide size"; onClicked: win.openPop("theme", themeBtn) },
-        Seg { visible: !win.browsing; icon: "edit"; tip: "Speaker notes"; on: win.notesOpen; onClicked: win.notesOpen = !win.notesOpen },
-        Seg { visible: !win.browsing; icon: "search"; tip: "Find (Ctrl+F)"; on: win.finding; onClicked: win.finding ? (win.finding = false) : win.find() },
+        Seg { visible: !win.browsing && win.width >= 1000; icon: "edit"; tip: "Speaker notes"; on: win.notesOpen; onClicked: win.notesOpen = !win.notesOpen },
+        Seg { visible: !win.browsing && win.width >= 1000; icon: "search"; tip: "Find (Ctrl+F)"; on: win.finding; onClicked: win.finding ? (win.finding = false) : win.find() },
         Seg { visible: !win.browsing; icon: "redo"; tip: "Redo"; opacity: Backend.canRedo ? 1 : 0.4; onClicked: win.menuRedo() },
         Seg { visible: !win.browsing; icon: "undo"; tip: "Undo"; opacity: Backend.canUndo ? 1 : 0.4; onClicked: win.menuUndo() },
         Seg { visible: !win.browsing; icon: "back"; tip: "All presentations"; onClicked: { win.endEdit(); Backend.save(); win.browsing = true } }
@@ -200,8 +201,9 @@ GlassWindow {
 
     islands: [
         // what goes on a slide: the slide's layout, text, shapes, pictures; its background and transition
-        Island { id: insertBar; visible: !win.browsing && !win.presenting && !fmtBar.visible; y: 12; z: 8
-            x: Math.max(win.titleEnd + 12, Math.min(win.toolStart - width - 12, (win.width - width) / 2))
+        Island { id: insertBar; visible: !win.browsing && !win.presenting && !fmtBar.visible; z: 8
+            readonly property bool fits: !win.narrowTop
+            y: fits ? 12 : 60; x: fits ? Math.max(win.titleEnd + 12, Math.min(win.toolStart - width - 12, (win.width - width) / 2)) : (win.width - width) / 2
             Pick { id: layoutBtn; span: 132; text: "Layout: " + ((Backend.samples.filter(function (s) { return s.key === win.cur.layout })[0] || { name: "" }).name); onClicked: win.openPop("layout", layoutBtn) }
             Gap {}
             Tool { icon: "type"; tip: "Text box"; onClicked: win.insertText() }
@@ -252,7 +254,8 @@ GlassWindow {
             readonly property bool picture: fmtBar.list.length === 1 && fmtBar.list[0].kind === "picture"
             // in the top row, where the tools to add things are when nothing is chosen
             visible: !win.browsing && !win.presenting && fmtBar.list.length > 0
-            y: 12; x: Math.max(win.titleEnd + 12, Math.min(win.toolStart - width - 12, (win.width - width) / 2))
+            readonly property bool fits: !win.narrowTop
+            y: fits ? 12 : 60; x: fits ? Math.max(win.titleEnd + 12, Math.min(win.toolStart - width - 12, (win.width - width) / 2)) : Math.max(12, (win.width - width) / 2)
             Tool { id: addBtn2; icon: "plus"; tip: "Add a text box, shape or picture"; on: win.pop === "add"; onClicked: win.openPop("add", addBtn2) }
             Gap { visible: fmtBar.texty }
             Pick { id: fontPick; visible: fmtBar.texty; span: 118; text: win.fmt.font || "Font"; onClicked: win.openPop("font", fontPick) }
@@ -353,8 +356,8 @@ GlassWindow {
 
     // ------------------------------------------------------------------ the slide being made
     Item { id: work; visible: !win.browsing && !win.presenting; anchors.fill: parent
-        ImportNote { id: note; x: 16; y: 56; width: parent.width - 32; z: 3; file: Backend.importedFile; dropped: Backend.importedDropped; onDismissed: Backend.dismissNote() }
-        Item { id: stage; x: 24; y: note.visible ? note.y + note.height + 8 : 58; width: parent.width - 48; height: parent.height - y - 112 - (win.notesOpen ? 92 : 0)
+        ImportNote { id: note; x: 16; y: win.narrowTop ? 102 : 56; width: parent.width - 32; z: 3; file: Backend.importedFile; dropped: Backend.importedDropped; onDismissed: Backend.dismissNote() }
+        Item { id: stage; x: 24; y: (note.visible ? note.y + note.height + 8 : 58) + (win.narrowTop ? 46 : 0); width: parent.width - 48; height: parent.height - y - 112 - (win.notesOpen ? 92 : 0)
             // a click on the bare stage around the slide chooses nothing
             MouseArea { anchors.fill: parent; onPressed: { win.endEdit(); win.sel = []; win.pop = ""; win.menu = null; canvasKeys.forceActiveFocus() } }
             SlideFace { id: face; x: (stage.width - width) / 2; y: (stage.height - height) / 2; width: Math.max(100, Math.min(stage.width, stage.height * Backend.slideW / 1080))
