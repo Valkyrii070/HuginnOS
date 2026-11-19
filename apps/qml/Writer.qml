@@ -68,6 +68,8 @@ GlassWindow {
         } else if (here !== pendingAt) { pending = []; pendingAt = -1 }
     }
     function openPop(kind, from) { if (pop === kind) { pop = ""; return } popFrom = from; pop = kind }
+    property int footTick: 0
+    Connections { target: Backend; function onFootnotesChanged() { win.footTick++ } }
     function ask(kind, data) { pop = ""; ctx = null; sheet = kind; sheetData = data || ({}) }
     function say(text) { win.notice = text; hide.restart() }
     // the top bar's menus (and their keys)
@@ -89,6 +91,14 @@ GlassWindow {
     // review: comments and tracked changes (huginn_review)
     function showReview() { if (Backend.current !== "") railTab = "review" }
     function toggleTrack() { if (Backend.current === "") return; Backend.setTracking(!Backend.tracking); say(Backend.tracking ? "Changes are tracked: what you type and delete is marked." : "Changes aren't tracked any more.") }
+    // footnotes: a numbered mark in the text, its words at the bottom of the page (Ctrl+Alt+F)
+    function addFootnote() { if (Backend.current === "") return
+        var at = editor.selectionEnd, id = Backend.insertFootnote(at); if (!id) return
+        editor.cursorPosition = Math.min(editor.length, at + 1); editFootnote(id, true) }
+    function editFootnote(id, fresh) { ask("footnote", { id: id, fresh: !!fresh }); footBox.many = Backend.footnote(id); footBox.focusIn() }
+    function saveFootnote() { var d = sheetData
+        if (!footBox.many.trim() && d.fresh) Backend.removeFootnote(d.id); else Backend.setFootnote(d.id, footBox.many.trim())
+        sheet = ""; editor.forceActiveFocus() }
     function newNote() { if (Backend.current === "") return
         var a = editor.selectionStart, b = editor.selectionEnd
         if (a === b) { var w = Backend.wordAt(editor.cursorPosition); if (w && w.end > w.start) { a = w.start; b = w.end } }
@@ -356,7 +366,7 @@ GlassWindow {
                                     : win.pop === "font" ? Backend.fonts.slice(0, 300).map(function (f) { return ["font:" + f, f, 13, f] })
                                     : win.pop === "align" ? [["left", "Align left (Ctrl+L)", 12], ["center", "Centre (Ctrl+E)", 12], ["right", "Align right (Ctrl+R)", 12], ["justify", "Justify (Ctrl+J)", 12]]
                                     : win.pop === "spacing" ? [["spacing:100", "Single", 12], ["spacing:115", "1.15", 12], ["spacing:150", "1.5", 12], ["spacing:200", "Double", 12], ["space:0", "No space after paragraphs", 11], ["space:8", "Space after paragraphs", 11]]
-                                    : win.pop === "insert" ? [["!table", "Table…", 12], ["!picture", "Picture…", 12], ["!break", "Page break (Ctrl+Enter)", 12], ["!link", "Link… (Ctrl+K)", 12], ["!line", "Line across", 12], ["!contents", "Contents from the headings", 12], ["!date", "Today's date", 12]]
+                                    : win.pop === "insert" ? [["!table", "Table…", 12], ["!picture", "Picture…", 12], ["!break", "Page break (Ctrl+Enter)", 12], ["!link", "Link… (Ctrl+K)", 12], ["!line", "Line across", 12], ["!contents", "Contents from the headings", 12], ["!date", "Today's date", 12], ["!footnote", "Footnote (Ctrl+Alt+F)", 12]]
                                     : []
                         Pressable { required property var modelData; width: popInner.width; height: Math.max(30, modelData[2] + 16); radius: 9; color: hovered ? Theme.t.hover : "transparent"
                             onClicked: { var k = modelData[0], w = win; if (k.charAt(0) === "!") w.insertKind(k.slice(1)); else w.apply(k); if (w.pop !== "table") w.pop = "" }   // (closing last: this row goes with it)
@@ -390,6 +400,7 @@ GlassWindow {
         else if (k === "line") Backend.insertLine(editor.cursorPosition)
         else if (k === "contents") { var at = Backend.insertContents(editor.cursorPosition); editor.cursorPosition = at }
         else if (k === "date") editor.insert(editor.cursorPosition, Qt.formatDate(new Date(), Qt.DefaultLocaleLongDate))
+        else if (k === "footnote") { addFootnote(); return }
         editor.forceActiveFocus()
     }
     function table(action) { var at = Backend.tableDo(editor.selectionStart, editor.selectionEnd, action); editor.cursorPosition = Math.min(at, editor.length); refresh(); editor.forceActiveFocus() }
@@ -434,6 +445,14 @@ GlassWindow {
                         readonly property string head: Backend.headerFor(index + 1) + (win.pg.pages >= 0 ? "" : "")
                         readonly property string foot: Backend.footerFor(index + 1) + (win.pg.pages >= 0 ? "" : "")
                         readonly property string num: Backend.numberFor(index + 1) + (win.pg.pages >= 0 ? "" : "")
+                        readonly property var notes: (win.footTick, win.pg.room > 0 ? Backend.notesFor(index + 1) : [])
+                        Column { visible: parent.notes.length > 0; x: win.pg.left; y: win.pg.h - win.pg.bottom - win.pg.room + 6; width: win.pg.w - win.pg.left - win.pg.right; spacing: 0
+                            Rectangle { width: 140; height: 1; color: "#9AA1AA" }
+                            Item { width: 1; height: 5 }
+                            Repeater { model: parent.parent.notes
+                                Text { required property var modelData; width: parent.width - 18; wrapMode: Text.Wrap; textFormat: Text.PlainText; bottomPadding: 3
+                                    text: modelData.n + "  " + (modelData.text || "…"); color: modelData.text ? "#15181C" : "#9AA1AA"; font.family: "Inter"; font.pointSize: 9
+                                    MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: win.editFootnote(parent.modelData.id) } } } }
                         Text { x: win.pg.left; y: Math.max(16, win.pg.top / 2 - 10); width: win.pg.w - win.pg.left - win.pg.right; height: 20; verticalAlignment: Text.AlignVCenter
                             text: parent.head; color: "#5F6670"; font.family: "Inter"; font.pointSize: 9; elide: Text.ElideRight }
                         Text { id: num1; x: win.pg.left; y: win.pg.numbers === "top-right" ? Math.max(16, win.pg.top / 2 - 10) : win.pg.h - Math.max(16, win.pg.bottom / 2) - 10
@@ -457,6 +476,7 @@ GlassWindow {
                     Keys.onPressed: function (e) {
                         var ctrl = e.modifiers & Qt.ControlModifier, shift = e.modifiers & Qt.ShiftModifier
                         if (ctrl && (e.modifiers & Qt.AltModifier) && e.key === Qt.Key_M) { win.newNote(); e.accepted = true; return }
+                        if (ctrl && (e.modifiers & Qt.AltModifier) && e.key === Qt.Key_F) { win.addFootnote(); e.accepted = true; return }
                         if (ctrl && shift && e.key === Qt.Key_R) { win.toggleTrack(); e.accepted = true; return }
                         if (Backend.tracking) {     // changes tracked: deleting strikes through, typing over a selection keeps it, struck through
                             var a = editor.selectionStart, b = editor.selectionEnd, at = -1
@@ -491,13 +511,15 @@ GlassWindow {
                             if (s < 0) return; var r = editor.positionToRectangle(s)
                             if (pt.position.x < r.x - 2 && pt.position.x > r.x - 30 && pt.position.y >= r.y - 2 && pt.position.y <= r.y + r.height + 2) { Backend.toggleCheck(s); win.refresh() } } }
                     TapHandler { acceptedButtons: Qt.LeftButton; acceptedModifiers: Qt.ControlModifier
-                        onTapped: function (pt) { var href = Backend.linkAt(editor.positionAt(pt.position.x, pt.position.y)); if (href) Qt.openUrlExternally(href) } }
+                        onTapped: function (pt) { var href = Backend.linkAt(editor.positionAt(pt.position.x, pt.position.y))
+                            if (href.indexOf("#fn-") === 0) win.editFootnote(href.slice(4)); else if (href) Qt.openUrlExternally(href) } }
                     TapHandler { acceptedButtons: Qt.RightButton
                         onTapped: function (pt) { var p = editor.positionAt(pt.position.x, pt.position.y)
                             if (editor.selectedText === "" || p < editor.selectionStart || p > editor.selectionEnd) editor.cursorPosition = p
                             var g = editor.mapToItem(win.contentItem, pt.position.x, pt.position.y)
                             var here = Backend.changes.filter(function (c) { return p >= c.start && p <= c.end })[0]
-                            win.ctx = { x: g.x, y: g.y, pos: p, word: Backend.wordAt(p), href: Backend.linkAt(p), change: here ? here.id : 0 } } } } } } }
+                            var fn = Backend.footnoteAt(p), href = Backend.linkAt(p)
+                            win.ctx = { x: g.x, y: g.y, pos: p, word: Backend.wordAt(p), href: href.indexOf("#fn-") === 0 ? "" : href, change: here ? here.id : 0, footnote: fn } } } } } } }
 
     // ---------------------------------------------------------------- the right-click menu: spelling, then the usual
     Rectangle { visible: win.ctx !== null; z: 30; x: Math.min(parent.width - width - 8, win.ctx ? win.ctx.x : 0); y: Math.min(parent.height - height - 8, win.ctx ? win.ctx.y : 0)
@@ -512,12 +534,15 @@ GlassWindow {
             CtxItem { visible: !!ctxCol.w.wrong; label: "Ignore It Here"; onClicked: { var w = ctxCol.w.word; win.ctx = null; Backend.ignoreWord(w) } }
             Rectangle { visible: !!ctxCol.w.wrong; width: parent.width; height: 1; color: Theme.t.islandLine }
             CtxItem { visible: !!(win.ctx && win.ctx.href); label: "Open the Link"; onClicked: { var h = win.ctx.href; win.ctx = null; Qt.openUrlExternally(h) } }
+            CtxItem { visible: !!(win.ctx && win.ctx.footnote); label: "Edit the Footnote…"; onClicked: { var f = win.ctx.footnote; win.ctx = null; win.editFootnote(f) } }
+            CtxItem { visible: !!(win.ctx && win.ctx.footnote); label: "Delete the Footnote"; onClicked: { var f = win.ctx.footnote; win.ctx = null; Backend.removeFootnote(f) } }
             CtxItem { label: "Cut"; enabled: editor.selectedText !== ""; onClicked: { win.ctx = null; editor.cut() } }
             CtxItem { label: "Copy"; enabled: editor.selectedText !== ""; onClicked: { win.ctx = null; editor.copy() } }
             CtxItem { label: "Paste"; enabled: editor.canPaste; onClicked: { win.ctx = null; editor.paste() } }
             Rectangle { width: parent.width; height: 1; color: Theme.t.islandLine }
             CtxItem { label: "Link…"; onClicked: win.link() }
             CtxItem { label: "Comment…"; onClicked: { win.ctx = null; win.newNote() } }
+            CtxItem { visible: !(win.ctx && win.ctx.footnote); label: "Footnote…"; onClicked: { win.ctx = null; win.addFootnote() } }
             CtxItem { visible: !!(win.ctx && win.ctx.change); label: "Accept the Change"; onClicked: { var c = win.ctx.change; win.ctx = null; Backend.settle(c, true) } }
             CtxItem { visible: !!(win.ctx && win.ctx.change); label: "Reject the Change"; onClicked: { var c = win.ctx.change; win.ctx = null; Backend.settle(c, false) } }
             CtxItem { visible: aiPanel.on("writer") && editor.selectedText !== ""; label: "Huginn AI…"; onClicked: { win.ctx = null; aiMenu.visible = true } } } }
@@ -527,10 +552,10 @@ GlassWindow {
 
     // ---------------------------------------------------------------- sheets: page setup, printing, a link
     Item { anchors.fill: parent; z: 40; visible: win.sheet !== ""; onVisibleChanged: if (visible && win.sheet === "note") noteBox.focusIn()
-        Rectangle { anchors.fill: parent; radius: win.r; color: "#66000000"; MouseArea { anchors.fill: parent; onClicked: win.sheet = "" } }
-        Rectangle { id: card; anchors.centerIn: parent; width: 520; height: col.height + (win.sheet === "note" ? 124 : 84); radius: 20; color: Theme.t.menu_bg; border.width: 1; border.color: Theme.t.menu_border
+        Rectangle { anchors.fill: parent; radius: win.r; color: "#66000000"; MouseArea { anchors.fill: parent; onClicked: if (win.sheet === "footnote") win.saveFootnote(); else win.sheet = "" } }
+        Rectangle { id: card; anchors.centerIn: parent; width: 520; height: col.height + (win.sheet === "note" || win.sheet === "footnote" ? 124 : 84); radius: 20; color: Theme.t.menu_bg; border.width: 1; border.color: Theme.t.menu_border
             MouseArea { anchors.fill: parent }
-            Label { x: 24; y: 20; font.pixelSize: 17; font.weight: Font.DemiBold; text: ({ page: "Page", print: "Print", link: "Link", note: "Comment" })[win.sheet] || "" }
+            Label { x: 24; y: 20; font.pixelSize: 17; font.weight: Font.DemiBold; text: ({ page: "Page", print: "Print", link: "Link", note: "Comment", footnote: "Footnote" })[win.sheet] || "" }
             Column { id: col; x: 24; y: 56; width: parent.width - 48; spacing: 12
                 // page setup
                 Row { visible: win.sheet === "page"; spacing: 10
@@ -589,13 +614,17 @@ GlassWindow {
                 // a comment
                 Label { visible: win.sheet === "note"; width: parent.width; elide: Text.ElideRight; font.italic: true; secondary: true; text: "On “" + (win.sheetData.quote || "") + "”" }
                 TextBox { id: noteBox; visible: win.sheet === "note"; width: parent.width; lines: 4; placeholder: "What do you want to say about it?" }
+                // a footnote
+                TextBox { id: footBox; visible: win.sheet === "footnote"; width: parent.width; lines: 4; placeholder: "What goes at the bottom of the page" }
                 // a link
                 TextBox { id: urlBox; visible: win.sheet === "link"; width: parent.width; placeholder: "https://…"; text: win.sheetData.url || ""; onAccepted: linkOk.clicked() }
                 TextBox { id: linkText; visible: win.sheet === "link" && !win.sheetData.text; width: parent.width; placeholder: "The words to show (the address, when empty)" } }
             Row { anchors { right: parent.right; rightMargin: 20; bottom: parent.bottom; bottomMargin: 16 } spacing: 8
                 Btn { visible: win.sheet === "print"; text: "Make a PDF Instead"; onClicked: { win.sheet = ""; win.exportPdf() } }
                 Btn { visible: win.sheet === "link" && !!win.sheetData.url; text: "Remove the Link"; onClicked: { Backend.link(win.sheetData.a, win.sheetData.b, "", ""); win.sheet = "" } }
-                Btn { text: win.sheet === "page" ? "Done" : "Cancel"; onClicked: { win.sheet = ""; editor.forceActiveFocus() } }
+                Btn { visible: win.sheet === "footnote"; text: "Delete the Footnote"; onClicked: { Backend.removeFootnote(win.sheetData.id); win.sheet = ""; editor.forceActiveFocus() } }
+                Btn { visible: win.sheet !== "footnote"; text: win.sheet === "page" ? "Done" : "Cancel"; onClicked: { win.sheet = ""; editor.forceActiveFocus() } }
+                Btn { visible: win.sheet === "footnote"; primary: true; text: "Done"; onClicked: win.saveFootnote() }
                 Btn { id: linkOk; visible: win.sheet === "link"; primary: true; text: "Link"; onClicked: { Backend.link(win.sheetData.a, win.sheetData.b, urlBox.text, linkText.text); win.sheet = ""; editor.forceActiveFocus() } }
                 Btn { visible: win.sheet === "note"; primary: true; text: "Comment"; opacity: noteBox.many.trim() ? 1 : 0.5
                     onClicked: { if (!noteBox.many.trim()) return; Backend.addNote(win.sheetData.a, win.sheetData.b, noteBox.many); noteBox.many = ""; noteBox.focusIn(); win.sheet = ""; win.railTab = "review"; editor.forceActiveFocus() } }

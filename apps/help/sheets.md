@@ -31,5 +31,11 @@ Choose the cells with the numbers (and their labels), then the chart button: col
 ## Sheets in a file
 The tabs at the bottom left: + adds a sheet; click the one in front to rename, duplicate or delete it. Formulas can use other sheets (=Costs!B4).
 
+## Choices and limits
+Right-click › Choices for These Cells… (or Data › Choices for cells) sets what may go in the cells you chose: a list to pick from (type the choices with commas between them, or name the cells that hold them, such as E1:E5), whole numbers, numbers, dates or a length of text, between two values, at least, at most or exactly one. A cell with a list shows an arrow when you're on it: click it, or press Alt+↓, and pick. Anything else is turned away, or let in with a warning if you'd rather.
+
+## Notes
+Right-click › Add a Note… (or Insert › Note…) puts a few words on a cell; a red corner shows it has one, and resting the pointer on the cell shows the note. Notes move with their rows and columns, and when sorting.
+
 ## Other suites' files
-Sheets opens and saves Excel (.xlsx) with formulas, formats, frozen panes, filters and charts, and tells you what didn't come across. OpenDocument (.ods) and old Excel (.xls) files open too. Export makes CSV and PDF.
+Sheets opens and saves Excel (.xlsx) with formulas, formats, frozen panes, filters, charts, choices (data validation) and notes, and tells you what didn't come across. OpenDocument (.ods) and old Excel (.xls) files open too. Export makes CSV and PDF.

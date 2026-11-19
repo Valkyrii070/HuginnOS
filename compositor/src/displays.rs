@@ -246,8 +246,10 @@ impl<B: Backend + 'static> HuginnState<B> {
                 }
                 let id = |m: &Mode| format!("{}x{}@{}", m.size.w, m.size.h, m.refresh);
                 let loc = o.current_location();
+                let p = o.physical_properties();
                 json!({
                     "id": i + 1, "name": o.name(), "connected": true, "enabled": on,
+                    "make": if p.make == "Unknown" { "" } else { p.make.as_str() }, "model": if p.model == "Unknown" { "" } else { p.model.as_str() },
                     "priority": if main.as_ref().map_or(i == 0, |m| *m == o.name()) { 1 } else { 2 },
                     "modes": modes.iter().map(|m| json!({"id": id(m), "size": {"width": m.size.w, "height": m.size.h},
                                                           "refreshRate": m.refresh as f64 / 1000.0})).collect::<Vec<_>>(),
@@ -265,6 +267,14 @@ impl<B: Backend + 'static> HuginnState<B> {
 
     /// One change to one screen: "" when done, else why not.
     pub fn configure_display(&mut self, name: &str, change: &str) -> String {
+        // windows stay on their screens through it (wm.rs)
+        self.screens_changing();
+        let why = self.configure_display_now(name, change);
+        self.screens_changed();
+        why
+    }
+
+    fn configure_display_now(&mut self, name: &str, change: &str) -> String {
         let (what, value) = change.split_once('.').unwrap_or((change, ""));
         if what == "enable" {
             let Some(i) = self.huginn.off_outputs.iter().position(|o| o.name() == name) else { return String::new() };

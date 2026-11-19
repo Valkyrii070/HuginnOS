@@ -44,7 +44,9 @@ Column {
                                   var minX = 0, minY = 0
                                   Backend.placeScreen(modelData.name, Math.round(nx), Math.round(ny)) } } } } }
     Row { visible: pg.screens.length > 1; spacing: 6
-        Repeater { model: pg.screens; Seg { required property var modelData; text: modelData.label; on: pg.sel === modelData.name; onClicked: pg.chosen = modelData.name } } }
+        Repeater { model: pg.screens; Seg { required property var modelData; text: modelData.label; on: pg.sel === modelData.name; onClicked: pg.chosen = modelData.name } }
+        Item { width: 10; height: 1 }
+        Btn { text: "Identify"; onClicked: Backend.identifyScreens() } }
     SetCard { visible: pg.cur !== null; title: pg.cur ? pg.cur.label : ""
         SetRow { visible: pg.screens.length > 1; title: "Use this screen"; Toggle { on: pg.cur ? pg.cur.enabled : false; onToggled: function (v) { Backend.setScreenOn(pg.cur.name, v) } } }
         SetRow { visible: pg.screens.length > 1 && pg.cur && pg.cur.enabled; title: "Main screen"; sub: "Where the top bar and dock live"

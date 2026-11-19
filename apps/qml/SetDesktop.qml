@@ -109,6 +109,7 @@ Column {
         SetRow { title: "Clicking the app in front hides it"; sub: "Click it again and it comes back."; Toggle { on: Settings.dockClickHides; onToggled: function (v) { pg.sw("dockClickHides")(v) } } }
         SetRow { title: "Bars under open apps"; sub: "One bar for each window, up to three."; Toggle { on: Settings.dockDots; onToggled: function (v) { pg.sw("dockDots")(v) } } }
         SetRow { title: "Make room for windows"; sub: "The dock slides away while a window covers it, and comes back when you point at the bottom edge."; Toggle { on: Settings.dockMakeRoom; onToggled: function (v) { pg.sw("dockMakeRoom")(v) } } }
+        SetRow { title: "Moves to the screen you're using"; sub: "With more than one screen, rest the pointer at the bottom of another and the dock comes there. Off: it stays on the main screen."; Toggle { on: Settings.dockFollows; onToggled: function (v) { pg.sw("dockFollows")(v) } } }
     }
     // ---------------------------------------------------------------- stacks
     SetCard { title: "Stacks"
@@ -128,7 +129,7 @@ Column {
         SetRow { title: "24-hour clock"; Toggle { on: Settings.clock24; onToggled: function (v) { pg.sw("clock24")(v) } } }
         SetRow { title: "Show the date"; Toggle { on: Settings.barDate; onToggled: function (v) { pg.sw("barDate")(v) } } }
         SetRow { title: "Battery percentage"; Toggle { on: Settings.batteryPercent; onToggled: function (v) { pg.sw("batteryPercent")(v) } } }
-        SetRow { title: "On every screen"; sub: "With more than one screen, each has its own top bar. The dock stays on the main screen."
+        SetRow { title: "On every screen"; sub: "With more than one screen, each has its own top bar."
             Toggle { on: Settings.barEverywhere; onToggled: function (v) { pg.sw("barEverywhere")(v) } } }
     }
     // ---------------------------------------------------------------- Today

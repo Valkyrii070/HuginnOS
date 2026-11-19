@@ -18,6 +18,7 @@ from PySide6.QtGui import QFont, QFontMetrics
 
 import huginn_sheet_engine as se
 import huginn_sheet_rules as rules_
+import huginn_sheet_checks as checks_
 import huginn_xlsx as xlsx
 from huginn_office import FileList, fresh_path, note_recent, write_atomic
 
@@ -61,8 +62,20 @@ def parse_span(text: str):
     return (p[0], p[1], p[0], p[1]) if p else None
 
 
+def _me() -> str:
+    """Who notes are signed by: the account's full name, else its user name."""
+    try:
+        import os
+        import pwd
+        entry = pwd.getpwuid(os.getuid())
+        return (entry.pw_gecos or "").split(",")[0].strip() or entry.pw_name
+    except (ImportError, KeyError):
+        return "Me"
+
+
 def blank_sheet(name: str) -> dict:
-    return {"name": name, "raw": {}, "fmt": {}, "widths": {}, "heights": {}, "freeze": [0, 0], "filter": None, "charts": [], "merges": [], "rules": [], "pivot": None}
+    return {"name": name, "raw": {}, "fmt": {}, "widths": {}, "heights": {}, "freeze": [0, 0], "filter": None, "charts": [], "merges": [], "rules": [], "pivot": None,
+            "checks": [], "notes": {}}
 
 
 # ------------------------------------------------------------------------------------------------ the grid, for TableView
@@ -144,6 +157,7 @@ class Sheets(FileList):
     gridChanged = Signal()
     chartsChanged = Signal()
     historyChanged = Signal()
+    refused = Signal(str)          # what was typed didn't go in (or went in with a warning): why
 
     def __init__(self, target: Path = None):
         super().__init__(target)
@@ -259,6 +273,12 @@ class Sheets(FileList):
             out["align"] = "right" if number else ("center" if isinstance(v, (bool, se.Err)) else "left")
         if self.sh.get("rules"):
             out.update(self.looks.look(self._at, self.sh["rules"], r, c))
+        if self.sh.get("notes") and (r, c) in self.sh["notes"]:
+            out["note"] = True
+        if self.sh.get("checks"):
+            chk = self.check_at(r, c)
+            if chk and chk["kind"] == "list":
+                out["pick"] = True
         return out
 
     @Slot(int, int, result=str)
@@ -349,6 +369,16 @@ class Sheets(FileList):
             text = "=" + _fix_case(text[1:])
         if self.sh["raw"].get((r, c), "") == text:
             return
+        chk = self.check_at(r, c)
+        if chk:
+            why = checks_.allowed(self.book, self._at, chk, text)
+            if why and chk["stop"]:
+                self.refused.emit(why)
+                return
+            if why:
+                self.refused.emit("Let in, though: " + why[:1].lower() + why[1:])
+            if chk["kind"] == "list" and text.strip():           # the choice as it's spelled in the list
+                text = next((x for x in checks_.choices(self.book, self._at, chk) if x.lower() == text.strip().lower()), text)
         self._keep("typing")
         self._set(r, c, text)
         self._done()
@@ -547,7 +577,8 @@ class Sheets(FileList):
                 return None
             nv = v + count
             return (nv, key[1]) if idx == 0 else (key[0], nv)
-        for part in ("raw", "fmt"):
+        self.sh.setdefault("notes", {})
+        for part in ("raw", "fmt", "notes"):
             old = self.sh[part]
             new = {}
             for k, v in old.items():
@@ -584,6 +615,109 @@ class Sheets(FileList):
                 rule["range"] = span
                 kept.append(rule)
         self.sh["rules"] = kept
+        kept = []
+        for chk in self.sh.get("checks") or []:
+            span = shifted(chk["range"])
+            if span[hi] >= span[lo] and not (count < 0 and chk["range"][lo] >= at and chk["range"][hi] < at - count):
+                chk["range"] = span
+                kept.append(chk)
+        self.sh["checks"] = kept
+        self._done()
+
+    # ------------------------------------------------------------------ what may go in cells (data validation)
+    def check_at(self, r: int, c: int):
+        return next((x for x in self.sh.get("checks") or [] if checks_.covers(x, r, c)), None)
+
+    @Property("QVariantList", notify=historyChanged)
+    def checks(self):
+        return [{"id": x["id"], "range": list(x["range"]), "where": span_name(*x["range"]), "what": checks_.describe(x), "kind": x["kind"],
+                 "items": ", ".join(x["items"]), "source": x["source"], "op": x["op"], "a": x["a"], "b": x["b"], "stop": x["stop"]}
+                for x in self.sh.get("checks") or []]
+
+    @Slot(int, int, result="QVariantMap")
+    def checkAt(self, r: int, c: int) -> dict:
+        x = self.check_at(r, c)
+        return {} if x is None else {"id": x["id"], "range": list(x["range"]), "kind": x["kind"], "items": ", ".join(x["items"]), "source": x["source"],
+                                     "op": x["op"], "a": x["a"], "b": x["b"], "stop": x["stop"], "what": checks_.describe(x)}
+
+    @Slot(int, int, result="QVariantList")
+    def choicesAt(self, r: int, c: int) -> list:
+        x = self.check_at(r, c)
+        return checks_.choices(self.book, self._at, x) if x else []
+
+    @Slot(int, int, int, int, str, str, str, str, str, bool, result=str)
+    def setCheck(self, r0: int, c0: int, r1: int, c1: int, kind: str, items: str, op: str, a: str, b: str, stop: bool) -> str:
+        """What may go in these cells: kind list (items: 'Yes, No' or a range such as E1:E5), whole, decimal, date or
+        length, with op and a (and b). It takes the place of any check these cells had. Returns why not, or ''."""
+        source = ""
+        if kind == "list":
+            t = items.strip().lstrip("=")
+            if re.fullmatch(r"(('[^']+'|[A-Za-z_][\w. ]*)!)?\$?[A-Za-z]{1,3}\$?\d+(:\$?[A-Za-z]{1,3}\$?\d+)?", t):
+                source, items_list = t, []
+            else:
+                items_list = checks_.items_from_text(items)
+                if not items_list:
+                    return "Type the choices, with commas between them, or the cells that hold them (such as E1:E5)."
+        else:
+            items_list = []
+            if not a.strip() and not b.strip():
+                return "Say which values are allowed."
+        self._keep("choices")
+        self._drop_checks(r0, c0, r1, c1)
+        ident = "v" + str(1 + max([int(x["id"][1:]) for sh in self.book.sheets for x in sh.get("checks") or [] if x["id"][1:].isdigit()] or [0]))
+        chk = checks_.clean_check({"id": ident, "range": [r0, c0, r1, c1], "kind": kind, "items": items_list, "source": source, "op": op,
+                                   "a": a.strip(), "b": b.strip(), "stop": stop})
+        if chk is None:
+            self._undo.pop()
+            return "That can't be checked."
+        self.sh.setdefault("checks", []).insert(0, chk)
+        self._done()
+        return ""
+
+    def _drop_checks(self, r0, c0, r1, c1) -> int:
+        """Take these cells out of the checks they're in (a check over other cells too keeps those)."""
+        kept, n = [], 0
+        for x in self.sh.get("checks") or []:
+            a0, b0, a1, b1 = x["range"]
+            if a1 < r0 or a0 > r1 or b1 < c0 or b0 > c1:
+                kept.append(x)
+                continue
+            n += 1
+            # the parts of it outside the cells: up to four blocks around them
+            for part in ([a0, b0, r0 - 1, b1], [r1 + 1, b0, a1, b1], [max(a0, r0), b0, min(a1, r1), c0 - 1], [max(a0, r0), c1 + 1, min(a1, r1), b1]):
+                if part[2] >= part[0] and part[3] >= part[1]:
+                    kept.append(dict(x, range=part, id=x["id"] + chr(97 + len(kept) % 26) if len(x["id"]) < 10 else x["id"]))
+        self.sh["checks"] = kept
+        return n
+
+    @Slot(int, int, int, int, result=int)
+    def clearChecks(self, r0: int, c0: int, r1: int, c1: int) -> int:
+        if not any(not (x["range"][2] < r0 or x["range"][0] > r1 or x["range"][3] < c0 or x["range"][1] > c1) for x in self.sh.get("checks") or []):
+            return 0
+        self._keep("choices")
+        n = self._drop_checks(r0, c0, r1, c1)
+        self._done()
+        return n
+
+    # ------------------------------------------------------------------ notes on cells
+    @Slot(int, int, result="QVariantMap")
+    def noteAt(self, r: int, c: int) -> dict:
+        n = (self.sh.get("notes") or {}).get((r, c))
+        return {} if not n else {"text": n["text"], "by": n.get("by", ""), "when": n.get("when", 0), "where": a1(r, c)}
+
+    @Slot(int, int, str)
+    def setNote(self, r: int, c: int, text: str) -> None:
+        """A note on a cell ('' takes it off)."""
+        notes = self.sh.setdefault("notes", {})
+        old = notes.get((r, c))
+        if (old["text"] if old else "") == text.strip():
+            return
+        self._keep("note")
+        if text.strip():
+            import time
+            notes[(r, c)] = {"text": text.strip(), "by": (old or {}).get("by") or _me(), "when": int(time.time())}
+        else:
+            notes.pop((r, c), None)
         self._done()
 
     # ------------------------------------------------------------------ conditional formatting
@@ -847,7 +981,8 @@ class Sheets(FileList):
         self._keep("sort")
         rows = []
         for r in range(r0, r1 + 1):
-            rows.append(([(self.sh["raw"].get((r, c), ""), self.sh["fmt"].get((r, c))) for c in range(c0, c1 + 1)], self.book.value(self._at, r, key), r))
+            rows.append(([(self.sh["raw"].get((r, c), ""), self.sh["fmt"].get((r, c)), (self.sh.get("notes") or {}).get((r, c))) for c in range(c0, c1 + 1)],
+                         self.book.value(self._at, r, key), r))
 
         def order(item):
             v = item[1]
@@ -864,13 +999,17 @@ class Sheets(FileList):
         rows = filled + [x for x in rows if x[1] is se.BLANK or x[1] == ""]
         for n, (cells, _, src) in enumerate(rows):
             tr = r0 + n
-            for k, (raw, fmt) in enumerate(cells):
+            for k, (raw, fmt, note) in enumerate(cells):
                 c = c0 + k
                 self._set(tr, c, se.shift_formula(raw, tr - src, 0) if raw.startswith("=") else raw, guess_format=False)
                 if fmt:
                     self.sh["fmt"][(tr, c)] = fmt
                 else:
                     self.sh["fmt"].pop((tr, c), None)
+                if note:                                    # a note goes with its row
+                    self.sh.setdefault("notes", {})[(tr, c)] = note
+                else:
+                    self.sh.get("notes", {}).pop((tr, c), None)
         self._done()
 
     @Slot(int, int, int, int, result="QVariantList")
@@ -1325,7 +1464,9 @@ def write_hsheet(sheets: list, front: int) -> str:
                     "widths": {se.col_name(int(c)): w for c, w in sorted(sh["widths"].items())},
                     "heights": {str(int(r) + 1): h for r, h in sorted(sh["heights"].items())},
                     "freeze": sh["freeze"], "filter": sh.get("filter"), "charts": sh["charts"], "merges": sh.get("merges", []),
-                    **({"rules": sh["rules"]} if sh.get("rules") else {}), **({"pivot": sh["pivot"]} if sh.get("pivot") else {})})
+                    **({"rules": sh["rules"]} if sh.get("rules") else {}), **({"pivot": sh["pivot"]} if sh.get("pivot") else {}),
+                    **({"checks": sh["checks"]} if sh.get("checks") else {}),
+                    **({"notes": {a1(r, c): n for (r, c), n in sorted(sh["notes"].items())}} if sh.get("notes") else {})})
     return json.dumps({"format": "huginn-sheet-3", "front": front, "sheets": out}, indent=1, ensure_ascii=False)
 
 
@@ -1356,6 +1497,11 @@ def read_hsheet(text: str) -> list:
         sh["merges"] = entry.get("merges") or []
         sh["rules"] = [r for r in (rules_.clean_rule(x) for x in entry.get("rules") or []) if r]
         sh["pivot"] = entry.get("pivot") if isinstance(entry.get("pivot"), dict) else None
+        sh["checks"] = [x for x in (checks_.clean_check(v) for v in entry.get("checks") or []) if x]
+        for ref, n in (entry.get("notes") or {}).items():
+            p, n = se.parse_cell(ref), checks_.clean_note(n)
+            if p and n:
+                sh["notes"][p] = n
         sheets.append(sh)
     return sheets, int(data.get("front", 0) or 0)
 

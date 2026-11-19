@@ -1414,6 +1414,10 @@ impl HuginnState<UdevData> {
                 return;
             }
         };
+        let scan_result: Vec<_> = scan_result.into_iter().collect();
+        if !scan_result.is_empty() {
+            self.screens_changing();
+        }
 
         for event in scan_result {
             match event {
@@ -1437,8 +1441,9 @@ impl HuginnState<UdevData> {
             }
         }
 
-        // fixup window coordinates
+        // fixup window coordinates; windows back on their own screens
         crate::shell::fixup_positions(&mut self.space, self.pointer.current_location());
+        self.screens_changed();
     }
 
     fn device_removed(&mut self, node: DrmNode) {
@@ -1453,6 +1458,7 @@ impl HuginnState<UdevData> {
             .crtcs()
             .map(|(info, crtc)| (info.clone(), crtc))
             .collect();
+        self.screens_changing();
 
         for (connector, crtc) in crtcs {
             self.connector_disconnected(node, connector, crtc);
@@ -1476,6 +1482,7 @@ impl HuginnState<UdevData> {
         }
 
         crate::shell::fixup_positions(&mut self.space, self.pointer.current_location());
+        self.screens_changed();
     }
 
     fn frame_finish(&mut self, dev_id: DrmNode, crtc: crtc::Handle, metadata: &mut Option<DrmEventMetadata>) {

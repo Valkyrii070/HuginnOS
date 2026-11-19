@@ -984,6 +984,7 @@ impl HuginnState<UdevData> {
             },
         );
         pointer.frame(self);
+        self.edge_watch(pointer_location);
 
         // If pointer is now in a constraint region, activate it
         // TODO Anywhere else pointer is moved needs to do this
@@ -1009,20 +1010,18 @@ impl HuginnState<UdevData> {
     ) {
         let serial = SCOUNTER.next_serial();
 
-        let max_x = self
+        // a tablet (or a virtual machine's pointer) spans the box around every screen
+        let bbox = self
             .space
             .outputs()
-            .fold(0, |acc, o| acc + self.space.output_geometry(o).unwrap().size.w);
-
-        let max_h_output = self
-            .space
-            .outputs()
-            .max_by_key(|o| self.space.output_geometry(o).unwrap().size.h)
-            .unwrap();
-
-        let max_y = self.space.output_geometry(max_h_output).unwrap().size.h;
-
-        let mut pointer_location = (evt.x_transformed(max_x), evt.y_transformed(max_y)).into();
+            .filter_map(|o| self.space.output_geometry(o))
+            .reduce(|a, b| a.merge(b))
+            .unwrap_or_default();
+        let mut pointer_location: Point<f64, Logical> = (
+            bbox.loc.x as f64 + evt.x_transformed(bbox.size.w.max(1)),
+            bbox.loc.y as f64 + evt.y_transformed(bbox.size.h.max(1)),
+        )
+            .into();
 
         // clamp to screen limits
         pointer_location = self.clamp_coords(pointer_location);
@@ -1046,6 +1045,7 @@ impl HuginnState<UdevData> {
             },
         );
         pointer.frame(self);
+        self.edge_watch(pointer_location);
     }
 
     fn on_tablet_tool_axis<B: InputBackend>(&mut self, evt: B::TabletToolAxisEvent) {
@@ -1223,32 +1223,23 @@ impl HuginnState<UdevData> {
         }
     }
 
+    /// The pointer stays on a screen: when it would go where no screen is (screens of different sizes, or set
+    /// beside, above or below each other in Settings › Displays), it slides along the edge of the nearest one.
     fn clamp_coords(&self, pos: Point<f64, Logical>) -> Point<f64, Logical> {
-        if self.space.outputs().next().is_none() {
-            return pos;
+        let mut best: Option<(f64, Point<f64, Logical>)> = None;
+        for o in self.space.outputs() {
+            let Some(g) = self.space.output_geometry(o) else {
+                continue;
+            };
+            let (x0, y0) = (g.loc.x as f64, g.loc.y as f64);
+            let x = pos.x.clamp(x0, x0 + (g.size.w as f64 - 0.6).max(0.0));
+            let y = pos.y.clamp(y0, y0 + (g.size.h as f64 - 0.6).max(0.0));
+            let d = (x - pos.x).powi(2) + (y - pos.y).powi(2);
+            if best.is_none_or(|(bd, _)| d < bd) {
+                best = Some((d, (x, y).into()));
+            }
         }
-
-        let (pos_x, pos_y) = pos.into();
-        let max_x = self
-            .space
-            .outputs()
-            .fold(0, |acc, o| acc + self.space.output_geometry(o).unwrap().size.w);
-        let clamped_x = pos_x.clamp(0.0, max_x as f64);
-        let max_y = self
-            .space
-            .outputs()
-            .find(|o| {
-                let geo = self.space.output_geometry(o).unwrap();
-                geo.contains((clamped_x as i32, 0))
-            })
-            .map(|o| self.space.output_geometry(o).unwrap().size.h);
-
-        if let Some(max_y) = max_y {
-            let clamped_y = pos_y.clamp(0.0, max_y as f64);
-            (clamped_x, clamped_y).into()
-        } else {
-            (clamped_x, pos_y).into()
-        }
+        best.map_or(pos, |(_, p)| p)
     }
 }
 

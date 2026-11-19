@@ -205,6 +205,34 @@ pub fn run_winit() {
         .shm_state
         .update_formats(state.backend_data.backend.renderer().shm_formats());
     state.space.map_output(&output, (0, 0));
+    // HUGINN_DEV=1 HUGINN_DEV_SECOND_SCREEN=1280x800 (only here, in a window): a second screen to the right of the
+    // first, not drawn, to try what more than one screen does (wm.rs: windows moving between them, screens going
+    // away and coming back, the dock moving).
+    let _second = (std::env::var("HUGINN_DEV").as_deref() == Ok("1"))
+        .then(|| std::env::var("HUGINN_DEV_SECOND_SCREEN").ok())
+        .flatten()
+        .and_then(|v| {
+            let (w, h) = v.split_once('x')?;
+            Some((w.parse::<i32>().ok()?, h.parse::<i32>().ok()?))
+        })
+        .map(|(w, h)| {
+            let o = Output::new(
+                "Virtual-2".into(),
+                PhysicalProperties {
+                    size: (600, 340).into(),
+                    subpixel: Subpixel::Unknown,
+                    make: "Huginn".into(),
+                    model: "Second".into(),
+                    serial_number: "2".into(),
+                },
+            );
+            let global = o.create_global::<HuginnState<WinitData>>(&state.display_handle);
+            let mode = Mode { size: (w, h).into(), refresh: 60_000 };
+            o.change_current_state(Some(mode), Some(Transform::Normal), None, Some((size.w, 0).into()));
+            o.set_preferred(mode);
+            state.space.map_output(&o, (size.w, 0));
+            (o, global)
+        });
 
     #[cfg(feature = "xwayland")]
     state.huginn_start();

@@ -20,7 +20,7 @@ import subprocess
 import tempfile
 from pathlib import Path
 
-from PySide6.QtCore import (Property, QBuffer, QByteArray, QDateTime, QIODevice, QLocale, QMarginsF, QObject, QRectF, QSizeF, Qt, QTimer,
+from PySide6.QtCore import (Property, QBuffer, QByteArray, QDateTime, QIODevice, QLocale, QMarginsF, QObject, QPointF, QRectF, QSizeF, Qt, QTimer,
                             QUrl, Signal, Slot)
 from PySide6.QtGui import (QAbstractTextDocumentLayout, QBrush, QColor, QFont, QFontDatabase, QImage, QPageLayout, QPageSize,
                            QPainter, QPdfWriter, QSyntaxHighlighter, QTextBlockFormat, QTextCharFormat, QTextCursor, QTextDocument,
@@ -49,6 +49,48 @@ FAVOURITE_FONTS = ("Inter", "Noto Sans", "Noto Serif", "Carlito", "Caladea", "Li
 
 
 REVIEW_META = re.compile(r'<meta name="huginn-review" content="([^"]*)"\s*/?>')
+FOOT_META = re.compile(r'<meta name="huginn-footnotes" content="([^"]*)"\s*/?>')
+FN = "#fn-"                    # a footnote's mark in the text: a raised number, a link to "#fn-<its id>"
+NOTE_PT = 9                    # footnotes' size at the bottom of the page
+
+
+def footnote_refs(doc: QTextDocument) -> list:
+    """Every footnote mark in the text, in order: (position, length, id)."""
+    out = []
+    block = doc.begin()
+    while block.isValid():
+        it = block.begin()
+        while not it.atEnd():
+            frag = it.fragment()
+            it += 1
+            if frag.isValid():
+                cf = frag.charFormat()
+                href = cf.anchorHref() if cf.isAnchor() else ""
+                if href.startswith(FN):
+                    if out and out[-1][2] == href[len(FN):] and out[-1][0] + out[-1][1] == frag.position():
+                        out[-1] = (out[-1][0], out[-1][1] + frag.length(), out[-1][2])
+                    else:
+                        out.append((frag.position(), frag.length(), href[len(FN):]))
+        block = block.next()
+    return out
+
+
+def page_at(doc: QTextDocument, position: int, stride: float) -> int:
+    """The page (from 0) a place in the text is laid out on."""
+    block = doc.findBlock(position)
+    lay = doc.documentLayout()
+    y = lay.blockBoundingRect(block).y()
+    line = block.layout().lineForTextPosition(position - block.position()) if block.layout() else None
+    if line is not None and line.isValid():
+        y += line.y()
+    return max(0, int(y // max(1.0, stride)))
+
+
+def note_height(text: str, width: float) -> float:
+    from PySide6.QtGui import QFontMetricsF
+    f = QFont("Inter")
+    f.setPointSizeF(NOTE_PT)
+    return QFontMetricsF(f).boundingRect(QRectF(0, 0, max(40.0, width - 18), 1e6), int(Qt.TextWordWrap), text or " ").height() + 3
 
 
 def me() -> str:
@@ -242,6 +284,11 @@ class Writer(FileList):
         self._review_tick.setSingleShot(True)
         self._review_tick.setInterval(250)
         self._review_tick.timeout.connect(self.reviewChanged)
+        self._foot, self._room, self._mark_text = {"notes": {}, "next": 1}, 0.0, {}
+        self._notes_tick = QTimer(self)
+        self._notes_tick.setSingleShot(True)
+        self._notes_tick.setInterval(300)
+        self._notes_tick.timeout.connect(self._notes_settle)
         self.changed.connect(self.wordsChanged)
         if self._extra:
             self.open(str(self._extra))
@@ -268,6 +315,7 @@ class Writer(FileList):
             self._pending = None
         self._apply_page()
         self._doc.contentsChanged.connect(self._edited)
+        self._doc.contentsChange.connect(self._notes_touched)
         self._plain = self._doc.toRawText()
         self._doc.contentsChange.connect(self._typed)
 
@@ -280,12 +328,18 @@ class Writer(FileList):
         self._fixing = True
         ff = self._doc.rootFrame().frameFormat()
         ff.setTopMargin(top)
-        ff.setBottomMargin(bottom + GAP)
+        ff.setBottomMargin(bottom + GAP + self._room)
         ff.setLeftMargin(left)
         ff.setRightMargin(right)
         ff.setPadding(0)
         ff.setBorder(0)
-        self._doc.rootFrame().setFrameFormat(ff)
+        if self._doc.isUndoRedoEnabled() and not self._loading:     # (the room for footnotes changing goes with the edit that changed it)
+            c = QTextCursor(self._doc)
+            c.joinPreviousEditBlock()
+            self._doc.rootFrame().setFrameFormat(ff)
+            c.endEditBlock()
+        else:
+            self._doc.rootFrame().setFrameFormat(ff)
         self._doc.setPageSize(QSizeF(w, h + GAP))
         self._fixing = False
         self._sized()
@@ -307,7 +361,7 @@ class Writer(FileList):
     def paper(self):
         w, h = paper_px(self._setup)
         top, right, bottom, left = (m * PX_PER_MM for m in self._setup["margins"])
-        return {"w": w, "h": h, "stride": h + GAP, "top": top, "right": right, "bottom": bottom, "left": left, **self._setup,
+        return {"w": w, "h": h, "stride": h + GAP, "top": top, "right": right, "bottom": bottom, "left": left, "room": self._room, **self._setup,
                 "pages": self._pages, "sizeName": PAPERS[self._setup["paper"]][0]}
 
     pages = Property(int, lambda self: self._pages, notify=pageChanged)
@@ -377,6 +431,17 @@ class Writer(FileList):
                     review = json.loads(html.unescape(m.group(1)))
                 except ValueError:
                     review = None
+        foot = None
+        if kind == "html":
+            m = FOOT_META.search(text)
+            if m:
+                try:
+                    foot = json.loads(html.unescape(m.group(1)))
+                except ValueError:
+                    foot = None
+        notes = foot.get("notes") if isinstance(foot, dict) and isinstance(foot.get("notes"), dict) else {}
+        self._foot = {"notes": {str(k): str(v)[:5000] for k, v in notes.items()}, "next": int(foot.get("next", 1) or 1) if isinstance(foot, dict) else 1}
+        self._room = 0.0
         marks, mark_sum = (review.pop("marks", None), review.pop("sum", None)) if isinstance(review, dict) else (None, None)
         self._review, self._mine = rv.clean_review(review), set()
         if kind == "md":
@@ -387,15 +452,21 @@ class Writer(FileList):
             self._doc.setHtml(text)
             if marks and mark_sum == rv.text_sum(self._doc.toPlainText()):
                 rv.put_marks(self._doc, marks)
+            self._mark_text = {}
+            if self._foot["notes"]:
+                self._split_marks()
+                self._renumber()
         self._doc.setModified(False)
         self._doc.clearUndoRedoStacks()
         self._loading = False
         plain = self._doc.toPlainText()
         self._words, self._chars = len(plain.split()), len(plain.replace("\n", "").replace(" ", ""))
+        self._room = self._need_room() if self._foot["notes"] else 0.0
         self._apply_page()
         self.loaded.emit()
         self.changed.emit()
         self.reviewChanged.emit()
+        self.footnotesChanged.emit()
 
     _incoming_setup = None
 
@@ -458,6 +529,10 @@ class Writer(FileList):
                         marks.append([p, p + n, tip])
             out_review = dict(self._review, marks=marks, sum=rv.text_sum(self._doc.toPlainText()))
             meta += f'<meta name="huginn-review" content="{html.escape(json.dumps(out_review), quote=True)}" />'
+        live = {ident for _, _, ident in footnote_refs(self._doc)} if self._foot["notes"] else set()
+        if live:
+            kept = {k: v for k, v in self._foot["notes"].items() if k in live}
+            meta += f'<meta name="huginn-footnotes" content="{html.escape(json.dumps({"notes": kept, "next": self._foot["next"]}), quote=True)}" />'
         return out.replace("<head>", "<head>" + meta, 1) if "<head>" in out else meta + out
 
     @Slot()
@@ -472,6 +547,165 @@ class Writer(FileList):
         except OSError as err:
             self.failed.emit(f"Couldn't save: {err.strerror or err}")
         self.changed.emit()
+
+    # ------------------------------------------------------------------ footnotes
+    footnotesChanged = Signal()
+
+    def _ref_format(self, at: int, ident: str) -> QTextCharFormat:
+        """A footnote's mark: the text's own look where it is, raised, a link to the note (not drawn as one)."""
+        base = self._cursor(max(0, at), max(0, at)).charFormat() if at > 0 else QTextCharFormat()
+        fmt = QTextCharFormat(base)
+        for prop in (QTextFormat.TextUnderlineStyle, QTextFormat.FontUnderline, QTextFormat.TextToolTip):
+            fmt.clearProperty(prop)
+        if not base.hasProperty(QTextFormat.ForegroundBrush) or base.isAnchor():   # (a link is drawn in the link's colour unless it says)
+            fmt.setForeground(QBrush(QColor("#15181C")))
+        fmt.setAnchor(True)
+        fmt.setAnchorHref(FN + ident)
+        fmt.setVerticalAlignment(QTextCharFormat.AlignSuperScript)
+        return fmt
+
+    def _notes_touched(self, position: int, removed: int, added: int) -> None:
+        if self._foot["notes"] and not self._loading and not self._own:
+            if added:
+                QTimer.singleShot(0, self._split_marks)        # typed just after a mark: that isn't part of it
+            self._notes_tick.start()
+
+    def _split_marks(self) -> None:
+        """Text typed right after a footnote's mark takes the mark's look (Qt carries a link on): give it back the
+        text's own, keeping the mark to its number."""
+        if self._doc is None:
+            return
+        self._own = True
+        try:
+            for pos, length, ident in reversed(footnote_refs(self._doc)):
+                text = self._cursor(pos, pos + length).selectedText()
+                mark = self._mark_text.get(ident) or (re.match(r"\d*", text).group(0) or text[:1])
+                if len(text) <= len(mark) or not text.startswith(mark):
+                    continue
+                a = pos + len(mark)
+                for p_, n_, cf in [f for f in rv.fragments(self._doc) if f[0] < pos + length and f[0] + f[1] > a]:
+                    lo, hi = max(p_, a), min(p_ + n_, pos + length)
+                    if hi <= lo:
+                        continue
+                    plain = QTextCharFormat(cf)
+                    for prop in (QTextFormat.IsAnchor, QTextFormat.AnchorHref, QTextFormat.TextVerticalAlignment):
+                        plain.clearProperty(prop)
+                    c = self._cursor(lo, hi)
+                    if self._doc.isUndoRedoEnabled():
+                        c.joinPreviousEditBlock()
+                        c.setCharFormat(plain)
+                        c.endEditBlock()
+                    else:
+                        c.setCharFormat(plain)
+        finally:
+            self._own = False
+
+    def _renumber(self) -> bool:
+        """Each mark shows its footnote's number in order (1, 2, 3…), in its own look. True when one changed."""
+        changed = False
+        self._own = True
+        try:
+            for n, (pos, length, ident) in reversed(list(enumerate(footnote_refs(self._doc), 1))):
+                c = self._cursor(pos, pos + length)
+                want = str(n)
+                self._mark_text[ident] = want
+                fmt = self._ref_format(pos, ident)
+                now = c.charFormat()
+                if c.selectedText() != want or now.fontUnderline() or now.foreground().color() != fmt.foreground().color() \
+                        or now.verticalAlignment() != QTextCharFormat.AlignSuperScript:
+                    if self._doc.isUndoRedoEnabled() and not self._loading:
+                        c.joinPreviousEditBlock()
+                        c.insertText(want, fmt)
+                        c.endEditBlock()
+                    else:
+                        c.insertText(want, fmt)
+                    changed = True
+        finally:
+            self._own = False
+        return changed
+
+    def _need_room(self) -> float:
+        """How much of each page's bottom the footnotes need: the most any page needs, so the pages stay alike."""
+        refs = footnote_refs(self._doc)
+        if not refs:
+            return 0.0
+        w, h = paper_px(self._setup)
+        top, right, bottom, left = (m * PX_PER_MM for m in self._setup["margins"])
+        width = w - left - right
+        per_page = {}
+        for n, (pos, _, ident) in enumerate(refs, 1):
+            page = page_at(self._doc, pos, h + GAP)
+            per_page[page] = per_page.get(page, 14.0) + note_height(f"{n}  {self._foot['notes'].get(ident, '')}", width)
+        room = max(per_page.values())
+        return float(min(h * 0.5, round(room / 6 + 0.49) * 6))
+
+    def _notes_settle(self) -> None:
+        if self._doc is None:
+            return
+        self._split_marks()
+        self._renumber()
+        room = self._need_room()
+        if abs(room - self._room) >= 6 or (room == 0) != (self._room == 0):
+            self._room = room
+            self._apply_page()
+        self.footnotesChanged.emit()
+
+    @Slot(int, result=str)
+    def insertFootnote(self, position: int) -> str:
+        """A footnote at this place in the text: its mark goes in, numbered; returns its id (its text is written next)."""
+        if self._doc is None:
+            return ""
+        ident = f"f{self._foot['next']}"
+        self._foot["next"] += 1
+        self._foot["notes"][ident] = ""
+        c = self._cursor(position, position)
+        self._own = True
+        c.insertText("0", self._ref_format(position, ident))
+        self._own = False
+        self._mark_text[ident] = "0"
+        self._notes_settle()
+        self.touch()
+        return ident
+
+    @Slot(str, result=str)
+    def footnote(self, ident: str) -> str:
+        return self._foot["notes"].get(ident, "")
+
+    @Slot(str, str)
+    def setFootnote(self, ident: str, text: str) -> None:
+        if ident in self._foot["notes"] and self._foot["notes"][ident] != text:
+            self._foot["notes"][ident] = text[:5000]
+            self._notes_settle()
+            self.touch()
+
+    @Slot(str)
+    def removeFootnote(self, ident: str) -> None:
+        """The footnote and its mark go."""
+        for pos, length, ref in reversed(footnote_refs(self._doc)):
+            if ref == ident:
+                self._cursor(pos, pos + length).removeSelectedText()
+        self._foot["notes"].pop(ident, None)
+        self._notes_settle()
+        self.touch()
+
+    @Slot(int, result=str)
+    def footnoteAt(self, position: int) -> str:
+        """The footnote whose mark is at (or just before) this place, or ''."""
+        for pos, length, ident in footnote_refs(self._doc) if self._doc is not None and self._foot["notes"] else []:
+            if pos <= position <= pos + length:
+                return ident
+        return ""
+
+    @Slot(int, result="QVariantList")
+    def notesFor(self, page: int) -> list:
+        """The footnotes whose marks are on a page (from 1): [{id, n, text}]."""
+        if self._doc is None or not self._foot["notes"]:
+            return []
+        stride = paper_px(self._setup)[1] + GAP
+        return [{"id": ident, "n": n, "text": self._foot["notes"].get(ident, "")}
+                for n, (pos, _, ident) in enumerate(footnote_refs(self._doc), 1) if page_at(self._doc, pos, stride) == page - 1]
+
+    footnoteCount = Property(int, lambda self: len(footnote_refs(self._doc)) if self._doc is not None and self._foot["notes"] else 0, notify=footnotesChanged)
 
     # ------------------------------------------------------------------ comments and tracked changes
     tracking = Property(bool, lambda self: bool(self._review.get("track")), notify=reviewChanged)
@@ -1533,7 +1767,7 @@ class Writer(FileList):
         top, right, bottom, left = (m * PX_PER_MM for m in self._setup["margins"])
         ff = copy.rootFrame().frameFormat()
         ff.setTopMargin(top)
-        ff.setBottomMargin(bottom)
+        ff.setBottomMargin(bottom + self._room)
         ff.setLeftMargin(left)
         ff.setRightMargin(right)
         copy.rootFrame().setFrameFormat(ff)
@@ -1556,6 +1790,7 @@ class Writer(FileList):
         painter = QPainter(pdf)
         n = max(1, copy.pageCount())
         lay = copy.documentLayout()
+        refs = footnote_refs(copy) if self._foot["notes"] else []
         small = QFont("Inter")
         small.setPointSizeF(9)
         for k in range(n):
@@ -1568,6 +1803,21 @@ class Writer(FileList):
             painter.setClipRect(ctx.clip)
             lay.draw(painter, ctx)
             painter.restore()
+            notes = [(i, ident) for i, (pos, _, ident) in enumerate(refs, 1) if page_at(copy, pos, h) == k]
+            if notes:                                   # the page's footnotes, above its footer
+                y = h - bottom - self._room + 6
+                painter.setPen(QColor("#9AA1AA"))
+                painter.drawLine(QPointF(left, y), QPointF(left + 140, y))
+                y += 6
+                nf = QFont("Inter")
+                nf.setPointSizeF(NOTE_PT)
+                painter.setFont(nf)
+                painter.setPen(QColor("#15181C"))
+                for i, ident in notes:
+                    text = f"{i}  {self._foot['notes'].get(ident, '')}"
+                    ht = note_height(text, w - left - right)
+                    painter.drawText(QRectF(left, y, w - left - right - 18, ht), int(Qt.TextWordWrap), text)
+                    y += ht
             painter.setFont(small)
             painter.setPen(QColor("#5F6670"))
             head, foot, num = self._band("header", k + 1, n), self._band("footer", k + 1, n), self.numberFor(k + 1)
@@ -1647,7 +1897,7 @@ class Writer(FileList):
                 out.write_text(self._doc.toHtml(), encoding="utf-8")
             elif kind == "docx":
                 self._tidy_review()
-                docx.document_to_docx(self._doc, self._setup, out, self.title, self._review)
+                docx.document_to_docx(self._doc, self._setup, out, self.title, self._review, footnotes=self._foot["notes"])
             else:
                 return ""
         except (OSError, docx.ConvertError) as err:

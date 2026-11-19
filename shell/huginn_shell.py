@@ -180,14 +180,14 @@ class Settings(QObject):
     Each process watches the file, so a change made anywhere (realm, dark mode, menu style) shows everywhere."""
     changed = Signal()
     DEFAULTS = {"menuStyle": "one", "dark": "true", "realm": "aurora", "clock24": "true", "barDate": "true", "batteryPercent": "false", "barEverywhere": "true",
-                "dockMakeRoom": "true", "dockDots": "true", "autoUpdate": "true", "liveWallpaper": "false",
+                "dockMakeRoom": "true", "dockDots": "true", "dockFollows": "true", "autoUpdate": "true", "liveWallpaper": "false",
                 "contrast": "false", "reduceTransparency": "false", "reduceMotion": "false", "uiScale": "1",       # accessibility
                 # Settings › Desktop & Dock
                 "dockSize": "44", "hideStyle": "drop", "dockClickHides": "true", "overviewOpen": "glide", "hotCorner": "false",
                 "spacesAllScreens": "true", "inAppMotion": "grow", "fillButtonLayouts": "true", "snapGaps": "true", "keepSnapped": "true",
                 # windows and screens on Huginn's own compositor
                 "reopenApps": "true", "rememberPlaces": "true", "adaptiveSync": "auto", "sharpX11": "true", "allowTearing": "true"}
-    SWITCHES = ("clock24", "barDate", "batteryPercent", "barEverywhere", "dockMakeRoom", "dockDots", "autoUpdate", "liveWallpaper", "contrast", "reduceTransparency", "reduceMotion",
+    SWITCHES = ("clock24", "barDate", "batteryPercent", "barEverywhere", "dockMakeRoom", "dockDots", "dockFollows", "autoUpdate", "liveWallpaper", "contrast", "reduceTransparency", "reduceMotion",
                 "dockClickHides", "hotCorner", "spacesAllScreens", "fillButtonLayouts", "snapGaps", "keepSnapped", "reopenApps", "rememberPlaces", "sharpX11", "allowTearing")
     SCALES = ("1", "1.25", "1.5", "1.75", "2")
 
@@ -237,6 +237,7 @@ class Settings(QObject):
     barDate = Property(bool, lambda self: self._values["barDate"] == "true", notify=changed)
     batteryPercent = Property(bool, lambda self: self._values["batteryPercent"] == "true", notify=changed)
     barEverywhere = Property(bool, lambda self: self._values["barEverywhere"] == "true", notify=changed)   # a top bar on every screen, not just the main one
+    dockFollows = Property(bool, lambda self: self._values["dockFollows"] == "true", notify=changed)       # the dock comes to the screen whose bottom the pointer rests at
     # "Make room for windows": the dock slides away while a window covers its place (a filled one, or one dragged
     # over it), and comes back when the pointer reaches the bottom edge. (Was "dockHide", which nothing read.)
     dockMakeRoom = Property(bool, lambda self: self._values["dockMakeRoom"] == "true", notify=changed)

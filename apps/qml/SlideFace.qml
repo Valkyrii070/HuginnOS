@@ -35,7 +35,14 @@ Item {
 
     Item { width: face.slideW; height: 1080; scale: face.k; transformOrigin: Item.TopLeft
         Repeater { model: face.slide && face.slide.frameItems ? face.slide.frameItems : []; delegate: Bit {} }
-        Repeater { model: face.slide ? face.slide.items : []; delegate: Bit {} } }
+        Repeater { model: face.slide ? face.slide.items : []; delegate: Bit {} }
+        // the footer: the date on the left, a line of text in the middle, the slide's number on the right
+        Repeater { model: face.slide && face.slide.foot ? [["date", 0.0688, 0.225, Text.AlignLeft], ["text", 0.3313, 0.3375, Text.AlignHCenter], ["num", 0.7063, 0.225, Text.AlignRight]] : []
+            Text { required property var modelData
+                x: modelData[1] * face.slideW; y: 1001; width: modelData[2] * face.slideW; height: 58
+                text: face.slide.foot[modelData[0]] || ""; horizontalAlignment: modelData[3]; verticalAlignment: Text.AlignVCenter; elide: Text.ElideRight
+                font.family: face.look && face.look.body ? face.look.body : "Inter"; font.pixelSize: 24
+                color: face.look && face.look.text ? face.look.text : "#555"; opacity: 0.7 } } }
 
     component Bit: Item {
         id: bit

@@ -1840,6 +1840,70 @@ Before the first start on a desktop PC (a Radeon RX 9070 XT and three screens):
   desktop, widgets and the Welcome tour. Without a graphics card the shell takes a few minutes to come up the first
   time.
 
+## Several screens, round two (2026-11-19)
+
+- **The top bar and dock go to the main screen.** Settings › Displays › Make Main only reached the widgets: Qt puts a
+  window on the screen the compositor names first, so the bar and dock stayed there. They're placed on the main screen
+  now (`Shell.qml`: `mainScreen`), and move when it changes; a layer surface can't change screens, so it's made again
+  on the other one (`moveTo`).
+- **Windows stay on their screens** (`wm.rs`: `screens_changing`, `screens_changed`). Before the screens change (one
+  plugged in or out, switched on or off in Settings, a monitor that drops off its connection while asleep, or screens
+  moved on the map) the compositor notes which screen each window is on (by its make, model and serial number) and
+  where on it; after, a window stays there, at the same place, snapped or full as it was. A window whose screen went
+  away goes to the main screen and remembers its own; when that screen comes back it goes home, unless it was moved
+  since. Windows on other spaces and minimised ones too. Which screen a window is on is now the one its middle is on
+  (the space's own list lags a move just made), so maximising and snapping right after a move use the new screen.
+- **The pointer can't get lost.** It was clamped as if the screens stood in a row from the top left; with screens of
+  different sizes, or set above or below each other, it could go where no screen is. It now slides along the edge of
+  the nearest screen; a tablet's (or a virtual machine's) pointer spans the box round them all.
+- **The Overview on every screen**: each screen's windows spread out on it, with their names; the spaces and the search
+  are on the screen the pointer is on (`OverviewOverlay.qml`: `main`, `screenName`).
+- **The dock comes to you** (Settings › Desktop & Dock › Moves to the screen you're using, on): rest the pointer at the
+  bottom edge of another screen for a moment and the dock moves there. The compositor tells the shell when the pointer
+  reaches a screen's bottom edge (`edge:<screen>`, only with more than one screen).
+- **Identify** (Settings › Displays): each screen's name over it for a few seconds, with its size and "Main screen".
+  Screens are named by their model ("DELL U2723QE") where it's known, with the socket when two are the same model.
+- Checked with a second screen added to the compositor's window for trying it (`HUGINN_DEV=1
+  HUGINN_DEV_SECOND_SCREEN=1280x800`, the window backend only): Super+Alt+→ and snapping on the second screen,
+  turning it off and on (snapped and maximised windows went and came back), Make Main moving the widgets and the bar,
+  the dock moving there and back, Identify, and the Overview showing only the first screen's windows on it.
+
+## Office, round three (2026-11-19)
+
+- **Writer: footnotes** (Ctrl+Alt+F, Insert › Footnote, right-click › Footnote…). A footnote's mark is a raised number
+  that links to the note (`#fn-<id>`), the notes' words kept with the document (`huginn-footnotes`). They number
+  themselves in order; each page keeps room at its bottom for its footnotes (the most any page needs, so pagination
+  stays Qt's own), drawn above the footer on screen, in print and in PDF. Text typed straight after a mark (Qt carries
+  a link on to it) is given its own look back. Word's footnotes come in and go out as Word's own (`footnotes.xml`,
+  with the separator lines and Word's footnote styles); endnotes come in as footnotes.
+- **Sheets: choices** (Excel's data validation, `apps/huginn_sheet_checks.py`, new): a list to pick from (typed out, or
+  the cells of a range, on this sheet or another), whole numbers, numbers, dates or a length of text, between, at
+  least, at most, exactly, not. The cell in front shows the list's arrow (or Alt+↓); anything else is turned away and
+  the cell stays open, or let in with a warning. Checks follow rows and columns inserted and deleted, and go to and
+  come from Excel's `dataValidations` (list formulas from a range or quoted, dates as serial numbers, stop or
+  warning); ones by formula or a named range are reported.
+- **Sheets: notes on cells**: a red corner, the note shown when the pointer rests on the cell, written from the
+  right-click menu; they move with rows, columns and sorting, and go to and come from Excel's comments (with the VML
+  drawing Excel needs to show them).
+- **Slides: groups** (Ctrl+G, Ctrl+Shift+G, Arrange, right-click): a click chooses the group, a second click the item
+  in it; the group's box has handles that size everything in it together, as one undo step. A group stays together in
+  front-to-back order; copies are groups of their own. PowerPoint's groups come in as groups (a group in a group joins
+  it) and go out as `p:grpSp`.
+- **Slides: numbers, date and footer** (Slide › Numbers, date and footer…): the slide's number, today's date or one
+  typed, and a line of text, where PowerPoint puts them, on title slides or not; shown while editing and presenting
+  and in PDF, and written to PowerPoint as its own `sldNum`, `dt` and `ftr` placeholders (a field for the number and
+  for today's date), read back from them.
+- **Slides: see-through colours** from PowerPoint (`a:alpha`) are kept (as #AARRGGBB) and written back; the Realm
+  theme's orb came back solid after a trip through PowerPoint.
+- Tested: 35 checks of choices and notes (lists typed and from cells, spelling as listed, turning away and warning,
+  whole numbers, dates, splitting a check, rows inserted, notes moving and sorting, undo, .hsheet and Excel out and
+  back, openpyxl reading both), 21 of Slides (footers on and off title slides, dates, groups kept together through
+  ordering, copies, a group of one coming apart, sizing as one step, PowerPoint out and back), 23 of footnotes
+  (numbering and renumbering, typing after a mark, deleting, saving and opening, Word out and back, endnotes, PDF);
+  the earlier suites still pass (Sheets 47 and 79, Slides 69 and 12, Writer 61, review 40). On screen: a list picked
+  from and a value turned away, a note shown on hover, the Choices panel, a group chosen and sized, the footer on a
+  slide, a footnote written and shown at the bottom of its page.
+
 ## Huginn, the browser
 
 Inside the Huginn repository (this kit is its `os/` folder) the image ships the repository's own browser. A kit used

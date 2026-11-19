@@ -6,11 +6,16 @@ import QtQuick
 // app's icon and name under each window, and typing to find one (matches lit, the others dimmed; Enter goes to the
 // first; nothing found: Search everything with what was typed). Esc, or a click on nothing, goes back.
 // "Glide with light" (Settings › Desktop & Dock): the realm's light sweeps up through it as it opens.
+// Every screen has one: the windows on it spread out there; the spaces and the search are on the screen the pointer
+// was on (`main`), and the others only show their windows' chips.
 Item {
     id: ov
+    property bool main: true
+    property string screenName: ""
     readonly property var info: Status.overview
     readonly property bool open: info.open === true
-    readonly property var wins: info.windows || []
+    readonly property var all: info.windows || []
+    readonly property var wins: all.filter(function (w) { return !w.screen || (ov.main ? !info.screen || w.screen === info.screen : w.screen === ov.screenName) })
     readonly property var spaces: info.spaces || Status.spaces.names || []
     readonly property int current: info.current !== undefined ? info.current : (Status.spaces.current || 0)
     property string query: ""
@@ -21,14 +26,14 @@ Item {
     readonly property var found: {
         var q = query.trim().toLowerCase(), out = []
         if (!q) return []
-        for (var i = 0; i < wins.length; i++) {
-            var a = appFor(wins[i].app)
-            if ((wins[i].title || "").toLowerCase().indexOf(q) >= 0 || (a && a.name.toLowerCase().indexOf(q) >= 0)) out.push(wins[i].id)
+        for (var i = 0; i < all.length; i++) {
+            var a = appFor(all[i].app)
+            if ((all[i].title || "").toLowerCase().indexOf(q) >= 0 || (a && a.name.toLowerCase().indexOf(q) >= 0)) out.push(all[i].id)
         }
         return out
     }
-    onFoundChanged: Status.overviewDo("dim:" + (query.trim() ? wins.filter(function (w) { return found.indexOf(w.id) < 0 }).map(function (w) { return w.id }).join(",") : ""))
-    onOpenChanged: if (open) { query = ""; field.text = ""; field.forceActiveFocus(); if (Settings.overviewOpen === "light" && Theme.t.openMs > 0) sweep.restart() }
+    onFoundChanged: if (main) Status.overviewDo("dim:" + (query.trim() ? all.filter(function (w) { return found.indexOf(w.id) < 0 }).map(function (w) { return w.id }).join(",") : ""))
+    onOpenChanged: if (open) { if (main) { query = ""; field.text = ""; field.forceActiveFocus() } if (Settings.overviewOpen === "light" && Theme.t.openMs > 0) sweep.restart() }
     visible: open || chips.opacity > 0
     Keys.onEscapePressed: { if (query) field.text = ""; else Status.overviewDo("close") }
 
@@ -39,6 +44,7 @@ Item {
         id: strip
         anchors.horizontalCenter: parent.horizontalCenter; y: 18
         spacing: 12
+        visible: ov.main
         opacity: ov.open ? 1 : 0
         Behavior on opacity { NumberAnimation { duration: Theme.t.openMs ? 220 : 0 } }
         Repeater {
@@ -140,13 +146,13 @@ Item {
         return i >= 0 && i < spaces.length ? i : -1
     }
     Label {
-        visible: ov.open && ov.wins.length === 0; anchors.centerIn: parent
+        visible: ov.main && ov.open && ov.wins.length === 0; anchors.centerIn: parent
         text: "No windows on " + (ov.spaces[ov.current] || "this space"); color: "#F5F7FA"; font.pixelSize: 16; opacity: 0.8
     }
 
     // ---------------------------------------------------------------- typing finds a window
     Rectangle {
-        visible: ov.open && field.text !== ""
+        visible: ov.main && ov.open && field.text !== ""
         anchors { horizontalCenter: parent.horizontalCenter; bottom: parent.bottom; bottomMargin: 100 }
         width: 360; height: 40; radius: 20; color: Qt.rgba(0.05, 0.06, 0.08, 0.85); border.width: 1.5; border.color: Theme.t.accent
         Glyph { x: 14; anchors.verticalCenter: parent.verticalCenter; name: "search"; size: 15; ink: "#F5F7FA" }

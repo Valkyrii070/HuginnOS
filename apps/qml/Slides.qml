@@ -46,6 +46,38 @@ GlassWindow {
     function say(t) { notice = t; hide.restart() }
     function item(id) { var a = cur.items; for (var i = 0; i < a.length; i++) if (a[i].id === id) return a[i]; return null }
     function chosen() { var out = []; for (var i = 0; i < sel.length; i++) { var it = item(sel[i]); if (it) out.push(it) } return out }
+    // groups: items with the same "group" are chosen, moved and sized together
+    function members(g) { return cur.items.filter(function (x) { return x.group === g }).map(function (x) { return x.id }) }
+    function withGroups(ids) { var out = []
+        for (var i = 0; i < ids.length; i++) { var it = item(ids[i]), add = it && it.group ? members(it.group) : [ids[i]]
+            for (var k = 0; k < add.length; k++) if (out.indexOf(add[k]) < 0) out.push(add[k]) }
+        return out }
+    // the one group that's chosen whole (and nothing else), or ""
+    function groupChosen() { var t = tick; if (sel.length < 2) return ""; var first = item(sel[0]); if (!first || !first.group) return ""
+        var m = members(first.group); return m.length === sel.length && sel.every(function (id) { return m.indexOf(id) >= 0 }) ? first.group : "" }
+    function groupItems() { if (sel.length < 2) { say("Choose two things or more to group (Shift-click, or drag a frame round them)."); return }
+        if (Backend.group(sel)) sel = withGroups(sel) }
+    function ungroupItems() { if (!Backend.ungroup(sel)) say("Nothing chosen is in a group.") }
+    function groupBox() { var ids = sel, x0 = 1e9, y0 = 1e9, x1 = -1e9, y1 = -1e9
+        for (var i = 0; i < ids.length; i++) { var it = item(ids[i]); if (!it) continue; var g = geo(it)
+            x0 = Math.min(x0, g.x); y0 = Math.min(y0, g.y); x1 = Math.max(x1, g.x + g.w); y1 = Math.max(y1, g.y + g.h) }
+        return x1 > x0 ? { x: x0, y: y0, w: x1 - x0, h: Math.max(1, y1 - y0) } : { x: 0, y: 0, w: 0, h: 0 } }
+    // a group sized from its box's handles: every item keeps its place and size in it
+    function resizeGroup(s, h, dx, dy, shift) {
+        var w = s.w, hh = s.h, x = s.x, y = s.y
+        if (h[0] === 0) { w = s.w - dx; x = s.x + dx } else if (h[0] === 1) w = s.w + dx
+        if (h[1] === 0) { hh = s.h - dy; y = s.y + dy } else if (h[1] === 1) hh = s.h + dy
+        if (shift && h[0] !== 0.5 && h[1] !== 0.5) { var k = Math.max(w / s.w, hh / s.h); var nw = s.w * k, nh = s.h * k
+            if (h[0] === 0) x += w - nw; if (h[1] === 0) y += hh - nh; w = nw; hh = nh }
+        w = Math.max(20, w); hh = Math.max(20, hh)
+        var kx = w / Math.max(1, s.w), ky = hh / Math.max(1, s.h), p = {}
+        for (var i = 0; i < s.items.length; i++) { var it = s.items[i]
+            p[it.id] = { x: x + (it.x - s.x) * kx, y: y + (it.y - s.y) * ky, w: Math.max(1, it.w * kx), h: Math.max(0.01, it.h * ky) } }
+        preview = p }
+    function dropGroupSize() { var list = []; for (var id in preview) { var v = preview[id]; list.push({ id: id, x: v.x, y: v.y, w: v.w, h: v.h }) }
+        if (list.length) Backend.placeItems(list); preview = ({}) }
+    // the footer: Header & footer (slide numbers, the date, a line of text)
+    function openFooter() { openPop("footer", trBtn) }
     function isLine(it) { return it && it.kind === "shape" && (it.shape === "line" || it.shape === "arrowline") }
     function hasText(it) { return it && (it.kind === "text" || (it.kind === "shape" && !isLine(it))) }
     function geo(it) { var p = preview[it.id]; return p ? { x: p.x, y: p.y, w: p.w, h: p.h, rot: p.rot !== undefined ? p.rot : (it.rot || 0) } : { x: it.x, y: it.y, w: it.w, h: it.h, rot: it.rot || 0 } }
@@ -396,6 +428,7 @@ GlassWindow {
                     property point from
                     property bool moving: false
                     property bool wasSole: false
+                    property string drill: ""
                     cursorShape: moving ? Qt.SizeAllCursor : Qt.ArrowCursor
                     onPressed: function (m) {
                         win.pop = ""; win.menu = null
@@ -408,8 +441,11 @@ GlassWindow {
                         if (!it) { if (!(m.modifiers & (Qt.ShiftModifier | Qt.ControlModifier))) win.sel = []; win.band = { x: m.x, y: m.y, w: 0, h: 0 }; canvasKeys.forceActiveFocus(); return }
                         wasSole = win.sel.length === 1 && win.sel[0] === it.id
                         if (m.modifiers & (Qt.ShiftModifier | Qt.ControlModifier)) {
-                            var s = win.sel.slice(), i = s.indexOf(it.id); if (i >= 0) s.splice(i, 1); else s.push(it.id); win.sel = s
-                        } else if (win.sel.indexOf(it.id) < 0) win.sel = [it.id]
+                            var s = win.sel.slice(), add = it.group ? win.members(it.group) : [it.id], on = s.indexOf(it.id) >= 0
+                            for (var q = 0; q < add.length; q++) { var at = s.indexOf(add[q]); if (on && at >= 0) s.splice(at, 1); else if (!on && at < 0) s.push(add[q]) }
+                            win.sel = s
+                        } else if (it.group && win.groupChosen() === it.group) { drill = it.id      // a second click on a group: the item in it (on release)
+                        } else if (win.sel.indexOf(it.id) < 0) win.sel = it.group ? win.members(it.group) : [it.id]
                         canvasKeys.forceActiveFocus()
                     }
                     onPositionChanged: function (m) {
@@ -422,7 +458,8 @@ GlassWindow {
                     }
                     onReleased: function (m) {
                         if (win.band) { win.bandSelect(m.modifiers & (Qt.ShiftModifier | Qt.ControlModifier)); win.band = null; return }
-                        if (moving) { win.dropMove(); moving = false; return }
+                        if (moving) { win.dropMove(); moving = false; drill = ""; return }
+                        if (drill) { win.sel = [drill]; drill = ""; return }
                         var it = hitItem
                         if (it && m.button === Qt.LeftButton && !(m.modifiers & (Qt.ShiftModifier | Qt.ControlModifier)) && win.hasText(it) && (wasSole || (it.empty && it.role)))
                             win.startEdit(it.id, m.x, m.y)
@@ -441,6 +478,23 @@ GlassWindow {
                 // the chosen items: outlines and handles
                 Repeater { model: (win.tick, win.chosen())
                     Chosen { required property var modelData; it: modelData } }
+                // a group chosen whole: one box round it, with handles to size it
+                Item { id: grpBox; z: 21; visible: win.groupChosen() !== "" && win.editId === ""
+                    readonly property var b: (win.tick, win.preview, win.sel, visible ? win.groupBox() : ({ x: 0, y: 0, w: 0, h: 0 }))
+                    readonly property real hs: 11 / win.k
+                    x: b.x; y: b.y; width: b.w; height: b.h
+                    Rectangle { anchors.fill: parent; anchors.margins: -6 / win.k; color: "transparent"; border.width: 2 / win.k; border.color: Theme.t.accent; radius: 4 / win.k }
+                    Repeater { model: [[0, 0], [0.5, 0], [1, 0], [1, 0.5], [1, 1], [0.5, 1], [0, 1], [0, 0.5]]
+                        Rectangle { required property var modelData; width: grpBox.hs; height: grpBox.hs; radius: grpBox.hs / 2; color: "#FFFFFF"; border.width: 1.5 / win.k; border.color: Theme.t.accent
+                            x: modelData[0] * grpBox.width - width / 2 + (modelData[0] - 0.5) * 12 / win.k; y: modelData[1] * grpBox.height - height / 2 + (modelData[1] - 0.5) * 12 / win.k
+                            MouseArea { anchors.fill: parent; anchors.margins: -4 / win.k; preventStealing: true
+                                cursorShape: (parent.modelData[0] === 0.5) ? Qt.SizeVerCursor : (parent.modelData[1] === 0.5) ? Qt.SizeHorCursor
+                                             : ((parent.modelData[0] === parent.modelData[1]) ? Qt.SizeFDiagCursor : Qt.SizeBDiagCursor)
+                                property var start
+                                onPressed: function (m) { var p = mapToItem(grpBox.parent, m.x, m.y), b = win.groupBox()
+                                    start = { px: p.x, py: p.y, x: b.x, y: b.y, w: b.w, h: b.h, items: win.chosen().map(function (it) { return { id: it.id, x: it.x, y: it.y, w: it.w, h: it.h } }) } }
+                                onPositionChanged: function (m) { var p = mapToItem(grpBox.parent, m.x, m.y); win.resizeGroup(start, parent.modelData, p.x - start.px, p.y - start.py, !!(m.modifiers & Qt.ShiftModifier)) }
+                                onReleased: win.dropGroupSize() } } } }
                 // typing in an item
                 Item { id: editBox; z: 25; visible: win.editId !== ""
                     readonly property var it: (win.tick, win.editId ? win.item(win.editId) : null)
@@ -487,7 +541,8 @@ GlassWindow {
         }
         return null
     }
-    function bandSelect(add) {
+    function bandSelect(add) { bandSelectItems(add); sel = withGroups(sel) }
+    function bandSelectItems(add) {
         var b = band, out = add ? sel.slice() : []
         if (!b || (b.w < 3 && b.h < 3)) return
         for (var i = 0; i < cur.items.length; i++) {
@@ -621,7 +676,7 @@ GlassWindow {
     Rectangle { id: popBox; visible: win.pop !== "" && win.popFrom !== null; z: 60; radius: 14; color: Theme.t.menu_bg; border.width: 1; border.color: Theme.t.menu_border
         readonly property point at: win.popFrom ? win.popFrom.mapToItem(win.contentItem, 0, 0) : Qt.point(0, 0)
         readonly property bool below: at.y < win.height / 2
-        width: popGrid.visible ? Math.max(popGrid.width, win.pop === "bg" ? 230 : 0) + 16 : popSlides.visible ? popSlides.width + 16 : win.pop === "transition" || win.pop === "build" ? 360 : win.pop === "insertShape" || win.pop === "shape" ? 240 : win.pop === "insertTable" ? 8 * 26 + 28 : 250
+        width: popGrid.visible ? Math.max(popGrid.width, win.pop === "bg" ? 230 : 0) + 16 : popSlides.visible ? popSlides.width + 16 : win.pop === "transition" || win.pop === "build" || win.pop === "footer" ? 360 : win.pop === "insertShape" || win.pop === "shape" ? 240 : win.pop === "insertTable" ? 8 * 26 + 28 : 250
         height: Math.min(win.height - 80, popCol.height + 12)
         x: Math.max(8, Math.min(win.width - width - 8, at.x + (win.popFrom ? win.popFrom.width / 2 : 0) - width / 2))
         y: below ? at.y + (win.popFrom ? win.popFrom.height : 0) + 12 : at.y - height - 12
@@ -697,6 +752,22 @@ GlassWindow {
                             Seg { required property var modelData; text: modelData[1]; on: win.cur.transition && win.cur.transition.ms === modelData[0]
                                 onClicked: Backend.setTransition(win.cur.transition ? win.cur.transition.kind : "fade", modelData[0], win.trAll) } } }
                     Row { Seg { text: "Every slide"; on: win.trAll; onClicked: { win.trAll = !win.trAll; if (win.trAll && win.cur.transition) Backend.setTransition(win.cur.transition.kind, win.cur.transition.ms, true) } } } }
+                // the footer: slide numbers, the date, a line of text (the whole talk)
+                Column { visible: win.pop === "footer"; width: popCol.width; spacing: 8
+                    Label { text: "On every slide"; font.pixelSize: 13; font.weight: Font.DemiBold }
+                    Row { spacing: 8; height: 28
+                        Toggle { on: Backend.footer.num; anchors.verticalCenter: parent.verticalCenter; onToggled: function (v) { Backend.setFooter("num", v) } }
+                        Label { text: "The slide's number"; font.pixelSize: 12; anchors.verticalCenter: parent.verticalCenter } }
+                    Row { spacing: 8; height: 28
+                        Toggle { on: Backend.footer.date; anchors.verticalCenter: parent.verticalCenter; onToggled: function (v) { Backend.setFooter("date", v) } }
+                        Label { text: "The date"; font.pixelSize: 12; anchors.verticalCenter: parent.verticalCenter } }
+                    TextBox { visible: Backend.footer.date; width: parent.width; height: 30; placeholder: "Today's, or type one to keep"; text: Backend.footer.dateText
+                        onAccepted: Backend.setFooter("dateText", text); onActiveFocusChanged: if (!activeFocus) Backend.setFooter("dateText", text) }
+                    TextBox { width: parent.width; height: 30; placeholder: "A line of text along the bottom"; text: Backend.footer.text
+                        onAccepted: Backend.setFooter("text", text); onActiveFocusChanged: if (!activeFocus) Backend.setFooter("text", text) }
+                    Row { spacing: 8; height: 28
+                        Toggle { on: Backend.footer.onTitle; anchors.verticalCenter: parent.verticalCenter; onToggled: function (v) { Backend.setFooter("onTitle", v) } }
+                        Label { text: "On title slides too"; font.pixelSize: 12; anchors.verticalCenter: parent.verticalCenter } } }
                 // builds
                 Column { id: buildCol; visible: win.pop === "build"; width: popCol.width; spacing: 6
                     readonly property var first: win.chosen()[0] || ({})
@@ -828,6 +899,8 @@ GlassWindow {
             MenuItem { visible: !parent.forSlide; label: "Delete"; keys: "Delete"; onClicked: { win.menu = null; win.deleteItems() } }
             MenuItem { visible: !parent.forSlide && win.sel.length === 1 && win.hasText(win.item(win.sel[0] || "")); label: "Edit the Text"; keys: "Enter"; onClicked: { win.menu = null; win.startEdit(win.sel[0]) } }
             Rectangle { visible: !parent.forSlide; width: parent.width; height: 1; color: Theme.t.islandLine }
+            MenuItem { visible: !parent.forSlide && win.sel.length > 1 && win.groupChosen() === ""; label: "Group"; keys: "Ctrl+G"; onClicked: { win.menu = null; win.groupItems() } }
+            MenuItem { visible: !parent.forSlide && win.chosen().some(function (it) { return !!it.group }); label: "Ungroup"; keys: "Ctrl+Shift+G"; onClicked: { win.menu = null; win.ungroupItems() } }
             MenuItem { visible: !parent.forSlide; label: "Bring to Front"; onClicked: { win.menu = null; win.arrange("front") } }
             MenuItem { visible: !parent.forSlide; label: "Send to Back"; onClicked: { win.menu = null; win.arrange("back") } }
             MenuItem { visible: parent.forSlide; label: "New Slide"; keys: "Ctrl+M"; onClicked: { win.menu = null; win.newSlide() } }

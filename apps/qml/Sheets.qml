@@ -32,6 +32,13 @@ GlassWindow {
     property string ruleKind: "gt"
     property string ruleStyle: "red"
     property var summing: null              // the Summarise panel: {block: [r0, c0, r1, c1], heads, rows, cols, values, fn}
+    property bool checking: false           // the Choices panel (what may go in the cells: data validation)
+    property string checkKind: "list"
+    property string checkOp: "between"
+    property var pickAt: null               // a cell's list of choices that's open: {r, c, x, y, items}
+    property var noteHover: null            // a note shown while the pointer rests on its cell: {r, c, x, y, text, by}
+    property var noteEdit: null             // a note being written: {r, c}
+    property bool refusedNow: false         // what was just typed was turned away by the cell's choices
     property int naming: -1
     property var fz: Backend.frozen
     property int tick: 0                    // a change that cells drawn from Python can't see
@@ -44,6 +51,26 @@ GlassWindow {
     readonly property var fmt: { tick; return Backend.current !== "" ? Backend.fmtAt(ar, ac) : ({}) }
 
     function say(t) { notice = t; hide.restart() }
+    // what may go in cells: a list to pick from, or limits (Data › Choices for cells)
+    function choices() { if (Backend.current === "") return; checking = !checking; if (!checking) return
+        var x = Backend.checkAt(ar, ac)
+        if (x.kind) { checkKind = x.kind; checkOp = x.op; chkItems.text = x.source || x.items; chkA.text = x.a; chkB.text = x.b; chkStop.on = x.stop }
+        else { chkItems.text = ""; chkA.text = ""; chkB.text = ""; chkStop.on = true }
+        if (checkKind === "list") chkItems.focusIn(); else chkA.focusIn() }
+    function setCheck() {
+        var why = Backend.setCheck(r0, c0, r1, c1, checkKind, chkItems.text, checkOp, chkA.text, chkB.text, chkStop.on)
+        if (why) say(why); else { checking = false; tick++; say(checkKind === "list" ? "These cells offer a list to pick from." : "These cells now check what's typed in.") } }
+    function clearChecks() { var n = Backend.clearChecks(r0, c0, r1, c1); checking = false; tick++; say(n ? "These cells take anything again." : "These cells had no choices.") }
+    function openPick() {
+        var items = Backend.choicesAt(ar, ac); if (!items.length) return
+        var b = cellBox(ar, ac); if (!b) return
+        var g = gridBox.mapToItem(win.contentItem, b.x + b.w, b.y + b.h)
+        pickAt = { r: ar, c: ac, x: g.x, y: g.y + 2, items: items, w: Math.max(150, b.w) } }
+    function pick(v) { var p = pickAt; pickAt = null; Backend.put(p.r, p.c, v); tick++; gridKeys.forceActiveFocus() }
+    // notes on cells
+    function noteCell() { if (Backend.current === "") return; noteHover = null; noteEdit = { r: ar, c: ac }; noteBox.many = Backend.noteAt(ar, ac).text || ""; noteBox.focusIn() }
+    function saveNote() { var n = noteEdit; noteEdit = null; Backend.setNote(n.r, n.c, noteBox.many); tick++; gridKeys.forceActiveFocus() }
+    function deleteNote() { Backend.setNote(ar, ac, ""); noteHover = null; tick++ }
     function highlightCells() { if (Backend.current === "") return; ruling = !ruling; if (ruling) ruleA.focusIn() }
     function addRule() {
         var why = Backend.addRule(r0, c0, r1, c1, ruleKind, ruleA.text, ruleB.text, parseInt(ruleN.text) || 10, ruleStyle)
@@ -103,8 +130,11 @@ GlassWindow {
         if (!editing) return
         var t = inBar ? barEdit.text : cellEdit.text
         editing = false; inBar = false; suggest = []; ptR = -1
+        refusedNow = false
         if (keep) Backend.put(ar, ac, t)
+        if (refusedNow) { refusedNow = false; startEdit(t); return }        // turned away: back to typing in the cell
         if (dr || dc) { var r = stepRow(ar, dr || 0), c = ac + (dc || 0); ar = cr = Math.max(0, r); ac = cc = Math.max(0, c); show(ar, ac) }
+        barEdit.text = Backend.raw(ar, ac)
         tick++; gridKeys.forceActiveFocus()
     }
     // function names as a formula is typed: the list under the formula island
@@ -166,6 +196,7 @@ GlassWindow {
 
     Connections { target: Backend
         function onFailed(msg) { win.say(msg) }
+        function onRefused(msg) { win.say(msg); if (msg.indexOf("Let in") !== 0) win.refusedNow = true }
         function onSheetsChanged() { win.tick++; if (!win.editing) barEdit.text = Backend.raw(win.ar, win.ac) }
         function onGridChanged() { win.fz = Backend.frozen; main.forceLayout(); topPane.forceLayout(); leftPane.forceLayout(); cornerPane.forceLayout()
             colHead.forceLayout(); colHeadF.forceLayout(); rowHead.forceLayout(); rowHeadF.forceLayout() } }
@@ -296,6 +327,42 @@ GlassWindow {
         Island { visible: Backend.current !== "" && Backend.isPivot; x: win.gridX; anchors { bottom: parent.bottom; bottomMargin: 64 } z: 6
             Label { leftPadding: 10; rightPadding: 4; font.pixelSize: 12; secondary: true; anchors.verticalCenter: parent.verticalCenter; text: "A pivot table: its numbers follow the table it sums up" }
             Seg { text: "Refresh"; tip: "Bring in names added to the table since"; onClicked: win.refreshSummary() } },
+        // ---- Choices: what may go in the selected cells (Excel's data validation)
+        Rectangle { id: checkPanel; visible: win.checking && Backend.current !== ""; z: 18; width: 470; height: chkCol.height + 28; radius: 18
+            anchors { right: parent.right; rightMargin: 12; bottom: bar.top; bottomMargin: 10 }
+            color: Theme.t.menu_bg; border.width: 1; border.color: Theme.t.menu_border
+            MouseArea { anchors.fill: parent }
+            Column { id: chkCol; x: 14; y: 14; width: parent.width - 28; spacing: 10
+                Item { width: parent.width; height: 24
+                    Label { anchors.verticalCenter: parent.verticalCenter; font.pixelSize: 15; font.weight: Font.DemiBold
+                        text: "Choices  ·  " + win.name(win.r0, win.c0) + (win.r1 !== win.r0 || win.c1 !== win.c0 ? ":" + win.name(win.r1, win.c1) : "") }
+                    Seg { anchors { right: parent.right; verticalCenter: parent.verticalCenter } icon: "x"; tip: "Close"; onClicked: win.checking = false } }
+                Flow { width: parent.width; spacing: 4
+                    Repeater { model: [["list", "A list to pick from"], ["whole", "Whole numbers"], ["decimal", "Numbers"], ["date", "Dates"], ["length", "Length of text"]]
+                        Seg { required property var modelData; text: modelData[1]; on: win.checkKind === modelData[0]
+                            onClicked: { win.checkKind = modelData[0]; if (modelData[0] === "list") chkItems.focusIn(); else chkA.focusIn() } } } }
+                TextBox { id: chkItems; visible: win.checkKind === "list"; width: parent.width; height: 32; placeholder: "Yes, No, Maybe  —  or the cells that hold them, such as E1:E5"
+                    onAccepted: win.setCheck() }
+                Flow { visible: win.checkKind !== "list"; width: parent.width; spacing: 4
+                    Repeater { model: [["between", "Between"], ["greaterThanOrEqual", "At least"], ["lessThanOrEqual", "At most"], ["equal", "Exactly"], ["notEqual", "Not"]]
+                        Seg { required property var modelData; text: modelData[1]; on: win.checkOp === modelData[0]; onClicked: win.checkOp = modelData[0] } } }
+                Row { visible: win.checkKind !== "list"; spacing: 8
+                    TextBox { id: chkA; width: win.checkOp === "between" ? 150 : 220; height: 32; onAccepted: win.setCheck()
+                        placeholder: win.checkKind === "date" ? "2026-01-01" : win.checkKind === "length" ? "Characters" : "A number" }
+                    Label { visible: win.checkOp === "between"; text: "and"; anchors.verticalCenter: parent.verticalCenter }
+                    TextBox { id: chkB; visible: win.checkOp === "between"; width: 150; height: 32; onAccepted: win.setCheck()
+                        placeholder: win.checkKind === "date" ? "2026-12-31" : "A number" } }
+                Row { spacing: 10; height: 30
+                    Toggle { id: chkStop; on: true; anchors.verticalCenter: parent.verticalCenter }
+                    Label { anchors.verticalCenter: parent.verticalCenter; font.pixelSize: 12; width: chkCol.width - 60; wrapMode: Text.WordWrap
+                        text: chkStop.on ? "Turn anything else away" : "Let anything in, with a warning" } }
+                Row { spacing: 8
+                    Btn { primary: true; text: "Set the Choices"; onClicked: win.setCheck() }
+                    Btn { text: "Take Them Off"; onClicked: win.clearChecks() } }
+                Label { visible: Backend.checks.length > 0; text: "ON THIS SHEET"; secondary: true; font.pixelSize: 10; font.weight: Font.DemiBold }
+                Repeater { model: Backend.checks
+                    Label { required property var modelData; width: chkCol.width; elide: Text.ElideRight; font.pixelSize: 12
+                        text: modelData.where + "  ·  " + modelData.what } } } },
         // ---- Highlight cells: conditional formatting for the selection, and the sheet's rules
         Rectangle { id: rulesPanel; visible: win.ruling && Backend.current !== ""; z: 18; width: 470; height: Math.min(win.height - 160, rulesCol.height + 28); radius: 18
             anchors { right: parent.right; rightMargin: 12; bottom: bar.top; bottomMargin: 10 }
@@ -516,6 +583,9 @@ GlassWindow {
                 if (m.button === Qt.LeftButton && flt.length && rc[0] === flt[0] && rc[1] >= flt[1] && rc[1] <= flt[3] && cellIt && m.x >= cellIt.x + cellIt.width - 22) {
                     var g = mapToItem(win.contentItem, cellIt.x + cellIt.width, cellIt.y + cellIt.height)       // the filter's arrow
                     win.filterAt = { c: rc[1], x: g.x, y: g.y + 4, values: Backend.filterValues(rc[1]) }; return }
+                if (m.button === Qt.LeftButton && rc[0] === win.ar && rc[1] === win.ac && !win.editing && cellIt && m.x >= cellIt.x + cellIt.width - 22 && cellIt.cell.pick) {
+                    win.openPick(); return }      // the list's arrow
+                win.noteHover = null
                 if (m.button === Qt.RightButton) { if (rc[0] < win.r0 || rc[0] > win.r1 || rc[1] < win.c0 || rc[1] > win.c1) win.select(rc[0], rc[1], false)
                     var g = mapToItem(win.contentItem, m.x, m.y); win.menu = { x: g.x, y: g.y }; return }
                 win.menu = null; win.pop = ""; win.chartSel = ""
@@ -523,8 +593,14 @@ GlassWindow {
                 pointFrom = null
                 win.select(rc[0], rc[1], !!(m.modifiers & Qt.ShiftModifier)); dragging = true }
             property var pointFrom: null
+            onExited: { noteWait.stop(); win.noteHover = null }
+            Timer { id: noteWait; interval: 350; property var at: [0, 0]; property point pos
+                onTriggered: { if (win.menu || win.editing || win.noteEdit) return
+                    var n = Backend.noteAt(at[0], at[1]); win.noteHover = n.text ? { r: at[0], c: at[1], x: pos.x + 14, y: pos.y + 10, text: n.text, by: n.by } : null } }
             onPositionChanged: function (m) {
-                if (!pressed) { hoverHandle = nearHandle(m); return }
+                if (!pressed) { hoverHandle = nearHandle(m); noteWait.at = at(m); noteWait.pos = mapToItem(win.contentItem, m.x, m.y)
+                    if (win.noteHover && (win.noteHover.r !== noteWait.at[0] || win.noteHover.c !== noteWait.at[1])) win.noteHover = null
+                    noteWait.restart(); return }
                 if (filling) { var f = at(m)
                     if (f[0] > win.r1 || f[0] < win.r0) { win.fillR = f[0]; win.fillC = win.c1 } else { win.fillR = win.r1; win.fillC = f[1] }
                     return }
@@ -588,6 +664,14 @@ GlassWindow {
         // the fill handle, at the selection's bottom right
         Rectangle { visible: cellItem.r === win.r1 && cellItem.c === win.c1 && !win.editing; z: 12; width: 9; height: 9; radius: 2; color: Theme.t.accent; border.width: 1; border.color: "#FFFFFF"
             x: parent.width - 5; y: parent.height - 5 }
+        // a note: a small red corner
+        Canvas { visible: !!cellItem.cell.note; z: 11; width: 7; height: 7; anchors { right: parent.right; top: parent.top }
+            onPaint: { var c = getContext("2d"); c.reset(); c.fillStyle = "#E03131"; c.beginPath(); c.moveTo(0, 0); c.lineTo(7, 0); c.lineTo(7, 7); c.closePath(); c.fill() } }
+        // a list to pick from: its arrow, on the cell that's chosen
+        Rectangle { visible: !!cellItem.cell.pick && cellItem.active && !win.editing; z: 13
+            anchors { right: parent.right; rightMargin: 2; verticalCenter: parent.verticalCenter } width: 18; height: Math.min(20, parent.height - 4); radius: 5
+            color: "#E9ECEF"; border.width: 1; border.color: "#CED4DA"
+            Glyph { anchors.centerIn: parent; name: "down"; size: 10; ink: "#495057" } }
         // a filter's arrow on the filter's first row
         Rectangle { visible: cellItem.flt.length > 0 && cellItem.r === cellItem.flt[0] && cellItem.c >= cellItem.flt[1] && cellItem.c <= cellItem.flt[3]; z: 13
             readonly property bool used: Backend.filterCols.indexOf(cellItem.c) >= 0       // some of this column's values are hidden
@@ -735,6 +819,7 @@ GlassWindow {
         var ctrl = e.modifiers & Qt.ControlModifier, shift = e.modifiers & Qt.ShiftModifier, alt = e.modifiers & Qt.AltModifier
         var moves = { [Qt.Key_Up]: [-1, 0], [Qt.Key_Down]: [1, 0], [Qt.Key_Left]: [0, -1], [Qt.Key_Right]: [0, 1] }
         if (chartSel && (e.key === Qt.Key_Delete || e.key === Qt.Key_Backspace)) { var id = chartSel; chartSel = ""; Backend.removeChart(id); e.accepted = true; return }
+        if (alt && e.key === Qt.Key_Down) { openPick(); e.accepted = true; return }
         if (moves[e.key]) { var d = moves[e.key], r = shift ? cr : ar, c = shift ? cc : ac
             if (ctrl) { var to = Backend.edge(r, c, d[0], d[1]); select(to[0], to[1], shift) } else select(stepRow(r, d[0]), c + d[1], shift)
             e.accepted = true; return }
@@ -745,7 +830,7 @@ GlassWindow {
             if (e.key === Qt.Key_Tab) tabStart = from; e.accepted = true; return }
         if (e.key === Qt.Key_Delete || e.key === Qt.Key_Backspace) { Backend.clear(r0, c0, r1, c1, "contents"); tick++; e.accepted = true; return }
         if (e.key === Qt.Key_F2) { startEdit(); e.accepted = true; return }
-        if (e.key === Qt.Key_Escape) { clip = null; menu = null; filterAt = null; e.accepted = true; return }
+        if (e.key === Qt.Key_Escape) { clip = null; menu = null; filterAt = null; pickAt = null; noteHover = null; e.accepted = true; return }
         if (alt && e.key === Qt.Key_Equal) { var at = Backend.autoSum(r0, c0, r1, c1); ar = cr = at[0]; ac = cc = at[1]; tick++; e.accepted = true; return }
         if (ctrl) {
             var k = e.key
@@ -792,7 +877,11 @@ GlassWindow {
             MenuItem { label: "Sort Smallest First"; onClicked: { win.menu = null; win.sortBy(false) } }
             MenuItem { label: "Sort Largest First"; onClicked: { win.menu = null; win.sortBy(true) } }
             MenuItem { label: "Clear"; keys: "Delete"; onClicked: { win.menu = null; Backend.clear(win.r0, win.c0, win.r1, win.c1, "contents"); win.tick++ } }
-            MenuItem { label: "Clear the Formatting"; onClicked: { win.menu = null; Backend.clear(win.r0, win.c0, win.r1, win.c1, "formats"); win.tick++ } } } }
+            MenuItem { label: "Clear the Formatting"; onClicked: { win.menu = null; Backend.clear(win.r0, win.c0, win.r1, win.c1, "formats"); win.tick++ } }
+            Rectangle { width: parent.width; height: 1; color: Theme.t.islandLine }
+            MenuItem { label: (win.tick, Backend.noteAt(win.ar, win.ac).text) ? "Edit the Note…" : "Add a Note…"; onClicked: { win.menu = null; win.noteCell() } }
+            MenuItem { visible: (win.tick, !!Backend.noteAt(win.ar, win.ac).text); label: "Delete the Note"; onClicked: { win.menu = null; win.deleteNote() } }
+            MenuItem { label: "Choices for These Cells…"; onClicked: { win.menu = null; win.choices() } } } }
     component MenuItem: Pressable { property string label: ""; property string keys: ""; width: parent ? parent.width : 200; height: 30; radius: 9; color: hovered ? Theme.t.hover : "transparent"
         Label { x: 10; anchors.verticalCenter: parent.verticalCenter; text: parent.label; font.pixelSize: 13 }
         Label { anchors { right: parent.right; rightMargin: 10; verticalCenter: parent.verticalCenter } text: parent.keys; font.pixelSize: 11; secondary: true } }
@@ -818,7 +907,38 @@ GlassWindow {
         Row { anchors { right: parent.right; rightMargin: 8; bottom: parent.bottom; bottomMargin: 8 } spacing: 6
             Btn { text: "Cancel"; onClicked: win.filterAt = null }
             Btn { text: "Show"; primary: true; onClicked: { Backend.setFilterHidden(win.filterAt.c, filterBox.hidden); win.filterAt = null; win.tick++ } } } }
-    MouseArea { anchors.fill: parent; z: 49; visible: win.menu !== null || win.filterAt !== null || win.pop !== ""; acceptedButtons: Qt.AllButtons; onPressed: { win.menu = null; win.filterAt = null; win.pop = "" } }
+    MouseArea { anchors.fill: parent; z: 49; visible: win.menu !== null || win.filterAt !== null || win.pop !== "" || win.pickAt !== null; acceptedButtons: Qt.AllButtons
+        onPressed: { win.menu = null; win.filterAt = null; win.pop = ""; win.pickAt = null } }
+
+    // ---------------------------------------------------------------- a cell's list of choices
+    Rectangle { visible: win.pickAt !== null; z: 50; x: Math.max(8, Math.min(parent.width - width - 8, win.pickAt ? win.pickAt.x - width : 0)); y: Math.min(parent.height - height - 8, win.pickAt ? win.pickAt.y : 0)
+        width: win.pickAt ? Math.min(320, win.pickAt.w + 30) : 160; height: Math.min(300, pickCol.height + 12); radius: 12; color: Theme.t.menu_bg; border.width: 1; border.color: Theme.t.menu_border
+        Flickable { anchors { fill: parent; margins: 6 } contentHeight: pickCol.height; clip: true; interactive: pickCol.height > height
+            Column { id: pickCol; width: parent.width; spacing: 1
+                Repeater { model: win.pickAt ? win.pickAt.items : []
+                    Pressable { required property string modelData; width: pickCol.width; height: 28; radius: 8
+                        readonly property bool now: win.pickAt && (win.tick, Backend.raw(win.pickAt.r, win.pickAt.c)) === modelData
+                        color: hovered ? Theme.t.hover : now ? Qt.alpha(Theme.t.accent, 0.16) : "transparent"; onClicked: win.pick(modelData)
+                        Label { x: 10; width: parent.width - 20; anchors.verticalCenter: parent.verticalCenter; text: modelData; elide: Text.ElideRight; font.pixelSize: 13 } } } } } }
+
+    // ---------------------------------------------------------------- a note, while the pointer rests on its cell
+    Rectangle { visible: win.noteHover !== null && !win.noteEdit; z: 48; x: Math.min(parent.width - width - 8, win.noteHover ? win.noteHover.x : 0); y: Math.min(parent.height - height - 8, win.noteHover ? win.noteHover.y : 0)
+        width: Math.min(280, Math.max(140, noteText.implicitWidth + 24)); height: noteText.height + noteBy.height + 22; radius: 10
+        color: "#FFF9DB"; border.width: 1; border.color: "#E9D8A6"
+        Label { id: noteBy; x: 12; y: 8; visible: text !== ""; text: win.noteHover ? win.noteHover.by : ""; color: "#5C4813"; font.pixelSize: 11; font.weight: Font.DemiBold }
+        Label { id: noteText; x: 12; y: noteBy.visible ? noteBy.y + noteBy.height + 3 : 8; width: Math.min(256, implicitWidth); wrapMode: Text.Wrap; text: win.noteHover ? win.noteHover.text : ""; color: "#2B2F33"; font.pixelSize: 12 } }
+
+    // ---------------------------------------------------------------- writing a note
+    Item { anchors.fill: parent; z: 60; visible: win.noteEdit !== null
+        Rectangle { anchors.fill: parent; color: "#55000000"; MouseArea { anchors.fill: parent; onClicked: win.noteEdit = null } }
+        Rectangle { anchors.centerIn: parent; width: 440; height: noteCol.height + 36; radius: 18; color: Theme.t.menu_bg; border.width: 1; border.color: Theme.t.menu_border
+            MouseArea { anchors.fill: parent }
+            Column { id: noteCol; x: 18; y: 18; width: parent.width - 36; spacing: 12
+                Label { text: "Note on " + (win.noteEdit ? win.name(win.noteEdit.r, win.noteEdit.c) : ""); font.pixelSize: 16; font.weight: Font.DemiBold }
+                TextBox { id: noteBox; width: parent.width; lines: 5; placeholder: "A few words about this cell" }
+                Row { anchors.right: parent.right; spacing: 8
+                    Btn { text: "Cancel"; onClicked: { win.noteEdit = null; gridKeys.forceActiveFocus() } }
+                    Btn { primary: true; text: "Save the Note"; onClicked: win.saveNote() } } } } }
 
     // ---------------------------------------------------------------- rename or delete a sheet: click the tab that's in front
     MouseArea { visible: win.naming >= 0; anchors.fill: parent; z: 59; onClicked: win.naming = -1 }

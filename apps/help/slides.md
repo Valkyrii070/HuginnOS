@@ -19,8 +19,11 @@ The palette button picks a theme (each with its colours and fonts) and the slide
 ## Transitions and builds
 Transition sets how a slide comes on (fade, push, wipe, zoom or cover) and how long it takes. Build, on a chosen item, makes it come in on a click while presenting: appearing, fading, rising or zooming, and for text one paragraph at a time.
 
+## Groups, numbers and the footer
+Choose two things or more (Shift-click, or drag a frame round them) and press Ctrl+G to group them: a click chooses the whole group, a second click the one thing in it, and the group's handles size everything in it together. Ctrl+Shift+G takes it apart. Slide › Numbers, date and footer… puts the slide's number, the date (today's, or one you type) and a line of text along the bottom of every slide, and on title slides too if you like.
+
 ## Presenting
 F5 starts from the beginning, Shift+F5 from this slide. Click, Space or the arrow keys go on (and back); B blanks the screen black and W white; type a slide's number and Enter to jump; Esc stops. With a second screen, the show goes there and this screen shows the presenter view: the slide, what comes next, your notes, a timer and the clock. Alt+F5 opens the presenter view on one screen, to rehearse.
 
 ## Other suites' files
-Slides opens PowerPoint (.pptx) files with their slides, design, text formatting, shapes, pictures, tables, notes, transitions and builds, and says what didn't come across. OpenDocument (.odp) and old PowerPoint (.ppt) files open too. Export makes PowerPoint, PDF (with text you can select) and OpenDocument files.
+Slides opens PowerPoint (.pptx) files with their slides, design, text formatting, shapes, groups, pictures, tables, notes, slide numbers and footers, transitions and builds, and says what didn't come across. OpenDocument (.odp) and old PowerPoint (.ppt) files open too. Export makes PowerPoint, PDF (with text you can select) and OpenDocument files.

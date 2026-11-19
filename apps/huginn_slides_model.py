@@ -2,9 +2,11 @@
 
 The deck is plain JSON ("huginn-slides-2"):
     {"format", "theme", "look" (a design read from a PowerPoint file, until another theme is picked), "size": "16:9"|"4:3",
+     "footer": {"num", "date" (bool), "dateText" (fixed; "" for today), "text", "onTitle" (also on title slides)},
      "slides": [{"id", "layout", "items": [...], "notes", "bg", "transition": {"kind", "ms"}, "hidden"}]}
 An item: {"id", "kind": "text"|"shape"|"picture"|"table"|"chart", "role": ""|"title"|"subtitle"|"body"|"body2", "x", "y", "w", "h", "rot",
-          "shape", "fill", "line", "lineW", "flipH", "flipV", "arrow", "paras", "valign", "fit", "src", "anim", "locked"}
+          "shape", "fill", "line", "lineW", "flipH", "flipV", "arrow", "paras", "valign", "fit", "src", "anim", "locked", "group"}
+Items with the same "group" are a group: chosen, moved and sized together, and a group in PowerPoint (p:grpSp).
 A table also has "cells" (rows of strings), "header" and "banded" (bool), "accent" and "size" (points); a chart "chart"
 ("column"|"bar"|"line"|"pie"), "cats" (its labels), "series" ([{"name", "values"}]), "title" and "legend".
 A paragraph: {"runs": [{"t", "b", "i", "u", "s", "color", "size" (points), "font"}], "lvl", "list": ""|"bullet"|"number", "align"}
@@ -704,6 +706,67 @@ def paint_background(p: QPainter, bg: dict, w: float, h: float) -> None:
         p.fillRect(QRectF(0, 0, w, h), QColor(bg.get("color") or "#FFFFFF"))
 
 
+# ---------------------------------------------------------------------------------------------- footers
+FOOT_BOXES = {"date": (0.0688, 0.225), "text": (0.3313, 0.3375), "num": (0.7063, 0.225)}   # where each sits: left edge and width, as shares of the slide's width
+FOOT_Y, FOOT_H, FOOT_PT = 1001, 58, 12
+
+
+def clean_footer(raw) -> dict:
+    f = raw if isinstance(raw, dict) else {}
+    return {"num": bool(f.get("num")), "date": bool(f.get("date")), "dateText": str(f.get("dateText") or "")[:80],
+            "text": str(f.get("text") or "")[:200], "onTitle": bool(f.get("onTitle"))}
+
+
+def today_text() -> str:
+    from PySide6.QtCore import QDate, QLocale
+    return QLocale.system().toString(QDate.currentDate(), QLocale.ShortFormat)
+
+
+def footer_of(deck: dict, slide: dict, number: int) -> dict:
+    """What a slide's footer shows: {"date", "text", "num"} ("" where nothing), or {} for none."""
+    f = clean_footer(deck.get("footer"))
+    if slide.get("layout") == "title" and not f["onTitle"]:
+        return {}
+    out = {"date": (f["dateText"] or today_text()) if f["date"] else "", "text": f["text"], "num": str(number) if f["num"] else ""}
+    return out if any(out.values()) else {}
+
+
+def paint_footer(p: QPainter, foot: dict, look: dict, w: float) -> None:
+    if not foot:
+        return
+    font = QFont(look.get("body") or "Inter")
+    font.setPixelSize(round(FOOT_PT * PT))
+    p.setFont(font)
+    c = QColor(look["text"])
+    c.setAlphaF(0.7)
+    p.setPen(c)
+    for key, align in (("date", Qt.AlignLeft), ("text", Qt.AlignHCenter), ("num", Qt.AlignRight)):
+        if foot.get(key):
+            x, share = FOOT_BOXES[key]
+            p.drawText(QRectF(x * w, FOOT_Y, share * w, FOOT_H), int(align | Qt.AlignVCenter), foot[key])
+
+
+# ---------------------------------------------------------------------------------------------- groups
+def tidy_groups(items: list) -> None:
+    """A group needs two items or more; a group's items stay together in the order front to back."""
+    count = {}
+    for it in items:
+        if it.get("group"):
+            count[it["group"]] = count.get(it["group"], 0) + 1
+    for it in items:
+        if it.get("group") and count.get(it["group"], 0) < 2:
+            it.pop("group", None)
+    seen, out = set(), []
+    for it in items:
+        g = it.get("group")
+        if not g:
+            out.append(it)
+        elif g not in seen:
+            seen.add(g)
+            out += [x for x in items if x.get("group") == g]
+    items[:] = out
+
+
 def paint_slide(p: QPainter, deck: dict, slide: dict) -> None:
     """One slide in slide units (the painter already scaled): the same drawing as the window's."""
     look = look_of(deck)
@@ -727,6 +790,8 @@ def paint_slide(p: QPainter, deck: dict, slide: dict) -> None:
             p.setPen(Qt.NoPen)
             p.setBrush(QColor(look["accents"][0]))
             p.drawRoundedRect(QRectF(item["x"] + INSET_X, item["y"] + item["h"] + 4, 112, 8), 4, 4)
+    number = next((k + 1 for k, s in enumerate(deck.get("slides", [])) if s is slide or s.get("id") == slide.get("id")), 1)
+    paint_footer(p, footer_of(deck, slide, number), look, w)
 
 
 def paint_item(p: QPainter, item: dict, layout: str, look: dict) -> None:

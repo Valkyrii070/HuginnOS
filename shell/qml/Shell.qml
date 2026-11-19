@@ -78,6 +78,60 @@ QtObject {
             stop(); shell.startTour(Tour.due)
         }
     }
+    // ---------------------------------------------------------------- screens
+    // The main screen (Settings › Displays › Make Main) has the top bar and the dock; Qt on its own would put them on
+    // whichever screen the compositor named first.
+    function screenNamed(name) { var l = Status.screenList; for (var i = 0; i < l.length; i++) if (l[i].name === name) return l[i]; return null }
+    readonly property var mainScreen: screenNamed(Status.primaryScreen) || (Status.screenList.length ? Status.screenList[0] : null)
+    // Settings › Desktop & Dock › "Moves to the screen you're using": resting the pointer at the bottom of another
+    // screen brings the dock there (the compositor says when the pointer reaches a screen's bottom edge).
+    property string dockScreenName: ""
+    readonly property var dockScreen: (Settings.dockFollows && screenNamed(dockScreenName)) || mainScreen
+    property string edgeAt: ""
+    property Timer edgeRest: Timer { interval: 450; onTriggered: if (Settings.dockFollows && shell.edgeAt !== "") shell.dockScreenName = shell.edgeAt }
+    function pointerAtEdge(name) {
+        edgeAt = name
+        var dockOn = dockWin.placedOn || (dockWin.screen ? dockWin.screen.name : "")
+        if (name !== "" && name !== dockOn && Settings.dockFollows && Status.screenList.length > 1) edgeRest.restart(); else edgeRest.stop()
+    }
+    // A layer surface stays on the screen it was made on: to move one, it's made again on the other.
+    function moveTo(win, screen) {
+        if (!screen || win.placedOn === screen.name) return
+        win.placedOn = screen.name
+        win.LayerShell.Window.screen = screen
+        if (win.visible) { win.visible = false; Qt.callLater(function () { win.visible = true }) }
+    }
+    onMainScreenChanged: moveTo(topBarWin, mainScreen)
+    onDockScreenChanged: moveTo(dockWin, dockScreen)
+    // Settings › Displays › Identify: each screen's name over it for a few seconds
+    property var identify: ({})
+    property Timer identifyEnd: Timer { interval: 3500; onTriggered: shell.identify = ({}) }
+    property Instantiator identities: Instantiator {
+        model: Object.keys(shell.identify).length ? Status.screenList : []
+        delegate: Window {
+            required property var modelData
+            readonly property var info: shell.identify[modelData.name] || { label: modelData.name }
+            visible: true; width: idCard.width + 40; height: idCard.height + 40; color: "transparent"
+            flags: Qt.WindowTransparentForInput
+            LayerShell.Window.screen: modelData
+            LayerShell.Window.wantsToBeOnActiveScreen: false
+            LayerShell.Window.scope: "huginn-identify"
+            LayerShell.Window.layer: LayerShell.Window.LayerOverlay
+            LayerShell.Window.anchors: LayerShell.Window.AnchorNone
+            LayerShell.Window.exclusionZone: -1
+            LayerShell.Window.keyboardInteractivity: LayerShell.Window.KeyboardInteractivityNone
+            Rectangle {
+                id: idCard; anchors.centerIn: parent
+                width: Math.max(260, idCol.width + 64); height: idCol.height + 44; radius: 28
+                color: Qt.rgba(0.05, 0.06, 0.08, 0.82); border.width: 2; border.color: Theme.t.accent
+                Column {
+                    id: idCol; anchors.centerIn: parent; spacing: 6
+                    Text { anchors.horizontalCenter: parent.horizontalCenter; text: info.label; color: "#F5F7FA"; font.pixelSize: 40; font.weight: Font.DemiBold; font.family: Theme.t.font }
+                    Text { anchors.horizontalCenter: parent.horizontalCenter; text: (info.size || "") + (modelData.name === Status.primaryScreen ? (info.size ? "  ·  " : "") + "Main screen" : ""); visible: text !== ""; color: "#B9C2CC"; font.pixelSize: 16; font.family: Theme.t.font }
+                }
+            }
+        }
+    }
     function frontWindow() { var a = Status.windows.filter(function (w) { return w.active && !w.minimised }); return a.length ? a[0] : null }
     // a stack opened over its dock tile
     property string stackFolder: ""
@@ -95,6 +149,8 @@ QtObject {
             else if (what === "emoji") shell.open = shell.open === "emoji" ? "" : "emoji"
             else if (what === "menu") shell.appMenu("")
             else if (what.indexOf("run:") === 0) shell.runKey(what.slice(4))
+            else if (what.indexOf("edge:") === 0) shell.pointerAtEdge(what.slice(5))
+            else if (what.indexOf("identify:") === 0) { try { shell.identify = JSON.parse(what.slice(9)) } catch (e) { shell.identify = ({}) } identifyEnd.restart() }
         }
     }
     // A shortcut that opens something (Settings › Keyboard shortcuts): "open:files" (one of Huginn's apps by name),
@@ -130,8 +186,24 @@ QtObject {
     }
     // Settings › Desktop & Dock › Top bar › "On every screen": the others get a bar of their own. Its buttons open the
     // same panels, on the screen the pointer is on (the compositor puts a panel with no screen of its own there).
+    // the Overview on the other screens: their windows' chips (the compositor spreads each screen's windows on it)
+    property Instantiator moreOverviews: Instantiator {
+        model: overview.visible && Status.screenList.length > 1 ? Status.screenList.filter(function (sc) { return sc.name !== (Status.overview.screen || "") }) : []
+        delegate: Window {
+            required property var modelData
+            visible: true; color: "transparent"
+            LayerShell.Window.screen: modelData
+            LayerShell.Window.wantsToBeOnActiveScreen: false
+            LayerShell.Window.scope: "huginn-overview-more"
+            LayerShell.Window.layer: LayerShell.Window.LayerOverlay
+            LayerShell.Window.anchors: LayerShell.Window.AnchorTop | LayerShell.Window.AnchorBottom | LayerShell.Window.AnchorLeft | LayerShell.Window.AnchorRight
+            LayerShell.Window.exclusionZone: -1
+            LayerShell.Window.keyboardInteractivity: LayerShell.Window.KeyboardInteractivityNone
+            OverviewOverlay { anchors.fill: parent; main: false; screenName: modelData.name; query: overview.query }
+        }
+    }
     property Instantiator moreBars: Instantiator {
-        model: Settings.barEverywhere && topBarWin.screen ? Status.screenList.filter(function (sc) { return sc.name !== topBarWin.screen.name }) : []
+        model: Settings.barEverywhere && shell.mainScreen ? Status.screenList.filter(function (sc) { return sc.name !== shell.mainScreen.name }) : []
         delegate: Window {
             required property var modelData
             visible: true; height: 30; color: "transparent"
@@ -168,6 +240,9 @@ QtObject {
         id: topBarWin
         // Grows while the dropdown menu list is open; the reserved strip (exclusionZone) stays 30 px.
         visible: true; height: 30; color: "transparent"
+        property string placedOn: ""
+        LayerShell.Window.screen: shell.mainScreen
+        Component.onCompleted: placedOn = shell.mainScreen ? shell.mainScreen.name : ""
         LayerShell.Window.scope: "huginn-topbar"
         LayerShell.Window.keyboardInteractivity: LayerShell.Window.KeyboardInteractivityNone
         LayerShell.Window.layer: LayerShell.Window.LayerTop
@@ -184,6 +259,9 @@ QtObject {
     Window {   // dock. Wider than the dock, so the live island can grow and shrink without the surface changing size
         id: dockWin
         visible: true; width: Math.max(dock.width, dock.restWidth + 780); color: "transparent"
+        property string placedOn: ""
+        LayerShell.Window.screen: shell.dockScreen
+        Component.onCompleted: placedOn = shell.dockScreen ? shell.dockScreen.name : ""
         readonly property int full: dock.tile + 34
         // Settings › Desktop & Dock › "Make room for windows": while a window covers the dock's place (filled, full
         // screen, or just big), the dock slides down out of the way and its surface shrinks to a strip along the
@@ -192,7 +270,8 @@ QtObject {
         readonly property bool covered: {
             var sh = dockWin.screen ? dockWin.screen.height : 0, sw = dockWin.screen ? dockWin.screen.width : 0
             if (!sh) return false
-            var top = sh - full, left = (sw - dock.restWidth) / 2, right = left + dock.restWidth, cur = Status.spaces.current || 0
+            var g = shell.dockScreen ? shell.dockScreen.geometry : null, gx = g ? g.x : 0, gy = g ? g.y : 0
+            var top = gy + sh - full, left = gx + (sw - dock.restWidth) / 2, right = left + dock.restWidth, cur = Status.spaces.current || 0
             return Status.windows.some(function (w) {
                 return !w.minimised && (w.space || 0) === cur && w.w > 0 && (w.full || (w.y + w.h > top + 6 && w.x < right && w.x + w.w > left))
             })

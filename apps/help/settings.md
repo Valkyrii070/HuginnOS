@@ -11,7 +11,7 @@ Turn Wi‑Fi on or off, pick a network and type its password once (the system ke
 Put the device in pairing mode (usually by holding its button), choose Look for devices, then Pair. My devices shows what's paired, whether it's connected and its battery.
 
 ## Displays
-A screen you plug in starts at its own resolution and its fastest refresh rate, with a size of things to suit how sharp it is. With two screens or more, drag them on the map to match your desk, and choose the main one (it has the dock and the widgets; every screen has a top bar, unless you turn that off in Desktop & Dock). For each screen: resolution, size of things (scaling), refresh rate and turning. Night light makes colours warmer in the evening, from sunset to sunrise, at set hours, or always.
+A screen you plug in starts at its own resolution and its fastest refresh rate, with a size of things to suit how sharp it is. With two screens or more, drag them on the map to match your desk, and choose the main one (it has the dock and the widgets; every screen has a top bar, unless you turn that off in Desktop & Dock). Identify puts each screen's name on it for a moment, so you can tell which is which. When a screen is unplugged, turned off or drops away while asleep, its windows move to the main screen, and go back when it returns. For each screen: resolution, size of things (scaling), refresh rate and turning. Night light makes colours warmer in the evening, from sunset to sunrise, at set hours, or always.
 
 ## Sound
 Choose where sound plays and which microphone listens, and how loud each is. Apps playing now lets you turn one app down without touching the rest.

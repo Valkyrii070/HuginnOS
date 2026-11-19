@@ -333,14 +333,10 @@ impl<BackendData: Backend> HuginnState<BackendData> {
         };
 
         let old_geo = self.space.element_bbox(&elem).unwrap();
-        let outputs_for_window = self.space.outputs_for_element(&elem);
-        let output = outputs_for_window
-            .first()
-            // The window hasn't been mapped yet, use the primary output instead
-            .or_else(|| self.space.outputs().next())
-            // Assumes that at least one output exists
-            .expect("No outputs found");
-        let geometry = self.space.output_geometry(output).unwrap();
+        let Some(output) = self.output_of(&elem).or_else(|| self.space.outputs().next().cloned()) else {
+            return;
+        };
+        let geometry = self.space.output_geometry(&output).unwrap();
 
         window.set_maximized(true).unwrap();
         window.configure(geometry).unwrap();

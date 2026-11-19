@@ -107,10 +107,23 @@ impl Snap {
     }
 }
 
+/// Where a window was when its screen went away: the screen, the place on it as a share of its size, and the
+/// screen it was put on instead.
+#[derive(Clone, Debug)]
+pub struct HomeAt {
+    key: String,
+    fx: f64,
+    fy: f64,
+    moved_to: String,
+}
+pub struct Home(pub std::cell::RefCell<Option<HomeAt>>);
+
 pub struct Overview {
     start: Instant,
     pub opening: bool,
-    pub slots: Vec<(WindowElement, Rectangle<i32, Logical>)>,
+    /// Each window's place in it, on the screen it's on (every screen has its own Overview).
+    pub slots: Vec<(WindowElement, Rectangle<i32, Logical>, Output)>,
+    /// The screen with the spaces and the search (the one the pointer was on).
     pub output: Output,
     pub dimmed: Vec<u64>,
 }
@@ -158,6 +171,10 @@ pub struct Wm {
     pub switcher_shown: bool,
     /// The line between two windows snapped side by side, being dragged: the left one, the right one.
     pub divider: Option<(WindowElement, WindowElement)>,
+    /// Which screen each window was on (its key) and where on it, as the screens last were (screens_changing).
+    pub screens_before: HashMap<u64, (String, f64, f64)>,
+    /// The screen whose bottom edge the pointer is at ("" when none), as last told to the shell.
+    pub edge: String,
 }
 
 /// What render.rs draws differently this frame.
@@ -423,15 +440,31 @@ impl<B: Backend + 'static> HuginnState<B> {
         self.space.output_under(pointer).next().or_else(|| self.space.outputs().next()).cloned()
     }
 
+    /// Every screen's windows spread out on it (a window belongs to the screen its middle is on).
+    fn overview_layout_all(&self) -> Vec<(WindowElement, Rectangle<i32, Logical>, Output)> {
+        let outputs: Vec<Output> = self.space.outputs().cloned().collect();
+        let mut out = Vec::new();
+        for o in outputs {
+            out.extend(self.overview_layout(&o).into_iter().map(|(w, r)| (w, r, o.clone())));
+        }
+        out
+    }
+
     fn overview_layout(&self, output: &Output) -> Vec<(WindowElement, Rectangle<i32, Logical>)> {
         let Some(geo) = self.space.output_geometry(output) else {
             return vec![];
         };
+        let first = self.space.outputs().next() == Some(output);
         let mut wins: Vec<(WindowElement, Rectangle<i32, Logical>)> = self
             .space
-            .elements_for_output(output)
+            .elements()
             .filter_map(|w| {
                 let loc = self.space.element_location(w)?;
+                match self.screen_at(w, loc) {
+                    Some((o, _)) if &o == output => {}
+                    None if first => {}
+                    _ => return None,
+                }
                 let g = w.geometry();
                 Some((w.clone(), Rectangle::new(loc + g.loc - geo.loc, g.size)))
             })
@@ -482,7 +515,7 @@ impl<B: Backend + 'static> HuginnState<B> {
         let Some(output) = self.overview_output() else {
             return;
         };
-        let slots = self.overview_layout(&output);
+        let slots = self.overview_layout_all();
         let start = match &self.huginn.wm.overview {
             // coming back while it was closing: carry on from where it is
             Some(o) if !o.opening => Instant::now() - Duration::from_secs_f64((1.0 - o.progress()) * OVERVIEW_MS / 1000.0 * 0.6),
@@ -493,10 +526,10 @@ impl<B: Backend + 'static> HuginnState<B> {
     }
 
     fn overview_relayout(&mut self) {
-        let Some(output) = self.huginn.wm.overview.as_ref().map(|o| o.output.clone()) else {
+        if self.huginn.wm.overview.is_none() {
             return;
-        };
-        let slots = self.overview_layout(&output);
+        }
+        let slots = self.overview_layout_all();
         if let Some(o) = self.huginn.wm.overview.as_mut() {
             o.slots = slots;
         }
@@ -525,13 +558,13 @@ impl<B: Backend + 'static> HuginnState<B> {
         let rows: Vec<serde_json::Value> = o
             .slots
             .iter()
-            .map(|(w, r)| {
+            .map(|(w, r, o)| {
                 let (title, app) = Self::window_names(w);
-                serde_json::json!({"id": window_id(w).to_string(), "app": app, "title": title, "x": r.loc.x, "y": r.loc.y, "w": r.size.w, "h": r.size.h})
+                serde_json::json!({"id": window_id(w).to_string(), "app": app, "title": title, "x": r.loc.x, "y": r.loc.y, "w": r.size.w, "h": r.size.h, "screen": o.name()})
             })
             .collect();
         self.say(Outgoing::Overview(
-            serde_json::json!({"open": true, "windows": rows, "current": self.huginn.wm.current, "spaces": self.huginn.wm.spaces}).to_string(),
+            serde_json::json!({"open": true, "windows": rows, "current": self.huginn.wm.current, "spaces": self.huginn.wm.spaces, "screen": o.output.name()}).to_string(),
         ));
     }
 
@@ -565,8 +598,14 @@ impl<B: Backend + 'static> HuginnState<B> {
         Rectangle::new(geo.loc + zone.loc, zone.size)
     }
 
-    fn output_of(&self, window: &WindowElement) -> Option<Output> {
-        self.space.outputs_for_element(window).first().cloned().or_else(|| self.overview_output())
+    /// The screen a window is on: the one its middle is on (the space's own list can lag a move just made).
+    pub(crate) fn output_of(&self, window: &WindowElement) -> Option<Output> {
+        self.space
+            .element_location(window)
+            .and_then(|loc| self.screen_at(window, loc))
+            .map(|(o, _)| o)
+            .or_else(|| self.space.outputs_for_element(window).first().cloned())
+            .or_else(|| self.overview_output())
     }
 
     pub fn snap_rect(&self, output: &Output, snap: Snap) -> Rectangle<i32, Logical> {
@@ -750,7 +789,14 @@ impl<B: Backend + 'static> HuginnState<B> {
         let Some(window) = self.focused_window() else {
             return;
         };
-        let Some(from) = self.output_of(&window) else {
+        let Some(loc) = self.space.element_location(&window) else {
+            return;
+        };
+        let Some((from, from_geo)) = self.screen_at(&window, loc).or_else(|| {
+            let o = self.output_of(&window)?;
+            let g = self.space.output_geometry(&o)?;
+            Some((o, g))
+        }) else {
             return;
         };
         let mut outs: Vec<(Output, Rectangle<i32, Logical>)> =
@@ -760,29 +806,170 @@ impl<B: Backend + 'static> HuginnState<B> {
         }
         outs.sort_by_key(|(_, g)| (g.loc.x, g.loc.y));
         let i = outs.iter().position(|(o, _)| *o == from).unwrap_or(0) as i32;
-        let (to, to_geo) = outs[(i + dir).rem_euclid(outs.len() as i32) as usize].clone();
-        let from_geo = self.space.output_geometry(&from).unwrap_or_default();
-        let id = window_id(&window);
-        let snapped = self.huginn.wm.snapped.get(&id).copied();
-        let loc = self.space.element_location(&window).unwrap_or_default();
-        let size = window.geometry().size;
+        let (_, to_geo) = outs[(i + dir).rem_euclid(outs.len() as i32) as usize].clone();
         let fx = (loc.x - from_geo.loc.x) as f64 / from_geo.size.w.max(1) as f64;
         let fy = (loc.y - from_geo.loc.y) as f64 / from_geo.size.h.max(1) as f64;
+        Self::set_home(&window, None);
+        self.put_on(&window, to_geo, fx, fy, true);
+        self.activate_window(&window);
+        self.report_windows_now();
+    }
+
+    /// With more than one screen, the shell hears "edge:<screen>" when the pointer reaches the bottom edge of a
+    /// screen and "edge:" when it leaves it: resting there brings the dock to that screen (Settings › Desktop & Dock).
+    pub fn edge_watch(&mut self, at: Point<f64, Logical>) {
+        if self.space.outputs().nth(1).is_none() && self.huginn.wm.edge.is_empty() {
+            return;
+        }
+        let edge = self
+            .space
+            .outputs()
+            .find_map(|o| {
+                let g = self.space.output_geometry(o)?.to_f64();
+                (at.x >= g.loc.x && at.x < g.loc.x + g.size.w && at.y >= g.loc.y + g.size.h - 2.0 && at.y < g.loc.y + g.size.h + 1.0)
+                    .then(|| o.name())
+            })
+            .unwrap_or_default();
+        if edge != self.huginn.wm.edge {
+            self.huginn.wm.edge = edge.clone();
+            self.say(Outgoing::ShellKey(format!("edge:{edge}")));
+        }
+    }
+
+    // ------------------------------------------------------------------------- screens coming and going
+    /// The screen a window's middle is on, and where that screen is.
+    pub(crate) fn screen_at(&self, w: &WindowElement, loc: Point<i32, Logical>) -> Option<(Output, Rectangle<i32, Logical>)> {
+        let g = w.geometry();
+        let c = loc + g.loc + Point::from((g.size.w / 2, g.size.h / 2));
+        self.space.outputs().find_map(|o| {
+            let r = self.space.output_geometry(o)?;
+            r.contains(c).then(|| (o.clone(), r))
+        })
+    }
+
+    /// Every window, wherever it is: on the desktop (true), or waiting on another space or minimised, with where.
+    fn window_places(&self) -> Vec<(WindowElement, Point<i32, Logical>, bool)> {
+        let mut v: Vec<_> = self.space.elements().filter_map(|w| Some((w.clone(), self.space.element_location(w)?, true))).collect();
+        v.extend(self.huginn.wm.away.iter().map(|(w, l)| (w.clone(), *l, false)));
+        v.extend(self.huginn.minimised.iter().map(|(w, l)| (w.clone(), *l, false)));
+        v
+    }
+
+    fn home_of(w: &WindowElement) -> Option<HomeAt> {
+        w.0.user_data().get::<Home>().and_then(|h| h.0.borrow().clone())
+    }
+
+    fn set_home(w: &WindowElement, h: Option<HomeAt>) {
+        w.0.user_data().get_or_insert(|| Home(std::cell::RefCell::new(None))).0.replace(h);
+    }
+
+    /// A window at the same place (as a share of the screen) on another screen, snapped or full as it was. One on
+    /// another space or minimised only has where it'll come back changed.
+    fn put_on(&mut self, w: &WindowElement, to_geo: Rectangle<i32, Logical>, fx: f64, fy: f64, mapped: bool) {
+        let size = w.geometry().size;
         let x = (to_geo.loc.x + (fx * to_geo.size.w as f64) as i32).clamp(to_geo.loc.x, to_geo.loc.x + (to_geo.size.w - size.w).max(0));
         let y = (to_geo.loc.y + (fy * to_geo.size.h as f64) as i32).clamp(to_geo.loc.y, to_geo.loc.y + (to_geo.size.h - size.h).max(0));
-        self.space.map_element(window.clone(), Point::from((x, y)), true);
-        match snapped {
-            Some(s) => self.snap_window(&window, s, false),
-            None if Self::is_maximised(&window) => {
-                if let Some(t) = window.0.toplevel().cloned() {
-                    smithay::wayland::shell::xdg::XdgShellHandler::maximize_request(self, t);
+        let at = Point::from((x, y));
+        if !mapped {
+            for (x, l) in self.huginn.wm.away.iter_mut().chain(self.huginn.minimised.iter_mut()) {
+                if x == w {
+                    *l = at;
                 }
-                self.activate_window(&window);
             }
-            None => self.activate_window(&window),
+            return;
         }
-        let _ = to;
-        self.report_windows_now();
+        let snapped = self.huginn.wm.snapped.get(&window_id(w)).copied();
+        self.space.map_element(w.clone(), at, false);
+        match snapped {
+            Some(s) => self.snap_window(w, s, false),
+            None if Self::is_maximised(w) => {
+                if let Some(t) = w.0.toplevel().cloned() {
+                    smithay::wayland::shell::xdg::XdgShellHandler::maximize_request(self, t);
+                } else {
+                    #[cfg(feature = "xwayland")]
+                    if let Some(x) = w.0.x11_surface().cloned() {
+                        self.maximize_request_x11(&x);
+                    }
+                }
+            }
+            None => {}
+        }
+    }
+
+    /// Before the screens change (one plugged in or out, switched on or off, asleep and gone, or moved in Settings ›
+    /// Displays): which screen every window is on, and where on it. Kept while there are no screens at all, so
+    /// windows still know theirs when the first comes back.
+    pub fn screens_changing(&mut self) {
+        if self.space.outputs().next().is_none() {
+            return;
+        }
+        let mut before = HashMap::new();
+        for (w, loc, _) in self.window_places() {
+            if let Some((o, r)) = self.screen_at(&w, loc) {
+                let fx = (loc.x - r.loc.x) as f64 / r.size.w.max(1) as f64;
+                let fy = (loc.y - r.loc.y) as f64 / r.size.h.max(1) as f64;
+                before.insert(window_id(&w), (crate::displays::key(&o), fx, fy));
+            }
+        }
+        self.huginn.wm.screens_before = before;
+    }
+
+    /// After the screens changed: a window stays on the screen it was on, at the same place; one whose screen went
+    /// away goes to the main screen and remembers its own; when that one comes back it goes home again, if it's
+    /// still where it was put.
+    pub fn screens_changed(&mut self) {
+        let outs: Vec<(String, String, Rectangle<i32, Logical>)> = self
+            .space
+            .outputs()
+            .filter_map(|o| Some((o.name(), crate::displays::key(o), self.space.output_geometry(o)?)))
+            .collect();
+        if outs.is_empty() {
+            return;
+        }
+        let focused = self.focused_window();
+        let main = crate::displays::main_name();
+        let (_, main_key, main_geo) = outs.iter().find(|(n, _, _)| Some(n) == main.as_ref()).unwrap_or(&outs[0]).clone();
+        let before = std::mem::take(&mut self.huginn.wm.screens_before);
+        let mut moved = 0;
+        for (w, loc, mapped) in self.window_places() {
+            let now = self.screen_at(&w, loc).map(|(o, _)| crate::displays::key(&o));
+            if let Some(h) = Self::home_of(&w) {
+                if let Some((_, _, geo)) = outs.iter().find(|(_, k, _)| *k == h.key) {
+                    Self::set_home(&w, None);
+                    if now.is_none() || now.as_deref() == Some(h.moved_to.as_str()) {
+                        self.put_on(&w, *geo, h.fx, h.fy, mapped);
+                        moved += 1;
+                    }
+                    continue;
+                }
+            }
+            let Some((key, fx, fy)) = before.get(&window_id(&w)).cloned() else {
+                if now.is_none() {
+                    self.put_on(&w, main_geo, 0.2, 0.15, mapped);
+                    moved += 1;
+                }
+                continue;
+            };
+            if now.as_ref() == Some(&key) {
+                continue;
+            }
+            if let Some((_, _, geo)) = outs.iter().find(|(_, k, _)| *k == key) {
+                self.put_on(&w, *geo, fx, fy, mapped);
+            } else {
+                if Self::home_of(&w).is_none() {
+                    Self::set_home(&w, Some(HomeAt { key, fx, fy, moved_to: main_key.clone() }));
+                }
+                self.put_on(&w, main_geo, fx, fy, mapped);
+            }
+            moved += 1;
+        }
+        if moved > 0 {
+            tracing::info!(moved, "Windows put back on their screens");
+            if let Some(f) = focused.filter(|f| self.space.elements().any(|w| w == f)) {
+                self.activate_window(&f);
+            }
+            self.report_windows_now();
+        }
     }
 
     /// Super+←/→/↑/↓: through the sizes (half, a third, two-thirds), full, and back (then hidden).
@@ -1000,11 +1187,11 @@ impl<B: Backend + 'static> HuginnState<B> {
         }
         // the Overview
         let done = match &self.huginn.wm.overview {
-            Some(o) if &o.output == output => {
+            Some(o) => {
                 let p = o.progress();
                 view.dim = (0.42 * p) as f32;
                 let geo = self.space.output_geometry(output).unwrap_or_default();
-                for (w, to) in &o.slots {
+                for (w, to, _) in o.slots.iter().filter(|s| &s.2 == output) {
                     let Some(loc) = self.space.element_location(w) else {
                         continue;
                     };

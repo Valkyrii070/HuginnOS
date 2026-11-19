@@ -351,13 +351,11 @@ impl<BackendData: Backend> XdgShellHandler for HuginnState<BackendData> {
         // NOTE: This should use layer-shell when it is implemented to
         // get the correct maximum size
         let window = self.window_for_surface(surface.wl_surface()).unwrap();
-        let outputs_for_window = self.space.outputs_for_element(&window);
-        let output = outputs_for_window
-            .first()
-            // The window hasn't been mapped yet, use the primary output instead
-            .or_else(|| self.space.outputs().next())
-            // Assumes that at least one output exists
-            .expect("No outputs found");
+        // the screen it's on (its middle); not mapped yet: the first one
+        let Some(output) = self.output_of(&window).or_else(|| self.space.outputs().next().cloned()) else {
+            return;
+        };
+        let output = &output;
         let geometry = {
             let geo = self.space.output_geometry(output).unwrap();
             let zone = layer_map_for_output(output).non_exclusive_zone();

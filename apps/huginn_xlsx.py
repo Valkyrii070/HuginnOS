@@ -5,6 +5,9 @@ numbers, dates and true/false; bold, italic, underline, strike, colours, fills, 
 number formats; column widths and row heights; frozen panes; the filter; and charts (column, bar, line, area and pie,
 drawn by Excel from the cells, with their numbers kept in the file too).
 
+Lists to pick from and other limits on what cells take (dataValidations), and notes on cells (comments, with the
+VML drawing Excel needs to show them), both ways.
+
 In: the same, plus shared formulas (worked out for each cell), and a plain-language list of what didn't come across.
 """
 import re
@@ -266,6 +269,120 @@ def _read_cf(root, dxfs: list) -> tuple:
     return rules, skipped
 
 
+def _dv_xml(checks: list, day_first: bool) -> str:
+    """Sheets' checks (huginn_sheet_checks) as Excel's dataValidations."""
+    out = []
+    for x in checks:
+        r0, c0, r1, c1 = x["range"]
+        ref = se.ref_name(r0, c0) + ("" if (r0, c0) == (r1, c1) else ":" + se.ref_name(r1, c1))
+        stop = ' errorStyle="stop"' if x["stop"] else ' errorStyle="warning"'
+        say = f' error="{_attr(x["say"])}"' if x.get("say") else ""
+        if x["kind"] == "list":
+            if x["source"]:
+                f1 = escape(x["source"] if x["source"].startswith(("$", "'")) or "!" in x["source"] else re.sub(r"([A-Za-z]+)(\d+)", r"$\1$\2", x["source"]))
+            else:
+                f1 = escape('"' + ",".join(i.replace('"', '""') for i in x["items"]) + '"')
+            out.append(f'<dataValidation type="list" allowBlank="1" showInputMessage="1" showErrorMessage="1"{stop}{say} sqref="{ref}"><formula1>{f1}</formula1></dataValidation>')
+            continue
+        kind = {"length": "textLength"}.get(x["kind"], x["kind"])
+
+        def value(t):
+            v, _ = se.literal(t, day_first)
+            return se.general(float(v)) if isinstance(v, (int, float)) and not isinstance(v, bool) else '"' + t.replace('"', '""') + '"'
+        f = f"<formula1>{escape(value(x['a']))}</formula1>" if x["a"] else ""
+        if x["op"] in ("between", "notBetween"):
+            f += f"<formula2>{escape(value(x['b']))}</formula2>" if x["b"] else ""
+        op = f' operator="{x["op"]}"' if x["op"] != "between" else ""
+        out.append(f'<dataValidation type="{kind}"{op} allowBlank="1" showInputMessage="1" showErrorMessage="1"{stop}{say} sqref="{ref}">{f}</dataValidation>')
+    return f'<dataValidations count="{len(out)}">' + "".join(out) + "</dataValidations>" if out else ""
+
+
+def _read_dv(root, day_first: bool) -> tuple:
+    """Excel's dataValidations as Sheets' checks, and how many couldn't come across (custom formulas)."""
+    import huginn_sheet_checks as hc
+    out, skipped = [], 0
+    for k, dv in enumerate(root.iter(_q("dataValidation"))):
+        kind = {"textLength": "length"}.get(dv.get("type", ""), dv.get("type", ""))
+        if kind not in hc.KINDS:
+            skipped += 1
+            continue
+        f1 = (dv.findtext(_q("formula1")) or "").strip()
+        f2 = (dv.findtext(_q("formula2")) or "").strip()
+        if not f1:            # (newer Excel keeps some in x14 extensions: the formula sits in xm:f)
+            f1 = next((e.text or "" for e in dv.iter() if e.tag.endswith("}f")), "").strip()
+
+        def plain(t):
+            if t.startswith('"') and t.endswith('"'):
+                return t[1:-1].replace('""', '"')
+            if kind == "date" and re.fullmatch(r"-?\d+(\.\d+)?", t):
+                return se.to_date(float(t)).strftime("%Y-%m-%d")
+            return t
+        items, source = [], ""
+        if kind == "list":
+            if f1.startswith('"'):
+                items = [i.strip() for i in plain(f1).split(",") if i.strip()]
+            elif re.fullmatch(r"(('[^']+'|[\w.]+)!)?\$?[A-Za-z]{1,3}\$?\d+(:\$?[A-Za-z]{1,3}\$?\d+)?", f1):
+                source = f1.replace("$", "")
+            else:
+                skipped += 1               # a named range or a formula
+                continue
+        for ref in (dv.get("sqref") or "").split():
+            a, _, b = ref.partition(":")
+            p, q = se.parse_cell(a), se.parse_cell(b or a)
+            if not p or not q:
+                continue
+            chk = hc.clean_check({"id": f"v{k + 1}" + ("" if len(out) == 0 else chr(97 + len(out) % 26)), "range": [p[0], p[1], q[0], q[1]], "kind": kind,
+                                  "items": items, "source": source, "op": dv.get("operator") or "between", "a": plain(f1) if kind != "list" else "",
+                                  "b": plain(f2) if kind != "list" else "", "stop": dv.get("errorStyle", "stop") == "stop", "say": dv.get("error") or ""})
+            if chk:
+                out.append(chk)
+    return out, skipped
+
+
+def _comments_parts(notes: dict, n: int) -> tuple:
+    """(comments xml, vml drawing) for a sheet's notes: Excel shows notes through the VML shapes."""
+    authors = sorted({x.get("by") or "Huginn Sheets" for x in notes.values()})
+    rows, shapes = [], []
+    for k, ((r, c), x) in enumerate(sorted(notes.items())):
+        who = x.get("by") or "Huginn Sheets"
+        rows.append(f'<comment ref="{se.ref_name(r, c)}" authorId="{authors.index(who)}"><text><r><rPr><b/><sz val="9"/></rPr><t xml:space="preserve">{escape(who)}:</t></r>'
+                    f'<r><rPr><sz val="9"/></rPr><t xml:space="preserve">\n{escape(x["text"])}</t></r></text></comment>')
+        shapes.append(f'<v:shape id="_x0000_s{1025 + k}" type="#_x0000_t202" style="position:absolute;margin-left:59.25pt;margin-top:1.5pt;width:108pt;height:59.25pt;z-index:{k + 1};visibility:hidden" '
+                      f'fillcolor="#ffffe1" o:insetmode="auto"><v:fill color2="#ffffe1"/><v:shadow on="t" color="black" obscured="t"/><v:path o:connecttype="none"/>'
+                      f'<v:textbox style="mso-direction-alt:auto"><div style="text-align:left"></div></v:textbox><x:ClientData ObjectType="Note"><x:MoveWithCells/><x:SizeWithCells/>'
+                      f'<x:Anchor>{c + 1}, 15, {r}, 2, {c + 3}, 15, {r + 4}, 4</x:Anchor><x:AutoFill>False</x:AutoFill><x:Row>{r}</x:Row><x:Column>{c}</x:Column></x:ClientData></v:shape>')
+    comments = (f'<?xml version="1.0" encoding="UTF-8" standalone="yes"?><comments xmlns="{S}"><authors>' + "".join(f"<author>{escape(a)}</author>" for a in authors)
+                + "</authors><commentList>" + "".join(rows) + "</commentList></comments>")
+    vml = ('<xml xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel">'
+           f'<o:shapelayout v:ext="edit"><o:idmap v:ext="edit" data="{n}"/></o:shapelayout>'
+           '<v:shapetype id="_x0000_t202" coordsize="21600,21600" o:spt="202" path="m,l,21600r21600,l21600,xe"><v:stroke joinstyle="miter"/>'
+           '<v:path gradientshapeok="t" o:connecttype="rect"/></v:shapetype>' + "".join(shapes) + "</xml>")
+    return comments, vml
+
+
+def _read_comments(root) -> dict:
+    """Excel's comments on cells as Sheets' notes (the author's name, which Excel also puts at the start, left out)."""
+    if root is None:
+        return {}
+    authors = [a.text or "" for a in root.iter(_q("author"))]
+    out = {}
+    for cm in root.iter(_q("comment")):
+        p = se.parse_cell(cm.get("ref") or "")
+        if not p:
+            continue
+        text = "".join(t.text or "" for t in cm.iter(_q("t")))
+        try:
+            who = authors[int(cm.get("authorId", "0"))]
+        except (ValueError, IndexError):
+            who = ""
+        if who and text.startswith(who + ":"):
+            text = text[len(who) + 1:]
+        text = text.strip()
+        if text:
+            out[p] = {"text": text, "by": who.split(":")[0].strip(), "when": 0}
+    return out
+
+
 def _formula_out(src: str) -> str:
     body = src[1:]
     try:
@@ -429,6 +546,8 @@ def write(book, path, shown=None) -> None:
             extra += f'<mergeCells count="{len(sh["merges"])}">' + "".join(f'<mergeCell ref="{_attr(m)}"/>' for m in sh["merges"]) + "</mergeCells>"
         if sh.get("rules"):
             extra += _cf_xml(sh["rules"], styles)
+        if sh.get("checks"):
+            extra += _dv_xml(sh["checks"], book.day_first)
         rels = []
         if sh.get("charts"):
             anchors = []
@@ -451,6 +570,14 @@ def write(book, path, shown=None) -> None:
             content_overrides.append(f'<Override PartName="/xl/drawings/drawing{s + 1}.xml" ContentType="application/vnd.openxmlformats-officedocument.drawing+xml"/>')
             rels.append(f'<Relationship Id="rId1" Type="{REL}/drawing" Target="../drawings/drawing{s + 1}.xml"/>')
             extra += '<drawing r:id="rId1"/>'
+        if sh.get("notes"):
+            comments, vml = _comments_parts(sh["notes"], s + 1)
+            parts[f"xl/comments{s + 1}.xml"] = comments
+            parts[f"xl/drawings/vmlDrawing{s + 1}.vml"] = vml
+            content_overrides.append(f'<Override PartName="/xl/comments{s + 1}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.comments+xml"/>')
+            rels.append(f'<Relationship Id="rId2" Type="{REL}/comments" Target="../comments{s + 1}.xml"/>')
+            rels.append(f'<Relationship Id="rId3" Type="{REL}/vmlDrawing" Target="../drawings/vmlDrawing{s + 1}.vml"/>')
+            extra += '<legacyDrawing r:id="rId3"/>'
         selected = ' tabSelected="1"' if s == 0 else ""
         parts[f"xl/worksheets/sheet{s + 1}.xml"] = (
             f'<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="{S}" xmlns:r="{R}"><dimension ref="{dim}"/>'
@@ -481,6 +608,7 @@ def write(book, path, shown=None) -> None:
     overrides += [f'<Override PartName="/xl/worksheets/sheet{i + 1}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>' for i in range(n)]
     parts["[Content_Types].xml"] = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
                                     '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/>'
+                                    '<Default Extension="vml" ContentType="application/vnd.openxmlformats-officedocument.vmlDrawing"/>'
                                     + "".join(overrides + content_overrides) + "</Types>")
     parts["_rels/.rels"] = (f'<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="{PKG}">'
                             f'<Relationship Id="rId1" Type="{REL}/officeDocument" Target="xl/workbook.xml"/></Relationships>')
@@ -557,6 +685,14 @@ def _our_format(code: str) -> str:
     return (sym + base) if sym else base
 
 
+def _day_first() -> bool:
+    try:
+        from PySide6.QtCore import QLocale
+        return QLocale.system().dateFormat(QLocale.ShortFormat).lower().startswith("d")
+    except Exception:                                       # noqa: BLE001
+        return False
+
+
 def read(path) -> tuple:
     """(sheets as Sheets keeps them, dropped notes)."""
     from huginn_sheets import blank_sheet
@@ -589,14 +725,14 @@ def read(path) -> tuple:
             if root is None:
                 continue
             sh = blank_sheet((el.get("name") or f"Sheet {len(sheets) + 1}")[:31])
-            _read_sheet(z, target, root, sh, sst, fmts, unknown, lost, names, dxfs)
+            _read_sheet(z, target, root, sh, sst, fmts, unknown, lost, names, dxfs, _day_first())
             sheets.append(sh)
         if len(sheets) > 64:
             dropped.append(f"{len(sheets) - 64} sheets past the first 64")
             sheets = sheets[:64]
     if unknown:
         dropped.append("formulas using " + ", ".join(sorted(unknown)[:6]) + (" and others" if len(unknown) > 6 else "") + " (they show #NAME? for now)")
-    for key, words in (("cf", "some conditional formatting (icon sets and rules by formula)"), ("dv", "lists to pick from (data validation)"), ("comments", "comments"),
+    for key, words in (("cf", "some conditional formatting (icon sets and rules by formula)"), ("dv", "some limits on what cells take (by formula or a named list)"), ("comments", "comments"),
                        ("pictures", "pictures and shapes"), ("pivots", "pivot tables (their last results are kept as values)"),
                        ("merges", "merged cells (shown as separate cells; they're merged again in Excel files Sheets makes)")):
         if lost[key]:
@@ -669,7 +805,7 @@ def _formula_in(text: str) -> str:
     return "=" + re.sub(r"_xlfn\.|_xlws\.", "", text, flags=re.I)
 
 
-def _read_sheet(z, target, root, sh, sst, fmts, unknown, lost, names, dxfs=()):
+def _read_sheet(z, target, root, sh, sst, fmts, unknown, lost, names, dxfs=(), day_first=False):
     shared = {}                       # si -> (row, col, formula text)
     for c in root.iter(_q("c")):
         ref = c.get("r")
@@ -749,11 +885,12 @@ def _read_sheet(z, target, root, sh, sst, fmts, unknown, lost, names, dxfs=()):
         lost["merges"] += 1
     sh["rules"], skipped = _read_cf(root, list(dxfs))
     lost["cf"] += skipped
-    lost["dv"] += sum(1 for _ in root.iter(_q("dataValidation")))
+    sh["checks"], skipped = _read_dv(root, day_first)
+    lost["dv"] += skipped
     rels = _rels(z, target)
     for rid, (part, kind) in rels.items():
         if kind.endswith("/comments"):
-            lost["comments"] += 1
+            sh["notes"].update(_read_comments(_part(z, part)))
         elif kind.endswith("/pivotTable"):
             lost["pivots"] += 1
         elif kind.endswith("/drawing"):

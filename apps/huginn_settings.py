@@ -371,7 +371,13 @@ def parse_screens(text: str) -> list:
                     "hdr": bool(o.get("hdr")), "sdr": int(o.get("sdr-brightness", 203) or 203),
                     "resolutions": [{"id": f"{w}x{h}", "label": f"{w} × {h}"} for w, h in sizes],
                     "rates": [{"id": str(r), "label": f"{r:g} Hz"} for r in rates], "modes": modes,
+                    "model": str(o.get("model") or "").strip(),
                     "label": "Built-in screen" if name.startswith(("eDP", "LVDS", "DSI")) else name.replace("-", " ")})
+    # a screen's model names it better than its socket ("DELL U2723QE"); two of the same model keep the socket too
+    models = [s["model"] for s in out]
+    for s in out:
+        if s["model"] and not s["builtIn"]:
+            s["label"] = s["model"] if models.count(s["model"]) == 1 else f"{s['model']} ({s['name'].replace('-', ' ')})"
     return out
 
 
@@ -1631,6 +1637,18 @@ class SystemSettings(QObject):
     def setMain(self, name: str) -> None:
         self._act("displays", lambda: self._kscreen(f"output.{name}.priority.1", what="Choosing the main screen") or "The dock and top bar move to that screen.",
                   demo_change=lambda s: [x.update(primary=x["name"] == name) for x in s["screens"]])
+
+    @Slot()
+    def identifyScreens(self) -> None:
+        """Each screen's name over it for a few seconds (the shell shows them)."""
+        screens = self._state.get("displays", {}).get("screens", [])
+        names = {s["name"]: {"label": s["label"], "size": f"{s['w']} × {s['h']}" if s.get("w") else ""} for s in screens if s.get("enabled")}
+        try:
+            from gi.repository import Gio, GLib
+            Gio.bus_get_sync(Gio.BusType.SESSION, None).call_sync("org.huginn.Shell", "/org/huginn/Shell", "org.huginn.Shell", "Key",
+                                                                 GLib.Variant("(s)", ("identify:" + json.dumps(names),)), None, 0, 3000, None)
+        except Exception:                                      # noqa: BLE001  (no shell of ours to show them)
+            self.said.emit("The names can't be shown on the screens here.", True)
 
     @Slot(str, int, int)
     def placeScreen(self, name: str, x: int, y: int) -> None:

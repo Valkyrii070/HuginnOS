@@ -60,7 +60,11 @@ class Slides(FileList):
             return self._made[1]
         look = self._look()
         look_key = self._look_key(look)
-        views = [self._view(s, look, look_key) for s in self._deck["slides"]]
+        views = []
+        for n, s in enumerate(self._deck["slides"], 1):          # the footer goes by the slide's place, so it's added here
+            v = self._view(s, look, look_key)
+            foot = sm.footer_of(self._deck, s, n)
+            views.append(dict(v, foot=foot) if foot else v)
         live = {s["id"] for s in self._deck["slides"]}
         self._views = {k: v for k, v in self._views.items() if k in live}
         self._made = (self._rev, views)
@@ -273,6 +277,7 @@ class Slides(FileList):
         deck.setdefault("theme", "realm")
         deck.setdefault("size", "16:9")
         deck.setdefault("look", None)
+        deck["footer"] = sm.clean_footer(deck.get("footer"))
         slides = [s for s in deck.get("slides", []) if isinstance(s, dict)]
         for s in slides:
             s.setdefault("id", "")
@@ -707,7 +712,82 @@ class Slides(FileList):
             self._keep()
             gone = {it["id"] for it in items}
             self._slide["items"] = [it for it in self._slide["items"] if it["id"] not in gone]
+            sm.tidy_groups(self._slide["items"])
             self._done()
+
+    # ------------------------------------------------------------------ groups
+    def _new_group(self) -> str:
+        used = {it.get("group") for s in self._deck["slides"] for it in s.get("items", [])}
+        n = 1
+        while f"g{n}" in used:
+            n += 1
+        return f"g{n}"
+
+    @Slot("QVariant", result=bool)
+    def group(self, ids) -> bool:
+        """Ctrl+G: these items (two or more) become one group, in front where the front-most of them was."""
+        items = [it for it in self._ids(ids) if not it.get("locked")]
+        if len(items) < 2:
+            return False
+        self._keep()
+        gid = self._new_group()
+        chosen = {it["id"] for it in items}
+        for it in items:
+            it["group"] = gid
+            if it.get("role"):                      # a placeholder can't be in a group (PowerPoint's rule): it becomes a text box
+                it["role"] = ""
+        lst = self._slide["items"]
+        top = max(k for k, it in enumerate(lst) if it["id"] in chosen)
+        members = [it for it in lst if it["id"] in chosen]
+        rest = [it for it in lst if it["id"] not in chosen]
+        at = sum(1 for it in lst[:top + 1] if it["id"] not in chosen)
+        self._slide["items"] = rest[:at] + members + rest[at:]
+        sm.tidy_groups(self._slide["items"])
+        self._done()
+        return True
+
+    @Slot("QVariant", result=bool)
+    def ungroup(self, ids) -> bool:
+        """Ctrl+Shift+G: the groups these items are in come apart."""
+        groups = {it.get("group") for it in self._ids(ids)} - {None, ""}
+        if not groups:
+            return False
+        self._keep()
+        for it in self._slide["items"]:
+            if it.get("group") in groups:
+                it.pop("group", None)
+        self._done()
+        return True
+
+    @Slot("QVariant")
+    def placeItems(self, rects) -> None:
+        """Several items' new boxes at once (a group sized): [{id, x, y, w, h}]."""
+        rects = rects.toVariant() if hasattr(rects, "toVariant") else rects
+        todo = [(self._find(r.get("id", "")), r) for r in rects or [] if isinstance(r, dict)]
+        todo = [(it, r) for it, r in todo if it is not None and not it.get("locked")]
+        if not todo:
+            return
+        self._keep("place:" + ",".join(it["id"] for it, _ in todo))
+        for it, r in todo:
+            line = it.get("shape") in ("line", "arrowline")
+            it["x"], it["y"] = round(float(r["x"]), 2), round(float(r["y"]), 2)
+            it["w"], it["h"] = round(max(0.01 if line else 4.0, float(r["w"])), 2), round(max(0.01 if line else 4.0, float(r["h"])), 2)
+        self._settle([it for it, _ in todo])
+        self._done()
+
+    # ------------------------------------------------------------------ the footer: slide numbers, the date, a line of text
+    footer = Property("QVariantMap", lambda self: sm.clean_footer(self._deck.get("footer")), notify=deckChanged)
+
+    @Slot(str, "QVariant")
+    def setFooter(self, key: str, value) -> None:
+        value = value.toVariant() if hasattr(value, "toVariant") else value
+        f = sm.clean_footer(self._deck.get("footer"))
+        if key not in f or f[key] == value:
+            return
+        self._keep()
+        f[key] = value
+        self._deck["footer"] = sm.clean_footer(f)
+        self._done()
 
     @Slot("QVariant", result="QVariantList")
     def duplicateItems(self, ids) -> list:
@@ -715,13 +795,16 @@ class Slides(FileList):
         if not items:
             return []
         self._keep()
-        made = []
+        made, regroup = [], {}
         for it in items:
             c = copy.deepcopy(it)
             c["id"], c["role"] = self._iid(), ""
             c["x"], c["y"] = it["x"] + 40, it["y"] + 40
+            if c.get("group"):
+                c["group"] = regroup.setdefault(c["group"], self._new_group() + "-" + c["id"])
             self._slide["items"].append(c)
             made.append(c["id"])
+        sm.tidy_groups(self._slide["items"])
         self._done()
         return made
 
@@ -744,6 +827,7 @@ class Slides(FileList):
                 j = i + step
                 if 0 <= j < len(seq) and seq[j] not in items:
                     seq[i], seq[j] = seq[j], seq[i]
+        sm.tidy_groups(self._slide["items"])
         self._done()
 
     @Slot("QVariant", str)
@@ -852,18 +936,21 @@ class Slides(FileList):
         if not items:
             return []
         self._keep()
-        made = []
+        made, regroup = [], {}
         here = {it["id"]: it for it in self._slide["items"]}
         for it in items:
             c = copy.deepcopy(it)
             same = here.get(it.get("id"))
             c["id"] = self._iid()
+            if c.get("group"):
+                c["group"] = regroup.setdefault(c["group"], self._new_group() + "-" + c["id"])
             if same is not None and abs(same["x"] - it["x"]) < 1 and abs(same["y"] - it["y"]) < 1:
                 c["x"], c["y"] = it["x"] + 40, it["y"] + 40           # pasted on its own slide: a little apart
             if c.get("role") and any(x.get("role") == c["role"] for x in self._slide["items"]):
                 c["role"] = ""
             self._slide["items"].append(c)
             made.append(c["id"])
+        sm.tidy_groups(self._slide["items"])
         self._done()
         return made
 

@@ -2,10 +2,12 @@
 
 write(deck, path): a .pptx with a master and one layout per Slides layout (and per design frame read from another
 file), the theme's colours and fonts, every item where it is on the slide (text with its runs, bullets and levels,
-shapes as PowerPoint's preset shapes, pictures), backgrounds, speaker notes, transitions, builds and hidden slides.
+shapes as PowerPoint's preset shapes, pictures), groups, backgrounds, speaker notes, transitions, builds, hidden
+slides, and the footer (the date, a line of text, the slide's number) as PowerPoint's own placeholders.
 
 read(path) → (deck, dropped): the slides with their items placed as PowerPoint places them: placeholders that take
-their place and text styles from the layout and master, theme colours and fonts, groups flattened, tables as cells,
+their place and text styles from the layout and master, theme colours and fonts, groups (a group inside another
+joins it), tables as cells, the footer,
 pictures (cropped), backgrounds, the master's and layout's own shapes (logos, bands) kept as the deck's frames,
 notes, transitions and entrance builds. What doesn't come across is listed.
 """
@@ -58,7 +60,18 @@ def emu(v: float) -> int:
 
 
 def hexval(c: str) -> str:
-    return (c or "#000000").lstrip("#").upper()[:6]
+    c = (c or "#000000").lstrip("#").upper()
+    return c[2:8] if len(c) == 8 else c[:6]          # (#AARRGGBB: a see-through colour)
+
+
+def alpha_xml(c: str) -> str:
+    """A see-through colour's alpha for PowerPoint, or ''."""
+    c = (c or "").lstrip("#")
+    if len(c) == 8:
+        a = int(c[:2], 16) / 255
+        if a < 0.999:
+            return f'<a:alpha val="{round(a * 100000)}"/>'
+    return ""
 
 
 def fill_xml(value: str, look: dict) -> str:
@@ -66,7 +79,9 @@ def fill_xml(value: str, look: dict) -> str:
         return "<a:noFill/>"
     if value.startswith("accent") and value[6:].isdigit() and 1 <= int(value[6:]) <= 6:
         return f'<a:solidFill><a:schemeClr val="{value}"/></a:solidFill>'
-    return f'<a:solidFill><a:srgbClr val="{hexval(sm.colour(value, look))}"/></a:solidFill>'
+    c = sm.colour(value, look)
+    a = alpha_xml(c)
+    return f'<a:solidFill><a:srgbClr val="{hexval(c)}">{a}</a:srgbClr></a:solidFill>' if a else f'<a:solidFill><a:srgbClr val="{hexval(c)}"/></a:solidFill>'
 
 
 def bg_xml(bg: dict, rel_for) -> str:
@@ -521,21 +536,60 @@ def write(deck: dict, path) -> None:
         rels = [f'<Relationship Id="rId1" Type="{R}/slideLayout" Target="../slideLayouts/slideLayout{layout_files[(lay, frame)]}.xml"/>']
         ids, shapes, sid = {}, "", 2
         roles = set()
-        for item in slide.get("items", []):
-            role_ok = item.get("role") and item["role"] in [r[0] for r in sm.placeholders(lay)] and item["role"] not in roles
+
+        def one(item, sid):
+            role_ok = item.get("role") and not item.get("group") and item["role"] in [r[0] for r in sm.placeholders(lay)] and item["role"] not in roles
             roles.add(item.get("role"))
             ids[item["id"]] = sid
             if item["kind"] == "table":
-                shapes += table_xml(item, sid, look)
-            elif item["kind"] == "chart":
+                return table_xml(item, sid, look)
+            if item["kind"] == "chart":
                 charts_n[0] += 1
                 files[f"ppt/charts/chart{charts_n[0]}.xml"] = chart_part_xml(item, look)
                 ct.append(f'<Override PartName="/ppt/charts/chart{charts_n[0]}.xml" ContentType="application/vnd.openxmlformats-officedocument.drawingml.chart+xml"/>')
                 rid = f"rId{len(rels) + 1}"
                 rels.append(f'<Relationship Id="{rid}" Type="{R}/chart" Target="../charts/chart{charts_n[0]}.xml"/>')
-                shapes += chart_frame_xml(item, sid, rid)
+                return chart_frame_xml(item, sid, rid)
+            return item_xml(item if role_ok else dict(item, role=""), sid, lay, look, lambda src: media_for(src, rels))
+        written = set()
+        for item in slide.get("items", []):
+            g = item.get("group")
+            if g and g in written:
+                continue
+            members = [x for x in slide["items"] if x.get("group") == g] if g else []
+            if len(members) < 2:
+                shapes += one(item, sid)
+                sid += 1
+                continue
+            # a group: its items inside one p:grpSp, the group's box the same as its items' (nothing scaled)
+            written.add(g)
+            x0, y0 = min(m["x"] for m in members), min(m["y"] for m in members)
+            x1, y1 = max(m["x"] + m["w"] for m in members), max(m["y"] + m["h"] for m in members)
+            box = f'<a:off x="{emu(x0)}" y="{emu(y0)}"/><a:ext cx="{emu(x1 - x0)}" cy="{emu(y1 - y0)}"/>'
+            gsid, sid = sid, sid + 1
+            inner = ""
+            for m in members:
+                inner += one(m, sid)
+                sid += 1
+            shapes += (f'<p:grpSp><p:nvGrpSpPr><p:cNvPr id="{gsid}" name="Group {gsid}"/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr>'
+                       f'<p:grpSpPr><a:xfrm>{box}{box.replace("a:off", "a:chOff").replace("a:ext", "a:chExt")}</a:xfrm></p:grpSpPr>{inner}</p:grpSp>')
+        # the footer: the date, a line of text and the slide's number, as PowerPoint's own placeholders
+        foot = sm.footer_of(deck, slide, n)
+        for key, kind, idx, size, algn in (("date", "dt", 10, "half", "l"), ("text", "ftr", 11, "quarter", "ctr"), ("num", "sldNum", 12, "quarter", "r")):
+            if not foot.get(key):
+                continue
+            share = sm.FOOT_BOXES[key]
+            box = {"x": share[0] * W, "y": sm.FOOT_Y, "w": share[1] * W, "h": sm.FOOT_H}
+            rpr = f'<a:rPr lang="en-US" sz="{sm.FOOT_PT * 100}"><a:solidFill><a:srgbClr val="{hexval(look["text"])}"><a:alpha val="70000"/></a:srgbClr></a:solidFill></a:rPr>'
+            if key == "num":
+                run = f'<a:fld id="{{B6F15528-21DE-4FAA-801E-634DDDAF4B2B}}" type="slidenum">{rpr}<a:t>{n}</a:t></a:fld>'
+            elif key == "date" and not sm.clean_footer(deck.get("footer"))["dateText"]:
+                run = f'<a:fld id="{{2B51DFE2-6E5A-4E1C-8B1C-7C3C4E8F0A11}}" type="datetime1">{rpr}<a:t>{escape(foot[key])}</a:t></a:fld>'
             else:
-                shapes += item_xml(item if role_ok else dict(item, role=""), sid, lay, look, lambda src: media_for(src, rels))
+                run = f'<a:r>{rpr}<a:t>{escape(foot[key])}</a:t></a:r>'
+            shapes += (f'<p:sp><p:nvSpPr><p:cNvPr id="{sid}" name="{ {"dt": "Date", "ftr": "Footer", "sldNum": "Slide Number"}[kind]} Placeholder {sid}"/>'
+                       f'<p:cNvSpPr><a:spLocks noGrp="1"/></p:cNvSpPr><p:nvPr><p:ph type="{kind}" sz="{size}" idx="{idx}"/></p:nvPr></p:nvSpPr>'
+                       f'<p:spPr>{xfrm_xml(box)}</p:spPr><p:txBody><a:bodyPr anchor="ctr"/><a:lstStyle/><a:p><a:pPr algn="{algn}"/>{run}</a:p></p:txBody></p:sp>')
             sid += 1
         bg = bg_xml(slide["bg"], lambda src: media_for(src, rels)) if slide.get("bg") else ""
         trans = slide.get("transition") or {}
@@ -675,6 +729,7 @@ class Read:
         self.names = set(self.z.namelist())
         self.cache = {}
         self.dropped = {}
+        self.foot = {}                     # the footer as the slides show it (dt, ftr, sldNum placeholders)
 
     def part(self, name: str):
         if name not in self.cache:
@@ -713,9 +768,12 @@ def _int(v, default=0):
 def _apply_mods(hexc: str, node) -> str:
     """lumMod / lumOff / tint / shade on a colour, as PowerPoint's theme variations use them."""
     r, g, b = (int(hexc[i:i + 2], 16) / 255 for i in (0, 2, 4))
+    alpha = 1.0
     for m in node:
         tag, val = m.tag.split("}")[-1], _int(m.get("val"), 100000) / 100000
-        if tag in ("lumMod", "lumOff"):
+        if tag == "alpha":
+            alpha = max(0.0, min(1.0, val))
+        elif tag in ("lumMod", "lumOff"):
             h, light, s = colorsys.rgb_to_hls(r, g, b)
             light = light * val if tag == "lumMod" else min(1.0, light + val)
             r, g, b = colorsys.hls_to_rgb(h, max(0.0, min(1.0, light)), s)
@@ -723,7 +781,8 @@ def _apply_mods(hexc: str, node) -> str:
             r, g, b = (c + (1 - c) * (1 - val) for c in (r, g, b))
         elif tag == "shade":
             r, g, b = (c * val for c in (r, g, b))
-    return "#" + "".join(f"{max(0, min(255, round(c * 255))):02X}" for c in (r, g, b))
+    hexa = f"{round(alpha * 255):02X}" if alpha < 0.999 else ""
+    return "#" + hexa + "".join(f"{max(0, min(255, round(c * 255))):02X}" for c in (r, g, b))
 
 
 class Theme:
@@ -1024,15 +1083,32 @@ def read(path) -> tuple:
                             sub = (ox + sub[0] * okx, oy + sub[1] * oky, sub[2] * okx, sub[3] * oky)
                     if _int(gx.get("rot")):
                         rd.drop("rotation of grouped shapes")
-                out += items_from(sp, part, theme, chain_for, layout_key, sub or offset, locked)
+                inner = items_from(sp, part, theme, chain_for, layout_key, sub or offset, locked)
+                if not locked and len(inner) > 1:          # a group on a slide stays a group (a group inside it joins the outer one)
+                    counter[0] += 1
+                    for it in inner:
+                        it["group"] = f"g{counter[0]}"
+                out += inner
                 continue
             if tag not in ("sp", "pic", "cxnSp", "graphicFrame"):
                 continue
             ph = sp.find(f".//{p_('nvPr')}/{p_('ph')}")
             kind_ph = ph.get("type", "body" if ph.get("idx") else "obj") if ph is not None else None
             if kind_ph in ("dt", "ftr", "sldNum", "hdr"):
-                if any(t.text for t in sp.iter(a_("t"))) and not locked:
-                    rd.drop("footers, dates and slide numbers")
+                if not locked and kind_ph != "hdr":         # the footer, as the deck's: seen on a slide, it's on
+                    text = "".join(t.text or "" for t in sp.iter(a_("t"))).strip()
+                    fld = next((f.get("type", "") for f in sp.iter(a_("fld"))), "")
+                    rd.foot["seen"] = True
+                    if layout_key == "title":
+                        rd.foot["onTitle"] = True
+                    if kind_ph == "sldNum":
+                        rd.foot["num"] = True
+                    elif kind_ph == "ftr" and text:
+                        rd.foot["text"] = rd.foot.get("text") or text
+                    elif kind_ph == "dt" and (text or fld):
+                        rd.foot["date"] = True
+                        if not fld.startswith("datetime"):
+                            rd.foot["dateText"] = rd.foot.get("dateText") or text
                 continue
             chain = chain_for(kind_ph, ph.get("idx") if ph is not None else None) if ph is not None else []
             xf = _xfrm(sp)
@@ -1438,7 +1514,8 @@ def read(path) -> tuple:
     look = current["look"]
     if not any(f["items"] for f in look["frames"].values()):
         look["frames"] = {}
-    deck = {"format": "huginn-slides-2", "theme": "paper", "look": look, "size": size, "slides": slides}
+    deck = {"format": "huginn-slides-2", "theme": "paper", "look": look, "size": size, "slides": slides,
+            "footer": sm.clean_footer(rd.foot)}
     for s in slides:
         for it in s["items"]:
             if it.get("role") and it["kind"] == "text":

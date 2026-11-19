@@ -67,6 +67,8 @@ STYLES_XML = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <w:style w:type="character" w:styleId="Hyperlink"><w:name w:val="Hyperlink"/><w:rPr><w:color w:val="2361AE"/><w:u w:val="single"/></w:rPr></w:style>
 <w:style w:type="table" w:default="1" w:styleId="TableNormal"><w:name w:val="Normal Table"/><w:tblPr><w:tblCellMar><w:top w:w="0" w:type="dxa"/><w:left w:w="108" w:type="dxa"/><w:bottom w:w="0" w:type="dxa"/><w:right w:w="108" w:type="dxa"/></w:tblCellMar></w:tblPr></w:style>
 <w:style w:type="table" w:styleId="TableGrid"><w:name w:val="Table Grid"/><w:basedOn w:val="TableNormal"/><w:tblPr><w:tblBorders><w:top w:val="single" w:sz="4" w:space="0" w:color="9AA0A6"/><w:left w:val="single" w:sz="4" w:space="0" w:color="9AA0A6"/><w:bottom w:val="single" w:sz="4" w:space="0" w:color="9AA0A6"/><w:right w:val="single" w:sz="4" w:space="0" w:color="9AA0A6"/><w:insideH w:val="single" w:sz="4" w:space="0" w:color="9AA0A6"/><w:insideV w:val="single" w:sz="4" w:space="0" w:color="9AA0A6"/></w:tblBorders></w:tblPr></w:style>
+<w:style w:type="paragraph" w:styleId="FootnoteText"><w:name w:val="footnote text"/><w:basedOn w:val="Normal"/><w:pPr><w:spacing w:after="0" w:line="240" w:lineRule="auto"/></w:pPr><w:rPr><w:sz w:val="20"/><w:szCs w:val="20"/></w:rPr></w:style>
+<w:style w:type="character" w:styleId="FootnoteReference"><w:name w:val="footnote reference"/><w:rPr><w:vertAlign w:val="superscript"/></w:rPr></w:style>
 </w:styles>"""
 
 BULLET_GLYPHS = ("•", "◦", "▪")
@@ -98,6 +100,7 @@ class _Out:
         self.pic = 0
         self.review = {"changes": {}, "notes": {}}
         self.note_starts, self.note_ends = {}, {}       # position -> [comment ids]
+        self.footnotes, self.fn_ids = {}, {}           # Writer's footnotes (id -> text), and each one's number in Word
 
     def rel(self, kind: str, target: str, external: bool = False) -> str:
         rid = f"rId{len(self.rels) + 10}"
@@ -251,6 +254,16 @@ def _paragraph(o: _Out, block, default_family: str, in_cell: bool = False) -> st
             imf = cf.toImageFormat()
             for _ in frag.text():
                 runs.append(_picture(o, imf.name(), imf.width(), imf.height()))
+            continue
+        fn = cf.anchorHref() if cf.isAnchor() else ""
+        if fn.startswith("#fn-"):                       # a footnote's mark: Word numbers it itself
+            if link_open is not None:
+                runs.append("".join(link_xml) + "</w:hyperlink>")
+                link_open, link_xml = None, []
+            ident = fn[4:]
+            if ident in o.footnotes and ident not in o.fn_ids:
+                o.fn_ids[ident] = len(o.fn_ids) + 1
+                runs.append(f'<w:r><w:rPr><w:rStyle w:val="FootnoteReference"/><w:vertAlign w:val="superscript"/></w:rPr><w:footnoteReference w:id="{o.fn_ids[ident]}"/></w:r>')
             continue
         marks = rv.parse(cf.toolTip())
         if marks:                                       # the text's own look, without the review's colours
@@ -441,10 +454,27 @@ def _comments_xml(notes: dict, ids) -> str:
     return f'<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:comments xmlns:w="{W}">{"".join(out)}</w:comments>'
 
 
-def document_to_docx(doc: QTextDocument, setup: dict, path, title: str = "", review: dict = None) -> None:
+def _footnotes_xml(notes: dict, ids: dict) -> str:
+    """Writer's footnotes as Word's footnotes part (with the separator lines Word draws above them)."""
+    sep = '<w:p><w:pPr><w:spacing w:after="0" w:line="240" w:lineRule="auto"/></w:pPr><w:r><w:%s/></w:r></w:p>'
+    out = [f'<w:footnote w:type="separator" w:id="-1">{sep % "separator"}</w:footnote>',
+           f'<w:footnote w:type="continuationSeparator" w:id="0">{sep % "continuationSeparator"}</w:footnote>']
+    for ident, n in sorted(ids.items(), key=lambda kv: kv[1]):
+        lines = (notes.get(ident) or "").split("\n") or [""]
+        paras = []
+        for k, line in enumerate(lines):
+            mark = '<w:r><w:rPr><w:rStyle w:val="FootnoteReference"/><w:vertAlign w:val="superscript"/></w:rPr><w:footnoteRef/></w:r>' if k == 0 else ""
+            text = _text_runs((" " if k == 0 else "") + line, '<w:rPr><w:sz w:val="20"/><w:szCs w:val="20"/></w:rPr>') if line or k == 0 else ""
+            paras.append(f'<w:p><w:pPr><w:pStyle w:val="FootnoteText"/><w:spacing w:after="0" w:line="240" w:lineRule="auto"/></w:pPr>{mark}{text}</w:p>')
+        out.append(f'<w:footnote w:id="{n}">{"".join(paras)}</w:footnote>')
+    return f'<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:footnotes xmlns:w="{W}">{"".join(out)}</w:footnotes>'
+
+
+def document_to_docx(doc: QTextDocument, setup: dict, path, title: str = "", review: dict = None, footnotes: dict = None) -> None:
     """Write a QTextDocument and Writer's page setup as a .docx (with its tracked changes and comments, from
-    Writer's review: huginn_review)."""
+    Writer's review: huginn_review, and its footnotes)."""
     o = _Out(doc)
+    o.footnotes = dict(footnotes or {})
     if review:
         o.review = review
         for ident, (a, b) in rv.spans(doc, "note").items():
@@ -490,6 +520,9 @@ def document_to_docx(doc: QTextDocument, setup: dict, path, title: str = "", rev
     if noted:
         parts["word/comments.xml"] = _comments_xml(o.review.get("notes") or {}, noted)
         o.rel(f"{REL}/comments", "comments.xml")
+    if o.fn_ids:
+        parts["word/footnotes.xml"] = _footnotes_xml(o.footnotes, o.fn_ids)
+        o.rel(f"{REL}/footnotes", "footnotes.xml")
     if (review or {}).get("track"):
         parts["word/settings.xml"] = f'<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:settings xmlns:w="{W}"><w:trackRevisions/></w:settings>'
         o.rel(f"{REL}/settings", "settings.xml")
@@ -505,6 +538,8 @@ def document_to_docx(doc: QTextDocument, setup: dict, path, title: str = "", rev
                  '<Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/>']
     if "word/comments.xml" in parts:
         overrides.append('<Override PartName="/word/comments.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.comments+xml"/>')
+    if "word/footnotes.xml" in parts:
+        overrides.append('<Override PartName="/word/footnotes.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.footnotes+xml"/>')
     if "word/settings.xml" in parts:
         overrides.append('<Override PartName="/word/settings.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.settings+xml"/>')
     if "word/header1.xml" in parts:
@@ -609,6 +644,8 @@ def docx_to_html(path) -> tuple:
         if body is None:
             raise ConvertError("The Word document has no text body.")
         reader.read_comments(_part(z, "word/comments.xml") if "word/comments.xml" in names else None)
+        reader.read_footnotes(_part(z, "word/footnotes.xml") if "word/footnotes.xml" in names else None, "w")
+        reader.read_footnotes(_part(z, "word/endnotes.xml") if "word/endnotes.xml" in names else None, "e")
         markup = reader.body(body)
         setup, extra = reader.setup(body, z, names)
         settings = _part(z, "word/settings.xml") if "word/settings.xml" in names else None
@@ -619,6 +656,10 @@ def docx_to_html(path) -> tuple:
         import json as _json
         reader.review["next"] = reader.next_id
         head += f'<meta name="huginn-review" content="{html.escape(_json.dumps(reader.review), quote=True)}" />'
+    if reader.fn_used:
+        import json as _json
+        notes = {k: reader.footnotes[k] for k in reader.fn_used}
+        head += f'<meta name="huginn-footnotes" content="{html.escape(_json.dumps({"notes": notes, "next": len(notes) + 1}), quote=True)}" />'
     return "<html><head>" + head + "</head><body>" + markup + "</body></html>", setup, reader.dropped(doc, names) + extra
 
 
@@ -635,6 +676,7 @@ class _Reader:
         self.pictures = self.anchored = 0
         self.review, self.ids, self.next_id = {"next": 1, "changes": {}, "notes": {}}, {}, 1
         self.comments, self.open_notes = {}, []
+        self.footnotes, self.fn_used = {}, []      # Word's footnotes and endnotes ("w<id>", "e<id>"), and those marked in the text, in order
         self.after = 8                 # px after a paragraph when it doesn't say (Word's default, from the styles below)
         if styles is not None:
             dflt = styles.find(f"{_q('docDefaults')}/{_q('pPrDefault')}/{_q('pPr')}/{_q('spacing')}")
@@ -694,6 +736,27 @@ class _Reader:
         ident = self.our_id("change", el.get(_q("id")) or str(id(el)))
         self.review["changes"].setdefault(str(ident), {"by": el.get(_q("author")) or "", "when": self._when(el.get(_q("date")) or "")})
         return (kind, ident)
+
+    def read_footnotes(self, part, prefix: str) -> None:
+        """Word's footnotes (or endnotes, which become footnotes) by their ids: their text, a line for each paragraph."""
+        if part is None:
+            return
+        for fn in part:
+            if fn.get(_q("type")) in ("separator", "continuationSeparator", "continuationNotice"):
+                continue
+            paras = []
+            for p in fn.iter(_q("p")):
+                paras.append("".join(t.text or "" for t in p.iter(_q("t"))))
+            self.footnotes[prefix + (fn.get(_q("id")) or "")] = "\n".join(paras).strip()
+
+    def footnote_mark(self, prefix: str, word_id: str) -> str:
+        ident = prefix + word_id
+        if ident not in self.footnotes:
+            return ""
+        if ident not in self.fn_used:
+            self.fn_used.append(ident)
+        n = self.fn_used.index(ident) + 1
+        return f'<a href="#fn-{_attr(ident)}"><span style="vertical-align:super">{n}</span></a>'
 
     def read_comments(self, part) -> None:
         if part is None:
@@ -848,6 +911,8 @@ class _Reader:
                 text.append(html.escape(chr(int(child.get(_q("char"), "20"), 16)) if re.fullmatch(r"[0-9A-Fa-f]{1,4}", child.get(_q("char"), "")) else ""))
             elif child.tag == _q("noBreakHyphen"):
                 text.append("‑")
+            elif child.tag in (_q("footnoteReference"), _q("endnoteReference")):
+                text.append(self.footnote_mark("w" if child.tag == _q("footnoteReference") else "e", child.get(_q("id")) or ""))
         piece = "".join(text)
         if not piece:
             return ""
@@ -1083,8 +1148,8 @@ class _Reader:
     def dropped(self, doc, names) -> list:
         count = lambda tag, ns=W: sum(1 for _ in doc.iter(_q(tag, ns)))      # noqa: E731
         out = []
-        if count("footnoteReference") or count("endnoteReference"):
-            out.append("footnotes and endnotes")
+        if count("endnoteReference"):
+            out.append("endnotes (they're footnotes now)")
         if any(el.tag.endswith("}oMath") for el in doc.iter()):
             out.append("equations")
         shapes = sum(1 for el in doc.iter() if el.tag.endswith("}wsp") or el.tag.endswith("}txbx"))

@@ -9,6 +9,8 @@ An open app has a bar under its tile for each of its windows (up to three; a dim
 
 At the right end of the apps, **Downloads** is a stack: the newest files piled up, a mark on it while something's still arriving. Click it for the list, drag a file out, or right-click a file to open it, show it in Files, copy, rename or move it to the Bin. Drag any folder onto the end of the dock to keep it there as another stack. How it looks, how big the dock is and what clicking does are in Settings › Desktop & Dock.
 
+With more than one screen, rest the pointer at the bottom of another screen for a moment and the dock comes there (Settings › Desktop & Dock › Moves to the screen you're using). The Overview spreads out every screen's windows on that screen.
+
 ## Search everything
 Press Super+Space, or click the magnifier in the top bar. Type, and apps, files, Settings pages, sums ("84.60 × 15%", "5 km in mi") and Huginn's open tabs come up; Enter opens the top one, Tab narrows it to one kind. Everything is searched on this computer; only "Search the web" sends what you typed anywhere. Before you type, it offers what you were doing last: the file you had open, the song you paused.
 
