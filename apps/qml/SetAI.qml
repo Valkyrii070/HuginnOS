@@ -61,7 +61,7 @@ Column {
     SetCard { visible: pg.have
         note: "Nothing is sent anywhere until it's on and you've chosen where it runs. Then only what you ask about goes, when you ask."
         SetRow { title: "Huginn AI"; glyph: "sparkle"; tile: "#7C5CFF"
-            sub: "Ask questions in Search. Rewrite, summarise and draft in Writer and Mail. Explain, fix and write code in Code."
+            sub: "Ask in Search. Rewrite, summarise and draft in Writer, Mail and Notes. Summarise and ask about documents and stories. Explain, fix and write code."
             Toggle { on: !!pg.st.enabled; onToggled: function (v) { AI.setEnabled(v) } } } }
 
     // ------------------------------------------------------------------ where it runs
@@ -136,7 +136,11 @@ Column {
         Repeater { model: [["search", "Search", "search", "Ask a question from Search everything: type it, then Ctrl+Enter."],
                            ["writer", "Writer", "doc", "Rewrite, proofread, summarise or carry on what you've written."],
                            ["mail", "Mail", "mail", "Summarise a message, draft a reply, improve what you've written."],
-                           ["code", "Code", "code", "Explain, fix or write code, from the command palette or the editor's menu."]]
+                           ["code", "Code", "code", "Explain, fix or write code, from the command palette."],
+                           ["notes", "Notes", "edit", "Tidy up a note, make a checklist of it, summarise it or carry it on."],
+                           ["documents", "Documents", "doc", "Summarise a PDF or a text, or ask questions about it."],
+                           ["feeds", "Feeds", "list", "Summarise a story."],
+                           ["translate", "Translate", "translate", "Translate into any language, also ones with no pack on this computer."]]
             SetRow { required property var modelData; title: modelData[1]; glyph: modelData[2]; sub: modelData[3]
                 Toggle { on: !pg.st.where || pg.st.where[modelData[0]] !== false; onToggled: function (v) { AI.setWhere(modelData[0], v) } } } } }
 

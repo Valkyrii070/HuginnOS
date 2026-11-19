@@ -8,6 +8,13 @@ GlassWindow {
     title: "Documents"; heading: Backend.current !== "" ? Backend.title + (Backend.edited ? "  •" : "") : ""; sidebarWidth: 196; glow: "left"; padTop: 58
     readonly property bool isText: Backend.kind === "text"
     readonly property bool isPdf: Backend.kind === "pdf"
+    // Huginn AI (Settings › AI): summarise what's open, or answer questions about it
+    function ai(what) {
+        var text = Backend.plainText()
+        if (text.trim() === "") { win.notice = win.isPdf ? "This PDF has no text to read (a scan is pictures of pages)." : "There's nothing in it yet."; hide.restart(); return }
+        if (what === "ask") aiPanel.question({ text: text, about: "“" + Backend.title + "”", heading: "Ask about " + Backend.title })
+        else aiPanel.run({ task: "summarise", text: text, heading: "Summary of " + Backend.title })
+    }
     property bool pages: true
     readonly property bool showPages: pages && isPdf
     property bool wrap: false
@@ -68,6 +75,8 @@ GlassWindow {
             Label { visible: win.isText; leftPadding: 10; rightPadding: 6; secondary: true; font.pixelSize: 12; anchors.verticalCenter: parent.verticalCenter
                 text: "Line " + editor.line + ", column " + editor.column + "  ·  " + Backend.language + "  ·  " + Backend.encoding }
             Seg { visible: Backend.current !== ""; icon: "mail"; tip: Backend.edited ? "Save, then send by Mail" : "Send by Mail"; onClicked: { if (Backend.edited) win.save(); Backend.sendByMail() } }
+            Seg { visible: Backend.current !== "" && (win.isPdf || win.isText) && aiPanel.on("documents"); icon: "sparkle"; tip: docAi.visible || aiPanel.visible ? "" : "Huginn AI"; tipAbove: true; on: docAi.visible
+                onClicked: docAi.visible = !docAi.visible }
             Seg { visible: win.isText; text: "Wrap"; tip: "Wrap long lines"; on: win.wrap; onClicked: win.wrap = !win.wrap }
             IslandGap {}
             IslandField { id: find; placeholder: win.isText ? "Find in file" : "Find in document"; onTextChanged: if (win.isPdf) view.searchString = text; onAccepted: win.isPdf ? view.searchForward() : win.findNext() }
@@ -77,7 +86,11 @@ GlassWindow {
             visible: win.notice !== "" || (win.isText && Backend.readOnly); x: 232; anchors { bottom: parent.bottom; bottomMargin: 14 }
             Label { leftPadding: 10; rightPadding: 10; font.pixelSize: 12; anchors.verticalCenter: parent.verticalCenter; width: Math.min(implicitWidth, win.width - 232 - 640); elide: Text.ElideRight
                 color: win.notice ? Theme.t.danger : Theme.t.text_secondary; text: win.notice || Backend.why }
-        }
+        },
+        AiMenu { id: docAi; z: 9; anchors { right: parent.right; rightMargin: 14; bottom: parent.bottom; bottomMargin: 62 }
+            items: [["summarise", "Summarise it", ""], ["ask", "Ask about it…", ""]]
+            onChosen: function (key) { win.ai(key) } },
+        AiPanel { id: aiPanel; z: 9; x: Math.max(12, win.width - width - 14); anchors { bottom: parent.bottom; bottomMargin: 62 } maxHeight: win.height * 0.7 }
     ]
     // ---------------- A text or code file: edit it
     Flickable { id: scroll; visible: win.isText; anchors.fill: parent; clip: true

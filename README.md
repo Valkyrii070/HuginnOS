@@ -1559,6 +1559,21 @@ The app round, for every app at once:
   The compositor's resting is for real screens (the window backend can't show it): try the PC, and if a screen
   ever seems slow to wake, say so.
 
+## Huginn AI, round two (2026-11-19)
+
+Huginn AI in four more apps, each with its own switch in Settings › AI › Where it shows:
+
+- **Notes**: the sparkle on the note's island: tidy up (spelling, headings, lists, nothing dropped), make a checklist
+  (inserted below, or in place of the text), summarise, carry on writing. On the selection or the whole note.
+- **Documents**: summarise a PDF or a text, or **ask about it**: a question box over the answers, each question
+  answered from what the document says (a PDF's text is read with QtPdf, up to 300 pages; a scanned PDF with no
+  text says so).
+- **Feeds**: Summarise, while reading a story.
+- **Translate**: with no offline language packs, Huginn AI does the translating, into any of 22 languages, as you
+  type (the fold says it's Huginn AI, and where it runs). With packs, "With Huginn AI" is there for a second opinion
+  or a language the packs don't have. Without either, the empty screen says Huginn AI can do it.
+- The panel can now hold a question box (`AiPanel.question()`), for asking about something more than once.
+
 ## Huginn, the browser
 
 Inside the Huginn repository (this kit is its `os/` folder) the image ships the repository's own browser. A kit used

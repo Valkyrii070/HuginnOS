@@ -38,7 +38,9 @@ GlassWindow {
             Seg { visible: win.reading; text: "A+"; tip: "Bigger letters"; onClicked: Backend.setSize(Backend.size + 1) }
             Seg { visible: win.reading; icon: "star"; on: !!Backend.article.star; tip: Backend.article.star ? "Starred" : "Star it"; onClicked: Backend.star(Backend.article.id) }
             Seg { visible: win.reading; icon: "eye"; tip: "Mark as not read"; onClicked: { Backend.setRead(Backend.article.id, false); Backend.close() } }
-            Seg { visible: win.reading && !!Backend.article.link; icon: "share"; text: "Open in Huginn"; onClicked: Backend.openLink(Backend.article.link) } },
+            Seg { visible: win.reading && !!Backend.article.link; icon: "share"; text: "Open in Huginn"; onClicked: Backend.openLink(Backend.article.link) }
+            Seg { visible: win.reading && aiPanel.on("feeds"); icon: "sparkle"; text: "Summarise"
+                onClicked: aiPanel.run({ task: "summarise", heading: "Summary", text: (Backend.article.title || "") + "\n\n" + String(Backend.article.content || "").replace(/<[^>]+>/g, " ").replace(/&nbsp;/g, " ").replace(/&amp;/g, "&").replace(/\s+/g, " ") }) } },
         Island { visible: win.reading; x: 132; y: 12
             Seg { icon: "back"; text: "All Stories"; onClicked: Backend.close() } },
         Toast { id: toast; anchors { horizontalCenter: parent.horizontalCenter; bottom: parent.bottom; bottomMargin: 22 } },
@@ -69,7 +71,8 @@ GlassWindow {
                     Btn { text: "Save a Copy"; onClicked: Backend.exportOpml() } }
                 Row { anchors { right: parent.right; rightMargin: 22; bottom: parent.bottom; bottomMargin: 18 } spacing: 8
                     Btn { text: card.kind === "follow" ? "Cancel" : "Done"; onClicked: win.sheet = null }
-                    Btn { visible: card.kind === "follow"; primary: true; text: Backend.busy ? "Looking…" : "Follow"; onClicked: Backend.follow(followBox.text) } } } }
+                    Btn { visible: card.kind === "follow"; primary: true; text: Backend.busy ? "Looking…" : "Follow"; onClicked: Backend.follow(followBox.text) } } } },
+        AiPanel { id: aiPanel; z: 9; x: (win.width - width) / 2; anchors { bottom: parent.bottom; bottomMargin: 24 } maxHeight: win.height * 0.6 }
     ]
 
 

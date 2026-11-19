@@ -3335,6 +3335,22 @@ class Documents(QObject):
     why = Property(str, lambda self: self._why, notify=changed)                   # why it can't be changed or shown
     encoding = Property(str, lambda self: {"utf-8": "UTF-8", "latin-1": "Latin-1"}[self._encoding] + (" with CRLF" if self._crlf else ""), notify=changed)
 
+    @Slot(result=str)
+    def plainText(self) -> str:
+        """What the open document says, as plain text (a PDF's first 300 pages), for Huginn AI."""
+        if self._kind == "text":
+            return self._text
+        if self._kind != "pdf" or not self._current:
+            return ""
+        from PySide6.QtPdf import QPdfDocument
+        doc = QPdfDocument(None)
+        try:
+            if doc.load(self._current) != QPdfDocument.Error.None_:
+                return ""
+            return "\n\n".join(doc.getAllText(page).text() for page in range(min(doc.pageCount(), 300)))
+        finally:
+            doc.close()
+
     @Slot()
     def sendByMail(self) -> None:
         if self._current:
@@ -5375,7 +5391,7 @@ def main() -> int:
             ctx.setContextProperty("Accounts", accounts)
         updates.said.connect(lambda msg, bad: backend.said.emit(msg, bad) if hasattr(backend, "said") else None)
     ai = None
-    if args.app in ("settings", "writer", "mail", "code"):   # Huginn AI (Settings › AI); off until it's turned on
+    if args.app in ("settings", "writer", "mail", "code", "notes", "documents", "feeds", "translate"):   # Huginn AI (Settings › AI); off until it's turned on
         import huginn_ai
         ai = huginn_ai.make(bool(args.demo), args.app)
     ctx.setContextProperty("AI", ai)

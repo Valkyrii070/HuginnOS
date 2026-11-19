@@ -11,7 +11,9 @@ Where it runs:
                     (Gemini's and GitHub's have free tiers).
 
 Where it shows (each can be turned off): Search everything (ask a question), Writer (rewrite, proofread,
-summarise, continue), Mail (summarise, draft a reply, improve what you wrote), Code (explain, fix, write).
+summarise, continue), Mail (summarise, draft a reply, improve what you wrote), Code (explain, fix, write), Notes (tidy
+up, make a checklist, summarise), Documents (summarise, ask about a PDF or a text), Feeds (summarise a story) and
+Translate (for languages with no offline pack).
 
 Nothing is sent anywhere until it's turned on and a place for it to run is chosen; then only what you ask it about
 is sent, when you ask. The settings are ~/.config/huginn/ai.json (shared by every app, which follow changes at
@@ -50,7 +52,7 @@ RUNTIME = Path(os.environ.get("XDG_RUNTIME_DIR") or f"/tmp/huginn-{os.getuid()}"
 SERVER_STATE = RUNTIME / "ai-server.json"
 USED = RUNTIME / "ai-used"
 IDLE_STOP = 15 * 60
-SURFACES = ("search", "writer", "mail", "code")
+SURFACES = ("search", "writer", "mail", "code", "notes", "documents", "feeds", "translate")
 HF = "https://huggingface.co"
 
 # ------------------------------------------------------------------------------------------- where it can run
@@ -120,10 +122,18 @@ TASKS = {
                 "\n\n{text}",
     "write-code": "Write {lang} code that does this: {text}\nReply with only the code: no explanation, no code fences.",
     "edit-code": "Change this {lang} code as asked: {ask}\nReply with only the new code: no explanation, no code fences.\n\n{text}",
+    "tidy": "Tidy up these notes: fix the spelling, put what belongs together together, and use '# ' for headings and "
+            "'- ' for lists. Keep everything they say, in their language. Reply with only the tidied notes.\n\n{text}",
+    "checklist": "Turn the text below into a checklist of things to do, one per line, each starting with '- [ ] ', in "
+                 "the text's language. Reply with only the list.\n\n{text}",
+    "ask-about": "Answer this question about the document below, from what the document says. If it doesn't say, say "
+                 "so.\nQuestion: {ask}\n\nDocument:\n{text}",
+    "translate": "Translate the text below into {target}. Keep its meaning, tone, names and numbers. Reply with only the "
+                 "translation.\n\n{text}",
 }
 TITLES = {"ask": "Answer", "rewrite": "Rewritten", "proofread": "Proofread", "summarise": "Summary", "continue": "Continued",
           "reply": "Reply", "improve": "Improved", "explain-code": "What it does", "fix-code": "Fixed", "write-code": "Written",
-          "edit-code": "Changed"}
+          "edit-code": "Changed", "tidy": "Tidied", "checklist": "Checklist", "ask-about": "Answer", "translate": "Translation"}
 
 
 def prompt(task: str, text: str, extra: dict) -> str:
@@ -131,7 +141,8 @@ def prompt(task: str, text: str, extra: dict) -> str:
     intent = f", saying {extra['intent'].strip()}" if extra.get("intent", "").strip() else ""
     problem = f" ({extra['problem'].strip()})" if extra.get("problem", "").strip() else ""
     return TASKS.get(task, TASKS["ask"]).format(text=text.strip()[:60000], style=style, intent=intent, problem=problem,
-                                                lang=extra.get("lang") or "the", ask=extra.get("ask", ""))
+                                                lang=extra.get("lang") or "the", ask=extra.get("ask", ""),
+                                                target=extra.get("target") or "English")
 
 
 def strip_fences(text: str) -> str:

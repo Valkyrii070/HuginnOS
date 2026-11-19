@@ -24,6 +24,21 @@ GlassWindow {
     function newNote() { Backend.create(); editor.forceActiveFocus() }
     function find() { noteSearch.focusInput() }
     function apply(what) { if (Backend.current !== "") setMark({ h1: "heading", check: "check", bullets: "list" }[what] || what) }
+    // Huginn AI (Settings › AI): on what's selected, or the whole note
+    function ai(task) {
+        var a = editor.selectionStart, b = editor.selectionEnd, all = a === b
+        if (all) { a = 0; b = editor.length }
+        var text = editor.getText(a, b), note = Backend.current
+        if (text.trim() === "") { win.notice = "Write something first."; hide.restart(); return }
+        function put(t, at, till, lead) {
+            if (Backend.current !== note || editor.getText(a, b) !== text) { aiPanel.copyIt(); win.notice = "The note changed meanwhile, so the answer is copied."; hide.restart(); return }
+            editor.remove(at, till); editor.insert(at, (lead || "") + t); editor.cursorPosition = at + (lead || "").length + t.length; editor.forceActiveFocus()
+        }
+        if (task === "summarise") aiPanel.run({ task: task, text: text, heading: "Summary", accept: "Insert Below", onAccept: function (t) { put(t, b, b, "\n\n") } })
+        else if (task === "checklist") aiPanel.run({ task: task, text: text, heading: "Checklist", accept: "Insert Below", second: "Replace", onAccept: function (t) { put(t, b, b, "\n\n") }, onSecond: function (t) { put(t, a, b, "") } })
+        else if (task === "continue") aiPanel.run({ task: task, text: editor.getText(0, b), heading: "Carried on", accept: "Insert", onAccept: function (t) { a = b; text = ""; put(t, b, b, "\n") } })
+        else aiPanel.run({ task: "tidy", text: text, heading: "Tidied", accept: all ? "Replace the Note" : "Replace", onAccept: function (t) { put(t, a, b, "") } })
+    }
     function tick(pos) {                                  // tick or untick the line at pos; false if it has no box
         var L = lineAt(pos), m = /^(\s*)- \[([ xX])\] /.exec(L.s); if (!m) return false
         var at = L.a + m[1].length + 3, keep = editor.cursorPosition
@@ -66,11 +81,17 @@ GlassWindow {
             Seg { text: "Checklist"; on: /^\s*- \[[ xX]\] /.test(win.here); onClicked: win.setMark("check") }
             Seg { text: "List"; on: /^\s*[-*] (?!\[[ xX]\] )/.test(win.here); onClicked: win.setMark("list") }
             Seg { visible: /^\s*- \[[ xX]\] /.test(win.here); icon: "check"; tip: "Tick it off (Ctrl+Enter)"; onClicked: { win.tick(editor.cursorPosition); editor.forceActiveFocus() } }
+            Seg { visible: aiPanel.on("notes"); icon: "sparkle"; tip: noteAi.visible || aiPanel.visible ? "" : "Huginn AI"; tipAbove: true; on: noteAi.visible; onClicked: noteAi.visible = !noteAi.visible }
             IslandGap {}
             Label { leftPadding: 4; rightPadding: 10; font.pixelSize: 12; anchors.verticalCenter: parent.verticalCenter
                 color: win.notice ? Theme.t.danger : Theme.t.text_secondary
                 text: win.notice || ((Backend.saved ? "Saved" : "Saving…") + "  ·  " + (Backend.checks !== "" ? Backend.checks + "  ·  " : "") + Backend.words + (Backend.words === 1 ? " word" : " words")) }
-        }
+        },
+        AiMenu { id: noteAi; z: 9; anchors { horizontalCenter: parent.horizontalCenter; bottom: parent.bottom; bottomMargin: 62 }
+            items: [["tidy", "Tidy up", ""], ["checklist", "Make a checklist", ""], ["summarise", "Summarise", ""], ["continue", "Carry on writing", ""]]
+            note: editor.selectedText !== "" ? "On what's selected." : "On the whole note."
+            onChosen: function (key) { win.ai(key) } },
+        AiPanel { id: aiPanel; z: 9; x: 274 + (win.width - 274 - width) / 2; anchors { bottom: parent.bottom; bottomMargin: 62 } maxHeight: win.height * 0.6 }
     ]
     Column { visible: Backend.current === ""; x: win.middleX(width, parent.y + y, height, notesRail) - parent.x; anchors.verticalCenter: parent.verticalCenter; spacing: 10
         Item { width: 200; height: 176; anchors.horizontalCenter: parent.horizontalCenter      // a torn-off note with a ticked line and a pencil lying across it
