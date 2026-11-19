@@ -100,7 +100,7 @@ every screen. Not tested: anything needing a click or a real desktop session.
 
 | App | Works now | Not yet |
 | --- | --- | --- |
-| Writer | Page view; title, heading, subheading and body styles; bold, italic, underline; size; colour; alignment; bulleted and numbered lists; saves as you type; export to PDF, Word, OpenDocument, Markdown | Pictures, tables you can edit, page breaks, headers and footers, spell-check, printing |
+| Writer | Real pages (Letter, A4, Legal, A5; margins; headers, footers, page numbers), styles, fonts, lists with levels and checklists, tables, pictures, links, find and replace, spelling, printing, Word in and out (see "Office, pro round one") | Comments, tracked changes, footnotes, columns, text wrapping round pictures |
 | Sheets | 26 x 200 grid; numbers, text, percentages; formulas with cell and range references and 20 functions (SUM, AVERAGE, MIN, MAX, COUNT, ROUND, IF ...); clear error marks; column summary; export to Excel and CSV | Several sheets, cell formatting, charts, sorting and filtering, selecting a range with the mouse, column resizing |
 | Slides | Four layouts, three themes, slide navigator, add / delete / reorder, speaker notes, full-screen presenting, export to PDF and PowerPoint | Pictures, free text boxes, bullets, transitions, presenter view with notes on a second screen |
 
@@ -1603,6 +1603,53 @@ Huginn AI in four more apps, each with its own switch in Settings › AI › Whe
 - Piano roll: **Legato** (each note held until the next starts, chords together) and **Key** (the song's key shaded on the rows, its root stronger, and new notes put on the nearest row of the key).
 - **Controllers in MIDI files**, both ways: the sustain pedal (CC 64), the mod wheel (CC 1) and pitch bend go out with the notes (loops repeated) and come in as the region's drawn controllers.
 - Tested (17 checks): pedal, wheel and bend through a MIDI file and back, into a region and out again; legato with a chord; taps at 120 and 100 a minute and a lone late tap ignored; three sung notes (A3, E4, C4) found and made into MIDI at the right beats, under the recording, and tuned into C major when asked.
+
+## Office, pro round one (2026-11-19)
+
+Writer, Sheets and Slides get the treatment the pro apps had: measured against Word, Excel and PowerPoint, the
+biggest gaps first.
+
+### Writer (`apps/huginn_writer.py`, `apps/huginn_docx.py`, both new; `apps/qml/Writer.qml`)
+- **Real pages.** The editor's own text document is laid out in pages: Qt's text layout moves a paragraph that
+  doesn't fit to the next page when the document has a page height, so each page is the paper plus a gap, the root
+  frame's margins are the page's (the gap added to the bottom one), and the window draws a sheet behind each page.
+  Letter, A4, Legal or A5, portrait or landscape, four margin sizes; the paper follows the country (Letter in the
+  Americas). Page breaks (Ctrl+Enter). The size fits the window until it's zoomed (Ctrl+wheel, or the zoom island).
+- **Headers, footers and page numbers**, with {page}, {pages}, {title} and {date}; a title page can go without them.
+  Double-click a page's top or bottom to change them.
+- **Formatting**: styles (Title, Heading, Subheading, Heading 3, Body, Quote, Code), any installed font and size,
+  bold, italic, underline, strike, raised and lowered, text colour and highlight, alignment, line spacing and space
+  after paragraphs, clear formatting; Word's keys (Ctrl+E/L/R/J, Ctrl+Alt+1-3, Ctrl+Shift+N, Ctrl+Shift+L, Ctrl+=,
+  Ctrl+Space). Formatting asked for with nothing selected goes on what's typed next; inside a word it takes the word.
+  Return after a heading or quote goes back to body text; Return on an empty list item ends the list.
+- **Lists** with nine levels (Tab and Shift+Tab, bullets • ◦ ▪, numbers 1. a. i.) and **checklists** (click the box).
+- **Tables**: pick the size from a grid; add and remove rows and columns, merge and split cells, a shaded header row;
+  Tab goes to the next cell and adds a row at the end.
+- **Pictures**, kept inside the document, sized as a share of the text width. **Links** (Ctrl+K; Ctrl+click opens).
+  A line across, today's date, and **Contents** made from the headings with their page numbers.
+- **Headings** in the left island: every heading with its page, to jump to.
+- **Find and replace** (Ctrl+F, Ctrl+H): every match marked, matching capitals or whole words, replace one or all.
+- **Spelling** through enchant and hunspell's dictionaries (US and British English, German, French, Spanish, Italian,
+  Dutch, Brazilian Portuguese in the image): red waves under words spelled wrong (drawn by the window: Qt Quick's text
+  only draws plain underlines), suggestions on the right button, add to the dictionary (~/.config/huginn/words.txt)
+  or ignore; the language in Page.
+- **Printing** through CUPS (`lp`): printer, copies, pages, both sides; or a PDF instead.
+- **PDF** drawn page by page with the headers, footers and numbers.
+- **Word files, both ways** (`huginn_docx`): styles, fonts, sizes, colours and shading, raised and lowered text,
+  links, pictures, lists with levels (each numbered list starting again from 1), checklists, tables with merged cells
+  and shading, page breaks, line spacing and indents, and the page (size, orientation, margins, header, footer, page
+  numbers as fields, a title page). Word files read the same things back, nested lists and merged cells included,
+  and say what didn't come across (comments, tracked changes, footnotes, equations, shapes, charts, columns, pictures
+  placed beside the text, more than one section).
+- `fonts-crosextra-carlito`, `fonts-crosextra-caladea` and `fonts-liberation2` are in the image, so Calibri, Cambria,
+  Arial, Times New Roman and Courier New text measures the same and Word files keep their line and page breaks.
+- Tested (61 checks): every style and format, lists in and out of levels, checklists, tables (rows, columns,
+  merging, header row), pictures and their size, page breaks, links, find and replace, the outline, headers and
+  footers, spelling (a mistake found with "spelling" suggested, a word learned), saving and opening with the page
+  setup, PDF, and Word out and back in with all of it. Our .docx opened in python-docx (styles, the table, the
+  picture, the page and footer) and in LibreOffice, whose rendering matches ours. On screen: pages with header,
+  footer and number, a picture moving to the next page, spelling waves and suggestions, Find, Headings, the page
+  setup, a table from the grid with Tab and a header row, formatting typed on.
 
 ## Huginn, the browser
 

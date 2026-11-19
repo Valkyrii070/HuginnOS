@@ -5337,7 +5337,11 @@ def main() -> int:
         backend = huginn_auth.Authenticator(None, args.demo)
     elif args.app in ("writer", "sheets", "slides"):
         import huginn_office
-        backend = {"writer": huginn_office.Writer, "sheets": huginn_office.Sheets, "slides": huginn_office.Slides}[args.app](target)
+        if args.app == "writer":
+            import huginn_writer
+            backend = huginn_writer.Writer(target)
+        else:
+            backend = {"sheets": huginn_office.Sheets, "slides": huginn_office.Slides}[args.app](target)
     else:
         backend = System()                               # settings and welcome
 
