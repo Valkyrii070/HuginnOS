@@ -1583,6 +1583,20 @@ Huginn AI in four more apps, each with its own switch in Settings › AI › Whe
 - **Breadcrumbs** in the status bar: where the cursor is (Shop › add); click one to go to it.
 - The signature tip no longer stays up after the call's closing bracket, and messages now show over sheets in every app.
 
+### Easel
+- **Distort and perspective** in free transform: Ctrl-drag a corner to put it anywhere, Ctrl-drag an edge to skew, Ctrl+Shift-drag a corner for perspective (the corner across the edge moves the mirror way). Drawn as a true projective map (`QTransform.quadToQuad`), on pixels, selections and smart objects; smart objects keep the distortion (saved in .easel) and it follows moves, crops, resizes and turns of the canvas. Straighten goes back to the box.
+- **History** (the clock by Undo, or Edit › History…): every step, to jump back to any one; the undone ones stay, greyed, until something changes.
+- **Mirror painting**: the brush and eraser paint across, down or both ways at once, about the first guide or the picture's middle (shown dashed).
+- New adjustment layers: **Vibrance** (lifts dull colours most, leaves strong ones) and **Gradient Map** (from the two colours in hand, darker for the shadows; balance, strength, turn round).
+- The tool bar fits a narrow window: the sliders lose their numbers and Mirror becomes one button.
+- Tested (44 checks): corners, perspective and skew land where dragged, the pixels go there, flips keep the outline, a folded quad still draws; smart objects distorted, saved and opened again; vibrance and gradient map against exact values; history back, forward, to the start and a change dropping what was undone; mirrored strokes across, four ways and about a guide.
+
+### Clips
+- **In and Out** (I and O, Alt+X clears): the part is shown on the ruler, and Make the Video can make only it (melt's `in`/`out`), captions included from its start.
+- **Slip** (Y, or Alt-drag a clip): the footage slides inside a clip that stays where it is and as long, stopping at either end of the file.
+- **Cut Pauses**: takes the pauses out of the picked clip's speech and closes up its track. The bar between quiet and voice comes from the clip itself (a quarter of the way, in decibels, from its quietest tenth to its loudest), pauses shorter than half a second stay, and a little of each pause is kept so words aren't clipped.
+- Tested (23 checks, real ffmpeg and melt): the pauses in a made-up talk found to within 80 ms and a short one left alone, the clip cut into three with no gaps and one undo; slips and their limits; the marked part made into a video two seconds long.
+
 ## Huginn, the browser
 
 Inside the Huginn repository (this kit is its `os/` folder) the image ships the repository's own browser. A kit used

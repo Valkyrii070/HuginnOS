@@ -6,7 +6,7 @@ import QtQuick
 GlassWindow {
     id: win
     title: "Clips"; heading: Backend.name; width: 1400; height: 880; minimumWidth: 1100; minimumHeight: 700; glow: "bottom"
-    property string tool: "select"                 // select | blade
+    property string tool: "select"                 // select | blade | slip
     property bool ripple: false
     property string tab: "video"
     property var sheet: null
@@ -57,6 +57,10 @@ GlassWindow {
     Shortcut { sequence: "End"; onActivated: Backend.seek(Backend.length) }
     Shortcut { sequence: "B"; onActivated: win.tool = win.tool === "blade" ? "select" : "blade" }
     Shortcut { sequence: "A"; onActivated: win.tool = "select" }
+    Shortcut { sequence: "Y"; onActivated: win.tool = win.tool === "slip" ? "select" : "slip" }
+    Shortcut { sequence: "I"; onActivated: Backend.markRange("in") }
+    Shortcut { sequence: "O"; onActivated: Backend.markRange("out") }
+    Shortcut { sequence: "Alt+X"; onActivated: Backend.markRange("clear") }
     Shortcut { sequences: ["S", "Ctrl+B"]; onActivated: { var n = Backend.cut(); if (!n) toast.say("Nothing under the playhead to cut", true) } }
     Shortcut { sequences: ["Delete", "Backspace"]; onActivated: Backend.removePicked(win.ripple) }
     Shortcut { sequence: "Shift+Delete"; onActivated: Backend.removePicked(true) }
@@ -234,7 +238,7 @@ GlassWindow {
             Rectangle { anchors.fill: parent; radius: win.r; color: "#77000000"; MouseArea { anchors.fill: parent; onClicked: if (!Backend.exporting) win.sheet = null } }
             Rectangle { id: card; anchors.centerIn: parent; width: 560; radius: 18; color: Theme.t.menu_bg; border.width: 1; border.color: Theme.t.menu_border
                 readonly property string kind: win.sheet ? win.sheet.kind : ""
-                height: kind === "export" ? 520 : kind === "captions" ? Math.min(win.height - 100, 330 + Math.min(6, capFiles.count) * 36) : Math.min(win.height - 100, 150 + Math.max(1, picks.count) * 40)
+                height: kind === "export" ? (Backend.markedRange.length === 2 ? 566 : 520) : kind === "captions" ? Math.min(win.height - 100, 330 + Math.min(6, capFiles.count) * 36) : Math.min(win.height - 100, 150 + Math.max(1, picks.count) * 40)
                 MouseArea { anchors.fill: parent }
                 Label { x: 24; y: 20; font.pixelSize: 17; font.weight: Font.DemiBold; text: card.kind === "export" ? "Make the video" : card.kind === "captions" ? "Captions" : "Bring in footage, music and pictures" }
                 Label { visible: card.kind === "import"; x: 24; y: 46; width: parent.width - 48; wrapMode: Text.WordWrap; secondary: true; font.pixelSize: 12
@@ -286,6 +290,11 @@ GlassWindow {
                         Label { text: "Size"; width: 70; anchors.verticalCenter: parent.verticalCenter; font.pixelSize: 12 }
                         Chips { width: 380; items: [["", "Project's"], ["4k", "4K"], ["1080p", "1080p"], ["720p", "720p"], ["half", "Half"]]; current: (win.sheet && win.sheet.size) || ""
                             onChosen: function (id) { win.sheet = Object.assign({}, win.sheet, { size: id }) } } }
+                    Row { spacing: 8; visible: Backend.markedRange.length === 2
+                        Label { text: "Make"; width: 70; anchors.verticalCenter: parent.verticalCenter; font.pixelSize: 12 }
+                        Chips { width: 380; current: win.sheet && win.sheet.part === false ? "all" : "part"
+                            items: [["part", "The marked part · " + Backend.clockOf((Backend.markedRange[1] || 0) - (Backend.markedRange[0] || 0))], ["all", "All of it"]]
+                            onChosen: function (id) { win.sheet = Object.assign({}, win.sheet, { part: id === "part" }) } } }
                     Item { width: 1; height: 4 }
                     Meter { visible: Backend.exporting || Backend.exportShare > 0; width: parent.width; value: Backend.exportShare }
                     Label { visible: Backend.exporting || !!Backend.exported; font.pixelSize: 12; secondary: true
@@ -295,7 +304,8 @@ GlassWindow {
                     Btn { visible: card.kind === "export" && Backend.exporting; danger: true; text: "Stop"; onClicked: Backend.stopExport() }
                     Btn { text: card.kind === "export" && Backend.exporting ? "Hide" : "Done"; onClicked: win.sheet = null }
                     Btn { visible: card.kind === "export" && !Backend.exporting; primary: true; text: "Make Video"
-                        onClicked: Backend.export(win.sheet.preset, win.sheet.quality, win.sheet.size) } } } }
+                        onClicked: { if (win.sheet.part !== false && Backend.markedRange.length === 2) Backend.exportPart(win.sheet.preset, win.sheet.quality, win.sheet.size)
+                                     else Backend.export(win.sheet.preset, win.sheet.quality, win.sheet.size) } } } } }
     ]
 
     // ================================================================ the library
@@ -744,12 +754,15 @@ GlassWindow {
         Row { id: tools; x: 12; y: 8; spacing: 4; height: 32
             Seg { text: "Select"; tip: "A"; on: win.tool === "select"; onClicked: win.tool = "select" }
             Seg { text: "Blade"; tip: "B: click a clip to cut it there"; on: win.tool === "blade"; onClicked: win.tool = "blade" }
+            Seg { objectName: "slipBtn"; text: "Slip"; tip: "Y (or Alt-drag): slide the footage inside a clip, which stays put"; on: win.tool === "slip"; onClicked: win.tool = "slip" }
             IslandGap {}
             Seg { text: "Ripple"; tip: "Deleting and trimming close the gaps"; on: win.ripple; onClicked: win.ripple = !win.ripple }
             Seg { text: "Cut Here"; tip: "S: cut at the playhead"; onClicked: { if (!Backend.cut()) toast.say("Nothing under the playhead to cut", true) } }
             Seg { text: "Marker"; tip: "M"; onClicked: Backend.addMarker("") }
             Seg { objectName: "shotsBtn"; visible: win.hasClip && win.clip.kind === "media" && win.clip.mediaKind === "video"; text: "Find Shots"
                 tip: "Cut the picked clip wherever its footage cuts to another shot"; onClicked: Backend.cutAtShots(win.clip.id) }
+            Seg { objectName: "pausesBtn"; visible: win.hasClip && win.clip.kind === "media" && !!win.clip.hasAudio; text: "Cut Pauses"
+                tip: "Take the pauses out of the picked clip's speech, closing up its track"; onClicked: Backend.removePauses(win.clip.id) }
             IslandGap {}
             Seg { text: "+ Video Track"; onClicked: Backend.addTrack("video") }
             Seg { text: "+ Audio Track"; onClicked: Backend.addTrack("audio") }
@@ -787,6 +800,11 @@ GlassWindow {
                 Item { required property int index; readonly property real s: index * ruler.stepS; x: s * win.z - lanes.contentX; width: 1; height: ruler.height
                     Rectangle { width: 1; height: 8; y: ruler.height - 8; color: Theme.t.text_secondary }
                     Label { x: 3; y: 2; text: Math.floor(parent.s / 60) + ":" + ("0" + Math.floor(parent.s % 60)).slice(-2); font.pixelSize: 9; secondary: true } } }
+            Rectangle { objectName: "rangeBand"; visible: Backend.markedRange.length === 2; x: (Backend.markedRange[0] || 0) * win.z - lanes.contentX; y: ruler.height - 7
+                width: Math.max(2, ((Backend.markedRange[1] || 0) - (Backend.markedRange[0] || 0)) * win.z); height: 7; radius: 2; color: Qt.alpha(Theme.t.accent, 0.55)
+                Rectangle { width: 2; height: ruler.height; y: -ruler.height + 7; color: Theme.t.accent }
+                Rectangle { anchors.right: parent.right; width: 2; height: ruler.height; y: -ruler.height + 7; color: Theme.t.accent }
+                MouseArea { anchors.fill: parent; onDoubleClicked: Backend.markRange("clear") } }
             Repeater { model: Backend.markers
                 Rectangle { required property var modelData; x: modelData.t * win.z - lanes.contentX - 5; y: 2; width: 10; height: 10; radius: 2; rotation: 45; color: modelData.colour
                     MouseArea { anchors.fill: parent; anchors.margins: -4; onClicked: Backend.seek(modelData.t); onDoubleClicked: Backend.removeMarker(modelData.t) } } }
@@ -807,6 +825,8 @@ GlassWindow {
                                 property real dy: 0
                                 property real trimL: 0
                                 property real trimR: 0
+                                property bool slipping: false
+                                property real slipX: 0
                                 x: (modelData.at * win.z) + dx + trimL; y: 3 + dy; z: dx || dy ? 10 : 1
                                 width: Math.max(4, modelData.length * win.z - trimL + trimR); height: lane.height - 6; radius: 7; clip: true
                                 color: Qt.rgba(Qt.color(win.clipColour(modelData)).r, Qt.color(win.clipColour(modelData)).g, Qt.color(win.clipColour(modelData)).b, Theme.t.dark ? 0.42 : 0.3)
@@ -847,16 +867,24 @@ GlassWindow {
                                         if (fi > 0) { c.beginPath(); c.moveTo(0, 16); c.lineTo(fi, 16); c.lineTo(0, height); c.closePath(); c.fill() }
                                         if (fo > 0) { c.beginPath(); c.moveTo(width, 16); c.lineTo(width - fo, 16); c.lineTo(width, height); c.closePath(); c.fill() } }
                                     onWidthChanged: requestPaint() }
-                                MouseArea { id: body; anchors.fill: parent; anchors.leftMargin: 7; anchors.rightMargin: 7; preventStealing: true; cursorShape: win.tool === "blade" ? Qt.SplitHCursor : Qt.OpenHandCursor
+                                Rectangle { visible: cl.slipping; anchors.centerIn: parent; width: slipL.width + 14; height: 20; radius: 10; color: "#CC000000"; z: 3
+                                    Label { id: slipL; anchors.centerIn: parent; font.pixelSize: 10; color: "#FFFFFF"; font.family: Theme.t.fontMono
+                                        text: "slip " + (cl.slipX >= 0 ? "+" : "−") + Math.abs(cl.slipX / win.z).toFixed(2) + " s" } }
+                                MouseArea { id: body; anchors.fill: parent; anchors.leftMargin: 7; anchors.rightMargin: 7; preventStealing: true
+                                    cursorShape: win.tool === "blade" ? Qt.SplitHCursor : win.tool === "slip" ? Qt.SizeHorCursor : Qt.OpenHandCursor
                                     property point from
                                     property bool moved: false
                                     onPressed: function (m) { from = mapToItem(lanes.contentItem, m.x, m.y); moved = false
+                                        cl.slipping = win.tool === "slip" || !!(m.modifiers & Qt.AltModifier); cl.slipX = 0
                                         if (win.tool === "blade") { Backend.pick(cl.modelData.id, false); Backend.seek(cl.modelData.at + (m.x + 7) / win.z); Backend.cut(); return }
                                         if (!cl.chosen || (m.modifiers & Qt.ControlModifier)) Backend.pick(cl.modelData.id, (m.modifiers & Qt.ControlModifier)) }
-                                    onPositionChanged: function (m) { if (win.tool === "blade") return; var p = mapToItem(lanes.contentItem, m.x, m.y); cl.dx = p.x - from.x; cl.dy = p.y - from.y; moved = Math.abs(cl.dx) + Math.abs(cl.dy) > 3 }
+                                    onPositionChanged: function (m) { if (win.tool === "blade") return; var p = mapToItem(lanes.contentItem, m.x, m.y)
+                                        if (cl.slipping) { cl.slipX = from.x - p.x; return }      // drag left: later footage comes into the clip
+                                        cl.dx = p.x - from.x; cl.dy = p.y - from.y; moved = Math.abs(cl.dx) + Math.abs(cl.dy) > 3 }
                                     onDoubleClicked: { if (cl.modelData.kind === "compound") Backend.openCompound(cl.modelData.id) }
                                     onReleased: function (m) {
                                         if (win.tool === "blade") return
+                                        if (cl.slipping) { cl.slipping = false; if (Math.abs(cl.slipX) > 2) { var why = Backend.slip(cl.modelData.id, cl.slipX / win.z); if (why) toast.say(why, true) } cl.slipX = 0; return }
                                         if (moved) { var t = win.trackAt(lane.y + 3 + cl.dy + height / 2); var ok = Backend.move(cl.modelData.id, t ? t.id : cl.modelData.track, cl.modelData.at + cl.dx / win.z); if (!ok) toast.say("It doesn't fit there", true) }
                                         cl.dx = 0; cl.dy = 0 } }
                                 MouseArea { width: 8; height: parent.height; cursorShape: Qt.SizeHorCursor; preventStealing: true

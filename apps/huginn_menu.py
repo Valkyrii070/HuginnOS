@@ -83,7 +83,7 @@ APP_MENUS = {
     # the pro apps: their own groups, from the shortcuts they already have (an item shows only if its shortcut is there)
     "easel": [("File", [item("New…", "short:Ctrl+N", "Ctrl+N"), item("Open…", "short:Ctrl+O", "Ctrl+O"), SEP, item("Save", "short:Ctrl+S", "Ctrl+S"),
                         item("Save as…", "short:Ctrl+Shift+S", "Ctrl+Shift+S"), item("Export…", "short:Ctrl+E", "Ctrl+E")]),
-              ("Edit", [item("Undo", "short:Ctrl+Z", "Ctrl+Z"), item("Redo", "short:Ctrl+Shift+Z", "Ctrl+Shift+Z"), SEP, item("Cut", "short:Ctrl+X", "Ctrl+X"),
+              ("Edit", [item("Undo", "short:Ctrl+Z", "Ctrl+Z"), item("Redo", "short:Ctrl+Shift+Z", "Ctrl+Shift+Z"), item("History…", "qml:history", ""), SEP, item("Cut", "short:Ctrl+X", "Ctrl+X"),
                         item("Copy", "short:Ctrl+C", "Ctrl+C"), item("Paste", "short:Ctrl+V", "Ctrl+V"), SEP, item("Free transform", "short:Ctrl+T", "Ctrl+T")]),
               ("Select", [item("All", "short:Ctrl+A", "Ctrl+A"), item("Deselect", "short:Ctrl+D", "Ctrl+D"), item("Invert", "short:Ctrl+Shift+I", "Ctrl+Shift+I")]),
               ("Layer", [item("New layer", "short:Ctrl+Shift+N", "Ctrl+Shift+N"), item("Duplicate layer", "short:Ctrl+J", "Ctrl+J"), SEP,
@@ -99,7 +99,8 @@ APP_MENUS = {
                             item("Back a frame", "short:Left", "←"), item("Forward a frame", "short:Right", "→"), item("Back a second", "short:Shift+Left", "Shift+←"),
                             item("Forward a second", "short:Shift+Right", "Shift+→"), SEP, item("Previous edit", "short:Up", "↑"), item("Next edit", "short:Down", "↓"),
                             item("Go to the start", "short:Home", "Home"), item("Go to the end", "short:End", "End")]),
-              ("Tools", [item("Select", "short:A", "A"), item("Blade", "short:B", "B")]),
+              ("Mark", [item("Start of the part (In)", "short:I", "I"), item("End of the part (Out)", "short:O", "O"), item("Clear In and Out", "short:Alt+X", "Alt+X")]),
+              ("Tools", [item("Select", "short:A", "A"), item("Blade", "short:B", "B"), item("Slip", "short:Y", "Y")]),
               ("View", [item("Zoom in", "short:=", "="), item("Zoom out", "short:-", "−")])],
     "tempo": [("Edit", [item("Undo", "short:Ctrl+Z", "Ctrl+Z"), item("Redo", "short:Ctrl+Shift+Z", "Ctrl+Shift+Z"), SEP, item("Duplicate region", "short:Ctrl+D", "Ctrl+D"),
                         item("Split region at the playhead", "short:Ctrl+T", "Ctrl+T"), item("Delete region", "short:Delete", "Delete")]),

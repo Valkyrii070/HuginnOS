@@ -509,6 +509,38 @@ def sound_of(path: str, seconds: float = 180, rate: int = 8000) -> np.ndarray:
     return np.frombuffer(raw[:len(raw) // 2 * 2], np.int16)
 
 
+def quiet_spans(x: np.ndarray, rate: int, least: float = 0.5, pad: float = 0.12) -> list:
+    """The pauses in speech: stretches at least `least` s long well below the voice, as (start, end) seconds with
+    `pad` s of the quiet left at each side (so words aren't clipped). The bar between quiet and voice is set from the
+    clip itself, a quarter of the way (in decibels) from its quietest tenth to its loudest tenth, so it holds for a
+    noisy room and a quiet one alike."""
+    hop = max(1, int(rate * 0.02))
+    n = len(x) // hop
+    if n < 10:
+        return []
+    frames = x[:n * hop].astype(np.float32).reshape(n, hop) / 32768.0
+    db = 20 * np.log10(np.sqrt((frames ** 2).mean(axis=1)) + 1e-6)
+    lo, hi = np.percentile(db, 10), np.percentile(db, 90)
+    if hi - lo < 8:                                        # no clear difference between voice and quiet: nothing to cut
+        return []
+    quiet = db < lo + (hi - lo) * 0.25
+    out, k = [], 0
+    while k < n:
+        if not quiet[k]:
+            k += 1
+            continue
+        j = k
+        while j < n and quiet[j]:
+            j += 1
+        a, b = k * hop / rate, j * hop / rate
+        if b - a >= least:
+            a2, b2 = (a + pad if k > 0 else a), (b - pad if j < n else b)
+            if b2 - a2 > 0.05:
+                out.append((round(a2, 3), round(b2, 3)))
+        k = j
+    return out
+
+
 def track_box(frames: list, box: tuple) -> list:
     """Follow a box through frames (grey numpy images): template matching near where it was, the template
     refreshed as it goes so it copes with slow changes. box = (x, y, w, h) in pixels of the frames. Gives the box
@@ -1544,9 +1576,11 @@ def melt_has(kind: str, name: str) -> bool:
     return f"- {name}\n" in out or out.rstrip().endswith(f"- {name}")
 
 
-def export_command(project_file: str, target: str, preset: str, quality: str, width: int, height: int, fps: int, threads: int = 0) -> list:
+def export_command(project_file: str, target: str, preset: str, quality: str, width: int, height: int, fps: int, threads: int = 0,
+                   frames: tuple = None) -> list:
     pr = PRESETS[preset]
-    args = ["melt", project_file, "-progress", "-consumer", f"avformat:{target}"] + list(pr["args"])
+    part = [f"in={int(frames[0])}", f"out={int(frames[1])}"] if frames else []    # only the marked part (in and out frames)
+    args = ["melt", project_file] + part + ["-progress", "-consumer", f"avformat:{target}"] + list(pr["args"])
     if pr.get("crf"):
         args.append(f"crf={pr['crf'].get(quality, list(pr['crf'].values())[1])}")
     if "vn=1" not in pr["args"]:
@@ -2124,10 +2158,42 @@ class Clips(QObject):
     angleNow = Property(int, _angle_now, notify=frameChanged)
     trackBox = Property("QVariantMap", _track_box, notify=frameChanged)
     markers = Property("QVariantList", lambda self: sorted(self._p["markers"], key=lambda m: m["t"]), notify=changed)
+    markedRange = Property("QVariantList", lambda self: list(self._p.get("range") or []), notify=changed)
+
+    @Slot(str)
+    def markRange(self, which: str) -> None:
+        """I and O: where the part to play or make starts and ends ("clear" forgets it)."""
+        r = list(self._p.get("range") or [0.0, total(self._p)])
+        if which == "clear":
+            if not self._p.get("range"):
+                return
+            self._before()
+            self._p.pop("range", None)
+            self._keep()
+            return
+        t = round(self._head, 3)
+        if which == "in":
+            r[0] = t
+            if r[1] <= t + 0.05:
+                r[1] = max(t + 1.0, total(self._p))
+        elif which == "out":
+            r[1] = t
+            if r[0] >= t - 0.05:
+                r[0] = 0.0
+        else:
+            return
+        self._before()
+        self._p["range"] = [round(r[0], 3), round(r[1], 3)]
+        self._keep()
     length = Property(float, lambda self: total(self._p), notify=changed)
     head = Property(float, lambda self: self._head, notify=frameChanged)
     headText = Property(str, lambda self: timecode(self._head, int(self._p.get("fps", 30))), notify=frameChanged)
     lengthText = Property(str, lambda self: timecode(total(self._p), int(self._p.get("fps", 30))), notify=changed)
+
+    @Slot(float, result=str)
+    def clockOf(self, seconds: float) -> str:
+        seconds = max(0.0, float(seconds))
+        return f"{seconds:.1f} s" if seconds < 60 else clock(seconds)
     frame = Property(int, lambda self: self._frame_no, notify=frameChanged)
     playing = Property(bool, lambda self: self._engine.playing, notify=frameChanged)
     name = Property(str, lambda self: self._p.get("name", ""), notify=changed)
@@ -3139,6 +3205,14 @@ class Clips(QObject):
 
     @Slot(str, str, str)
     def export(self, preset: str, quality: str, size: str) -> None:
+        self._make_video(preset, quality, size, False)
+
+    @Slot(str, str, str)
+    def exportPart(self, preset: str, quality: str, size: str) -> None:
+        """Make only the part between the In and Out marks."""
+        self._make_video(preset, quality, size, True)
+
+    def _make_video(self, preset: str, quality: str, size: str, part: bool) -> None:
         if preset not in PRESETS or self._export["busy"] or not self._p["clips"]:
             return
         if self._demo:
@@ -3157,14 +3231,17 @@ class Clips(QObject):
         elif size == "half":
             W, H = W // 2 // 2 * 2, H // 2 // 2 * 2
         target = self._target(PRESETS[preset]["ext"])
-        part = target.with_name(f".{target.stem}.part{target.suffix}")
+        part_file = target.with_name(f".{target.stem}.part{target.suffix}")
         work = CACHE / "export"
         work.mkdir(parents=True, exist_ok=True)
         (work / "project.mlt").write_text(self._xml(W, H, export=True), encoding="utf-8")
-        args = export_command(str(work / "project.mlt"), str(part), preset, quality, W, H, int(self._p.get("fps", 30)))
+        fps = int(self._p.get("fps", 30))
+        rng = self._p.get("range") if part else None
+        span = (round(rng[0] * fps), max(round(rng[0] * fps), round(rng[1] * fps) - 1)) if rng else None
+        args = export_command(str(work / "project.mlt"), str(part_file), preset, quality, W, H, fps, frames=span)
         proc = QProcess(self)
         proc.setProcessChannelMode(QProcess.MergedChannels)
-        self._export.update(busy=True, share=0.0, path="", proc=proc, target=str(target), part=str(part), log="")
+        self._export.update(busy=True, share=0.0, path="", proc=proc, target=str(target), part=str(part_file), log="")
 
         def read():
             text = bytes(proc.readAllStandardOutput()).decode(errors="replace")
@@ -3176,10 +3253,13 @@ class Clips(QObject):
 
         def finished(code, _status):
             self._export.update(busy=False, proc=None)
-            if code == 0 and Path(part).exists() and Path(part).stat().st_size > 0:
-                os.replace(part, target)
+            if code == 0 and Path(part_file).exists() and Path(part_file).stat().st_size > 0:
+                os.replace(part_file, target)
                 self._export.update(share=1.0, path=str(target))
                 items = captions_of(self._p)
+                if rng:                                     # only the marked part: its captions, from its start
+                    items = [(round(max(0.0, a - rng[0]), 3), round(min(rng[1], b) - rng[0], 3), text)
+                             for a, b, text in items if b > rng[0] and a < rng[1]]
                 if items:                                   # the captions go alongside, for players and video sites
                     try:
                         target.with_suffix(".srt").write_text(to_srt(items), encoding="utf-8")
@@ -3187,7 +3267,7 @@ class Clips(QObject):
                         pass
                 self.said.emit(f"Saved {target.name} in Videos/Clips" + (" with its captions (.srt)" if items else ""), False)
             else:
-                Path(part).unlink(missing_ok=True)
+                Path(part_file).unlink(missing_ok=True)
                 if not self._export.get("stopped"):
                     last = [l for l in self._export.get("log", "").splitlines() if l.strip() and "percentage" not in l][-1:] or ["it stopped"]
                     self.said.emit("The video couldn't be made: " + last[0][:160], True)
@@ -3697,6 +3777,92 @@ class Clips(QObject):
             blade(self._p, t, [cid])
         self._keep()
         self.said.emit(f"Cut into {len(times) + 1} shots.", False)
+
+    # ---------------------------------------------------------------- slip, and cutting out the pauses
+    @Slot(str, float, result=str)
+    def slip(self, cid: str, seconds: float) -> str:
+        """Slide the footage inside a clip: it stays where it is and as long, showing `seconds` of the timeline
+        later footage (or earlier, below zero). Returns why not, or ""."""
+        c = self._c(cid)
+        if not c or track_of(self._p, c["track"]).get("locked"):
+            return "That track is locked."
+        m = media_of(self._p, c.get("media", ""))
+        if c.get("kind") != "media" or m.get("kind") not in ("video", "audio"):
+            return "Only clips of footage or sound can slip."
+        if ramped(c):
+            return "A clip with speed changes can't slip: its speeds belong to the footage."
+        if (c.get("tracking") or {}).get("boxes"):
+            return "Clear the motion tracking first: it follows this footage."
+        d = float(seconds) * float(c.get("speed") or 1.0)
+        d = max(-float(c["in"]), min(d, float(m.get("duration") or 0) - float(c["out"])))
+        if abs(d) < 0.001:
+            return "There's no more footage that way."
+        self._before()
+        c["in"], c["out"] = round(float(c["in"]) + d, 4), round(float(c["out"]) + d, 4)
+        self._keep()
+        return ""
+
+    @Slot(str)
+    def removePauses(self, cid: str) -> None:
+        """Cut the pauses out of a clip's speech, closing up its track."""
+        c = self._c(cid)
+        m = media_of(self._p, (c or {}).get("media", ""))
+        if not c or c.get("kind") != "media" or not m.get("audio"):
+            self.said.emit("Pick a clip with someone talking in it.", True)
+            return
+        if track_of(self._p, c["track"]).get("locked"):
+            self.said.emit("That track is locked.", True)
+            return
+        lo, hi = float(c["in"]), float(c["out"])
+        if self._demo:
+            self._pauses_found(cid, [(lo + 2.0, lo + 3.1), (lo + 6.0, lo + 6.9)])
+            return
+        self.said.emit("Listening for the pauses…", False)
+        path, rate = m["path"], 8000
+
+        def work():
+            try:
+                raw = subprocess.run(["ffmpeg", "-v", "error", "-ss", f"{lo:.3f}", "-i", path, "-t", f"{hi - lo:.3f}", "-vn", "-ac", "1",
+                                      "-ar", str(rate), "-f", "s16le", "-"], capture_output=True, timeout=900).stdout
+            except (OSError, subprocess.SubprocessError):
+                raw = b""
+            x = np.frombuffer(raw[:len(raw) // 2 * 2], np.int16)
+            return [(lo + a, lo + b) for a, b in quiet_spans(x, rate)]
+        self._bg(work, lambda spans: self._pauses_found(cid, spans if isinstance(spans, list) else []))
+
+    def _pauses_found(self, cid: str, spans: list) -> None:
+        c = self._c(cid)
+        if not c:
+            return
+        cuts = [(c["at"] + out_of(c, a), c["at"] + out_of(c, b)) for a, b in spans if float(c["in"]) <= a < b <= float(c["out"]) + 0.001]
+        if not cuts:
+            self.said.emit("No pauses long enough to cut.", False)
+            return
+        self._before()
+        track, gone = c["track"], 0.0
+        for a, b in reversed(cuts):                          # from the end, so the earlier times still hold
+            piece = self._piece_between(track, a, b)
+            if piece is None:
+                continue
+            gone += clip_len(piece)
+            ripple_delete(self._p, [piece["id"]])
+        self._picked = []
+        self._keep()
+        self.said.emit(f"Cut {len(cuts)} pause{'' if len(cuts) == 1 else 's'}: {gone:.1f} s shorter.", False)
+
+    def _piece_between(self, track: str, a: float, b: float):
+        """Blade a track's clip at a and b and give the piece between (a clip's start or end can be one of them)."""
+        def under(t):
+            return next((x for x in on_track(self._p, track) if x["at"] - EPS <= t < clip_end(x) - EPS), None)
+        c = under(a + 0.01)
+        if c is None:
+            return None
+        if b < clip_end(c) - 0.05:
+            blade(self._p, b, [c["id"]])
+        if a > c["at"] + 0.05:
+            made = blade(self._p, a, [c["id"]])
+            return self._c(made[0]) if made else None
+        return c
 
     @Slot(str)
     def markBeats(self, cid: str) -> None:

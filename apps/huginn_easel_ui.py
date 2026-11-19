@@ -77,6 +77,7 @@ class Easel(QObject):
         self._sel_path = QPainterPath()
         self._xform = None                                       # a free transform in progress
         self._clone_src, self._clone_off, self.heal_spot = None, None, True
+        self.symmetry = ""                                       # mirror painting: "", "x" (left-right), "y" (top-bottom) or "xy"
         self._node_sel = None                                    # (shape id, subpath, node) being edited
         self.retouch, self.retouch_range, self.retouch_strength = "dodge", "mid", 0.35   # round four's brushes
         self.liquify_mode, self.liquify_strength, self.smudge_strength = "push", 0.7, 0.6
@@ -143,7 +144,7 @@ class Easel(QObject):
         x = self._xform
         if not x:
             return {}
-        return {"w": round(abs(x["sx"]) * 100), "h": round(abs(x["sy"]) * 100), "angle": round(x["rot"] % 360, 1)}
+        return {"w": round(abs(x["sx"]) * 100), "h": round(abs(x["sy"]) * 100), "angle": round(x["rot"] % 360, 1), "distorted": x.get("quad") is not None}
     textStyle = Property("QVariantMap", lambda self: dict(self.text), notify=changed)
 
     @Property("QVariantList", constant=True)
@@ -386,6 +387,40 @@ class Easel(QObject):
             self._undo.pop(0)
         self._redo.clear()
 
+    @Property("QVariantList", notify=changed)
+    def history(self):
+        """Every step that can be undone, then the ones that can be redone: [{name, state}] where state is
+        "done", "now" (where the picture is) or "undone"."""
+        if not self.doc:
+            return []
+        rows = [{"name": "Where it began" if len(self._undo) < 60 else "Earliest kept", "state": "done"}]
+        rows += [{"name": name, "state": "done"} for name, _ in self._undo]
+        rows[-1]["state"] = "now"
+        rows += [{"name": name, "state": "undone"} for name, _ in reversed(self._redo)]
+        return rows
+
+    @Slot(int)
+    def historyTo(self, k: int) -> None:
+        """Go back (or forward again) to just after step k of the history (0: where it began)."""
+        if not self.doc:
+            return
+        if self._xform is not None:
+            self.cancelTransform()
+        now = len(self._undo)
+        for _ in range(max(0, now - k)):
+            if not self._undo:
+                break
+            name, snap = self._undo.pop()
+            self._redo.append((name, self.doc.snapshot()))
+            self.doc.restore(snap)
+        for _ in range(max(0, k - now)):
+            if not self._redo:
+                break
+            name, snap = self._redo.pop()
+            self._undo.append((name, self.doc.snapshot()))
+            self.doc.restore(snap)
+        self._after_history()
+
     @Slot()
     def undo(self) -> None:
         if not self._undo or not self.doc:
@@ -529,6 +564,10 @@ class Easel(QObject):
         if self._hover is not None and self.tool in ("brush", "eraser", "clone", "heal", "dodge", "smudge", "liquify") and self.doc:
             out["brush"] = (self._hover, self.brush["size"])
         out["xform"] = self._xform_handles() if self._xform else None
+        out["mirror"] = None
+        if self.symmetry and self.doc and self.tool in ("brush", "eraser"):
+            ax, ay = self._mirror_axes()
+            out["mirror"] = (ax if "x" in self.symmetry else None, ay if "y" in self.symmetry else None)
         out["source"] = None
         if self.tool in ("clone", "heal") and self._clone_src is not None and not (self.tool == "heal" and self.heal_spot):
             if self._clone_off is not None and self._hover is not None:
@@ -633,6 +672,13 @@ class Easel(QObject):
     penSeen = Property(bool, lambda self: self._stylus, notify=changed)
     busyText = Property(str, lambda self: self.busy, notify=changed)
     pressureMode = Property(str, lambda self: self.pressure_mode, notify=changed)
+    symmetryMode = Property(str, lambda self: self.symmetry, notify=changed)
+
+    def _mirror_axes(self) -> tuple:
+        """Where painting is mirrored: the first guide across (or down) the picture, otherwise its middle."""
+        gx = next((g["at"] for g in self.doc.guides if g["axis"] == "x"), self.doc.w / 2)
+        gy = next((g["at"] for g in self.doc.guides if g["axis"] == "y"), self.doc.h / 2)
+        return gx, gy
 
     @Slot(str, "QVariant")
     def setOption(self, key: str, value) -> None:
@@ -640,6 +686,8 @@ class Easel(QObject):
             self.pressure_mode = value
         elif key == "contiguous":
             self.contiguous = bool(value)
+        elif key == "symmetry" and value in ("", "x", "y", "xy"):
+            self.symmetry = value
         elif key == "gradientKind" and value in ("linear", "radial"):
             self.gradient_kind = value
         elif key == "gradientClear":
@@ -733,6 +781,9 @@ class Easel(QObject):
         self._push("New adjustment")
         layer = ez.new_layer("adjust", ez.ADJUSTMENTS[kind], self.doc.w, self.doc.h)
         layer["adjust"], layer["params"] = kind, dict(ez.ADJUST_DEFAULTS.get(kind, {}))
+        if kind == "gradmap":                                        # from the two colours in hand: the darker for the shadows
+            dark, light = sorted((self.fg, self.bg), key=lambda c: sum(ez.hex_rgb(c)))
+            layer["params"].update({"from": dark, "to": light} if dark != light else {})
         if self.doc.selection is not None:
             layer["mask"] = QImage(self.doc.selection)
         self._insert(layer)
@@ -744,6 +795,21 @@ class Easel(QObject):
         if not l or l["kind"] != "adjust":
             return
         l.setdefault("params", {})[key] = float(value)
+        self.doc.touch(l)
+        self._refresh()
+
+    @Slot(str)
+    def gradientColours(self, how: str) -> None:
+        """A gradient map's two ends: "mine" takes the two colours in hand (darker for the shadows), "swap" turns it round."""
+        l = self.doc.layer() if self.doc else None
+        if not l or l.get("adjust") != "gradmap":
+            return
+        self._push("Gradient map")
+        pr = l.setdefault("params", {})
+        if how == "swap":
+            pr["from"], pr["to"] = pr.get("to", "#F5E6C8"), pr.get("from", "#1A1A2E")
+        else:
+            pr["from"], pr["to"] = sorted((self.fg, self.bg), key=lambda c: sum(ez.hex_rgb(c)))
         self.doc.touch(l)
         self._refresh()
 
@@ -1150,6 +1216,30 @@ class Easel(QObject):
         return img
 
     def _stamp(self, d: dict, x: float, y: float, pressure: float = None) -> None:
+        if d.get("kind") == "brush" and self.symmetry and not d.get("mirrored"):
+            size = self.brush["size"]
+            scatter = self.brush.get("scatter", 0)
+            jx = (random.random() - 0.5) * size * scatter * 2 if scatter else 0
+            jy = (random.random() - 0.5) * size * scatter * 2 if scatter else 0
+            ax, ay = self._mirror_axes()
+            px, py = x + jx, y + jy
+            spots = [(px, py)]
+            if "x" in self.symmetry:
+                spots.append((2 * ax - px, py))
+            if "y" in self.symmetry:
+                spots.append((px, 2 * ay - py))
+            if self.symmetry == "xy":
+                spots.append((2 * ax - px, 2 * ay - py))
+            d["mirrored"] = True                                 # (each dab once, without its own scatter)
+            keep = self.brush.get("scatter", 0)
+            self.brush["scatter"] = 0
+            try:
+                for sx, sy in spots:
+                    self._stamp(d, sx, sy, pressure)
+            finally:
+                self.brush["scatter"] = keep
+                d["mirrored"] = False
+            return
         img, size = d["dab"], self.brush["size"]
         p = d["painter"]
         scatter = self.brush.get("scatter", 0)
@@ -1518,7 +1608,7 @@ class Easel(QObject):
                     p.end()
                     x["image"] = out
                 elif x["kind"] == "smart":
-                    x["place"] = dict(o, cx=o["cx"] + d["dx"], cy=o["cy"] + d["dy"])
+                    x["place"] = more.place_moved(o, lambda a, b: (a + d["dx"], b + d["dy"]))
                 else:
                     x["shapes"] = json.loads(json.dumps(o))
                     for sh in x["shapes"]:
@@ -1630,8 +1720,7 @@ class Easel(QObject):
             for s in l.get("shapes", []):
                 ez.move_shape(s, -rect.x(), -rect.y())
             if l.get("place"):
-                l["place"]["cx"] -= rect.x()
-                l["place"]["cy"] -= rect.y()
+                l["place"] = more.place_moved(l["place"], lambda a, b: (a - rect.x(), b - rect.y()))
             l["v"] = l.get("v", 0) + 1
         for g in self.doc.guides:
             g["at"] -= rect.x() if g["axis"] == "x" else rect.y()
@@ -1669,6 +1758,8 @@ class Easel(QObject):
             if l.get("place"):
                 pl = l["place"]
                 pl.update(cx=pl["cx"] * sx, cy=pl["cy"] * sy, sx=pl["sx"] * sx, sy=pl["sy"] * sy)
+                if pl.get("quad"):
+                    pl["quad"] = [[a * sx, b * sy] for a, b in pl["quad"]]
             l["v"] = l.get("v", 0) + 1
         for g in self.doc.guides:
             g["at"] *= sx if g["axis"] == "x" else sy
@@ -1719,6 +1810,8 @@ class Easel(QObject):
                 pl = l["place"]
                 c = t.map(QPointF(pl["cx"], pl["cy"]))
                 pl["cx"], pl["cy"] = c.x(), c.y()
+                if pl.get("quad"):
+                    pl["quad"] = [[t.map(QPointF(a, b)).x(), t.map(QPointF(a, b)).y()] for a, b in pl["quad"]]
                 if how in ("cw", "ccw", "180"):
                     pl["rot"] = (pl.get("rot", 0) + {"cw": 90, "ccw": -90, "180": 180}[how]) % 360
                 else:
@@ -2404,6 +2497,8 @@ class Easel(QObject):
     # ------------------------------------------------------------------ free transform (pixels)
     def _xform_matrix(self, visual: bool = False) -> QTransform:
         x = self._xform
+        if x.get("quad") is not None and not visual:             # distorted: the layer's corners go to four free points
+            return more.quad_matrix(x["floating"].width(), x["floating"].height(), x["quad"])
         t = QTransform().translate(x["cx"], x["cy"]).rotate(x["rot"])
         if visual:
             return t
@@ -2412,6 +2507,16 @@ class Easel(QObject):
 
     def _xform_handles(self) -> dict:
         x = self._xform
+        if x.get("quad") is not None:
+            q = [QPointF(a, b) for a, b in x["quad"]]
+            pts = {"tl": q[0], "tr": q[1], "br": q[2], "bl": q[3]}
+            for name, a, b in (("t", 0, 1), ("r", 1, 2), ("b", 2, 3), ("l", 3, 0)):
+                pts[name] = (q[a] + q[b]) / 2
+            mid = sum(q, QPointF(0, 0)) / 4
+            out = pts["t"] - mid
+            n = math.hypot(out.x(), out.y()) or 1.0
+            pts["rot"] = pts["t"] + out / n * (28 / max(0.05, self.zoom))
+            return pts
         hw, hh = x["floating"].width() * x["sx"] / 2, x["floating"].height() * x["sy"] / 2
         t = self._xform_matrix(True)
         pts = {name: t.map(QPointF(sx * hw, sy * hh)) for name, sx, sy in
@@ -2437,7 +2542,8 @@ class Easel(QObject):
             pl = l["place"]
             self._xform = {"layer": l, "floating": l["source"], "rest": ez.new_image(self.doc.w, self.doc.h), "smart": True, "sel": None,
                            "cx": pl["cx"], "cy": pl["cy"], "sx": pl["sx"], "sy": pl["sy"], "rot": pl.get("rot", 0.0),
-                           "flipx": bool(pl.get("flipx")), "flipy": bool(pl.get("flipy"))}
+                           "flipx": bool(pl.get("flipx")), "flipy": bool(pl.get("flipy")),
+                           "quad": [list(c) for c in pl["quad"]] if pl.get("quad") else None}
             self._live = (l["id"], lambda img: self._xform_image())
             self.changed.emit()
             return True
@@ -2485,6 +2591,8 @@ class Easel(QObject):
             return
         if x.get("smart"):
             x["layer"]["place"] = {k: x[k] for k in ("cx", "cy", "sx", "sy", "rot", "flipx", "flipy")}
+            if x.get("quad") is not None:
+                x["layer"]["place"]["quad"] = [list(c) for c in x["quad"]]
             self._xform, self._live = None, None
             self.doc.touch(x["layer"])
             self._refresh()
@@ -2517,14 +2625,31 @@ class Easel(QObject):
     @Slot(str)
     def flipTransform(self, axis: str) -> None:
         if self._xform is not None:
-            self._xform["flipx" if axis == "x" else "flipy"] ^= True
+            if self._xform.get("quad") is not None:
+                self._xform["quad"] = more.flip_quad(self._xform["quad"], axis)
+            else:
+                self._xform["flipx" if axis == "x" else "flipy"] ^= True
+            self._refresh()
+
+    @Slot()
+    def straightenTransform(self) -> None:
+        """Drop a distortion: back to a box (where it was moved, sized, turned and flipped)."""
+        if self._xform is not None and self._xform.get("quad") is not None:
+            self._xform["quad"] = None
             self._refresh()
 
     @Slot(float, float, float)
     def setTransform(self, wpercent: float, hpercent: float, angle: float) -> None:
         if self._xform is not None:
-            self._xform.update(sx=max(0.01, wpercent / 100), sy=max(0.01, hpercent / 100), rot=angle % 360)
+            self._xform.update(sx=max(0.01, wpercent / 100), sy=max(0.01, hpercent / 100), rot=angle % 360, quad=None)
             self._refresh()
+
+    def _box_quad(self) -> list:
+        """The four points the floating picture's own corners are at now (top left, top right, bottom right, bottom left)."""
+        x = self._xform
+        m = self._xform_matrix()
+        w, h = x["floating"].width(), x["floating"].height()
+        return [[m.map(QPointF(a, b)).x(), m.map(QPointF(a, b)).y()] for a, b in ((0, 0), (w, 0), (w, h), (0, h))]
 
     def _press_transform(self, pt: QPointF, mods: int) -> None:
         if self._xform is None and not self._begin_transform():
@@ -2536,12 +2661,23 @@ class Easel(QObject):
         if which is None:
             poly = QPolygonF([handles[k] for k in ("tl", "tr", "br", "bl")])
             which = "move" if poly.containsPoint(pt, Qt.FillRule.OddEvenFill) else "rot"
-        self._drag = {"kind": "xform", "what": which, "start": pt, "orig": {k: x[k] for k in ("cx", "cy", "sx", "sy", "rot")}}
+        if mods & CTRL and which not in ("move", "rot") and x.get("quad") is None:
+            x["quad"] = self._box_quad()                         # Ctrl on a handle: distort (Ctrl+Shift on a corner: perspective)
+            handles = self._xform_handles()
+        if x.get("quad") is not None and which not in ("move", "rot"):   # (which corner is which, now the points are free)
+            which = min(("tl", "tr", "br", "bl", "t", "r", "b", "l"), key=lambda n: (handles[n].x() - pt.x()) ** 2 + (handles[n].y() - pt.y()) ** 2)
+        self._drag = {"kind": "xform", "what": which, "start": pt, "orig": {k: x[k] for k in ("cx", "cy", "sx", "sy", "rot")},
+                      "quad": [list(c) for c in x["quad"]] if x.get("quad") is not None else None}
 
     def _move_xform(self, pt: QPointF, mods: int) -> None:
         d, x = self._drag, self._xform
         o = d["orig"]
         w, h = x["floating"].width(), x["floating"].height()
+        if d.get("quad") is not None:
+            x["quad"] = more.drag_quad(d["quad"], d["what"], pt.x() - d["start"].x(), pt.y() - d["start"].y(), (d["start"].x(), d["start"].y()),
+                                     (pt.x(), pt.y()), perspective=bool(mods & CTRL and mods & SHIFT), steps=bool(mods & SHIFT))
+            self.changed.emit()
+            return
         if d["what"] == "move":
             dx, dy = pt.x() - d["start"].x(), pt.y() - d["start"].y()
             if self.snap and not mods & SHIFT:
@@ -3804,6 +3940,15 @@ class EaselView(QQuickPaintedItem):
             for i in (1, 2):
                 p.drawLine(QPointF(r.left() + r.width() * i / 3, r.top()), QPointF(r.left() + r.width() * i / 3, r.bottom()))
                 p.drawLine(QPointF(r.left(), r.top() + r.height() * i / 3), QPointF(r.right(), r.top() + r.height() * i / 3))
+        if ov.get("mirror"):                                          # where painting is mirrored
+            mx, my = ov["mirror"]
+            pen = QPen(QColor(255, 255, 255, 150), 1)
+            pen.setDashPattern([2, 4])
+            p.setPen(pen)
+            if mx is not None:
+                p.drawLine(t.map(QPointF(mx, 0)), t.map(QPointF(mx, doc.h)))
+            if my is not None:
+                p.drawLine(t.map(QPointF(0, my)), t.map(QPointF(doc.w, my)))
         if ov.get("xform"):
             hp = {k: t.map(v) for k, v in ov["xform"].items()}
             p.setBrush(Qt.BrushStyle.NoBrush)

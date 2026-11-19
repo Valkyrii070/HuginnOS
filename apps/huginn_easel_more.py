@@ -6,7 +6,7 @@ import math
 
 import numpy as np
 from PySide6.QtCore import QPointF, QRectF, Qt
-from PySide6.QtGui import QColor, QImage, QPainter, QTransform
+from PySide6.QtGui import QColor, QImage, QPainter, QPolygonF, QTransform
 
 try:
     import cv2
@@ -251,6 +251,8 @@ def smart_place(src: QImage, box_x: float, box_y: float) -> dict:
 
 
 def place_matrix(place: dict, w: int, h: int) -> QTransform:
+    if place.get("quad"):
+        return quad_matrix(w, h, place["quad"])
     return (QTransform().translate(place["cx"], place["cy"]).rotate(place.get("rot", 0))
             .scale(place["sx"] * (-1 if place.get("flipx") else 1), place["sy"] * (-1 if place.get("flipy") else 1)).translate(-w / 2, -h / 2))
 
@@ -436,3 +438,69 @@ def snap_box(x: float, y: float, w: float, h: float, xs: list, ys: list, within:
 
 def dumps(o) -> str:
     return json.dumps(o, sort_keys=True)
+
+
+# ------------------------------------------------------------------ distort and perspective (free transform)
+def quad_matrix(w: float, h: float, quad: list) -> QTransform:
+    """The projective map that takes a w × h picture's corners (top left, top right, bottom right, bottom left) to
+    four points. A quad that folds over on itself has none: then the box the points span stands in."""
+    src = QPolygonF([QPointF(0, 0), QPointF(w, 0), QPointF(w, h), QPointF(0, h)])
+    dst = QPolygonF([QPointF(a, b) for a, b in quad])
+    t = QTransform()
+    if QTransform.quadToQuad(src, dst, t):
+        return t
+    r = dst.boundingRect()
+    return QTransform().translate(r.x(), r.y()).scale(max(r.width(), 1) / max(w, 1), max(r.height(), 1) / max(h, 1))
+
+
+QUAD_SIDES = {"t": (0, 1), "r": (1, 2), "b": (2, 3), "l": (3, 0)}
+QUAD_CORNERS = {"tl": 0, "tr": 1, "br": 2, "bl": 3}
+
+
+def drag_quad(quad: list, what: str, dx: float, dy: float, start=(0.0, 0.0), now=(0.0, 0.0), perspective: bool = False, steps: bool = False) -> list:
+    """A distortion being dragged, from where it was when the drag began: the inside moves it all, outside turns it
+    round its middle (Shift: in 15° steps), a corner goes where it's dragged (with perspective, the corner across
+    the same edge moves the mirror way, so the edge narrows or widens evenly), and an edge's two corners move
+    together (skew)."""
+    q = [list(c) for c in quad]
+    if what == "move":
+        return [[a + dx, b + dy] for a, b in q]
+    if what == "rot":
+        cx, cy = sum(a for a, _ in q) / 4, sum(b for _, b in q) / 4
+        ang = math.atan2(now[1] - cy, now[0] - cx) - math.atan2(start[1] - cy, start[0] - cx)
+        if steps:
+            ang = math.radians(round(math.degrees(ang) / 15) * 15)
+        c, s_ = math.cos(ang), math.sin(ang)
+        return [[cx + (a - cx) * c - (b - cy) * s_, cy + (a - cx) * s_ + (b - cy) * c] for a, b in q]
+    if what in QUAD_CORNERS:
+        k = QUAD_CORNERS[what]
+        q[k] = [q[k][0] + dx, q[k][1] + dy]
+        if perspective:
+            # the corner across the top or bottom edge, moved the mirror way along that edge and the same way across it
+            other = {0: 1, 1: 0, 2: 3, 3: 2}[k]
+            ex, ey = quad[other][0] - quad[k][0], quad[other][1] - quad[k][1]
+            n = math.hypot(ex, ey) or 1.0
+            ux, uy = ex / n, ey / n
+            along = dx * ux + dy * uy
+            across_x, across_y = dx - along * ux, dy - along * uy
+            q[other] = [quad[other][0] - along * ux + across_x, quad[other][1] - along * uy + across_y]
+        return q
+    if what in QUAD_SIDES:
+        for k in QUAD_SIDES[what]:
+            q[k] = [q[k][0] + dx, q[k][1] + dy]
+    return q
+
+
+def flip_quad(quad: list, axis: str) -> list:
+    """Mirror a distortion in place: the picture's left and right corners trade places (or its top and bottom)."""
+    tl, tr, br, bl = quad
+    return [list(tr), list(tl), list(bl), list(br)] if axis == "x" else [list(bl), list(br), list(tr), list(tl)]
+
+
+def place_moved(place: dict, fn) -> dict:
+    """A smart object's placing with its middle (and a distortion's corners) taken through fn(x, y) → (x, y)."""
+    out = dict(place)
+    out["cx"], out["cy"] = fn(place["cx"], place["cy"])
+    if place.get("quad"):
+        out["quad"] = [list(fn(a, b)) for a, b in place["quad"]]
+    return out

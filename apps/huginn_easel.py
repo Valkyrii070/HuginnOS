@@ -42,7 +42,7 @@ ORA_OPS = {"normal": "svg:src-over", "multiply": "svg:multiply", "screen": "svg:
            "lighten": "svg:lighten", "dodge": "svg:color-dodge", "burn": "svg:color-burn", "hard": "svg:hard-light", "soft": "svg:soft-light",
            "difference": "svg:difference", "exclusion": "svg:exclusion", "add": "svg:plus"}
 ADJUSTMENTS = {"light": "Brightness & Contrast", "curves": "Curves", "colour": "Hue & Saturation", "levels": "Levels", "bw": "Black & White",
-               "invert": "Invert", "warmth": "Warmth", "posterize": "Posterize"}
+               "invert": "Invert", "warmth": "Warmth", "posterize": "Posterize", "vibrance": "Vibrance", "gradmap": "Gradient Map"}
 PICTURES = (".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff", ".gif")
 
 
@@ -557,6 +557,11 @@ def apply_curves(x: np.ndarray, curves: dict) -> np.ndarray:
     return out
 
 
+def hex_rgb(colour: str) -> tuple:
+    c = QColor(colour)
+    return (c.red(), c.green(), c.blue()) if c.isValid() else (0, 0, 0)
+
+
 def adjust_array(rgb: np.ndarray, kind: str, p: dict) -> np.ndarray:
     """One adjustment on float RGB (0..1). Parameters run from -1 to 1 unless said otherwise."""
     x = rgb
@@ -589,13 +594,33 @@ def adjust_array(rgb: np.ndarray, kind: str, p: dict) -> np.ndarray:
     elif kind == "posterize":
         n = max(2, int(2 + (p.get("levels", 0.3) + 1) * 7))
         x = np.round(x * (n - 1)) / (n - 1)
+    elif kind == "vibrance":
+        # vibrance lifts the dull colours most and leaves the strong ones (and skin) nearly alone; saturation is even
+        lum = (x @ np.array([0.2126, 0.7152, 0.0722], np.float32))[..., None]
+        sat = (x.max(axis=2, keepdims=True) - x.min(axis=2, keepdims=True))
+        v = p.get("vibrance", 0)
+        k = 1 + v * (1 - sat) * 1.5 if v > 0 else 1 + v * (1 - sat * 0.5)
+        x = lum + (x - lum) * k * (1 + p.get("saturation", 0))
+    elif kind == "gradmap":
+        # each pixel's lightness picks its colour on a gradient: shadows → highlights (balance moves the middle)
+        lum = np.clip(x @ np.array([0.2126, 0.7152, 0.0722], np.float32), 0, 1)
+        bal = p.get("balance", 0)
+        if bal:
+            lum = lum ** (2.0 ** (-bal * 1.5))
+        a = np.array(hex_rgb(p.get("from", "#1A1A2E")), np.float32) / 255
+        b = np.array(hex_rgb(p.get("to", "#F5E6C8")), np.float32) / 255
+        mapped = a + (b - a) * lum[..., None]
+        k = (p.get("strength", 1.0) + 1) / 2
+        x = x + (mapped - x) * k
     return np.clip(x, 0, 1)
 
 
 ADJUST_PARAMS = {"light": [("brightness", "Brightness"), ("contrast", "Contrast")], "colour": [("hue", "Hue"), ("saturation", "Saturation"), ("lightness", "Lightness")],
                  "levels": [("black", "Black point"), ("gamma", "Midtones"), ("white", "White point")], "bw": [("reds", "Reds"), ("greens", "Greens"), ("blues", "Blues")],
-                 "invert": [], "warmth": [("warmth", "Warmth")], "posterize": [("levels", "Levels")], "curves": []}
-ADJUST_DEFAULTS = {"levels": {"black": 0.0, "white": 1.0, "gamma": 0.0}, "posterize": {"levels": -0.4},
+                 "invert": [], "warmth": [("warmth", "Warmth")], "posterize": [("levels", "Levels")], "curves": [],
+                 "vibrance": [("vibrance", "Vibrance"), ("saturation", "Saturation")], "gradmap": [("balance", "Balance"), ("strength", "Strength")]}
+ADJUST_DEFAULTS = {"levels": {"black": 0.0, "white": 1.0, "gamma": 0.0}, "posterize": {"levels": -0.4}, "vibrance": {"vibrance": 0.4},
+                   "gradmap": {"balance": 0.0, "strength": 1.0},
                    "curves": {"curves": {"rgb": [[0, 0], [0.25, 0.2], [0.75, 0.82], [1, 1]]}}}
 
 
