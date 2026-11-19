@@ -213,7 +213,8 @@ def natural(text: str) -> list:
 KIND_NAMES = {"folder": "Folder", "image": "Picture", "music": "Audio", "video": "Video", "doc": "Document", "file": "File"}
 TRASH = "trash:"
 FIND_LIMIT = 500
-THUMBED = IMAGES | VIDEO | {".pdf"}
+OFFICE_THUMBS = {".odt", ".ods", ".odp", ".odg", ".docx", ".xlsx", ".pptx", ".hslides", ".html", ".htm", ".hsheet"}   # documents shown by their first page
+THUMBED = IMAGES | VIDEO | {".pdf"} | OFFICE_THUMBS
 MAX_TABS = 12
 READ_INSIDE = {".pdf", ".docx", ".odt", ".xlsx", ".ods", ".pptx", ".odp"}
 NET_SCHEMES = ("smb", "sftp", "ssh", "ftp", "ftps", "dav", "davs", "nfs", "afp")
@@ -4979,6 +4980,8 @@ class FileThumb(QQuickImageProvider):
         suffix = os.path.splitext(path)[1].lower()
         if suffix == ".pdf":
             picture = self._pdf(path, 1100 if big else self.W * 2)
+        elif suffix in OFFICE_THUMBS:
+            picture = self._office(path, suffix)
         elif suffix in VIDEO:
             picture = self._video(path, 960 if big else self.W * 2)
         elif big:
@@ -5011,7 +5014,7 @@ class FileThumb(QQuickImageProvider):
         shape = QPainterPath()
         shape.addRoundedRect(0, 0, self.W, self.H, self.R, self.R)
         painter.setClipPath(shape)
-        painter.drawImage((self.W - picture.width()) // 2, 0 if suffix == ".pdf" else (self.H - picture.height()) // 2, picture)
+        painter.drawImage((self.W - picture.width()) // 2, 0 if suffix in {".pdf"} | OFFICE_THUMBS - {".pptx", ".odp", ".hslides"} else (self.H - picture.height()) // 2, picture)
         if suffix in VIDEO:                                       # a small play mark, so a video isn't taken for a photo
             painter.setPen(Qt.PenStyle.NoPen)
             painter.setBrush(QColor(0, 0, 0, 150))
@@ -5031,6 +5034,125 @@ class FileThumb(QQuickImageProvider):
             pass
         return out
 
+
+    def _office(self, path: str, suffix: str):
+        """The picture an office file keeps of its first page (OpenDocument always does; Word, Excel and PowerPoint when
+        asked, and PowerPoint by default), or for a Slides presentation its first slide, drawn."""
+        import zipfile
+        if suffix in (".html", ".htm"):                           # only Writer's own (a web page saved from a browser keeps its icon)
+            try:
+                if os.path.getsize(path) > 4_000_000:
+                    return None
+                text = Path(path).read_text(encoding="utf-8", errors="replace")
+                if 'name="huginn-writer"' not in text[:4000]:
+                    return None
+                from PySide6.QtCore import QRectF
+                from PySide6.QtGui import QTextDocument
+                page_w, page_h, margin = 794, 1123, 96               # A4 at 96 dpi, an inch of margin: near enough for a picture
+                doc = QTextDocument()
+                doc.setHtml(text)
+                doc.setTextWidth(page_w - 2 * margin)
+                img = QImage(self.W * 2, round(self.W * 2 * page_h / page_w), QImage.Format.Format_RGB32)
+                img.fill(Qt.GlobalColor.white)
+                painter = QPainter(img)
+                painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+                painter.scale(img.width() / page_w, img.width() / page_w)
+                painter.translate(margin, margin)
+                doc.drawContents(painter, QRectF(0, 0, page_w - 2 * margin, page_h - 2 * margin))
+                painter.end()
+                return img
+            except Exception:                                     # noqa: BLE001
+                return None
+        if suffix in (".hsheet", ".xlsx"):
+            grid = self._sheet(path, suffix)
+            if grid is not None or suffix == ".hsheet":
+                return grid
+        if suffix == ".hslides":
+            try:
+                import json
+                import huginn_slides_model as sm
+                deck = json.loads(Path(path).read_text(encoding="utf-8"))
+                if deck.get("format") != "huginn-slides-2" or not deck.get("slides"):
+                    deck = sm.upgrade(deck)
+                first = next((sl for sl in deck["slides"] if not sl.get("hidden")), deck["slides"][0])
+                w = sm.slide_w(deck.get("size", "16:9"))
+                img = QImage(self.W * 2, round(self.W * 2 * sm.SLIDE_H / w), QImage.Format.Format_ARGB32_Premultiplied)
+                img.fill(Qt.GlobalColor.white)
+                painter = QPainter(img)
+                painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+                painter.scale(img.width() / w, img.width() / w)
+                sm.paint_slide(painter, deck, first)
+                painter.end()
+                return img
+            except Exception:                                     # noqa: BLE001  (no picture: the icon shows)
+                return None
+        try:
+            with zipfile.ZipFile(path) as z:
+                names = set(z.namelist())
+                inside = next((n for n in ("Thumbnails/thumbnail.png", "docProps/thumbnail.jpeg", "docProps/thumbnail.png") if n in names), None)
+                if inside is None:
+                    return None
+                img = QImage()
+                img.loadFromData(z.read(inside))
+                return None if img.isNull() else img
+        except (OSError, zipfile.BadZipFile, KeyError):
+            return None
+
+    def _sheet(self, path: str, suffix: str):
+        """The top-left of the sheet in front: column letters, a dozen rows, the values worked out."""
+        try:
+            if os.path.getsize(path) > 8_000_000:
+                return None
+            import huginn_sheet_engine as se
+            import huginn_sheets as hs
+            if suffix == ".hsheet":
+                sheets, front = hs.read_hsheet(Path(path).read_text(encoding="utf-8"))
+            else:
+                import huginn_xlsx
+                sheets, _dropped = huginn_xlsx.read(Path(path))
+                front = 0
+            if not sheets:
+                return None
+            book = se.Book()
+            book.sheets = sheets
+            front = max(0, min(front, len(sheets) - 1))
+            rows, cols, cw, rh, head = 12, 5, 56, 18, 14
+            img = QImage(head + cols * cw, head + rows * rh, QImage.Format.Format_RGB32)
+            img.fill(Qt.GlobalColor.white)
+            painter = QPainter(img)
+            painter.setRenderHint(QPainter.RenderHint.TextAntialiasing)
+            painter.fillRect(0, 0, img.width(), head, QColor("#EEF1F5"))
+            painter.fillRect(0, 0, head, img.height(), QColor("#EEF1F5"))
+            painter.setPen(QColor("#DDE2E8"))
+            for c in range(cols + 1):
+                painter.drawLine(head + c * cw, 0, head + c * cw, img.height())
+            for r in range(rows + 1):
+                painter.drawLine(0, head + r * rh, img.width(), head + r * rh)
+            font = painter.font()
+            font.setPixelSize(9)
+            painter.setFont(font)
+            painter.setPen(QColor("#8A94A3"))
+            for c in range(cols):
+                painter.drawText(head + c * cw, 0, cw, head, Qt.AlignmentFlag.AlignCenter, se.col_name(c))
+            font.setPixelSize(10)
+            painter.setFont(font)
+            painter.setPen(QColor("#1F2328"))
+            for r in range(rows):
+                for c in range(cols):
+                    if not book.raw(front, r, c):
+                        continue
+                    try:
+                        v = se.scalar(book.value(front, r, c))
+                    except Exception:                             # noqa: BLE001
+                        v = "#ERR"
+                    number = isinstance(v, (int, float)) and not isinstance(v, bool)
+                    shown = (f"{v:,.2f}".rstrip("0").rstrip(".") if number else se.text(v))[:14]
+                    painter.drawText(head + c * cw + 3, head + r * rh, cw - 6, rh,
+                                     (Qt.AlignmentFlag.AlignRight if number else Qt.AlignmentFlag.AlignLeft) | Qt.AlignmentFlag.AlignVCenter, shown)
+            painter.end()
+            return img
+        except Exception:                                         # noqa: BLE001  (no picture: the icon shows)
+            return None
 
     def _pdf(self, path: str, width: int):
         """The first page, on white."""
@@ -5336,7 +5458,6 @@ def main() -> int:
         import huginn_auth
         backend = huginn_auth.Authenticator(None, args.demo)
     elif args.app in ("writer", "sheets", "slides"):
-        import huginn_office
         if args.app == "writer":
             import huginn_writer
             backend = huginn_writer.Writer(target)

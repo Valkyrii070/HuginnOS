@@ -1333,6 +1333,8 @@ fn process_keyboard_shortcut(modifiers: ModifiersState, keysym: Keysym) -> Optio
         Some(KeyAction::Lock)
     } else if modifiers.logo && !modifiers.shift && (keysym == Keysym::t || keysym == Keysym::T) {
         Some(KeyAction::Shell("today"))
+    } else if modifiers.logo && !modifiers.shift && (keysym == Keysym::v || keysym == Keysym::V) {
+        Some(KeyAction::Shell("clipboard"))
     } else if modifiers.logo && keysym == Keysym::Tab {
         Some(KeyAction::Overview)
     } else if modifiers.logo && modifiers.ctrl && (keysym == Keysym::Left || keysym == Keysym::Right) {

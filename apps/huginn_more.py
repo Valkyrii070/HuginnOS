@@ -92,6 +92,16 @@ def recent_files(suffixes: tuple, limit: int = 6) -> list:
 
 
 # ================================================================================================ Passwords
+def copy_secret(board, text: str) -> None:
+    """A password or a code onto the clipboard, marked as a secret the way password managers mark them
+    (x-kde-passwordManagerHint), so clipboard history never keeps it."""
+    from PySide6.QtCore import QByteArray, QMimeData
+    data = QMimeData()
+    data.setText(text)
+    data.setData("x-kde-passwordManagerHint", QByteArray(b"secret"))
+    board.setMimeData(data)
+
+
 class Vault(QObject):
     """The Passwords app's view of the vault every Huginn app shares (see huginn_vault.py).
 
@@ -416,7 +426,10 @@ class Vault(QObject):
         board = QGuiApplication.clipboard() if QGuiApplication.instance() else None
         if not row or not board or what not in ("user", "password", "site"):
             return
-        board.setText(row.get(what, ""))
+        if what == "password":
+            copy_secret(board, row.get(what, ""))
+        else:
+            board.setText(row.get(what, ""))
         if what == "password":
             self._copied = row.get(what, "")
             self._wipe.start()
@@ -444,7 +457,7 @@ class Vault(QObject):
     def copyCode(self, code: str) -> None:
         board = QGuiApplication.clipboard() if QGuiApplication.instance() else None
         if board and code:
-            board.setText(code)
+            copy_secret(board, code)
             self._copied = code
             self._wipe.start()
             self.said.emit("Code copied. It leaves the clipboard in 30 seconds.")

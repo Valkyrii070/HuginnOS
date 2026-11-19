@@ -51,6 +51,9 @@ App Store installs apps from Flathub. Web apps you install from the Huginn brows
 ## Switch windows and keys to know
 Hold Alt and press Tab to see your open windows; let go of Alt to go to the one picked (Shift+Tab goes back, Escape stays put). Super on its own opens the start menu, Super+Tab the Overview, Super+T Today, Alt on its own the app's menu, Super+Space searches everything, Super+L locks, Print saves a screenshot of the whole screen to Pictures › Screenshots, and Shift+Print (or Super+Shift+S) opens Screenshot to choose what to take. Clicking an open app in the dock brings its window forward instead of opening another.
 
+## Clipboard history
+Super+V shows what you copied lately, text and pictures; pick one and it's pasted where you were typing. Type to find something, pin what you use often, Delete removes one. It's off until you turn it on (the first Super+V asks, or Settings › Privacy). Passwords copied from Passwords and Authenticator are never kept.
+
 ## When an app asks
 Some things apps can only do by asking you first, in a card of Huginn's own: using the camera or taking screenshots ("Allow …?", answered once), which app should open a file or a link (**Open With**, the last one you used already picked), or a colour from the screen (the screen holds still with a magnifier: click the colour). An app that asks for a screenshot holds the screen still too: drag over the part to share, or take the whole screen; Escape says no.
 

@@ -15,7 +15,7 @@ Rectangle {
     function focusIn() { (lines > 1 ? area : one).forceActiveFocus() }
     width: 280; height: lines > 1 ? 16 + lines * 18 : 36; radius: 10; color: Theme.t.group
     border.width: 1; border.color: one.activeFocus || area.activeFocus ? Theme.t.accent : Theme.t.islandLine
-    TextInput { id: one; visible: box.lines === 1; anchors { fill: parent; leftMargin: 12; rightMargin: 12 } verticalAlignment: TextInput.AlignVCenter; clip: true
+    TextInput { id: one; visible: box.lines === 1; activeFocusOnTab: visible; anchors { fill: parent; leftMargin: 12; rightMargin: 12 } verticalAlignment: TextInput.AlignVCenter; clip: true
         echoMode: box.secret ? TextInput.Password : TextInput.Normal; color: Theme.t.text; font.family: box.mono ? Theme.t.fontMono : Theme.t.font; font.pixelSize: 14
         selectionColor: Theme.t.accent; selectedTextColor: Theme.t.onAccent; selectByMouse: true; onAccepted: box.accepted(); onTextEdited: box.edited() }
     Flickable { visible: box.lines > 1; anchors { fill: parent; margins: 8 } clip: true; contentHeight: area.height

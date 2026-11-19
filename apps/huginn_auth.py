@@ -385,7 +385,8 @@ class Authenticator(huginn_more.Vault):
         board = QGuiApplication.clipboard()
         if not hit or not board:
             return
-        board.setText(hit["code"])
+        from huginn_more import copy_secret                    # marked, so clipboard history leaves it out
+        copy_secret(board, hit["code"])
         self._copied = hit["code"]
         self._wipe.start()
         self._touch()

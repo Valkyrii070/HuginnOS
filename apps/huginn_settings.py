@@ -1028,7 +1028,15 @@ def load_privacy(apps: dict = None) -> dict:
             "lockOn": kconfig_read(lock, ["Daemon"], "Autolock", "true") == "true", "lockAfter": int(kconfig_read(lock, ["Daemon"], "Timeout", "5") or 5),
             "lockOnWake": kconfig_read(lock, ["Daemon"], "LockOnResume", "true") == "true",
             "trashDays": int(kconfig_read(trash, group, "Days", "30") or 30) if kconfig_read(trash, group, "UseTimeLimit", "false") == "true" else 0,
-            "remember": remember != "2", "recent": _recent_count()}
+            "remember": remember != "2", "recent": _recent_count(), **_clipboard_state()}
+
+
+def _clipboard_state() -> dict:
+    try:
+        import huginn_clipboard
+        return {"clipboard": huginn_clipboard.enabled(), "clipboardCount": len(huginn_clipboard.entries()), "hasClipboard": bool(HAVE("wl-paste"))}
+    except Exception:                                            # noqa: BLE001
+        return {"clipboard": False, "clipboardCount": 0, "hasClipboard": False}
 
 
 def _plain_kv(path: Path) -> dict:
@@ -2012,6 +2020,12 @@ class SystemSettings(QObject):
                 kconfig_write(CONFIG / "ktrashrc", group, "UseTimeLimit", int(value) > 0)
                 if int(value) > 0:
                     kconfig_write(CONFIG / "ktrashrc", group, "Days", int(value))
+            elif key == "clipboard":
+                import huginn_clipboard
+                huginn_clipboard.set_enabled(bool(value))
+            elif key == "clipboardClear":
+                import huginn_clipboard
+                huginn_clipboard.clear()
             elif key == "remember":
                 kconfig_write(CONFIG / "kactivitymanagerd-pluginsrc", ["Plugin-org.kde.ActivityManager.Resources.Scoring"], "what-to-remember", 0 if value else 2)
                 if not value:

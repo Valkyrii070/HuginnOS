@@ -362,6 +362,37 @@ def _band_xml(kind: str, text: str, number: str, title: str) -> str:
             f'{"".join(paras) or f"<w:p><w:pPr><w:pStyle w:val=\"{style}\"/></w:pPr></w:p>"}</w:{tag}>')
 
 
+def _thumbnail(doc: QTextDocument, w_mm: float, h_mm: float, margins) -> bytes:
+    """The first page, 256 wide, as JPEG; b"" without a window system to draw with, or if anything goes wrong."""
+    try:
+        from PySide6.QtCore import QBuffer, QByteArray, QIODevice, QRectF, QSizeF
+        from PySide6.QtGui import QGuiApplication, QImage, QPainter
+        if QGuiApplication.instance() is None or not isinstance(QGuiApplication.instance(), QGuiApplication):
+            return b""
+        px = lambda mm: mm / 25.4 * 96                    # noqa: E731
+        top, right, bottom, left = margins
+        page_w, page_h = px(w_mm), px(h_mm)
+        copy = doc.clone()
+        copy.setPageSize(QSizeF(-1, -1))
+        copy.setTextWidth(page_w - px(left) - px(right))
+        img = QImage(256, round(256 * page_h / page_w), QImage.Format.Format_RGB32)
+        img.fill(0xFFFFFF)
+        painter = QPainter(img)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setRenderHint(QPainter.RenderHint.TextAntialiasing)
+        painter.scale(256 / page_w, 256 / page_w)
+        painter.translate(px(left), px(top))
+        copy.drawContents(painter, QRectF(0, 0, page_w - px(left) - px(right), page_h - px(top) - px(bottom)))
+        painter.end()
+        ba = QByteArray()
+        buf = QBuffer(ba)
+        buf.open(QIODevice.OpenModeFlag.WriteOnly)
+        img.save(buf, "JPEG", 85)
+        return bytes(ba)
+    except Exception:                                       # noqa: BLE001  (a file without a picture is still a file)
+        return b""
+
+
 def document_to_docx(doc: QTextDocument, setup: dict, path, title: str = "") -> None:
     """Write a QTextDocument and Writer's page setup as a .docx."""
     o = _Out(doc)
@@ -422,6 +453,10 @@ def document_to_docx(doc: QTextDocument, setup: dict, path, title: str = "") -> 
     parts["_rels/.rels"] = (f'<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="{PKG}">'
                             f'<Relationship Id="rId1" Type="{REL}/officeDocument" Target="word/document.xml"/>'
                             f'<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties" Target="docProps/core.xml"/></Relationships>')
+    thumb = _thumbnail(doc, w_mm, h_mm, (top, right, bottom, left))   # the first page, small, as Word keeps one when asked:
+    if thumb:                                                         # file managers show it
+        parts["docProps/thumbnail.jpeg"] = thumb
+        parts["_rels/.rels"] = parts["_rels/.rels"].replace("</Relationships>", '<Relationship Id="rId3" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/thumbnail" Target="docProps/thumbnail.jpeg"/></Relationships>')
     parts["docProps/core.xml"] = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?><cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" '
                                   'xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title>' + escape(title) + '</dc:title><dc:creator>Huginn Writer</dc:creator></cp:coreProperties>')
     tmp = Path(str(path) + ".part")

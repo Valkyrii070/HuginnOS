@@ -42,7 +42,7 @@ GlassWindow {
         ["a11y", "Slow keys", "typing accidental accessibility"], ["a11y", "Bounce keys", "tremor repeat accessibility"],
         ["a11y", "Mouse keys", "number pad pointer keyboard accessibility"], ["a11y", "Flash the screen", "deaf hearing beep bell alert visual accessibility"],
         ["appearance", "Dark mode", "light theme night"], ["appearance", "Realm", "accent colour color wallpaper tint"],
-        ["desktop", "App menus", "top bar menu one menu row"], ["desktop", "Clock", "24-hour time seconds top bar"], ["desktop", "Battery percentage", "top bar"],
+        ["desktop", "App menus", "top bar menu one menu row"], ["desktop", "Clock", "24-hour time seconds top bar"], ["desktop", "Battery percentage", "top bar"], ["desktop", "Top bar on every screen", "monitors screens displays second menu bar clock"],
         ["desktop", "Dock size", "dock bigger smaller icons"], ["desktop", "Hiding a window", "minimise minimize hide dock drop line comet"],
         ["desktop", "Stacks", "downloads folder dock stack"], ["desktop", "Today", "date calendar weather clocks world time agenda"],
         ["desktop", "Snapping windows", "snap layout halves thirds quarters tile fill button gaps"], ["desktop", "Overview", "spaces workspaces virtual desktops hot corner mission control"],
@@ -67,7 +67,7 @@ GlassWindow {
         ["users", "Other people", "add user account family admin administrator"],
         ["defaults", "Default apps", "browser mail open with file types"], ["defaults", "Start-up apps", "autostart login sign in"],
         ["privacy", "Firewall", "ufw block incoming"], ["privacy", "App permissions", "camera microphone location flatpak"], ["privacy", "Screen lock", "lock password idle"],
-        ["privacy", "Recent files", "history forget"], ["privacy", "Empty the Trash", "days automatically"],
+        ["privacy", "Recent files", "history forget"], ["privacy", "Clipboard history", "copy paste super v history clear"], ["privacy", "Empty the Trash", "days automatically"],
         ["updates", "Software Update", "upgrade security patches flatpak automatic huginn browser"],
         ["about", "About this computer", "model processor memory storage version graphics problem report logs crash bug"]
     ]

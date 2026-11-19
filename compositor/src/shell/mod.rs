@@ -251,6 +251,14 @@ impl<BackendData: Backend> CompositorHandler for HuginnState<BackendData> {
             });
         }
 
+        // a panel of the shell's that had the keyboard and now doesn't take it (it closed): back to the window in front
+        let panel_had_keys = self.seat.get_keyboard().is_some_and(|k| {
+            matches!(k.current_focus(), Some(crate::focus::KeyboardFocusTarget::LayerSurface(ref l)) if l.wl_surface() == surface)
+        });
+        if panel_had_keys {
+            self.focus_after_close();
+        }
+
         ensure_initial_configure(surface, &self.space, &mut self.popups)
     }
 }
@@ -267,9 +275,13 @@ impl<BackendData: Backend> WlrLayerShellHandler for HuginnState<BackendData> {
         _layer: Layer,
         namespace: String,
     ) {
+        // no screen asked for (the shell's panels): the one the pointer is on, so a panel opened from a second
+        // screen's top bar opens there
+        let pointer = self.seat.get_pointer().map(|p| p.current_location());
         let output = wl_output
             .as_ref()
             .and_then(Output::from_resource)
+            .or_else(|| pointer.and_then(|at| self.space.output_under(at).next().cloned()))
             .unwrap_or_else(|| self.space.outputs().next().unwrap().clone());
         let mut map = layer_map_for_output(&output);
         map.map_layer(&LayerSurface::new(surface, namespace)).unwrap();
@@ -286,6 +298,7 @@ impl<BackendData: Backend> WlrLayerShellHandler for HuginnState<BackendData> {
         }) {
             map.unmap_layer(&layer);
         }
+        self.focus_after_close();
     }
 }
 

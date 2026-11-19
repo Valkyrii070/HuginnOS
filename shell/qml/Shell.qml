@@ -91,6 +91,7 @@ QtObject {
         function onSearchWanted(text) { shell.searchText = text; shell.open = shell.open === "search" && !text ? "" : "search" }
         function onKeyWanted(what) {
             if (what === "today") shell.open = shell.open === "today" ? "" : "today"
+            else if (what === "clipboard") shell.open = shell.open === "clipboard" ? "" : "clipboard"
             else if (what === "menu") shell.appMenu("")
         }
     }
@@ -114,6 +115,29 @@ QtObject {
             Widgets { visible: wall.main; x: 22; y: 52; opacity: shell.settled ? 1 : 0; Behavior on opacity { NumberAnimation { duration: 600; easing.type: Easing.OutCubic } } }
         }
     }
+    // Settings › Desktop & Dock › Top bar › "On every screen": the others get a bar of their own. Its buttons open the
+    // same panels, on the screen the pointer is on (the compositor puts a panel with no screen of its own there).
+    property Instantiator moreBars: Instantiator {
+        model: Settings.barEverywhere && topBarWin.screen ? Status.screenList.filter(function (sc) { return sc.name !== topBarWin.screen.name }) : []
+        delegate: Window {
+            required property var modelData
+            visible: true; height: 30; color: "transparent"
+            LayerShell.Window.screen: modelData
+            LayerShell.Window.wantsToBeOnActiveScreen: false
+            LayerShell.Window.scope: "huginn-topbar-more"
+            LayerShell.Window.keyboardInteractivity: LayerShell.Window.KeyboardInteractivityNone
+            LayerShell.Window.layer: LayerShell.Window.LayerTop
+            LayerShell.Window.anchors: LayerShell.Window.AnchorTop | LayerShell.Window.AnchorLeft | LayerShell.Window.AnchorRight
+            LayerShell.Window.exclusionZone: 30
+            TopBar { width: parent.width; appName: Status.active.name || "Huginn"; solid: Status.active.maximized
+                onWindowAction: function (action) { Status.windowAction(action) }
+                opacity: shell.settled ? 1 : 0; Behavior on opacity { NumberAnimation { duration: 500; easing.type: Easing.OutCubic } }
+                onControlCentre: shell.open = shell.open === "cc" ? "" : "cc"; onLauncher: shell.open = shell.open === "launcher" ? "" : "launcher"
+                onSearch: shell.open = shell.open === "search" ? "" : "search"
+                todayOpen: shell.open === "today"; onToday: shell.open = shell.open === "today" ? "" : "today"
+                menuOpen: false; onAppMenu: function (group) { shell.appMenu(group) } }
+        }
+    }
     property list<QtObject> surfaces: [
     Window {   // arriving from the sign-in screen: its island carries on for a moment, then fades (takes no input)
         id: arriveWin
@@ -128,6 +152,7 @@ QtObject {
         Arrival { id: arrival; anchors.fill: parent; playing: arriving; opacity: arriving ? 1 : 0; onLeaving: shell.settled = true }
     },
     Window {   // top bar
+        id: topBarWin
         // Grows while the dropdown menu list is open; the reserved strip (exclusionZone) stays 30 px.
         visible: true; height: 30; color: "transparent"
         LayerShell.Window.scope: "huginn-topbar"
@@ -316,6 +341,7 @@ QtObject {
         id: todayWin
         visible: shell.open === "today" || todayIslands.visible; color: "transparent"
         LayerShell.Window.scope: "huginn-today"
+        LayerShell.Window.wantsToBeOnActiveScreen: true          // the screen the pointer is on
         LayerShell.Window.layer: LayerShell.Window.LayerTop
         LayerShell.Window.anchors: LayerShell.Window.AnchorTop | LayerShell.Window.AnchorBottom | LayerShell.Window.AnchorLeft | LayerShell.Window.AnchorRight
         LayerShell.Window.keyboardInteractivity: shell.open === "today" ? LayerShell.Window.KeyboardInteractivityExclusive : LayerShell.Window.KeyboardInteractivityNone
@@ -333,6 +359,7 @@ QtObject {
         id: menuWin
         visible: shell.open === "menu"; color: "transparent"
         LayerShell.Window.scope: "huginn-app-menu"
+        LayerShell.Window.wantsToBeOnActiveScreen: true          // the screen the pointer is on
         LayerShell.Window.layer: LayerShell.Window.LayerOverlay
         LayerShell.Window.anchors: LayerShell.Window.AnchorTop | LayerShell.Window.AnchorBottom | LayerShell.Window.AnchorLeft | LayerShell.Window.AnchorRight
         LayerShell.Window.keyboardInteractivity: shell.open === "menu" ? LayerShell.Window.KeyboardInteractivityExclusive : LayerShell.Window.KeyboardInteractivityNone
@@ -349,6 +376,7 @@ QtObject {
         id: ccWin
         visible: shell.open === "cc" || ccPanel.x < width - 1; color: "transparent"
         LayerShell.Window.scope: "huginn-control-centre"
+        LayerShell.Window.wantsToBeOnActiveScreen: true          // the screen the pointer is on
         LayerShell.Window.layer: LayerShell.Window.LayerOverlay
         LayerShell.Window.anchors: LayerShell.Window.AnchorTop | LayerShell.Window.AnchorBottom | LayerShell.Window.AnchorLeft | LayerShell.Window.AnchorRight
         LayerShell.Window.keyboardInteractivity: LayerShell.Window.KeyboardInteractivityOnDemand
@@ -386,12 +414,24 @@ QtObject {
     Window {   // Search everything: over the whole screen, bar and dock included
         visible: shell.open === "search" || search.visible; color: "transparent"
         LayerShell.Window.scope: "huginn-search"
+        LayerShell.Window.wantsToBeOnActiveScreen: true          // the screen the pointer is on
         LayerShell.Window.layer: LayerShell.Window.LayerOverlay
         LayerShell.Window.anchors: LayerShell.Window.AnchorTop | LayerShell.Window.AnchorBottom | LayerShell.Window.AnchorLeft | LayerShell.Window.AnchorRight
         LayerShell.Window.exclusionZone: -1
         LayerShell.Window.keyboardInteractivity: shell.open === "search" ? LayerShell.Window.KeyboardInteractivityExclusive : LayerShell.Window.KeyboardInteractivityNone
         Rectangle { anchors.fill: parent; color: "black"; opacity: search.presence * 0.4 }
         Search { id: search; anchors.fill: parent; shown: shell.open === "search"; startText: shell.searchText; onDone: { shell.open = ""; shell.searchText = "" } }
+    },
+    Window {   // clipboard history (Super+V): over everything, in the middle
+        visible: shell.open === "clipboard" || clipPanel.visible; color: "transparent"
+        LayerShell.Window.scope: "huginn-clipboard"
+        LayerShell.Window.wantsToBeOnActiveScreen: true          // the screen the pointer is on
+        LayerShell.Window.layer: LayerShell.Window.LayerOverlay
+        LayerShell.Window.anchors: LayerShell.Window.AnchorTop | LayerShell.Window.AnchorBottom | LayerShell.Window.AnchorLeft | LayerShell.Window.AnchorRight
+        LayerShell.Window.exclusionZone: -1
+        LayerShell.Window.keyboardInteractivity: shell.open === "clipboard" ? LayerShell.Window.KeyboardInteractivityExclusive : LayerShell.Window.KeyboardInteractivityNone
+        Rectangle { anchors.fill: parent; color: "black"; opacity: clipPanel.presence * 0.25 }
+        ClipPanel { id: clipPanel; anchors.fill: parent; shown: shell.open === "clipboard"; onDone: shell.open = "" }
     },
     Window {   // an app's island, from the dock (right-click or a long press on its tile)
         id: islandWin

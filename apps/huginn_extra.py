@@ -279,7 +279,7 @@ class PrintScan(Worker):
     def __init__(self, demo: bool = False, target=None):
         super().__init__()
         self._demo, self._printers, self._jobs, self._scanners, self._pages = demo, [], [], [], []
-        self._looking, self._scanning, self._busy = False, False, False
+        self._looking, self._scanning, self._busy, self._again = False, False, False, False
         self._file = str(target) if target and Path(str(target)).is_file() else ""
         self._has_print, self._has_scan = demo or shutil.which("lpstat") is not None, demo or shutil.which("scanimage") is not None
         self._tmp = CACHE_HOME / "scans"
@@ -331,9 +331,12 @@ class PrintScan(Worker):
 
     @Slot()
     def refresh(self) -> None:
-        if self._demo or not self._has_print or self._busy:
+        if self._demo or not self._has_print:
             return
-        self._busy = True
+        if self._busy:
+            self._again = True                                   # asked while a look was on its way: look again after it
+            return
+        self._busy, self._again = True, False
 
         def work():
             return self.read_printers(run(["lpstat", "-e"], 8)[1], run(["lpstat", "-p"], 8)[1], run(["lpstat", "-d"], 8)[1]), self.read_jobs(run(["lpstat", "-o"], 8)[1])
@@ -343,6 +346,8 @@ class PrintScan(Worker):
             if not isinstance(result, Exception) and (result[0], result[1]) != (self._printers, self._jobs):
                 self._printers, self._jobs = result
                 self.changed.emit()
+            if self._again:
+                self.refresh()
         self.bg(work, then)
 
     @Slot()
@@ -424,6 +429,69 @@ class PrintScan(Worker):
     def cancel(self, job: str) -> None:
         if not self._demo and re.fullmatch(r"[\w.\-]+-\d+", job):
             self.bg(lambda: run(["cancel", job], 10), lambda _r: self.refresh())
+
+    @staticmethod
+    def printer_uri(address: str) -> str:
+        """What the user typed (an address, a name on the network, or a whole ipp:// or ipps:// address) as the
+        address CUPS talks to: a bare host means a driverless printer's usual place, /ipp/print. "" when it isn't one."""
+        a = address.strip()
+        if re.fullmatch(r"(ipps?|http|https)://[\w.\-\[\]:]+(/[\w./\-]*)?", a):
+            return re.sub(r"^https?://", "ipp://", a) if a.startswith("http") else a
+        if re.fullmatch(r"[\w.\-]+(:\d{1,5})?|\[[0-9a-fA-F:]+\](:\d{1,5})?", a) and not a.startswith(("-", ".")):
+            return f"ipp://{a}/ipp/print"
+        return ""
+
+    @staticmethod
+    def queue_name(label: str, uri: str, taken) -> str:
+        """A printer's name as CUPS wants it (letters, digits, _ and -), not one already used."""
+        base = re.sub(r"[^\w\-]+", "_", label.strip() or re.sub(r"^\w+://|/.*$|:\d+$", "", uri)).strip("_")[:60] or "Printer"
+        name, n = base, 2
+        while name in taken:
+            name, n = f"{base}_{n}", n + 1
+        return name
+
+    @Slot(str, str)
+    def addPrinter(self, address: str, label: str) -> None:
+        """A printer that isn't found by itself (another network, a VPN, a printer that doesn't announce itself):
+        by its address. Only driverless printers (IPP Everywhere, AirPrint, Mopria), which is nearly every printer
+        made since 2015; CUPS asks the printer what it can do."""
+        uri = self.printer_uri(address)
+        if not uri:
+            self.said.emit("Type the printer's address, like 192.168.1.40 or printer.local.", True)
+            return
+        if self._demo:
+            self.said.emit("This is the preview: no printer is added.", False)
+            return
+        name = self.queue_name(label, uri, {p["name"] for p in self._printers})
+        self.said.emit("Asking the printer what it can do…", False)
+
+        def then(result):
+            code, out = result if not isinstance(result, Exception) else (1, str(result))
+            if code == 0:
+                self.said.emit(f"{name.replace('_', ' ')} is ready.", False)
+            elif "Forbidden" in out or "not authorized" in out.lower() or "permission" in out.lower():
+                self.said.emit("Your account isn't allowed to add printers. Ask whoever set up this computer.", True)
+            elif "connect" in out.lower() or "unable" in out.lower() or code == 124:
+                self.said.emit("No printer answered at that address. Check it's switched on and on this network.", True)
+            else:
+                self.said.emit((out.strip().splitlines() or ["The printer couldn't be added."])[-1][:160], True)
+            self.refresh()
+        self.bg(lambda: run(["lpadmin", "-p", name, "-E", "-v", uri, "-m", "everywhere", "-D", name.replace("_", " ")], 60), then)
+
+    @Slot(str)
+    def removePrinter(self, printer: str) -> None:
+        if self._demo or not any(p["name"] == printer for p in self._printers):
+            return
+
+        def then(result):
+            code, out = result if not isinstance(result, Exception) else (1, str(result))
+            if code == 0:
+                self.said.emit(f"{printer.replace('_', ' ')} is gone. A printer on the network may come back by itself while it's switched on.", False)
+            else:
+                self.said.emit("Your account isn't allowed to remove printers." if "Forbidden" in out or "authoriz" in out else
+                               (out.strip().splitlines() or ["The printer couldn't be removed."])[-1][:160], True)
+            self.refresh()
+        self.bg(lambda: run(["lpadmin", "-x", printer], 20), then)
 
     @Slot(str)
     def makeDefault(self, printer: str) -> None:

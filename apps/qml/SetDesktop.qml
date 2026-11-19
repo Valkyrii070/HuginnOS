@@ -128,6 +128,8 @@ Column {
         SetRow { title: "24-hour clock"; Toggle { on: Settings.clock24; onToggled: function (v) { pg.sw("clock24")(v) } } }
         SetRow { title: "Show the date"; Toggle { on: Settings.barDate; onToggled: function (v) { pg.sw("barDate")(v) } } }
         SetRow { title: "Battery percentage"; Toggle { on: Settings.batteryPercent; onToggled: function (v) { pg.sw("batteryPercent")(v) } } }
+        SetRow { title: "On every screen"; sub: "With more than one screen, each has its own top bar. The dock stays on the main screen."
+            Toggle { on: Settings.barEverywhere; onToggled: function (v) { pg.sw("barEverywhere")(v) } } }
     }
     // ---------------------------------------------------------------- Today
     SetCard { title: "Today"

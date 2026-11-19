@@ -506,9 +506,14 @@ def write(deck: dict, path) -> None:
                      '<Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/>'
                      '<Override PartName="/docProps/app.xml" ContentType="application/vnd.openxmlformats-officedocument.extended-properties+xml"/>'
                      + "".join(ct) + "</Types>")
+    thumb = _thumbnail(deck)          # a picture of the first slide, as PowerPoint keeps one (file managers show it)
+    if thumb:
+        files["docProps/thumbnail.jpeg"] = thumb
     root_rels = (f'{HEAD}<Relationships xmlns="{PKG}"><Relationship Id="rId1" Type="{R}/officeDocument" Target="ppt/presentation.xml"/>'
                  '<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties" Target="docProps/core.xml"/>'
-                 f'<Relationship Id="rId3" Type="{R}/extended-properties" Target="docProps/app.xml"/></Relationships>')
+                 f'<Relationship Id="rId3" Type="{R}/extended-properties" Target="docProps/app.xml"/>'
+                 + ('<Relationship Id="rId4" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/thumbnail" Target="docProps/thumbnail.jpeg"/>' if thumb else "")
+                 + "</Relationships>")
     tmp = str(path) + ".saving"
     with zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED) as z:
         z.writestr("[Content_Types].xml", content_types)
@@ -517,6 +522,31 @@ def write(deck: dict, path) -> None:
             z.writestr(name, data if isinstance(data, bytes) else data.encode("utf-8"))
     import os
     os.replace(tmp, path)
+
+
+def _thumbnail(deck: dict) -> bytes:
+    """The first slide shown, 256 wide, as JPEG ("" without a Qt application to draw with)."""
+    try:
+        from PySide6.QtCore import QBuffer, QByteArray, QIODevice, Qt
+        from PySide6.QtGui import QGuiApplication, QImage, QPainter
+        if QGuiApplication.instance() is None or not deck.get("slides"):
+            return b""
+        first = next((s for s in deck["slides"] if not s.get("hidden")), deck["slides"][0])
+        w = sm.slide_w(deck.get("size", "16:9"))
+        img = QImage(256, round(256 * sm.SLIDE_H / w), QImage.Format_RGB32)
+        img.fill(Qt.white)
+        painter = QPainter(img)
+        painter.setRenderHint(QPainter.Antialiasing)
+        painter.scale(256 / w, 256 / w)
+        sm.paint_slide(painter, deck, first)
+        painter.end()
+        ba = QByteArray()
+        buf = QBuffer(ba)
+        buf.open(QIODevice.WriteOnly)
+        img.save(buf, "JPEG", 85)
+        return bytes(ba)
+    except Exception:                                            # noqa: BLE001  (a file without a picture is still a file)
+        return b""
 
 
 # ============================================================================================== reading

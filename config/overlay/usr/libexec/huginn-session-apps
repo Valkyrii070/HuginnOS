@@ -25,6 +25,9 @@ fi
 # if another copy is already running. Both are light: they look every few seconds and sleep in between.
 (sleep 10; python3 /usr/share/huginn-apps/huginn_shortcuts.py agent) &
 (sleep 12; python3 /usr/share/huginn-apps/huginn_privacy.py watch) &
+# Clipboard history's watcher (Super+V): while history is off (it starts off) a change costs a tiny shell and nothing
+# is kept; turned on, the newest 50 things you copy are kept, never a password.
+command -v wl-paste >/dev/null && python3 /usr/share/huginn-apps/huginn_clipboard.py watch &
 # Software Update looks for updates every few hours (and, with automatic updates on, puts them in).
 python3 /usr/share/huginn-apps/huginn_updates.py watch &
 # Online Accounts keeps calendars and contacts in step with Google, Microsoft, iCloud and Nextcloud.

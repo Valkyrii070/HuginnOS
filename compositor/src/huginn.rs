@@ -191,6 +191,7 @@ impl<B: Backend + 'static> HuginnState<B> {
             Request::Lock => self.lock_now(),
             Request::LockForSleep(done) => self.lock_for_sleep(done),
             Request::Woke => self.touched(),
+            Request::Paste => self.paste_soon(),
             Request::Unlock => self.unlock_now(),
             Request::Blank(off) => {
                 self.huginn.blank = off;
@@ -296,7 +297,15 @@ impl<B: Backend + 'static> HuginnState<B> {
         let lost = match keyboard.current_focus() {
             None => true,
             Some(KeyboardFocusTarget::Window(w)) => !w.alive() || !self.space.elements().any(|e| e.0 == w),
-            Some(_) => false, // a layer surface (the launcher…) or a popup keeps it
+            // a panel of the shell's (the launcher, Search, clipboard history) that has closed: it no longer takes
+            // the keyboard, so the window in front gets it back
+            Some(KeyboardFocusTarget::LayerSurface(l)) => {
+                !l.alive()
+                    || l.layer_surface().with_cached_state(|d| {
+                        d.keyboard_interactivity == smithay::wayland::shell::wlr_layer::KeyboardInteractivity::None
+                    })
+            }
+            Some(_) => false, // a popup keeps it
         };
         if lost {
             let top = self.space.elements().last().cloned();
@@ -741,6 +750,51 @@ impl<B: Backend + 'static> HuginnState<B> {
             keyboard.set_focus(self, None, SERIAL_COUNTER.next_serial());
         }
         self.start_locker();
+    }
+
+    /// Ctrl+V for the window in front, a moment from now (the shell's panel lets go of the keyboard first). The
+    /// keys are found in the keyboard's own layout, so V is wherever this layout has it.
+    fn paste_soon(&mut self) {
+        use smithay::reexports::calloop::timer::{TimeoutAction, Timer};
+        let asked = Instant::now();
+        let _ = self.handle.insert_source(Timer::from_duration(Duration::from_millis(60)), move |_, _, state| {
+            if state.is_locked() {
+                return TimeoutAction::Drop;
+            }
+            let Some(keyboard) = state.seat.get_keyboard() else { return TimeoutAction::Drop };
+            // the panel that asked is still closing (it keeps the keyboard until its last frame): wait for it, a while
+            state.focus_after_close();
+            let panel_has_keys = matches!(keyboard.current_focus(), Some(KeyboardFocusTarget::LayerSurface(_)));
+            if panel_has_keys && asked.elapsed() < Duration::from_millis(1500) {
+                return TimeoutAction::ToDuration(Duration::from_millis(30));
+            }
+            if panel_has_keys {
+                tracing::debug!("paste: a panel still has the keyboard, not pasting");
+                return TimeoutAction::Drop; // something else is asking for the keyboard: don't type into it
+            }
+            tracing::debug!("paste: after {:?}, into {:?}", asked.elapsed(), keyboard.current_focus().map(|f| matches!(f, KeyboardFocusTarget::Window(_))));
+            let codes = keyboard.with_xkb_state(state, |ctx| {
+                let xkb = ctx.xkb().lock().unwrap();
+                let keymap = unsafe { xkb.keymap() };
+                let find = |want: smithay::input::keyboard::Keysym| {
+                    (keymap.min_keycode().raw()..=keymap.max_keycode().raw())
+                        .map(smithay::input::keyboard::Keycode::new)
+                        .find(|code| keymap.key_get_syms_by_level(*code, 0, 0).contains(&want))
+                };
+                (find(smithay::input::keyboard::Keysym::Control_L), find(smithay::input::keyboard::Keysym::v))
+            });
+            tracing::debug!("paste: keys {:?}", codes);
+            if let (Some(ctrl), Some(v)) = codes {
+                let time = smithay::backend::input::InputTime::now();
+                for (code, pressed) in [(ctrl, true), (v, true), (v, false), (ctrl, false)] {
+                    let key_state = if pressed { smithay::backend::input::KeyState::Pressed } else { smithay::backend::input::KeyState::Released };
+                    keyboard.input::<(), _>(state, code, key_state, SERIAL_COUNTER.next_serial(), time, |_, _, _| {
+                        smithay::input::keyboard::FilterResult::Forward
+                    });
+                }
+            }
+            TimeoutAction::Drop
+        });
     }
 
     /// Going to sleep: lock, then say so once the lock screen has been on screen for a frame or two (or after 3 s,

@@ -34,6 +34,8 @@ pub enum Request {
     /// Awake again: someone woke it on purpose, so the screen comes on (it may have been switched off before the
     /// computer slept, and the key that woke it never reaches us) and the idle time starts again.
     Woke,
+    /// Ctrl+V into the window that has the keyboard (clipboard history's pick)
+    Paste,
     /// logind's "unlock the session" (`loginctl unlock-session`, from a text console if the lock screen ever can't).
     Unlock,
     Blank(bool),
@@ -155,6 +157,11 @@ impl Compositor {
 
     fn lock(&self) {
         let _ = self.to_loop.send(Request::Lock);
+    }
+
+    /// Clipboard history picked something: Ctrl+V into the window in front, once the history's panel has gone.
+    fn paste(&self) {
+        let _ = self.to_loop.send(Request::Paste);
     }
 
     fn locked(&self) -> bool {

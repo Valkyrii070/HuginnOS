@@ -18,6 +18,8 @@ GlassWindow {
     property bool landscape: false
     property int dpi: 300
     property bool choosing: false
+    property bool adding: false
+    property string removing: ""
     property string lastPdf: ""
     readonly property var chosenPrinter: { var p = Backend.printers; for (var i = 0; i < p.length; i++) if (p[i].name === printer) return p[i]; return {} }
     function settle() { var p = Backend.printers; if (!chosenPrinter.name && p.length) { var d = p[0]; for (var i = 0; i < p.length; i++) if (p[i]["default"]) d = p[i]; printer = d.name }
@@ -30,6 +32,30 @@ GlassWindow {
             Seg { icon: "printer"; text: "Print"; on: win.tab === "print"; onClicked: win.tab = "print" }
             Seg { icon: "image"; text: "Scan" + (Backend.pages.length ? " · " + Backend.pages.length : ""); on: win.tab === "scan"; onClicked: win.tab = "scan" } },
         Toast { id: toast; anchors { horizontalCenter: parent.horizontalCenter; bottom: parent.bottom; bottomMargin: 18 } },
+        Item { anchors.fill: parent; z: 20; visible: win.adding     // a printer by its address
+            Rectangle { anchors.fill: parent; radius: win.r; color: "#66000000"; MouseArea { anchors.fill: parent; acceptedButtons: Qt.AllButtons; onClicked: win.adding = false } }
+            Rectangle { anchors.centerIn: parent; width: 460; height: 262; radius: 16; color: Theme.t.menu_bg; border.width: 1; border.color: Theme.t.menu_border
+                MouseArea { anchors.fill: parent }
+                Column { x: 22; y: 20; width: parent.width - 44; spacing: 10
+                    Label { font.pixelSize: 16; font.weight: Font.DemiBold; text: "Add a Printer by Its Address" }
+                    Label { width: parent.width; wrapMode: Text.WordWrap; secondary: true; font.pixelSize: 12
+                        text: "For a printer that doesn't appear by itself. Its address is on its own screen or on a page it prints (often under Network or Wi-Fi)." }
+                    TextBox { id: addrBox; objectName: "printerAddress"; width: parent.width; placeholder: "192.168.1.40, printer.local or ipp://…"; onAccepted: addGo.clicked() }
+                    TextBox { id: nameBox; width: parent.width; placeholder: "Name (optional), like Office Printer" } }
+                Row { anchors { right: parent.right; rightMargin: 22; bottom: parent.bottom; bottomMargin: 18 } spacing: 8
+                    Btn { text: "Cancel"; onClicked: win.adding = false }
+                    Btn { id: addGo; primary: true; text: "Add Printer"; opacity: addrBox.text.trim() ? 1 : 0.5
+                        onClicked: if (addrBox.text.trim()) { Backend.addPrinter(addrBox.text, nameBox.text); win.adding = false; addrBox.text = ""; nameBox.text = "" } } } }
+            onVisibleChanged: if (visible) addrBox.focusIn() },
+        Item { anchors.fill: parent; z: 20; visible: win.removing !== ""
+            Rectangle { anchors.fill: parent; radius: win.r; color: "#66000000"; MouseArea { anchors.fill: parent; acceptedButtons: Qt.AllButtons; onClicked: win.removing = "" } }
+            Rectangle { anchors.centerIn: parent; width: 420; height: 150; radius: 16; color: Theme.t.menu_bg; border.width: 1; border.color: Theme.t.menu_border
+                MouseArea { anchors.fill: parent }
+                Label { x: 22; y: 20; font.pixelSize: 16; font.weight: Font.DemiBold; text: "Remove " + win.removing.replace(/_/g, " ") + "?" }
+                Label { x: 22; y: 48; width: parent.width - 44; wrapMode: Text.WordWrap; secondary: true; font.pixelSize: 12; text: "Anything waiting to print on it is dropped. You can add it again later." }
+                Row { anchors { right: parent.right; rightMargin: 22; bottom: parent.bottom; bottomMargin: 18 } spacing: 8
+                    Btn { text: "Cancel"; onClicked: win.removing = "" }
+                    Btn { primary: true; text: "Remove"; onClicked: { Backend.removePrinter(win.removing); if (win.printer === win.removing) win.printer = ""; win.removing = "" } } } } },
         Item { anchors.fill: parent; z: 20; visible: win.choosing
             Rectangle { anchors.fill: parent; radius: win.r; color: "#66000000"; MouseArea { anchors.fill: parent; acceptedButtons: Qt.AllButtons; onClicked: win.choosing = false } }
             Rectangle { anchors.centerIn: parent; width: 460; height: 120 + Math.max(1, Backend.choices.length) * 36; radius: 16; color: Theme.t.menu_bg; border.width: 1; border.color: Theme.t.menu_border
@@ -55,7 +81,8 @@ GlassWindow {
             Label { anchors.horizontalCenter: parent.horizontalCenter; font.pixelSize: 20; font.weight: Font.DemiBold; text: Backend.hasPrint ? "No printers yet" : "Printing isn't set up" }
             Label { width: parent.width; wrapMode: Text.WordWrap; horizontalAlignment: Text.AlignHCenter; secondary: true
                 text: Backend.hasPrint ? "Switch the printer on and put it on the same network, or plug it in. Most printers made in the last ten years appear here by themselves within a minute."
-                                       : "This computer has no printing system (CUPS). Install the cups package and open Print & Scan again." } }
+                                       : "This computer has no printing system (CUPS). Install the cups package and open Print & Scan again." }
+            Btn { visible: Backend.hasPrint; anchors.horizontalCenter: parent.horizontalCenter; text: "Add a Printer by Its Address…"; onClicked: win.adding = true } }
         Row { visible: Backend.printers.length > 0; anchors.fill: parent; spacing: 18
             Column { width: 300; spacing: 8
                 Label { text: "PRINTERS"; secondary: true; font.pixelSize: 10; font.weight: Font.DemiBold }
@@ -65,7 +92,12 @@ GlassWindow {
                         Glyph { x: 14; anchors.verticalCenter: parent.verticalCenter; name: "printer"; size: 20; ink: modelData.ok ? Theme.t.accent : Theme.t.text_secondary }
                         Label { x: 46; y: 10; width: parent.width - 60; elide: Text.ElideRight; text: modelData.label; font.weight: Font.Medium }
                         Label { x: 46; y: 30; font.pixelSize: 11; color: modelData.ok ? Theme.t.text_secondary : Theme.t.danger; text: modelData.state + (modelData["default"] ? "  ·  the usual one" : "") } } }
-                Btn { visible: !!win.chosenPrinter.name && !win.chosenPrinter["default"]; height: 28; text: "Make This the Usual One"; onClicked: Backend.makeDefault(win.printer) }
+                Row { spacing: 8
+                    Btn { visible: !!win.chosenPrinter.name && !win.chosenPrinter["default"]; height: 28; text: "Make This the Usual One"; onClicked: Backend.makeDefault(win.printer) }
+                    Btn { visible: !!win.chosenPrinter.name; height: 28; text: "Remove"; onClicked: win.removing = win.printer } }
+                Pressable { width: 300; height: 30; radius: 9; color: hovered ? Theme.t.hover : "transparent"; onClicked: win.adding = true
+                    Glyph { x: 10; anchors.verticalCenter: parent.verticalCenter; name: "plus"; size: 13; ink: Theme.t.accent }
+                    Label { x: 30; anchors.verticalCenter: parent.verticalCenter; text: "Add a printer by its address…"; color: Theme.t.accent; font.pixelSize: 12 } }
                 Item { width: 1; height: 8 }
                 Label { visible: Backend.jobs.length > 0; text: "WAITING TO PRINT"; secondary: true; font.pixelSize: 10; font.weight: Font.DemiBold }
                 Repeater { model: Backend.jobs

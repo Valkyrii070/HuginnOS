@@ -179,7 +179,7 @@ class Settings(QObject):
     """User customisation, kept in ~/.config/huginn-shell/settings.json and shared by the shell and every app.
     Each process watches the file, so a change made anywhere (realm, dark mode, menu style) shows everywhere."""
     changed = Signal()
-    DEFAULTS = {"menuStyle": "one", "dark": "true", "realm": "aurora", "clock24": "true", "barDate": "true", "batteryPercent": "false",
+    DEFAULTS = {"menuStyle": "one", "dark": "true", "realm": "aurora", "clock24": "true", "barDate": "true", "batteryPercent": "false", "barEverywhere": "true",
                 "dockMakeRoom": "true", "dockDots": "true", "autoUpdate": "true", "liveWallpaper": "false",
                 "contrast": "false", "reduceTransparency": "false", "reduceMotion": "false", "uiScale": "1",       # accessibility
                 # Settings › Desktop & Dock
@@ -187,7 +187,7 @@ class Settings(QObject):
                 "spacesAllScreens": "true", "inAppMotion": "grow", "fillButtonLayouts": "true", "snapGaps": "true", "keepSnapped": "true",
                 # windows and screens on Huginn's own compositor
                 "reopenApps": "true", "rememberPlaces": "true", "adaptiveSync": "auto", "sharpX11": "true", "allowTearing": "true"}
-    SWITCHES = ("clock24", "barDate", "batteryPercent", "dockMakeRoom", "dockDots", "autoUpdate", "liveWallpaper", "contrast", "reduceTransparency", "reduceMotion",
+    SWITCHES = ("clock24", "barDate", "batteryPercent", "barEverywhere", "dockMakeRoom", "dockDots", "autoUpdate", "liveWallpaper", "contrast", "reduceTransparency", "reduceMotion",
                 "dockClickHides", "hotCorner", "spacesAllScreens", "fillButtonLayouts", "snapGaps", "keepSnapped", "reopenApps", "rememberPlaces", "sharpX11", "allowTearing")
     SCALES = ("1", "1.25", "1.5", "1.75", "2")
 
@@ -236,6 +236,7 @@ class Settings(QObject):
     clock24 = Property(bool, lambda self: self._values["clock24"] == "true", notify=changed)
     barDate = Property(bool, lambda self: self._values["barDate"] == "true", notify=changed)
     batteryPercent = Property(bool, lambda self: self._values["batteryPercent"] == "true", notify=changed)
+    barEverywhere = Property(bool, lambda self: self._values["barEverywhere"] == "true", notify=changed)   # a top bar on every screen, not just the main one
     # "Make room for windows": the dock slides away while a window covers its place (a filled one, or one dragged
     # over it), and comes back when the pointer reaches the bottom edge. (Was "dockHide", which nothing read.)
     dockMakeRoom = Property(bool, lambda self: self._values["dockMakeRoom"] == "true", notify=changed)
@@ -1124,6 +1125,13 @@ def main() -> int:
     except Exception as err:                                          # noqa: BLE001  (Search works without it)
         print("Huginn AI isn't available:", err, file=sys.stderr)
     ctx.setContextProperty("AI", ai)
+    clips = None
+    try:                                                              # clipboard history (Super+V)
+        import huginn_clipboard
+        clips = huginn_clipboard.qt_history()
+    except Exception as err:                                          # noqa: BLE001
+        print("Clipboard history isn't available:", err, file=sys.stderr)
+    ctx.setContextProperty("ClipHistory", clips)
     ctx.setContextProperty("Settings", settings)
     ctx.setContextProperty("startOpen", args.open)
     ctx.setContextProperty("startMenus", args.menus)

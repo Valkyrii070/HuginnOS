@@ -34,6 +34,11 @@ Column {
     SetCard { title: "History"
         SetRow { title: "Remember recent files"; sub: (pg.p.recent || 0) + " files are remembered for Recent in Files and other apps"
             Toggle { on: pg.p.remember !== false; onToggled: function (v) { Backend.setPrivacy("remember", v) } } }
+        SetRow { visible: pg.p.hasClipboard !== false; title: "Clipboard history"
+            sub: pg.p.clipboard ? (pg.p.clipboardCount || 0) + " things kept · Super+V shows them; passwords are never kept" : "Off · Super+V would show the last 50 things you copied"
+            Toggle { on: !!pg.p.clipboard; onToggled: function (v) { Backend.setPrivacy("clipboard", v) } } }
+        SetRow { visible: !!pg.p.clipboard && (pg.p.clipboardCount || 0) > 0; title: "Clear clipboard history"; sub: "Pinned things stay"
+            Btn { text: "Clear"; onClicked: Backend.setPrivacy("clipboardClear", true) } }
         SetRow { title: "Forget recent files"; sub: "Clears the list; the files themselves stay"; Btn { text: "Forget"; onClicked: win.confirm("Forget recent files?", "The list of recently opened files is cleared everywhere.", "Forget", function () { Backend.clearHistory() }) } }
         SetRow { title: "Empty the Trash by itself"; sub: "Things in the Trash longer than this are deleted"
             SetChoice { each: 70; options: [["0", "Never"], ["7", "7 days"], ["30", "30 days"], ["90", "90 days"]]; value: String(pg.p.trashDays || 0); onPicked: function (v) { Backend.setPrivacy("trashDays", Number(v)) } } } }

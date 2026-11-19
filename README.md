@@ -1758,6 +1758,34 @@ Before the first start on a desktop PC (a Radeon RX 9070 XT and three screens):
   written; nothing from your own files goes in. `usbutils`, `mesa-utils`, `vulkan-tools`, `rfkill` and `lm-sensors`
   are in the image for it (`57-huginn-report.list`).
 
+## Daily use, round one (2026-11-19)
+
+- **Clipboard history** (`apps/huginn_clipboard.py`, `shell/qml/ClipPanel.qml`, both new): Super+V shows what was
+  copied lately, text and pictures (50, plus any pinned), newest first; type to find, Up/Down and Enter or a click to
+  pick, Delete to remove, a pin to keep one. Picking puts it back on the clipboard (`wl-copy`), waits until the
+  clipboard really holds it, then asks the compositor (`org.huginn.Compositor.Paste`) to press Ctrl+V into the window
+  in front once the panel has let go of the keyboard. A watcher started with the session (`wl-paste --watch`) keeps
+  the history in `~/.local/share/huginn/clipboard` (0700), only while it's on: off until turned on (the first Super+V
+  asks, or Settings › Privacy, which also clears it). Copies marked as secret (`x-kde-passwordManagerHint`, as
+  Passwords and Authenticator now mark theirs) and copied files are never kept.
+- **The keyboard comes back.** When one of the shell's panels that takes the keyboard (Search, the start menu, the
+  app's menu, Today, clipboard history) closes, the window in front gets the keyboard back at once; before, typing
+  after closing Search went nowhere until a click.
+- **A top bar on every screen** (Settings › Desktop & Dock › Top bar › On every screen, on by default): each other
+  screen gets its own bar, with the clock, the app in front and the status icons. The dock and the widgets stay on
+  the main screen. Today, the app's menu, the control centre, Search and clipboard history open on the screen the
+  pointer is on (the compositor now puts a layer surface that asks for no screen there, not on the first one).
+- **Files: pictures of documents.** Besides pictures, videos and PDFs, Files now shows the first page of Writer's
+  documents (.html with Writer's mark, .docx), the first slide of presentations (.hslides, .pptx), the top-left of
+  spreadsheets (.hsheet, .xlsx, worked out), and the picture LibreOffice keeps in every OpenDocument file. Writer's
+  .docx and Slides' .pptx now carry a small picture of their first page as Word and PowerPoint do
+  (`docProps/thumbnail.jpeg`), so other file managers show it too.
+- **Printers by address** (Print & Scan): "Add a printer by its address" takes an address, a name on the network or an
+  ipp:// address and adds it as a driverless printer (`lpadmin -m everywhere`, which asks the printer what it can
+  do); for printers on another network or that don't announce themselves. Remove takes one off (asking first). Jobs
+  waiting to print were already listed with Cancel. The first user is in the `lpadmin` group, so no password.
+- Tab now moves between text boxes everywhere (`TextBox.qml`).
+
 ## Huginn, the browser
 
 Inside the Huginn repository (this kit is its `os/` folder) the image ships the repository's own browser. A kit used

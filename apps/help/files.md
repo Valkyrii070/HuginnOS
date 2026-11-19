@@ -7,6 +7,8 @@ Start typing in the search field to filter this folder. Press Enter to search it
 ## Look without opening
 Select a file and press Space for a quick look at pictures, videos, PDFs and text. The arrow keys move to the next one.
 
+Pictures, videos, PDFs, documents, sheets and presentations show a small picture of themselves instead of an icon (a video a frame from it, a document its first page).
+
 ## Copy, move and undo
 Drag files onto a folder, a place on the left or a drive. Ctrl+C, Ctrl+X and Ctrl+V work as usual, and Ctrl+Z undoes the last rename, move, copy or move to Trash.
 
