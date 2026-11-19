@@ -9,6 +9,9 @@ Reproducible ISO build for Huginn OS on Ubuntu 26.04 LTS ("resolute").
     sudo scripts/build.sh                # full build -> out/huginn-os-0.1-<date>-amd64.iso
     scripts/test-qemu.sh                 # boot it (UEFI); add --bios for legacy boot
 
+The browser (Huginn, github.com/Valkyrii070/Huginn) is fetched into `vendor/huginn` the first time; to build with a
+particular version of it, run `scripts/update-huginn.sh /path/to/Huginn` first.
+
 Faster iterations:
 
     sudo scripts/build.sh --from rootfs  # skip debootstrap, reinstall packages
@@ -16,8 +19,9 @@ Faster iterations:
     sudo scripts/build.sh --from customise   # reuse the installed chroot: overlay, apps and hooks again, then repack
     SQUASHFS_COMP=lz4 in config/build.conf for quick dev images
 
-In the Huginn repository this kit is the `os/` folder: run the same commands from there (`sudo os/scripts/build.sh`).
-Every change to it is checked by GitHub Actions (`.github/workflows/huginn-os.yml`: flake8 and shell syntax, and
+This is Huginn OS's own repository. Until 2026-11-19 the kit was the `os/` folder of the Huginn browser's repository
+(Valkyrii070/Huginn); its history came along. The browser itself stays there, and the image fetches it from there.
+Every change is checked by GitHub Actions (`.github/workflows/huginn-os.yml`: flake8 and shell syntax, and
 `scripts/ci-smoke.py`, which opens every app and the shell headless; the package lists against Ubuntu 26.04 by hand).
 Huginn's own compositor (`compositor/`, Rust) is built inside the image: the build puts Rust and the headers in only
 while it builds, then takes them out. Its crates are fetched with `cargo` on the build computer when it has one (kept

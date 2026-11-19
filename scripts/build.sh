@@ -344,13 +344,22 @@ stage_customise() {
 
     # Huginn, the browser, from vendor/huginn (see vendor/huginn/SOURCE for the version).
     # Its launcher and menu entry come from the overlay; the per-user installer is left out.
-    # When this kit is the os/ folder of the Huginn repository, the browser is the repository itself.
+    # Without vendor/huginn, the browser's own repository (BROWSER_REPO, Valkyrii070/Huginn) is fetched into it, as
+    # scripts/update-huginn.sh would. (An older checkout of this kit as the browser repository's os/ folder used
+    # the repository around it.)
     local browser="$ROOT/vendor/huginn"
     if [ ! -f "$browser/safari_browser.py" ] && [ -f "$ROOT/../safari_browser.py" ]; then
         browser="$(cd "$ROOT/.." && pwd)"
         install -m 644 "$browser/docs/huginn-icon.png" "$WORK/huginn-icon.png"
     fi
-    [ -f "$browser/safari_browser.py" ] || die "no browser: run scripts/update-huginn.sh /path/to/Huginn (or build from the Huginn repository's os/ folder)"
+    if [ ! -f "$browser/safari_browser.py" ] && command -v git > /dev/null; then
+        log "Fetching Huginn, the browser (${BROWSER_REPO:-https://github.com/Valkyrii070/Huginn})"
+        rm -rf "$WORK/huginn-src"
+        if git clone -q --depth 1 "${BROWSER_REPO:-https://github.com/Valkyrii070/Huginn}" "$WORK/huginn-src"; then
+            "$ROOT/scripts/update-huginn.sh" "$WORK/huginn-src" > /dev/null
+        fi
+    fi
+    [ -f "$browser/safari_browser.py" ] || die "no browser: run scripts/update-huginn.sh /path/to/Huginn (a checkout of the browser's repository)"
     rm -rf "$CHROOT/usr/share/huginn"
     install -d "$CHROOT/usr/share/huginn"
     rsync -a --chown=root:root --chmod=D755,F644 --exclude=installer --exclude='Install Huginn*' \

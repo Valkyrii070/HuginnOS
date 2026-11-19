@@ -24,7 +24,7 @@ from pathlib import Path
 from PySide6.QtCore import Property, QObject, QStandardPaths, QTimer, QUrl, Signal, Slot
 
 DATA_HOME = Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local/share") / "huginn"
-AGENT = "Huginn Feeds/1.0 (desktop app; https://github.com/Valkyrii070/Huginn)"
+AGENT = "Huginn Feeds/1.0 (desktop app; https://github.com/Valkyrii070/HuginnOS)"
 KEEP = 400                  # newest articles kept per feed (starred ones are always kept)
 FRESH = 30 * 60             # how often the open app checks again
 ATOM, RDF, RSS1, CONTENT, DC = ("{http://www.w3.org/2005/Atom}", "{http://www.w3.org/1999/02/22-rdf-syntax-ns#}", "{http://purl.org/rss/1.0/}",

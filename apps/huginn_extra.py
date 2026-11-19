@@ -24,7 +24,7 @@ from PySide6.QtCore import Property, QObject, QStandardPaths, QTimer, QUrl, Sign
 
 DATA_HOME = Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local/share") / "huginn"
 CACHE_HOME = Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache") / "huginn"
-AGENT = "Huginn/1.0 (desktop app; https://github.com/Valkyrii070/Huginn)"
+AGENT = "Huginn/1.0 (desktop app; https://github.com/Valkyrii070/HuginnOS)"
 
 
 def run(args: list, timeout: float = 15, feed: str = None) -> tuple:
