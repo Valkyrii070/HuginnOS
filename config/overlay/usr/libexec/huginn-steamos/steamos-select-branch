@@ -1,0 +1,4 @@
+#!/bin/sh
+# Steam's choice of SteamOS update channel: Huginn OS has one, so Steam shows none.
+[ "$1" = -c ] && echo stable
+exit 0

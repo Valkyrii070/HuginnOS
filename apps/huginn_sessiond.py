@@ -718,6 +718,26 @@ class Session(QObject):
         # the apps that were open, again (Settings › Desktop & Dock), then noting them as they change
         QTimer.singleShot(6000, self.reopen_apps)
         self._apps_timer = QTimer(self, interval=60000, timeout=self.note_apps)
+        # back from Game Mode because it couldn't start: say why
+        QTimer.singleShot(7000, self.game_mode_note)
+
+    GAME_NOTES = {
+        "no-steam": ("Game Mode needs Steam", "Install Steam from Games › Get Steam, sign in to it once, then try Game Mode again."),
+        "no-gamescope": ("Game Mode isn't installed", "gamescope, which Game Mode runs on, is missing. Software Update can put it back."),
+        "failed": ("Game Mode couldn't start", "Steam or gamescope closed straight away, so you're back on the desktop. "
+                   "Make a problem report in Settings › About to see why."),
+    }
+
+    def game_mode_note(self) -> None:
+        f = GAME_NEXT.with_name("game-mode-note")
+        try:
+            why = f.read_text().strip()
+            f.unlink()
+        except OSError:
+            return
+        if why in self.GAME_NOTES:
+            title, body = self.GAME_NOTES[why]
+            self.notes.notify("Games", 0, "huginn-games", title, body, [], {"desktop-entry": "huginn-games"}, 0)
 
     LAST_APPS = Path(os.environ.get("XDG_STATE_HOME") or Path.home() / ".local" / "state") / "huginn" / "last-apps.json"
     NOT_REOPENED = ("huginn-installer", "huginn-welcome", "huginn-authenticate")
@@ -895,7 +915,7 @@ class Session(QObject):
             self.notes.set_quiet(bool(args[0]))
             return None
         if method == "Do":                                    # the start menu's power row: someone at the computer asked
-            if args[0] in ("lock", "sleep", "hibernate", "restart", "shutdown", "signout"):
+            if args[0] in ("lock", "sleep", "hibernate", "restart", "shutdown", "signout", "gamemode"):
                 self.do(args[0], interactive=True)
             return None
         if method == "ClearNotifications":
@@ -1088,6 +1108,16 @@ class Session(QObject):
     def do(self, what: str, interactive: bool = False) -> None:
         """Carry out an action by its name: sleep, hibernate, shutdown, restart, signout, lock, screenOff, nothing.
         interactive: a person asked (the start menu), so logind may ask for a password if it needs one."""
+        if what == "gamemode":
+            # Game Mode: huginn-session starts it in the desktop's place once the desktop has ended (no signing out)
+            if not shutil.which("gamescope", path=os.environ.get("PATH", "") + ":/usr/games"):
+                return
+            try:
+                GAME_NEXT.parent.mkdir(parents=True, exist_ok=True)
+                GAME_NEXT.write_text("game\n")
+            except OSError:
+                return
+            what = "signout"
         if what == "signout":
             # Huginn's compositor closes the apps and ends the session itself, so the sign-in screen comes back
             # (ending it through logind takes SDDM's helper down too, and SDDM takes that for a crash)
@@ -1426,7 +1456,22 @@ def has_layer_shell(engine) -> bool:
     return False
 
 
+# huginn-session reads it when the desktop ends: "game" starts Game Mode in its place
+GAME_NEXT = Path(os.environ.get("XDG_STATE_HOME") or Path.home() / ".local" / "state") / "huginn" / "next-session"
+
+
+def name_process(name: str) -> None:
+    """The name top, Monitor and earlyoom see for this process (its comm), in place of "python3": earlyoom
+    (/etc/default/earlyoom) is told to leave the shell, the session daemon and their helpers be."""
+    try:
+        import ctypes
+        ctypes.CDLL(None).prctl(15, name.encode()[:15], 0, 0, 0)          # PR_SET_NAME
+    except (OSError, AttributeError):
+        pass
+
+
 def main() -> int:
+    name_process("huginn-sessiond")
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--demo", action="store_true", help="the windows with made-up content, and no D-Bus")
     ap.add_argument("--plain", action="store_true", help="ordinary windows even where layer-shell exists")

@@ -145,6 +145,8 @@ QtObject {
     // counted by the compositor), the graphics card and processor, top left of the screen the game fills (else the
     // screen of the window in front). Takes no clicks; read once a second only while it shows.
     property var gameStats: ({})
+    // a game has the screen: the shell's JavaScript lets go of its garbage too (huginn_system.py: trimMemory)
+    property Connections gameRoom: Connections { target: Status; function onGamePlayingChanged() { if (Status.gamePlaying) gc() } }
     property string gameBarOn: ""               // the screen the game bar opened on
     property Timer gameTick: Timer {
         interval: 1000; repeat: true; running: Settings.gameStats || shell.open === "gamebar"; triggeredOnStart: true

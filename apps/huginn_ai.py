@@ -51,6 +51,8 @@ MODELS_DIR = DATA / "ai-models"
 RUNTIME = Path(os.environ.get("XDG_RUNTIME_DIR") or f"/tmp/huginn-{os.getuid()}") / "huginn"
 SERVER_STATE = RUNTIME / "ai-server.json"
 USED = RUNTIME / "ai-used"
+# there while a game fills a screen (huginn-compositor: gamemode.rs) or Game Mode runs (huginn-game-session)
+GAME_PLAYING = Path(os.environ.get("XDG_RUNTIME_DIR") or f"/run/user/{os.getuid()}") / "huginn" / "game-playing"
 IDLE_STOP = 15 * 60
 SURFACES = ("search", "writer", "mail", "code", "notes", "documents", "feeds", "translate")
 HF = "https://huggingface.co"
@@ -647,7 +649,11 @@ def serve(ident: str, gpu: bool) -> int:
     stop = threading.Event()
     signal.signal(signal.SIGTERM, lambda *_: stop.set())
     while not stop.is_set() and proc.poll() is None:
-        stop.wait(20)
+        stop.wait(5)
+        # a game has the screen (the compositor's mark, or Game Mode's): the model's memory, and the graphics card's,
+        # go back to it; the next question starts the model again
+        if GAME_PLAYING.exists():
+            break
         try:
             idle = time.time() - float(USED.read_text(encoding="utf-8"))
         except (OSError, ValueError):

@@ -31,3 +31,7 @@ nano
 less
 curl
 zstd
+# Compressed memory (zram, /etc/systemd/zram-generator.conf) and closing a runaway program before the computer
+# freezes for want of memory (earlyoom, /etc/default/earlyoom)
+systemd-zram-generator
+earlyoom

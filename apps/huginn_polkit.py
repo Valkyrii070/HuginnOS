@@ -319,7 +319,18 @@ class Agent(QObject):
             self.changed.emit()
 
 
+def name_process(name: str) -> None:
+    """The name top, Monitor and earlyoom see for this process (its comm), in place of "python3": earlyoom
+    (/etc/default/earlyoom) is told to leave the shell, the session daemon and their helpers be."""
+    try:
+        import ctypes
+        ctypes.CDLL(None).prctl(15, name.encode()[:15], 0, 0, 0)          # PR_SET_NAME
+    except (OSError, AttributeError):
+        pass
+
+
 def main() -> int:
+    name_process("huginn-polkit")
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--process", type=int, default=0, help="answer for this process only (tests)")
     ap.add_argument("--dark", action="store_true")
@@ -341,11 +352,52 @@ def main() -> int:
         pump.timeout.connect(lambda: GLib.MainContext.default().iteration(False))
         if not qt_runs_glib():
             pump.start()
-    engine = QQmlApplicationEngine()
-    ctx = engine.rootContext()
-    for name, obj in (("Theme", theme), ("Settings", settings), ("Agent", agent)):
-        ctx.setContextProperty(name, obj)
-    engine.load(QUrl.fromLocalFile(str(HERE / "qml" / "Authenticate.qml")))
+    # The window's QML is loaded when polkit first asks, and let go of five minutes after the last answer, so the agent
+    # waits in little memory (it's running all session for the few times a password is wanted).
+    ui = {}
+
+    def load() -> None:
+        if "engine" in ui:
+            return
+        engine = QQmlApplicationEngine()
+        ctx = engine.rootContext()
+        for name, obj in (("Theme", theme), ("Settings", settings), ("Agent", agent)):
+            ctx.setContextProperty(name, obj)
+        engine.load(QUrl.fromLocalFile(str(HERE / "qml" / "Authenticate.qml")))
+        ui["engine"] = engine
+
+    def unload() -> None:
+        engine = ui.pop("engine", None)
+        if engine is None or agent.active:
+            if engine is not None:
+                ui["engine"] = engine
+            return
+        for root in engine.rootObjects():
+            root.deleteLater()
+        QTimer.singleShot(500, engine.deleteLater)               # once the window has gone (it binds to the engine's context)
+        QTimer.singleShot(1500, trim)
+
+    def trim() -> None:
+        import ctypes
+        import gc
+        gc.collect()
+        try:
+            ctypes.CDLL("libc.so.6").malloc_trim(0)
+        except (OSError, AttributeError):
+            pass
+
+    rest = QTimer(singleShot=True, interval=300000)
+    rest.timeout.connect(unload)
+
+    def follow() -> None:
+        if agent.active:
+            rest.stop()
+            load()
+        else:
+            rest.start()
+    agent.changed.connect(follow)
+    if args.process or os.environ.get("HUGINN_POLKIT_EAGER"):
+        load()                                                  # tests look at the window straight away
     return app.exec()
 
 

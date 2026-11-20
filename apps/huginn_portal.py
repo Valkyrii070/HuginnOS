@@ -656,7 +656,18 @@ def wait_for_display(limit: float = 120.0) -> None:
         loop.run()
 
 
+def name_process(name: str) -> None:
+    """The name top, Monitor and earlyoom see for this process (its comm), in place of "python3": earlyoom
+    (/etc/default/earlyoom) is told to leave the shell, the session daemon and their helpers be."""
+    try:
+        import ctypes
+        ctypes.CDLL(None).prctl(15, name.encode()[:15], 0, 0, 0)          # PR_SET_NAME
+    except (OSError, AttributeError):
+        pass
+
+
 def main() -> int:
+    name_process("huginn-portal")
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--demo", nargs="?", const="open", choices=("open", "save", "access", "apps", "shot", "colour"),
                     help="show one of the windows on its own (open, save, access, apps, shot, colour)")

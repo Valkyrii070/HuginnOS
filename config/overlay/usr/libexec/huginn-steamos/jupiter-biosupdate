@@ -1,0 +1,3 @@
+#!/bin/sh
+# Steam Deck firmware: not on this computer.
+exit 0

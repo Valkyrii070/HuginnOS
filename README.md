@@ -2137,6 +2137,51 @@ apps) showed up in the start menu and Search too; `config/hooks/42-helpers-out-o
   archive that reaches outside its folder, a release name that isn't GE's); the sandbox here can't reach GitHub.
 - Sheets: a merged cell's outline no longer complains about cells that aren't merged (found by `ci-smoke`).
 
+## Gaming, round three: Game Mode and less memory (2026-11-20)
+
+Measured first: the installation drive in a virtual PC (one 1024×768 screen, software drawing), signed in and idle,
+used about 1.3 GB (PSS over every process). The biggest were the shell (405 MB, much of it the software renderer's
+pictures, which a graphics card keeps in its own memory), a MIDI synthesiser nothing used (163 MB), the session
+daemon (85), the file chooser portal (82), the password prompt (76) and four small helpers (85 together).
+
+- **Game Mode** (as SteamOS's): Steam's big-screen interface (`-gamepadui -steamos3`) on Valve's gamescope
+  (Ubuntu's, from multiverse), filling the main screen (Settings › Displays) with the others dark, adaptive sync on,
+  and Steam told it may offer its frame-rate, tearing and upscaling controls. Pick it on the sign-in screen
+  ("Huginn OS Game Mode"), in Games (Game Mode, top right) or in the start menu's bottom row (the controller, where
+  gamescope is installed). `huginn-session` now runs the desktop (`huginn-desktop-session`) or Game Mode
+  (`huginn-game-session`) one after the other in the same signed-in session, so switching needs no password: the
+  desktop writes `game` to `~/.local/state/huginn/next-session` and ends; Steam's Power › Switch to Desktop runs
+  `steamos-session-select`, which writes `desktop` and closes Steam. Restart and Shut Down in Steam work through
+  SteamOS's sentinel files. Steam from Flathub gets these helpers (`/usr/libexec/huginn-steamos`) in its own folder
+  and on its PATH; Ubuntu's Steam on the system PATH. If Game Mode can't start (no Steam, no gamescope, or Steam or
+  gamescope closing within 20 seconds), the desktop comes back and says why. Tested with stand-ins for gamescope,
+  Flatpak and Steam (`session_test.sh`, 20 checks, including Flathub's PATH and the main screen); gamescope itself
+  needs a real graphics card (its DRM extension), so the RX 9070 XT is its first real run. Not yet: HDR in Game Mode
+  (gamescope's WSI layer isn't inside Flathub's Steam) and Steam's performance overlay levels (Ubuntu's MangoHud has
+  no mangoapp).
+- **Faster Windows games**: `ntsync` is loaded at start (`/etc/modules-load.d/huginn-ntsync.conf`, with
+  `/dev/ntsync` open to games: `62-huginn-ntsync.rules`); Wine 11 and GE-Proton use it by themselves in place of
+  esync/fsync. As SteamOS does, the kernel no longer slows down games that do split locks (`kernel.split_lock_mitigate
+  = 0`), and background memory compaction, which shows as stutter, is off (`vm.compaction_proactiveness = 0`;
+  `/etc/sysctl.d/60-huginn-games.conf`). Ubuntu already raises `vm.max_map_count`.
+- **Making room while a game plays**: the compositor keeps `$XDG_RUNTIME_DIR/huginn/game-playing` while a game fills
+  a screen (whether or not GameMode is on), and Game Mode keeps it all along. The local AI model (llama-server) is
+  unloaded within five seconds, giving its memory and the graphics card's back (the next question starts it again);
+  automatic updates wait until the game ends; the shell lets go of its windows' cached pictures, its JavaScript
+  garbage and freed heap (about 50 MB in the nested session, logged as "a game has the screen").
+- **Compressed memory (zram)**: a swap in RAM compressed with zstd, up to 8 GB (`/etc/systemd/zram-generator.conf`,
+  `systemd-zram-generator`), with the settings that suit swap in RAM set once it's there (swappiness 180, no
+  read-ahead). Huginn OS makes no swap on the disk, so before this there was none.
+- **No more freezing when memory runs out**: earlyoom closes the program using the most when both memory and the
+  compressed swap are nearly gone, leaving Huginn's compositor, shell, session daemon, portal and password prompt,
+  Xwayland, gamescope and sound alone, and taking a browser's page processes first (`/etc/default/earlyoom`). For
+  that, Huginn's own processes now give themselves names (`huginn-shell`, `huginn-sessiond`, `huginn-writer`…), which
+  top and Monitor show too.
+- **Less memory at idle**: Ubuntu's fluidsynth user service is off (Tempo runs fluidsynth itself; −163 MB); the
+  password prompt loads its window only when polkit asks and lets it go five minutes after (`huginn_polkit.py`); the
+  shortcuts agent, privacy watcher, automatic updates and accounts run as threads of one process
+  (`huginn_helpers.py`: 44 MB in place of about 85).
+
 ## Huginn, the browser
 
 Inside the Huginn repository (this kit is its `os/` folder) the image ships the repository's own browser. A kit used

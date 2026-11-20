@@ -21,17 +21,14 @@ fi
 (sleep 6; python3 /usr/share/huginn-apps/huginn_app.py mail --background) &
 # Messages the same way, when you're signed in and keep it on.
 (sleep 8; python3 /usr/share/huginn-apps/huginn_app.py messages --background) &
-# Shortcuts' watcher (times, logins, drives, phones, Wi-Fi, battery) and Privacy Report's notebook. Each leaves at once
-# if another copy is already running. Both are light: they look every few seconds and sleep in between.
-(sleep 10; python3 /usr/share/huginn-apps/huginn_shortcuts.py agent) &
-(sleep 12; python3 /usr/share/huginn-apps/huginn_privacy.py watch) &
+# Huginn's quiet helpers, in one process (huginn_helpers.py): Shortcuts' watcher (times, logins, drives, phones, Wi-Fi,
+# battery), Privacy Report's notebook, Software Update (every few hours; with automatic updates on, it puts them in)
+# and Online Accounts (calendars and contacts kept in step with Google, Microsoft, iCloud and Nextcloud). Each looks
+# now and then and sleeps in between, and leaves it to another copy that's already running.
+(sleep 10; python3 /usr/share/huginn-apps/huginn_helpers.py) &
 # Clipboard history's watcher (Super+V): while history is off (it starts off) a change costs a tiny shell and nothing
 # is kept; turned on, the newest 50 things you copy are kept, never a password.
 command -v wl-paste >/dev/null && python3 /usr/share/huginn-apps/huginn_clipboard.py watch &
-# Software Update looks for updates every few hours (and, with automatic updates on, puts them in).
-python3 /usr/share/huginn-apps/huginn_updates.py watch &
-# Online Accounts keeps calendars and contacts in step with Google, Microsoft, iCloud and Nextcloud.
-(sleep 20; python3 /usr/share/huginn-apps/huginn_accounts.py watch) &
 if [ "$1" = "--services" ]; then
     wait
 else

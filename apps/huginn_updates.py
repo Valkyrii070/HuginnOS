@@ -538,11 +538,20 @@ class Updates(QObject):
 
 
 # ------------------------------------------------------------------------------------------- in the background
+GAME_PLAYING = Path(os.environ.get("XDG_RUNTIME_DIR") or f"/run/user/{os.getuid()}") / "huginn" / "game-playing"
+
+
 def watch(every: float = 6 * 3600, first_wait: float = 300) -> None:
     """Look for updates now and then. With automatic updates on, apps and Huginn are updated straight away and
     system updates are downloaded and set to go in at the next restart."""
     time.sleep(first_wait)
     while True:
+        # not while a game has the screen (the compositor's mark): downloads and unpacking take the network, the disk
+        # and the processor from it. Looked at again every minute, for up to six hours.
+        for _ in range(360):
+            if not GAME_PLAYING.exists():
+                break
+            time.sleep(60)
         items = look_everywhere(True)
         restart = needs_restart(items)
         if auto_wanted():

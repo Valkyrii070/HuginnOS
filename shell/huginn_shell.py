@@ -1109,7 +1109,18 @@ class Glance(QObject):
     upNext = Property("QVariantList", lambda self: self._next, notify=changed)
 
 
+def name_process(name: str) -> None:
+    """The name top, Monitor and earlyoom see for this process (its comm), in place of "python3": earlyoom
+    (/etc/default/earlyoom) is told to leave the shell, the session daemon and their helpers be."""
+    try:
+        import ctypes
+        ctypes.CDLL(None).prctl(15, name.encode()[:15], 0, 0, 0)          # PR_SET_NAME
+    except (OSError, AttributeError):
+        pass
+
+
 def main() -> int:
+    name_process("huginn-shell")
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--preview", action="store_true")
     ap.add_argument("--compositor", action="store_true", help="be the compositor too (Huginn's own; the preview session)")

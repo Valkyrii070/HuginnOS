@@ -883,6 +883,20 @@ class Games(QObject):
             self.said.emit(f"{name} is gone. Games set to use it go back to Steam's own Proton.", False)
             self.refresh()
     steamInstalled = Property(bool, lambda self: bool(self._roots) or bool(self._have.get("steam")), notify=changed)
+    # Game Mode (huginn-game-session): Steam's big-screen interface in gamescope in the desktop's place
+    gameModeReady = Property(bool, lambda self: bool(shutil.which("gamescope", path=os.environ.get("PATH", "") + ":/usr/games")) and not self._demo_mode(), notify=changed)
+
+    def _demo_mode(self) -> bool:
+        return bool(getattr(self, "_demo", False))
+
+    @Slot()
+    def gameMode(self) -> None:
+        """Switch to Game Mode: the session daemon ends the desktop and huginn-session starts Game Mode."""
+        try:
+            subprocess.Popen(["gdbus", "call", "--session", "-d", "org.huginn.Session", "-o", "/org/huginn/Session",
+                              "-m", "org.huginn.Session.Do", "gamemode"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except OSError:
+            self.said.emit("Game Mode couldn't be started from here.", True)
     tools = Property("QVariantMap", lambda self: {"mangohud": bool(self._have.get("mangohud")), "gamemode": bool(self._have.get("gamemoderun")), "wine": bool(self._have.get("wine")),
                                                   "proton": len(self._protons), "umu": bool(self._have.get("umu-run")),
                                                   "steamFlatpak": self._steam_flatpak()}, notify=changed)

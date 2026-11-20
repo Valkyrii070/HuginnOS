@@ -1,0 +1,6 @@
+[Desktop Entry]
+Name=Huginn OS Game Mode
+Comment=Steam's big-screen interface, for a controller and the TV, as on SteamOS
+Exec=/usr/bin/huginn-session --game
+Type=Application
+DesktopNames=gamescope

@@ -14,6 +14,7 @@ import os
 import shlex
 import shutil
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -123,9 +124,15 @@ class System(QObject):
         self._bt_path = ""
         self._pending = {}                                 # dock clicks waiting for KWin to say if a window was there
         self.sb = self.yb = None
-        self._power = {"sleep": True, "restart": True, "shutdown": True}
+        # Game Mode (Steam in gamescope, huginn-game-session): only where gamescope is, under Huginn's own session
+        self._power = {"sleep": True, "restart": True, "shutdown": True, "gamemode": bool(shutil.which("gamescope", path=os.environ.get("PATH", "") + ":/usr/games")) and os.environ.get("XDG_SESSION_DESKTOP") == "huginn"}
         self.lastPower = ""                                 # (tests) the last power action asked for
         self._shooting = False
+        # A game has the screen (the compositor's mark, gamemode.rs): the shell lets go of what it can (trimMemory)
+        self._game_playing = False
+        if not demo:
+            self._game_timer = QTimer(self, interval=2000, timeout=self._game_check)
+            self._game_timer.start()
         if demo:
             self._battery = {"present": True, "percent": 82, "charging": False}
             self._network = {"wifiDevice": True, "wifiOn": True, "kind": "wifi", "name": "Home", "signal": 78, "wifiName": "Home", "wired": False, "wiredName": ""}
@@ -888,6 +895,7 @@ for (var i = 0; i < all.length; i++) {{ var win = all[i]; if (String(win.interna
                 caps[key] = v != "na"
             except GLib.Error:
                 caps[key] = True
+        caps["gamemode"] = self._power.get("gamemode", False)
         if caps != self._power:
             self._power = caps
             self.changed.emit()
@@ -914,11 +922,50 @@ for (var i = 0; i < all.length; i++) {{ var win = all[i]; if (String(win.interna
             self._shooting = False
         threading.Thread(target=run, daemon=True).start()
 
+    # ------------------------------------------------------------------ making room for a game
+    gamePlayingChanged = Signal()
+    GAME_MARK = Path(os.environ.get("XDG_RUNTIME_DIR") or f"/run/user/{os.getuid()}") / "huginn" / "game-playing"
+
+    def _game_check(self) -> None:
+        now = self.GAME_MARK.exists()
+        if now != self._game_playing:
+            self._game_playing = now
+            self.gamePlayingChanged.emit()
+            if now:
+                QTimer.singleShot(1500, self.trimMemory)            # once the shell's own QML has collected (Shell.qml)
+
+    gamePlaying = Property(bool, lambda self: self._game_playing, notify=gamePlayingChanged)
+
+    @Slot()
+    def trimMemory(self) -> None:
+        """Give back memory the shell isn't using: each window's cached graphics (its scene graph's textures, glyphs,
+        shaders: made again when next drawn), Python's garbage, and the C library's freed heap."""
+        from PySide6.QtGui import QGuiApplication
+        from PySide6.QtQuick import QQuickWindow
+
+        def rss() -> int:
+            try:
+                return int(Path("/proc/self/statm").read_text().split()[1]) * os.sysconf("SC_PAGE_SIZE") // 1048576
+            except (OSError, ValueError, IndexError):
+                return 0
+        before = rss()
+        for w in QGuiApplication.topLevelWindows():
+            if isinstance(w, QQuickWindow):
+                w.releaseResources()
+        import gc
+        gc.collect()
+        try:
+            import ctypes
+            ctypes.CDLL("libc.so.6").malloc_trim(0)
+        except (OSError, AttributeError):
+            pass
+        print(f"huginn-shell: a game has the screen; memory {before} MB → {rss()} MB", file=sys.stderr, flush=True)
+
     @Slot(str)
     def power(self, what: str) -> None:
-        """lock, sleep, restart, shutdown or signout. The session daemon does it (it locks before sleeping); without
-        it, logind directly."""
-        if what not in ("lock", "sleep", "restart", "shutdown", "signout"):
+        """lock, sleep, restart, shutdown, signout or gamemode (the desktop ends and Game Mode starts in its place). The
+        session daemon does it (it locks before sleeping); without it, logind directly."""
+        if what not in ("lock", "sleep", "restart", "shutdown", "signout", "gamemode"):
             return
         self.lastPower = what
         if self._demo:
@@ -937,6 +984,14 @@ for (var i = 0; i < all.length; i++) {{ var win = all[i]; if (String(win.interna
             self._power_direct(what)
 
     def _power_direct(self, what: str) -> None:
+        if what == "gamemode":
+            nxt = Path(os.environ.get("XDG_STATE_HOME") or Path.home() / ".local" / "state") / "huginn" / "next-session"
+            try:
+                nxt.parent.mkdir(parents=True, exist_ok=True)
+                nxt.write_text("game\n")
+            except OSError:
+                return
+            what = "signout"
         if what == "lock":
             cmd = ["loginctl", "lock-session"]
         elif what == "signout":

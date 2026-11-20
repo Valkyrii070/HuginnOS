@@ -1098,6 +1098,7 @@ impl<B: Backend + 'static> HuginnState<B> {
             }
         }
         self.huginn.game_awake = !games.is_empty();
+        crate::gamemode::mark(!games.is_empty());
         crate::gamemode::playing(games);
     }
 

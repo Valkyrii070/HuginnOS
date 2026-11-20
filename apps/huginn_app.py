@@ -5274,6 +5274,16 @@ def apply_ui_scale() -> None:
         os.environ["QT_SCALE_FACTOR"] = f"{scale:g}"
 
 
+def name_process(name: str) -> None:
+    """The name top, Monitor and earlyoom see for this process (its comm), in place of "python3": earlyoom
+    (/etc/default/earlyoom) is told to leave the shell, the session daemon and their helpers be."""
+    try:
+        import ctypes
+        ctypes.CDLL(None).prctl(15, name.encode()[:15], 0, 0, 0)          # PR_SET_NAME
+    except (OSError, AttributeError):
+        pass
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("app", choices=sorted(APPS))
@@ -5290,6 +5300,7 @@ def main() -> int:
     mode.add_argument("--light", action="store_true")
     args = ap.parse_args()
 
+    name_process(f"huginn-{args.app}")
     title, qml = APPS[args.app]
     if args.app == "welcome" and not (args.demo or args.shot or args.first_run):
         # The tour runs on the desktop itself, in the shell: ask it to (a session without Huginn's shell gets the window)

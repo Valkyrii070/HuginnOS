@@ -13,6 +13,8 @@ Window {
     title: "Authenticate"
     modality: Qt.ApplicationModal
     onVisibleChanged: if (visible) { pass.text = ""; Qt.callLater(function () { pass.focusIn(); win.requestActivate() }) }
+    // (loaded when polkit asks, so it can start out shown)
+    Component.onCompleted: if (visible) Qt.callLater(function () { pass.focusIn(); win.requestActivate() })
     property int lastTries: 0
     readonly property int tries: Agent.tries
     onTriesChanged: { if (tries > lastTries) { shake.restart(); pass.text = "" } lastTries = tries }

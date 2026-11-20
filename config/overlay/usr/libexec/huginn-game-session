@@ -1,0 +1,90 @@
+#!/bin/bash
+# Huginn OS's Game Mode: Steam's big-screen interface (-gamepadui) on Valve's gamescope, the way SteamOS's Game Mode
+# runs, on the main screen (Settings › Displays) with the others dark. huginn-session runs this in the desktop's
+# place; when it ends, the desktop comes back (see huginn-session).
+#
+# Steam is Steam from Flathub (Games › Get Steam) or Ubuntu's, whichever is installed. It runs as SteamOS's
+# (-steamos3), so its Power menu has Switch to Desktop, Restart and Shut Down; the helpers it calls for those are in
+# /usr/libexec/huginn-steamos (put first on its PATH; for Flathub's, copied where its sandbox can see them).
+#
+# What went wrong, if anything, is left in ~/.local/state/huginn/game-mode-note for the desktop to say
+# (huginn_sessiond.py): no-gamescope, no-steam or failed.
+# Ubuntu puts gamescope (and its own Steam) in /usr/games, which the sign-in screen's PATH may leave out
+case ":$PATH:" in *:/usr/games:*) ;; *) export PATH="$PATH:/usr/games" ;; esac
+state="${XDG_STATE_HOME:-$HOME/.local/state}/huginn"
+mkdir -p "$state"
+rm -f "$state/game-mode-note"
+note() { echo "$1" > "$state/game-mode-note"; }
+
+command -v gamescope >/dev/null 2>&1 || { note no-gamescope; exit 0; }
+
+helpers=/usr/libexec/huginn-steamos
+if command -v flatpak >/dev/null 2>&1 && flatpak info com.valvesoftware.Steam >/dev/null 2>&1; then
+    # Flathub's Steam sees its own folder (~/.var/app/com.valvesoftware.Steam) at the same path inside its sandbox:
+    # the helpers, the switch and the sentinels go there
+    app="$HOME/.var/app/com.valvesoftware.Steam"
+    bin="$app/huginn-bin"
+    shared="$app/.local/state/huginn"
+    mkdir -p "$bin" "$shared"
+    cp -f "$helpers"/* "$bin/"
+    steam=(flatpak run "--env=PATH=$bin:/app/bin:/app/utils/bin:/usr/bin" com.valvesoftware.Steam)
+elif command -v steam >/dev/null 2>&1; then
+    shared="$state"
+    export PATH="$helpers:$PATH"
+    steam=(steam)
+else
+    note no-steam
+    exit 0
+fi
+
+# What Steam is told this gamescope can do (as SteamOS's session tells it): its controls for adaptive sync
+# (FreeSync), tearing and the upscaling filter; the second X server per game; the volume keys.
+export XDG_CURRENT_DESKTOP=gamescope XDG_SESSION_DESKTOP=gamescope
+export STEAM_GAMESCOPE_VRR_SUPPORTED=1
+export STEAM_GAMESCOPE_HAS_TEARING_SUPPORT=1 STEAM_GAMESCOPE_TEARING_SUPPORTED=1
+export STEAM_GAMESCOPE_NIS_SUPPORTED=1
+export STEAM_MULTIPLE_XWAYLANDS=1
+export STEAM_ENABLE_VOLUME_HANDLER=1
+export STEAM_DISABLE_AUDIO_DEVICE_SWITCHING=1
+export STEAM_ALLOW_DRIVE_UNMOUNT=1
+export SRT_URLOPEN_PREFER_STEAM=1
+# Steam's first-start state for this session (an empty file: Steam fills it), as SteamOS keeps it
+export STEAM_BOOTSTRAP_CONFIG="$shared/bootstrap.cfg"
+touch "$STEAM_BOOTSTRAP_CONFIG"
+# Steam's Power › Restart and Shut Down leave these and close Steam; and its Switch to Desktop writes next-session
+# here (steamos-session-select)
+export HUGINN_SESSION_STATE="$shared"
+export STEAMOS_STEAM_REBOOT_SENTINEL="$shared/reboot" STEAMOS_STEAM_SHUTDOWN_SENTINEL="$shared/shutdown"
+rm -f "$STEAMOS_STEAM_REBOOT_SENTINEL" "$STEAMOS_STEAM_SHUTDOWN_SENTINEL"
+# Compiled shaders: as on the desktop (huginn-desktop-session)
+export MESA_SHADER_CACHE_MAX_SIZE="${MESA_SHADER_CACHE_MAX_SIZE:-10G}"
+ulimit -n 524288 2>/dev/null
+
+# The main screen, as Settings › Displays keeps it (else gamescope's own choice)
+main=$(sed -n 's/.*"_main" *: *"\([^"]*\)".*/\1/p' "${XDG_CONFIG_HOME:-$HOME/.config}/huginn/displays.json" 2>/dev/null | head -n 1)
+
+args=(--steam --xwayland-count 2 --adaptive-sync)
+[ -n "$main" ] && args+=(--prefer-output "$main")
+
+# Game Mode is all game: the desktop's helpers that are still running make room as they do for a game on the
+# desktop (the local AI model unloads, update downloads wait); see the compositor's gamemode.rs
+mark="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/huginn/game-playing"
+mkdir -p "${mark%/*}" && echo gamemode > "$mark"
+trap 'rm -f "$mark"' EXIT
+
+started=$SECONDS
+dbus-run-session -- gamescope "${args[@]}" -- "${steam[@]}" -gamepadui -steamos3
+code=$?
+
+if [ -e "$STEAMOS_STEAM_REBOOT_SENTINEL" ]; then
+    rm -f "$STEAMOS_STEAM_REBOOT_SENTINEL"; systemctl reboot; exit 0
+fi
+if [ -e "$STEAMOS_STEAM_SHUTDOWN_SENTINEL" ]; then
+    rm -f "$STEAMOS_STEAM_SHUTDOWN_SENTINEL"; systemctl poweroff; exit 0
+fi
+# Ended within seconds, without Switch to Desktop: gamescope or Steam couldn't start
+if (( SECONDS - started < 20 )) && [ ! -s "$shared/next-session" ]; then
+    echo "huginn-game-session: gamescope and Steam ended after $((SECONDS - started)) s (exit $code)" >&2
+    note failed
+fi
+exit 0

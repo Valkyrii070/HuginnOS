@@ -42,7 +42,8 @@ Item {
         { id: "lock", label: "Lock", glyph: "lock" }, { id: "sleep", label: "Sleep", glyph: "moon" },
         { id: "restart", label: "Restart", glyph: "refresh", ask: "Restart now?" },
         { id: "shutdown", label: "Shut Down", glyph: "power", ask: "Shut down now?" },
-        { id: "signout", label: "Sign Out", glyph: "signout", ask: "Sign out? Open apps will close." } ]
+        { id: "signout", label: "Sign Out", glyph: "signout", ask: "Sign out? Open apps will close." },
+        { id: "gamemode", label: "Game Mode", glyph: "gamepad", ask: "Switch to Game Mode? Open apps will close. Steam's Power › Switch to Desktop comes back." } ]
 
     function find(q, g) {
         q = q.trim().toLowerCase()
@@ -434,7 +435,7 @@ Item {
                 visible: root.confirm === ""
                 x: 7; anchors.verticalCenter: parent.verticalCenter; spacing: 4
                 Repeater {
-                    model: root.power.filter(function (p) { return Status.powerCaps[p.id] !== false })
+                    model: root.power.filter(function (p) { return p.id === "gamemode" ? Status.powerCaps.gamemode === true : Status.powerCaps[p.id] !== false })
                     Pressable {
                         id: pb
                         required property var modelData

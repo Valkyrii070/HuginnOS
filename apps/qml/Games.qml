@@ -13,6 +13,7 @@ GlassWindow {
     readonly property bool has: Backend.summary.games > 0
     property string sheet: ""            // "", "accounts", "add", "ge"
     property string confirmGe: ""         // a GE-Proton about to be removed
+    property bool demoGameMode: false     // (pictures) the Game Mode button without gamescope
     property bool profile: false
     property bool renaming: false
     // The carousel is fed the games' ids, and only when the line-up really changes: the backend hands over a fresh
@@ -85,6 +86,7 @@ GlassWindow {
         Island { anchors { right: parent.right; rightMargin: 12 } y: 12
             IslandField { objectName: "search"; width: 170; placeholder: "Find a game"; onTextChanged: Backend.search(text) }
             Seg { icon: "user"; tip: "Steam accounts"; onClicked: win.sheet = "accounts" }
+            Seg { objectName: "gameModeButton"; visible: Backend.gameModeReady || win.demoGameMode; icon: "gamepad"; text: "Game Mode"; tip: "Steam's big-screen interface, as on SteamOS"; onClicked: win.sheet = "gamemode" }
             Seg { objectName: "geButton"; text: "Proton-GE"; tip: "GE-Proton for Steam: fixes many Windows games"; onClicked: { win.sheet = "ge"; if (!Backend.ge.latest) Backend.geCheck() } }
             Seg { icon: "history"; tip: "Look again"; onClicked: Backend.refresh() }
             Seg { icon: "plus"; text: "Add a Game"; onClicked: win.openAdd() } },
@@ -142,6 +144,24 @@ GlassWindow {
                     Btn { text: Backend.steamInstalled ? "Open Steam" : "Get Steam"; onClicked: Backend.steamInstalled ? Backend.openSteam() : Backend.getSteam() }
                     Btn { primary: true; text: "Done"; onClicked: win.sheet = "" } }
                 Label { anchors { left: parent.left; leftMargin: 24; bottom: parent.bottom; bottomMargin: 24 } width: 250; wrapMode: Text.WordWrap; secondary: true; font.pixelSize: 11; text: "Epic, GOG and Amazon accounts are signed in inside Heroic." } } },
+
+        // ---------------- Game Mode: Steam's big-screen interface in gamescope (huginn-game-session), in the desktop's place
+        Item { anchors.fill: parent; z: 20; visible: win.sheet === "gamemode"
+            Rectangle { anchors.fill: parent; radius: win.r; color: "#66000000"; MouseArea { anchors.fill: parent; acceptedButtons: Qt.AllButtons; onClicked: win.sheet = "" } }
+            Rectangle { anchors.centerIn: parent; width: 520; height: gmCol.height + 48; radius: 18; color: Theme.t.menu_bg; border.width: 1; border.color: Theme.t.menu_border
+                MouseArea { anchors.fill: parent }
+                Column { id: gmCol; x: 24; y: 22; width: parent.width - 48; spacing: 12
+                    Label { font.pixelSize: 17; font.weight: Font.DemiBold; text: "Game Mode" }
+                    Label { width: parent.width; wrapMode: Text.WordWrap; secondary: true; font.pixelSize: 13
+                        text: "Steam's big-screen interface fills your main screen, as on SteamOS: made for a controller and a TV, with "
+                              + "its own quick settings for frame rate and FreeSync. The other screens go dark and open apps close.\n\n"
+                              + "To come back, choose Power › Switch to Desktop in Steam. You can also pick Game Mode on the sign-in screen." }
+                    Label { visible: !Backend.steamInstalled; width: parent.width; wrapMode: Text.WordWrap; font.pixelSize: 13; color: Theme.t.accent
+                        text: "Steam isn't installed yet. Get Steam, sign in to it once here on the desktop, then come back." }
+                    Row { anchors.right: parent.right; spacing: 8
+                        Btn { text: "Cancel"; onClicked: win.sheet = "" }
+                        Btn { visible: !Backend.steamInstalled; text: "Get Steam"; onClicked: { win.sheet = ""; Backend.getSteam() } }
+                        Btn { objectName: "gameModeGo"; primary: true; enabled: Backend.steamInstalled; text: "Switch to Game Mode"; onClicked: { win.sheet = ""; Backend.gameMode() } } } } } },
 
         // ---------------- GE-Proton: the newest from GitHub into Steam, checked against its SHA-512
         Item { anchors.fill: parent; z: 20; visible: win.sheet === "ge"

@@ -49,6 +49,26 @@ pub fn looks_like_game(class: &str, title: &str, pid: u32, tearing: bool) -> boo
 
 /// The games filling screens now (their process ids). Called every couple of seconds; tells GameMode only when
 /// the set changes.
+/// $XDG_RUNTIME_DIR/huginn/game-playing, there while a game fills a screen (whether or not GameMode is on), so the
+/// rest of the session can make room for it: the local AI model is unloaded (huginn_ai.py), update downloads wait
+/// (huginn_updates.py) and the shell lets go of its caches (huginn_system.py). Written only when it changes.
+pub fn mark(playing: bool) {
+    static LAST_MARK: Mutex<Option<bool>> = Mutex::new(None);
+    let Ok(mut last) = LAST_MARK.lock() else { return };
+    if *last == Some(playing) {
+        return;
+    }
+    *last = Some(playing);
+    let Some(dir) = std::env::var_os("XDG_RUNTIME_DIR").map(|d| std::path::PathBuf::from(d).join("huginn")) else { return };
+    let file = dir.join("game-playing");
+    if playing {
+        let _ = std::fs::create_dir_all(&dir);
+        let _ = std::fs::write(&file, b"desktop\n");
+    } else {
+        let _ = std::fs::remove_file(&file);
+    }
+}
+
 pub fn playing(pids: BTreeSet<u32>) {
     let pids = if ALLOWED.load(Ordering::Relaxed) { pids } else { BTreeSet::new() };
     {
