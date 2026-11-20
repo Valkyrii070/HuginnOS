@@ -17,7 +17,7 @@ import sys
 import threading
 from pathlib import Path
 
-from PySide6.QtCore import Property, QObject, QProcess, QTimer, Signal, Slot
+from PySide6.QtCore import Property, QAbstractListModel, QModelIndex, QObject, QProcess, Qt, QTimer, Signal, Slot
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
@@ -226,13 +226,214 @@ def locale_label(code: str) -> str:
     return f"{lang[:1].upper()}{lang[1:]} ({region})" if region else lang
 
 
+ZONEINFO = Path("/usr/share/zoneinfo")
+# The United States' zones as people say them (zone.tab lists 29, most for a few counties).
+US_MAIN = [("America/New_York", "Eastern"), ("America/Chicago", "Central"), ("America/Denver", "Mountain"),
+           ("America/Phoenix", "Arizona"), ("America/Los_Angeles", "Pacific"), ("America/Anchorage", "Alaska"),
+           ("Pacific/Honolulu", "Hawaii")]
+TWELVE_HOUR = ("en_US", "en_CA", "en_AU", "hi_IN", "ar_SA")
+
+
+def utc_text(seconds: int) -> str:
+    """UTC−6, UTC+5:30, UTC."""
+    if not seconds:
+        return "UTC"
+    sign, s = ("+" if seconds > 0 else "−"), abs(seconds)
+    h, m = divmod(s // 60, 60)
+    return f"UTC{sign}{h}" + (f":{m:02d}" if m else "")
+
+
 def zone_list() -> list:
+    """Every place in tzdata's zone.tab: its city, country, what the zone is called there ("Central"), its offset
+    now, and words to find it by (the city, country, region, abbreviations like CST, "utc-6")."""
+    import datetime
     try:
         import zoneinfo
-        names = sorted(z for z in zoneinfo.available_timezones() if "/" in z and not z.startswith(("Etc/", "SystemV/", "US/", "posix/", "right/")))
-    except Exception:                                       # noqa: BLE001
-        names = ["UTC"]
-    return [{"id": z, "city": z.rsplit("/", 1)[-1].replace("_", " "), "region": z.split("/", 1)[0].replace("_", " ")} for z in names]
+    except ImportError:                                      # pragma: no cover
+        return [{"id": "UTC", "city": "UTC", "country": "", "place": "Coordinated Universal Time", "cc": "", "offset": "UTC", "minutes": 0, "note": "", "find": "utc gmt"}]
+    from PySide6.QtCore import QLocale
+    countries = {}
+    try:
+        for line in (ZONEINFO / "iso3166.tab").read_text(encoding="utf-8").splitlines():
+            if line and not line.startswith("#") and "\t" in line:
+                cc, name = line.split("\t", 1)
+                countries[cc] = name.strip()
+    except OSError:
+        pass
+
+    def country(cc: str) -> str:
+        try:
+            t = QLocale.codeToTerritory(cc)
+            name = QLocale.territoryToString(t) if t.value else ""      # 0: AnyTerritory (an unknown code)
+        except (AttributeError, TypeError, ValueError):
+            name = ""
+        return name or countries.get(cc, cc)
+
+    rows = []
+    try:
+        lines = (ZONEINFO / "zone.tab").read_text(encoding="utf-8").splitlines()
+    except OSError:
+        lines = []
+    us = dict(US_MAIN)
+    now = datetime.datetime.now(datetime.timezone.utc)
+    jan, jul = datetime.datetime(now.year, 1, 15, 12, tzinfo=datetime.timezone.utc), datetime.datetime(now.year, 7, 15, 12, tzinfo=datetime.timezone.utc)
+    for line in lines:
+        if not line or line.startswith("#"):
+            continue
+        f = line.split("\t")
+        if len(f) < 3:
+            continue
+        cc, zid, note = f[0], f[2], (f[3].strip() if len(f) > 3 else "")
+        try:
+            tz = zoneinfo.ZoneInfo(zid)
+        except (zoneinfo.ZoneInfoNotFoundError, ValueError, OSError):
+            continue
+        off = int(now.astimezone(tz).utcoffset().total_seconds())
+        abbrs = {jan.astimezone(tz).tzname(), jul.astimezone(tz).tzname()}
+        abbrs = sorted(a for a in abbrs if a and a.isalpha())
+        note = us.get(zid) or re.sub(r"\s*\(most areas\)", "", note)
+        name = country(cc)
+        city = zid.rsplit("/", 1)[-1].replace("_", " ")
+        hours = utc_text(off).replace("−", "-").lower()
+        rows.append({"id": zid, "city": city, "cc": cc, "country": name, "place": name + (f" · {note}" if note else ""), "offset": utc_text(off),
+                     "minutes": off // 60, "note": note,
+                     "find": " ".join([city, name, note, zid.replace("_", " ").replace("/", " "), " ".join(abbrs), hours, hours.replace("utc", "gmt"),
+                                       (note + " time") if note in us.values() else ""]).lower()})
+    if not rows:                                            # no zone.tab: the names Python knows
+        for zid in sorted(z for z in zoneinfo.available_timezones() if "/" in z and not z.startswith(("Etc/", "SystemV/", "US/", "posix/", "right/"))):
+            city = zid.rsplit("/", 1)[-1].replace("_", " ")
+            rows.append({"id": zid, "city": city, "cc": "", "country": zid.split("/", 1)[0], "place": zid.split("/", 1)[0], "offset": "", "minutes": 0, "note": "",
+                         "find": (city + " " + zid).lower()})
+    rows.sort(key=lambda r: (r["city"].lower(), r["id"]))
+    return rows
+
+
+def suggested_zones(rows: list, cc: str) -> list:
+    """The few zones a country's people mostly mean: the US's seven, else zone.tab's for that country (its main
+    ones when it has many)."""
+    if cc == "US":
+        by = {r["id"]: r for r in rows}
+        return [by[z] for z, _ in US_MAIN if z in by]
+    mine = [r for r in rows if r["cc"] == cc]
+    if len(mine) > 8:
+        main = [r for r in mine if not r["note"] or "most" in r["note"].lower()]
+        mine = main if 0 < len(main) <= 8 else mine[:8]
+    return sorted(mine, key=lambda r: -r["minutes"])
+
+
+class ZoneModel(QAbstractListModel):
+    """The time zone list: the suggested ones (for the language's country) above them all, or what matches a search
+    (every word of it, the city's start first). Filtering here, in Python, keeps typing quick: the list QML had
+    filtered itself was converted again, all 400-odd zones of it, at every key."""
+    ROLES = {Qt.UserRole + 1: b"zid", Qt.UserRole + 2: b"city", Qt.UserRole + 3: b"place", Qt.UserRole + 4: b"offset",
+             Qt.UserRole + 5: b"clock", Qt.UserRole + 6: b"group"}
+    minuteChanged = Signal()
+
+    def __init__(self, rows: list, parent=None):
+        super().__init__(parent)
+        self._all = rows
+        self._by = {r["id"]: r for r in rows}
+        self._shown = []                                    # (row, group)
+        self._query = ""
+        self._cc = ""
+        self._twelve = True
+        self._clocks = {}
+        self._minute = ""
+        self._tz = {}
+        self._timer = QTimer(self, interval=15000, timeout=self._tick)
+        self._timer.start()
+        self._refill()
+
+    def roleNames(self):
+        return self.ROLES
+
+    def rowCount(self, parent=QModelIndex()):
+        return 0 if parent.isValid() else len(self._shown)
+
+    def data(self, index, role=Qt.DisplayRole):
+        if not index.isValid() or not 0 <= index.row() < len(self._shown):
+            return None
+        r, group = self._shown[index.row()]
+        name = self.ROLES.get(role)
+        if name == b"zid":
+            return r["id"]
+        if name == b"city":
+            return r["city"]
+        if name == b"place":
+            return r["place"]
+        if name == b"offset":
+            return r["offset"]
+        if name == b"clock":
+            return self.clock(r["id"])
+        if name == b"group":
+            return group
+        return None
+
+    def rows(self) -> list:
+        return self._all
+
+    def find(self, zid: str):
+        return self._by.get(zid)
+
+    @Slot(str, result=str)
+    def clock(self, zid: str) -> str:
+        """The time there now: 9:53 PM (or 21:53, by the language)."""
+        if zid not in self._clocks:
+            import datetime
+            import zoneinfo
+            try:
+                tz = self._tz.get(zid) or self._tz.setdefault(zid, zoneinfo.ZoneInfo(zid))
+            except (zoneinfo.ZoneInfoNotFoundError, ValueError, OSError):
+                return ""
+            t = datetime.datetime.now(tz)
+            self._clocks[zid] = (f"{(t.hour % 12) or 12}:{t.minute:02d} {'AM' if t.hour < 12 else 'PM'}" if self._twelve
+                                 else f"{t.hour:02d}:{t.minute:02d}")
+        return self._clocks[zid]
+
+    minute = Property(str, lambda self: self._minute, notify=minuteChanged)
+
+    def _tick(self) -> None:
+        import time
+        m = time.strftime("%H:%M")
+        if m != self._minute:
+            self._minute = m
+            self._clocks = {}
+            if self._shown:
+                self.dataChanged.emit(self.index(0), self.index(len(self._shown) - 1), [Qt.UserRole + 5])
+            self.minuteChanged.emit()
+
+    def setLanguage(self, lang: str) -> None:
+        cc = lang.partition("_")[2]
+        twelve = lang in TWELVE_HOUR
+        if cc != self._cc or twelve != self._twelve:
+            self._cc, self._twelve, self._clocks = cc, twelve, {}
+            self._refill()
+
+    @Slot(str)
+    def setFilter(self, text: str) -> None:
+        q = " ".join((text or "").lower().replace("−", "-").split())
+        if q != self._query:
+            self._query = q
+            self._refill()
+
+    def _refill(self) -> None:
+        q = self._query
+        if q:
+            words = q.split()
+            hits = [r for r in self._all if all(w in r["find"] for w in words)]
+            hits.sort(key=lambda r: (not r["city"].lower().startswith(q), not r["find"].startswith(words[0]), r["city"].lower()))
+            shown = [(r, "Matches") for r in hits]
+        else:
+            sug = suggested_zones(self._all, self._cc) if self._cc else []
+            name = sug[0]["country"] if sug else ""
+            shown = [(r, f"Suggested for {name}") for r in sug] + [(r, "All time zones") for r in self._all]
+        self.beginResetModel()
+        self._shown = shown
+        self.endResetModel()
+
+    @Slot(str, result=int)
+    def indexOf(self, zid: str) -> int:
+        return next((i for i, (r, _) in enumerate(self._shown) if r["id"] == zid), -1)
 
 
 def xkb_list() -> list:
@@ -260,7 +461,15 @@ def chassis() -> str:
 
 
 class Installer(QObject):
-    changed = Signal()
+    # Each part says when it changes, so a click on a time zone or a key in a name doesn't make every list and
+    # field in the installer look again (one signal for everything made the time zone list slow to answer).
+    changed = Signal()                               # the step, the state, the network, the disk
+    langChanged = Signal()
+    layoutChanged = Signal()
+    zoneChanged = Signal()
+    youChanged = Signal()
+    problemChanged = Signal()                        # after any of the above (what's missing on this step)
+    summaryChanged = Signal()
     _wifiRead = Signal(object)                       # from the thread that asks NetworkManager (a scan takes seconds)
     _wifiJoined = Signal(str, int, str)
     progressed = Signal()
@@ -274,8 +483,15 @@ class Installer(QObject):
         self._lang = "en_US"
         self._layouts = xkb_list()
         self._layout = "us"
-        self._zones = zone_list()
+        self._zones = ZoneModel(zone_list(), self)
+        self._zones.setLanguage(self._lang)
         self._zone = self._guess_zone()
+        if not self._zones.find(self._zone):                # the live system's clock is in UTC: the language's guess
+            self._zone = GUESS.get(self._lang, ("us", "UTC"))[1]
+        self._you_view = None
+        for sig in (self.changed, self.langChanged, self.layoutChanged, self.zoneChanged, self.youChanged):
+            sig.connect(self.problemChanged)
+            sig.connect(self.summaryChanged)
         self._wifi = {"available": True, "networks": [], "wired": False, "connected": ""}
         self._disks = demo_disks() if demo else read_disks()
         self._disk = next((d["path"] for d in self._disks if d["big"] and not d["removable"]), self._disks[0]["path"] if self._disks else "")
@@ -384,18 +600,29 @@ class Installer(QObject):
                 return "The two passwords aren't the same."
         return ""
 
-    problem = Property(str, _problem, notify=changed)
+    problem = Property(str, _problem, notify=problemChanged)
 
     # ------------------------------------------------------------------ language, keyboard, time zone
     languages = Property("QVariantList", lambda self: self._langs, constant=True)
-    language = Property(str, lambda self: self._lang, notify=changed)
+    language = Property(str, lambda self: self._lang, notify=langChanged)
     layouts = Property("QVariantList", lambda self: self._layouts, constant=True)
-    layout = Property(str, lambda self: self._layout, notify=changed)
-    layoutLabel = Property(str, lambda self: next((l["label"] for l in self._layouts if l["id"] == self._layout), self._layout), notify=changed)
-    languageLabel = Property(str, lambda self: next((l["label"] for l in self._langs if l["id"] == self._lang), self._lang), notify=changed)
-    zones = Property("QVariantList", lambda self: self._zones, constant=True)
-    zone = Property(str, lambda self: self._zone, notify=changed)
-    zoneLabel = Property(str, lambda self: self._zone.rsplit("/", 1)[-1].replace("_", " ") + " (" + self._zone.split("/", 1)[0] + ")" if "/" in self._zone else self._zone, notify=changed)
+    layout = Property(str, lambda self: self._layout, notify=layoutChanged)
+    layoutLabel = Property(str, lambda self: next((l["label"] for l in self._layouts if l["id"] == self._layout), self._layout), notify=layoutChanged)
+    languageLabel = Property(str, lambda self: next((l["label"] for l in self._langs if l["id"] == self._lang), self._lang), notify=langChanged)
+    zoneModel = Property(QObject, lambda self: self._zones, constant=True)
+    zone = Property(str, lambda self: self._zone, notify=zoneChanged)
+
+    def _zone_label(self) -> str:
+        """Chicago (Central, United States)"""
+        r = self._zones.find(self._zone)
+        if not r:
+            return self._zone
+        where = ", ".join(x for x in (r["note"], r["country"]) if x)
+        return f"{r['city']} ({where})" if where else r["city"]
+    zoneLabel = Property(str, _zone_label, notify=zoneChanged)
+    zoneCity = Property(str, lambda self: (self._zones.find(self._zone) or {}).get("city", self._zone), notify=zoneChanged)
+    zonePlace = Property(str, lambda self: (self._zones.find(self._zone) or {}).get("place", ""), notify=zoneChanged)
+    zoneOffset = Property(str, lambda self: (self._zones.find(self._zone) or {}).get("offset", ""), notify=zoneChanged)
 
     def _guess_zone(self) -> str:
         try:
@@ -411,15 +638,18 @@ class Installer(QObject):
         lay, zone = GUESS.get(code, ("us", "UTC"))
         if any(l["id"] == lay for l in self._layouts):
             self.setLayout(lay)
-        self._zone = zone
-        self.changed.emit()
+        self._zones.setLanguage(code)
+        if self._zones.find(zone):
+            self._zone = zone
+        self.langChanged.emit()
+        self.zoneChanged.emit()
 
     @Slot(str)
     def setLayout(self, lay: str) -> None:
         if not re.fullmatch(r"[a-z]{2,8}", lay or ""):
             return
         self._layout = lay
-        self.changed.emit()
+        self.layoutChanged.emit()
         if not self._demo:                                  # try it right away, in the live session
             rc = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "kxkbrc"
             try:
@@ -433,9 +663,9 @@ class Installer(QObject):
 
     @Slot(str)
     def setZone(self, zone: str) -> None:
-        if any(z["id"] == zone for z in self._zones):
+        if zone != self._zone and self._zones.find(zone):
             self._zone = zone
-            self.changed.emit()
+            self.zoneChanged.emit()
 
     # ------------------------------------------------------------------ network
     wifi = Property("QVariantMap", lambda self: self._wifi, notify=changed)
@@ -527,9 +757,13 @@ class Installer(QObject):
         self.changed.emit()
 
     # ------------------------------------------------------------------ you
-    you = Property("QVariantMap", lambda self: {k: v for k, v in self._you.items() if k not in ("password", "again")}
-                   | {"hasPassword": bool(self._you["password"]), "same": self._you["password"] == self._you["again"],
-                      "strength": strength(self._you["password"])}, notify=changed)
+    def _you_map(self) -> dict:
+        if self._you_view is None:                   # read by a dozen bindings: made once per change
+            u = self._you
+            self._you_view = ({k: v for k, v in u.items() if k not in ("password", "again")}
+                              | {"hasPassword": bool(u["password"]), "same": u["password"] == u["again"], "strength": strength(u["password"])})
+        return self._you_view
+    you = Property("QVariantMap", _you_map, notify=youChanged)
 
     @Slot(str, str)
     def setYou(self, key: str, value: str) -> None:
@@ -549,7 +783,8 @@ class Installer(QObject):
             u[key] = value
         elif key == "autologin":
             u["autologin"] = value == "true"
-        self.changed.emit()
+        self._you_view = None
+        self.youChanged.emit()
 
     # ------------------------------------------------------------------ the plan, and installing it
     def _plan(self) -> dict:
@@ -642,7 +877,7 @@ class Installer(QObject):
                 "huginnFraction": sh["huginn"] / max(1, self.chosenDisk.get("size", 1)), "windowsLeast": size_text(sh["min"])}
     shrink = Property("QVariantMap", _shrink_view, notify=changed)
 
-    summary = Property("QVariantList", _summary, notify=changed)
+    summary = Property("QVariantList", _summary, notify=summaryChanged)
     fraction = Property(float, lambda self: self._fraction, notify=progressed)
     label = Property(str, lambda self: self._label, notify=progressed)
     note = Property(str, lambda self: self._note, notify=progressed)

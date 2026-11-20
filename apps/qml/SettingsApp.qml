@@ -65,7 +65,7 @@ GlassWindow {
         ["desktop", "App menus", "top bar menu one menu row"], ["desktop", "Clock", "24-hour time seconds top bar"], ["desktop", "Battery percentage", "top bar"], ["desktop", "Top bar on every screen", "monitors screens displays second menu bar clock"],
         ["desktop", "Dock size", "dock bigger smaller icons"], ["desktop", "Hiding a window", "minimise minimize hide dock drop line comet"],
         ["desktop", "Stacks", "downloads folder dock stack"], ["desktop", "Today", "date calendar weather clocks world time agenda"],
-        ["desktop", "Snapping windows", "snap layout halves thirds quarters tile fill button gaps"], ["desktop", "Overview", "spaces workspaces virtual desktops hot corner mission control"],
+        ["desktop", "Snapping windows", "snap layout halves thirds quarters tile fill button gaps"], ["desktop", "Games", "game mode gamemode performance freesync g-sync adaptive sync vrr tearing v-sync vsync"], ["desktop", "Overview", "spaces workspaces virtual desktops hot corner mission control"],
         ["desktop", "Opening things in apps", "motion animation grow slide"],
         ["notifications", "Do Not Disturb", "quiet silence focus hours"], ["notifications", "App notifications", "banners sounds alerts badges"], ["notifications", "Previews", "lock screen private"],
         ["network", "Wi‑Fi", "wireless internet join password network"], ["network", "Airplane mode", "flight offline radio"], ["network", "VPN", "wireguard openvpn private network"],

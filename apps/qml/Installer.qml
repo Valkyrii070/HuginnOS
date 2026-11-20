@@ -1,4 +1,5 @@
 import QtQuick
+import QtQuick.Window
 
 // Install Huginn OS. A rail of steps down the left (done ones can be gone back to), the step itself on the right with
 // a big plain heading, and Back / Continue in an island at the bottom. Nothing is touched until Ready, where
@@ -6,12 +7,12 @@ import QtQuick
 // what it's doing, and the apps waiting on the other side; at the end, Restart.
 GlassWindow {
     id: win
-    title: "Install Huginn OS"; width: 1000; height: 680; minimumWidth: 900; minimumHeight: 620; glow: "left"
+    // tall enough for the disk step's choices and its encryption switch, where the screen has room
+    title: "Install Huginn OS"; width: 1000; height: Math.max(620, Math.min(760, Screen.desktopAvailableHeight - 60)); minimumWidth: 900; minimumHeight: 620; glow: "left"
     readonly property string stepId: Backend.steps[Backend.step].id
     readonly property bool setup: Backend.state === "setup"
     property string langFilter: ""
     property string layoutFilter: ""
-    property string zoneFilter: ""
     property string openWifi: ""
     property bool showLog: false
     property string encOne: ""
@@ -75,7 +76,7 @@ GlassWindow {
                     Rectangle { anchors { top: langSearch.bottom; topMargin: 10; left: parent.left; right: parent.right; bottom: choices.top; bottomMargin: 18 }
                         radius: 14; color: Theme.t.group; border.width: 1; border.color: Theme.t.islandLine; clip: true
                         ListView { id: langList; anchors.fill: parent; anchors.margins: 6; spacing: 2; clip: true
-                            Connections { target: Backend; function onChanged() { var i = langList.model.findIndex(function (l) { return l.id === Backend.language }); if (i >= 0) langList.positionViewAtIndex(i, ListView.Contain) } }
+                            Connections { target: Backend; function onLangChanged() { var i = langList.model.findIndex(function (l) { return l.id === Backend.language }); if (i >= 0) langList.positionViewAtIndex(i, ListView.Contain) } }
                             model: Backend.languages.filter(function (l) { return !win.langFilter || l.label.toLowerCase().indexOf(win.langFilter) >= 0 || l.id.toLowerCase().indexOf(win.langFilter) >= 0 })
                             delegate: Rectangle { required property var modelData; width: langList.width; height: 36; radius: 10
                                 objectName: "lang-" + modelData.id
@@ -109,7 +110,9 @@ GlassWindow {
                         radius: 14; color: Theme.t.group; border.width: 1; border.color: Theme.t.islandLine; clip: true
                         ListView { id: layList; anchors.fill: parent; anchors.margins: 6; spacing: 2; clip: true
                             model: Backend.layouts.filter(function (l) { return !win.layoutFilter || l.label.toLowerCase().indexOf(win.layoutFilter) >= 0 || l.id === win.layoutFilter })
-                            Component.onCompleted: positionViewAtIndex(Math.max(0, model.findIndex(function (l) { return l.id === Backend.layout })), ListView.Center)
+                            function showChosen() { var i = model.findIndex(function (l) { return l.id === Backend.layout }); if (i >= 0) positionViewAtIndex(i, ListView.Center) }
+                            onVisibleChanged: if (visible) Qt.callLater(showChosen)
+                            onHeightChanged: if (visible) Qt.callLater(showChosen)
                             delegate: Rectangle { required property var modelData; width: layList.width; height: 36; radius: 10
                                 color: modelData.id === Backend.layout ? Theme.t.accent : (kh.containsMouse ? Theme.t.hover : "transparent")
                                 Label { x: 14; anchors.verticalCenter: parent.verticalCenter; text: modelData.label; color: modelData.id === Backend.layout ? Theme.t.onAccent : Theme.t.text
@@ -159,7 +162,13 @@ GlassWindow {
                 }
 
                 // ---------------------------------------------------- disk
-                Flickable { visible: win.stepId === "disk"; anchors.fill: parent; contentHeight: diskCol.height + 10; clip: true
+                Flickable { id: diskFlick; visible: win.stepId === "disk"; anchors.fill: parent; contentHeight: diskCol.height + 10; clip: true
+                    boundsBehavior: Flickable.StopAtBounds
+                    // a choice that opens more below it (beside Windows' slider, the partitions) scrolls it into view
+                    readonly property string seen: Backend.mode + "/" + Backend.shrink.state
+                    onSeenChanged: if (visible && (Backend.mode === "shrink" || Backend.mode === "manual")) diskReveal.restart()
+                    Timer { id: diskReveal; interval: 60; onTriggered: { var end = Math.max(0, diskFlick.contentHeight - diskFlick.height); if (diskFlick.contentY < end) diskScroll.to = end, diskScroll.restart() } }
+                    NumberAnimation { id: diskScroll; target: diskFlick; property: "contentY"; duration: 260; easing.type: Easing.OutCubic }
                     Column { id: diskCol; width: parent.width; spacing: 14
                         // the disks, when there's more than one
                         Flow { visible: Backend.disks.length > 1; width: parent.width; spacing: 8
@@ -277,6 +286,14 @@ GlassWindow {
                     }
                 }
 
+                // the disk step's scroll bar, and a fade where there's more below
+                Rectangle { visible: diskFlick.visible && diskFlick.contentHeight > diskFlick.height + 4; z: 3
+                    anchors { right: parent.right; rightMargin: -10 } width: 4; radius: 2; color: Theme.t.text_secondary; opacity: 0.45
+                    y: diskFlick.visibleArea.yPosition * diskFlick.height; height: Math.max(30, diskFlick.visibleArea.heightRatio * diskFlick.height) }
+                Rectangle { visible: diskFlick.visible && diskFlick.contentY < diskFlick.contentHeight - diskFlick.height - 4; z: 2
+                    anchors { left: parent.left; right: parent.right; bottom: parent.bottom } height: 28
+                    gradient: Gradient { GradientStop { position: 0; color: "transparent" } GradientStop { position: 1; color: Qt.alpha(Theme.t.appBase, 0.85) } } }
+
                 // ---------------------------------------------------- you
                 Item { visible: win.stepId === "you"; anchors.fill: parent
                     Rectangle { id: face; width: 96; height: 96; radius: 48
@@ -312,24 +329,52 @@ GlassWindow {
                 }
 
                 // ---------------------------------------------------- time zone
+                // The zones in a list the backend filters (ZoneModel): suggested ones for the language's country on
+                // top, then them all; a search matches cities, countries, "Central", CST or UTC−6, every word of it.
                 Item { visible: win.stepId === "time"; anchors.fill: parent
-                    Rectangle { id: zoneNow; width: parent.width; height: 70; radius: 16; color: Qt.alpha(Theme.t.accent, 0.14); border.width: 1; border.color: Theme.t.accent
+                    Rectangle { id: zoneNow; width: parent.width; height: 74; radius: 16; color: Qt.alpha(Theme.t.accent, 0.14); border.width: 1; border.color: Theme.t.accent
                         Row { x: 18; anchors.verticalCenter: parent.verticalCenter; spacing: 14
                             Glyph { name: "globe"; size: 26; ink: Theme.t.accent; anchors.verticalCenter: parent.verticalCenter }
-                            Column { anchors.verticalCenter: parent.verticalCenter; Label { text: Backend.zoneLabel; font.pixelSize: 17; font.weight: Font.DemiBold }
-                                Label { text: Backend.zone; font.family: Theme.t.fontMono; secondary: true; font.pixelSize: 12 } } } }
-                    TextBox { id: zoneSearch; anchors { top: zoneNow.bottom; topMargin: 14 } width: parent.width; placeholder: "Search for a city"; onEdited: win.zoneFilter = text.toLowerCase() }
+                            Column { anchors.verticalCenter: parent.verticalCenter; spacing: 2
+                                Label { objectName: "zoneCity"; text: Backend.zoneCity; font.pixelSize: 17; font.weight: Font.DemiBold }
+                                Label { text: Backend.zonePlace; secondary: true; font.pixelSize: 12 } } }
+                        Column { anchors { right: parent.right; rightMargin: 20; verticalCenter: parent.verticalCenter } spacing: 2
+                            Label { anchors.right: parent.right; objectName: "zoneClock"; font.pixelSize: 20; font.weight: Font.Light
+                                text: Backend.zoneModel.minute !== undefined ? Backend.zoneModel.clock(Backend.zone) : "" }
+                            Label { anchors.right: parent.right; text: Backend.zoneOffset; secondary: true; font.pixelSize: 12 } } }
+                    TextBox { id: zoneSearch; objectName: "zoneSearch"; anchors { top: zoneNow.bottom; topMargin: 14 } width: parent.width
+                        placeholder: "Search for a city, a country or a zone (Central, CST, UTC−6)"
+                        onEdited: Backend.zoneModel.setFilter(text)
+                        onAccepted: if (zoneList.count > 0) { var it = zoneList.itemAtIndex(0); if (it) Backend.setZone(it.zid) } }
                     Rectangle { anchors { top: zoneSearch.bottom; topMargin: 10; left: parent.left; right: parent.right; bottom: parent.bottom }
                         radius: 14; color: Theme.t.group; border.width: 1; border.color: Theme.t.islandLine; clip: true
-                        ListView { id: zoneList; anchors.fill: parent; anchors.margins: 6; spacing: 2; clip: true
-                            model: Backend.zones.filter(function (z) { return !win.zoneFilter || z.city.toLowerCase().indexOf(win.zoneFilter) >= 0 || z.region.toLowerCase().indexOf(win.zoneFilter) >= 0 })
-                            delegate: Rectangle { required property var modelData; width: zoneList.width; height: 34; radius: 10
-                                objectName: "zone-" + modelData.id
-                                color: modelData.id === Backend.zone ? Theme.t.accent : (zh.containsMouse ? Theme.t.hover : "transparent")
-                                Label { x: 14; anchors.verticalCenter: parent.verticalCenter; text: modelData.city; color: modelData.id === Backend.zone ? Theme.t.onAccent : Theme.t.text }
-                                Label { anchors { right: parent.right; rightMargin: 14; verticalCenter: parent.verticalCenter } text: modelData.region; font.pixelSize: 12
-                                    color: modelData.id === Backend.zone ? Theme.t.onAccent : Theme.t.text_secondary }
-                                MouseArea { id: zh; anchors.fill: parent; hoverEnabled: true; onClicked: Backend.setZone(modelData.id) } } } }
+                        ListView { id: zoneList; objectName: "zoneList"; anchors.fill: parent; anchors.margins: 6; spacing: 2; clip: true; reuseItems: true
+                            model: Backend.zoneModel
+                            boundsBehavior: Flickable.StopAtBounds
+                            section.property: "group"
+                            section.delegate: Item { required property string section; width: zoneList.width; height: 28
+                                Label { x: 14; anchors { bottom: parent.bottom; bottomMargin: 5 } text: section; secondary: true; font.pixelSize: 11
+                                    font.weight: Font.DemiBold; font.capitalization: Font.AllUppercase; font.letterSpacing: 0.6 } }
+                            delegate: Rectangle { id: zrow
+                                required property string zid
+                                required property string city
+                                required property string place
+                                required property string offset
+                                required property string clock
+                                readonly property bool chosen: zid === Backend.zone
+                                width: zoneList.width; height: 38; radius: 10
+                                objectName: "zone-" + zid
+                                color: chosen ? Theme.t.accent : (zh.containsMouse ? Theme.t.hover : "transparent")
+                                Label { id: zc; x: 14; anchors.verticalCenter: parent.verticalCenter; text: zrow.city
+                                    color: zrow.chosen ? Theme.t.onAccent : Theme.t.text; font.weight: zrow.chosen ? Font.DemiBold : Font.Normal }
+                                Label { anchors { left: zc.right; leftMargin: 10; right: zt.left; rightMargin: 12; verticalCenter: parent.verticalCenter }
+                                    text: zrow.place; elide: Text.ElideRight; font.pixelSize: 12; color: zrow.chosen ? Theme.t.onAccent : Theme.t.text_secondary }
+                                Label { id: zt; anchors { right: parent.right; rightMargin: 14; verticalCenter: parent.verticalCenter }
+                                    text: zrow.clock + (zrow.offset ? "   " + zrow.offset : ""); font.pixelSize: 12
+                                    color: zrow.chosen ? Theme.t.onAccent : Theme.t.text_secondary }
+                                MouseArea { id: zh; anchors.fill: parent; hoverEnabled: true; onClicked: Backend.setZone(zrow.zid) } }
+                            Label { anchors.centerIn: parent; visible: zoneList.count === 0; text: "No time zone matches that. Try the city's country, or its offset (UTC+1)."
+                                secondary: true; width: parent.width - 40; wrapMode: Text.WordWrap; horizontalAlignment: Text.AlignHCenter } } }
                 }
 
                 // ---------------------------------------------------- ready

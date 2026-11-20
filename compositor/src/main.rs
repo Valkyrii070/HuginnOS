@@ -4,14 +4,17 @@
 //!     huginn-compositor --winit    in a window of another desktop (testing)
 
 fn main() {
-    if let Ok(env_filter) = tracing_subscriber::EnvFilter::try_from_default_env() {
-        tracing_subscriber::fmt().compact().with_env_filter(env_filter).init();
-    } else {
-        tracing_subscriber::fmt()
-            .compact()
-            .with_env_filter(tracing_subscriber::EnvFilter::new("info"))
-            .init();
-    }
+    // To stderr: the sign-in screen sends a session's stdout nowhere and its stderr to
+    // ~/.local/share/sddm/wayland-session.log, which problem reports (huginn-report) read. Plain text there.
+    use std::io::IsTerminal;
+    let filter = tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
+    tracing_subscriber::fmt()
+        .compact()
+        .with_writer(std::io::stderr)
+        .with_ansi(std::io::stderr().is_terminal())
+        .with_env_filter(filter)
+        .init();
     profiling::register_thread!("Main Thread");
 
     let mut args: Vec<String> = std::env::args().skip(1).collect();

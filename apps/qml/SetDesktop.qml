@@ -170,6 +170,8 @@ Column {
         SetRow { title: "Reopen apps when you sign in"; sub: "The apps you had open come back after signing out or restarting."; Toggle { on: Settings.reopenApps; onToggled: function (v) { pg.sw("reopenApps")(v) } } }
         SetRow { title: "Adaptive sync for games and videos"; sub: "Smoother motion on screens that support FreeSync or G-Sync, while something fills the screen."
             SetChoice { each: 90; options: [["auto", "On"], ["off", "Off"]]; value: Settings.adaptiveSync; onPicked: function (v) { Settings.set("adaptiveSync", v) } } }
+        SetRow { title: "Game mode for games"; sub: "While a game fills the screen, the processor runs at full speed and the screen stays awake. No launch options needed."
+            Toggle { objectName: "gameMode"; on: Settings.gameMode; onToggled: function (v) { pg.sw("gameMode")(v) } } }
         SetRow { title: "Let games tear"; sub: "A game with V-Sync off shows each frame at once, for the lowest delay (where the graphics card can)."; Toggle { on: Settings.allowTearing; onToggled: function (v) { pg.sw("allowTearing")(v) } } }
     }
     // ---------------------------------------------------------------- where apps open (window rules)

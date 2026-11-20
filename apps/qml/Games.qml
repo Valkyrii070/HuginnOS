@@ -227,6 +227,8 @@ GlassWindow {
         color: Theme.t.island; border.width: 1; border.color: Theme.t.islandLine; clip: true
         readonly property var g: win.cur
         readonly property bool mine: g.kind === "own"
+        // Steam from Flathub: the overlay is its sandbox's MangoHud layer (the App Store adds it with Steam)
+        readonly property bool flatSteam: g.kind === "steam" && !!Backend.tools.steamFlatpak
         readonly property bool heroic: g.via === "Heroic"
         function fill() { if (argsBox.text !== (g.args || "")) argsBox.text = g.args || ""; if (envBox.text !== (g.env || "")) envBox.text = g.env || "" }
         onGChanged: fill()
@@ -271,10 +273,17 @@ GlassWindow {
 
                 Item { width: 1; height: 6 }
                 Label { text: "PERFORMANCE"; secondary: true; font.pixelSize: 10; font.weight: Font.Bold; font.letterSpacing: 1.4 }
-                Line { title: "Performance overlay"; hint: Backend.tools.mangohud ? "Frames per second and temperatures over the game (MangoHud)" : "MangoHud isn't installed"; opacity: Backend.tools.mangohud ? 1 : 0.5
+                Line { title: "Performance overlay"; opacity: Backend.tools.mangohud || pane.flatSteam ? 1 : 0.5
+                    hint: pane.flatSteam ? "Frames per second and temperatures over the game (MangoHud, inside Steam's sandbox)"
+                        : Backend.tools.mangohud ? "Frames per second and temperatures over the game (MangoHud)" : "MangoHud isn't installed"
                     Toggle { objectName: "overlay"; on: !!pane.g.overlay; onToggled: function (v) { Backend.setOption(pane.g.id, "overlay", v) } } }
-                Line { title: "GameMode"; hint: Backend.tools.gamemode ? "Asks the computer for full speed while the game runs" : "GameMode isn't installed"; opacity: Backend.tools.gamemode ? 1 : 0.5
-                    Toggle { on: !!pane.g.gamemode; onToggled: function (v) { Backend.setOption(pane.g.id, "gamemode", v) } } }
+                // GameMode comes by itself while a game fills the screen (Settings › Desktop & Dock); the switch is for
+                // the rest of the time (a game in a window), and for Steam from Flathub it isn't needed at all
+                Line { title: "GameMode"; opacity: Backend.tools.gamemode ? 1 : 0.5
+                    hint: !Backend.tools.gamemode ? "GameMode isn't installed"
+                        : Settings.gameMode ? (pane.flatSteam ? "On by itself while the game fills the screen" : "On by itself while it fills the screen; this keeps it on in a window too")
+                        : "Asks the computer for full speed while the game runs"
+                    Toggle { visible: !(pane.flatSteam && Settings.gameMode); on: !!pane.g.gamemode; onToggled: function (v) { Backend.setOption(pane.g.id, "gamemode", v) } } }
 
                 Item { width: 1; height: 6 }
                 Label { text: "STARTING IT"; secondary: true; font.pixelSize: 10; font.weight: Font.Bold; font.letterSpacing: 1.4 }

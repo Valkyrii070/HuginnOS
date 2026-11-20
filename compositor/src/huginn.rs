@@ -181,6 +181,9 @@ impl<B: Backend + 'static> HuginnState<B> {
         if self.huginn.places_tick % 5 == 0 {
             self.note_places();
         }
+        if self.huginn.places_tick % 5 == 2 {
+            self.game_mode_tick();
+        }
         self.report_active();
         self.report_windows();
         self.watch_lock();
@@ -681,6 +684,10 @@ impl<B: Backend + 'static> HuginnState<B> {
     /// dock), a little lower and to the right if another window is already exactly there.
     pub fn place_window(&mut self, window: &WindowElement) {
         self.claim_window(window);
+        // a window that went fullscreen as it opened (a game asking for it as it maps) stays as that put it
+        if self.space.outputs().any(|o| o.user_data().get::<FullscreenSurface>().and_then(|f| f.get()).as_ref() == Some(window)) {
+            return;
+        }
         let size = window.geometry().size;
         if size.w <= 0 || size.h <= 0 {
             return;
@@ -1025,6 +1032,30 @@ impl<B: Backend + 'static> HuginnState<B> {
     }
 
     /// Fullscreen on an output (for FreeSync: on while a game or a video fills the screen).
+    /// GameMode by itself (gamemode.rs): the games filling a screen now.
+    fn game_mode_tick(&mut self) {
+        let mut games = std::collections::BTreeSet::new();
+        if !self.is_locked() {
+            for output in self.space.outputs() {
+                let Some(window) = output.user_data().get::<FullscreenSurface>().and_then(|f| f.get()) else { continue };
+                let (title, class) = Self::window_names(&window);
+                let mut pid = self.window_pid(&window).max(0) as u32;
+                #[cfg(feature = "xwayland")]
+                if let Some(x) = window.0.x11_surface() {
+                    // the X server's own count of the client's process (_NET_WM_PID can be a sandbox's)
+                    if let Ok(real) = x.get_client_pid() {
+                        pid = real;
+                    }
+                }
+                let tearing = window.wl_surface().is_some_and(|s| crate::tearing::wants(&s));
+                if pid > 1 && crate::gamemode::looks_like_game(&class, &title, pid, tearing) {
+                    games.insert(pid);
+                }
+            }
+        }
+        crate::gamemode::playing(games);
+    }
+
     pub fn output_has_fullscreen(output: &smithay::output::Output) -> bool {
         output.user_data().get::<FullscreenSurface>().and_then(|f| f.get()).is_some()
     }

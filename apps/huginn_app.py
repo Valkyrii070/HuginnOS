@@ -4862,6 +4862,10 @@ class Store(QObject):
             wanted.append(f"org.kde.KStyle.Kvantum//{branch}")
         if name.startswith(("org.gnome.Platform", "org.freedesktop.Platform", "org.kde.Platform")):
             wanted.append("org.gtk.Gtk3theme.Breeze")
+        # Steam: the performance overlay (MangoHud) as the Vulkan layer its sandbox can see; Games' profiles turn it
+        # on for a game with MANGOHUD=1 in its launch options (the system's mangohud isn't inside Steam's sandbox)
+        if app_id == "com.valvesoftware.Steam" and name.startswith("org.freedesktop.Platform") and branch:
+            wanted.append(f"org.freedesktop.Platform.VulkanLayer.MangoHud//{branch}")
         if wanted:
             from PySide6.QtCore import QProcess
             QProcess.startDetached(self._flatpak, ["install", "-y", "--noninteractive", "flathub"] + wanted)

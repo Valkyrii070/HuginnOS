@@ -186,7 +186,7 @@ class Settings(QObject):
                 "dockSize": "44", "hideStyle": "drop", "dockClickHides": "true", "overviewOpen": "glide", "hotCorner": "false",
                 "spacesAllScreens": "true", "inAppMotion": "grow", "fillButtonLayouts": "true", "snapGaps": "true", "keepSnapped": "true",
                 # windows and screens on Huginn's own compositor
-                "reopenApps": "true", "rememberPlaces": "true", "adaptiveSync": "auto", "sharpX11": "true", "allowTearing": "true",
+                "reopenApps": "true", "rememberPlaces": "true", "adaptiveSync": "auto", "sharpX11": "true", "allowTearing": "true", "gameMode": "true",
                 # Settings › Appearance › Wallpaper: a picture of your own (its path), or a live wallpaper someone made
                 # (its wallpaper.json), instead of the realm's scene; the stamp changes when that one is edited
                 "wallpaper": "", "wallpaperStamp": "0",
@@ -194,7 +194,7 @@ class Settings(QObject):
                 "iconTheme": ""}
     PICTURES = (".jpg", ".jpeg", ".png", ".webp", ".bmp", ".gif", ".avif", ".heic", ".jxl")
     SWITCHES = ("clock24", "barDate", "batteryPercent", "barEverywhere", "dockMakeRoom", "dockDots", "dockFollows", "frameTimes", "autoUpdate", "liveWallpaper", "contrast", "reduceTransparency", "reduceMotion",
-                "dockClickHides", "hotCorner", "spacesAllScreens", "fillButtonLayouts", "snapGaps", "keepSnapped", "reopenApps", "rememberPlaces", "sharpX11", "allowTearing")
+                "dockClickHides", "hotCorner", "spacesAllScreens", "fillButtonLayouts", "snapGaps", "keepSnapped", "reopenApps", "rememberPlaces", "sharpX11", "allowTearing", "gameMode")
     SCALES = ("1", "1.25", "1.5", "1.75", "2")
 
     def __init__(self, path: Path, realms: list, persist: bool = True):
@@ -296,6 +296,7 @@ class Settings(QObject):
     adaptiveSync = Property(str, lambda self: self._values["adaptiveSync"], notify=changed)
     sharpX11 = Property(bool, lambda self: self._values["sharpX11"] == "true", notify=changed)
     allowTearing = Property(bool, lambda self: self._values["allowTearing"] == "true", notify=changed)
+    gameMode = Property(bool, lambda self: self._values["gameMode"] == "true", notify=changed)        # GameMode for games, by itself
     wallpaper = Property(str, lambda self: self._values["wallpaper"], notify=changed)
     wallpaperSpec = Property("QVariantMap", lambda self: self._wallpaper_spec(), notify=changed)
     iconTheme = Property(str, lambda self: self._values["iconTheme"], notify=changed)

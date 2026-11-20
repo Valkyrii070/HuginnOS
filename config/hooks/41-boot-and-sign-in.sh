@@ -54,3 +54,11 @@ EOF2
 # The installation drive signs in to Huginn's session, not Plasma's (casper would pick Plasma).
 chmod 755 /usr/libexec/huginn-live-session
 systemctl enable huginn-live-session.service
+# casper-md5check (the installation drive checking its own files at each start) wants an md5sum.txt this image
+# doesn't carry: it only ever failed, and showed among the failed services in problem reports. Switched off.
+ln -sf /dev/null /etc/systemd/system/casper-md5check.service
+# A text console (Ctrl+Alt+F3) greets you as Huginn OS, without Ubuntu's news.
+printf 'Huginn OS \\n \\l\n\n' > /etc/issue
+printf 'Huginn OS\n' > /etc/issue.net
+[ -f /etc/default/motd-news ] && sed -i 's/^ENABLED=.*/ENABLED=0/' /etc/default/motd-news
+true

@@ -59,8 +59,11 @@ impl<BackendData: Backend> XwmHandler for HuginnState<BackendData> {
     fn new_window(&mut self, _xwm: XwmId, _window: X11Surface) {}
     fn new_override_redirect_window(&mut self, _xwm: XwmId, _window: X11Surface) {}
 
-    fn map_window_request(&mut self, _xwm: XwmId, window: X11Surface) {
+    fn map_window_request(&mut self, xwm: XwmId, window: X11Surface) {
         window.set_mapped(true).unwrap();
+        // Games ask to start fullscreen before their window shows (Wine and Proton, SDL and others put
+        // _NET_WM_STATE_FULLSCREEN on it before mapping it, and send no request after): honour it as it maps.
+        let wants_full = window.is_fullscreen();
         let window = WindowElement(Window::new_x11_window(window));
         place_new_window(&mut self.space, self.pointer.current_location(), &window, true);
         let bbox = self.space.element_bbox(&window).unwrap();
@@ -69,6 +72,10 @@ impl<BackendData: Backend> XwmHandler for HuginnState<BackendData> {
         };
         xsurface.configure(Some(bbox)).unwrap();
         window.set_ssd(!xsurface.is_decorated());
+        if wants_full {
+            let xsurface = xsurface.clone();
+            self.fullscreen_request(xwm, xsurface);
+        }
     }
 
     fn mapped_override_redirect_window(&mut self, _xwm: XwmId, window: X11Surface) {

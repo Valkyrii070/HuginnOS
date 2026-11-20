@@ -306,6 +306,13 @@ from its name, so no two look alike; nothing uses shader effects, so it also dra
 - **Not in the image**: Steam (`steam-installer`, from Ubuntu's multiverse with 32-bit packages), Heroic (on Flathub
   as `com.heroicgameslauncher.hgl`; not in Ubuntu's archive) and Wine. Install any of them and Games picks it up.
   `mangohud` and `gamemode` are in (`46-huginn-games.list`).
+- **Steam from Flathub** (what "Get Steam" installs): its games run in its sandbox, where the system's `mangohud` and
+  `gamemoderun` aren't, so a profile's Launch Options line never names them there: the overlay is `MANGOHUD=1`
+  with Flathub's MangoHud Vulkan layer (`org.freedesktop.Platform.VulkanLayer.MangoHud`, for Steam's runtime
+  branch, which the App Store installs with Steam), and GameMode comes by itself (above). Controllers: Valve's
+  udev rules (`/etc/udev/rules.d/60-steam-input.rules`, `60-steam-vr.rules`, MIT, from
+  ValveSoftware/steam-devices) are in the image, since the Flatpak can't bring them and Ubuntu only has them in
+  multiverse; they give the person at the computer Steam Input's access to controllers (hidraw) and `/dev/uinput`.
 - Tested (116 + 27 checks, dark and light): against a made-up Steam folder (libraries, manifests, cover cache,
   accounts, play time, four Protons), a made-up Heroic folder (all three shops, DLC, broken files), and stand-ins for
   `steam`, `heroic`, `wine`, `mangohud` and `pgrep`; starting, stopping, a game that fails at once, and account
@@ -878,6 +885,15 @@ trying Huginn OS, and it waits in the launcher.
   through NetworkManager; optional), Disk, You (name → user name and computer name suggested, password with its
   strength, sign in by myself), Time zone (picked from the language), Ready (everything once more; the button says
   "Erase and Install" when it will). Continue stays put, saying why, until a step is complete.
+- **Time zones** come from tzdata's `zone.tab` with their country (Qt's names) and what the zone is called there
+  ("Central"), each with its time now and UTC offset. The language's country's zones come first ("Suggested for
+  United States": the seven people mean, not zone.tab's 29), then them all; a search matches every word against the
+  city, country, zone name, abbreviations (CST, CET) and offset (`utc-6`), and Enter takes the first. The list is a
+  model filtered in Python (`ZoneModel`): QML had filtered a copy of all 418 zones at every key, which took about
+  0.9 s per key here (much longer on a slow computer), and was the installer "hanging". Each part of the installer
+  also says when it changes (language, layout, zone, you, …) instead of one signal for everything, so picking a
+  zone or typing a name no longer makes every list look again. The default zone is the language's (the live
+  system's clock is in UTC).
 - **Disks** are read without root (lsblk and /sys): the live drive itself is never offered; Windows, Linux, macOS,
   EFI and recovery partitions are recognised; free space is found from the partition table. A bar shows the disk as
   it will be. **Erase**: GPT, a 512 MB EFI partition and the rest (BIOS computers get a 1 MiB BIOS boot partition).
@@ -1371,6 +1387,18 @@ over when the side island would reach them (`GlassWindow.middleX`).
   turned off.
 - **Screen sharing that doesn't drop**: xdg-desktop-portal-wlr 0.9.0 is built from `third_party/` (MIT) in place of
   Ubuntu's 0.8.1, whose frames could outlive their buffers when a viewer restarted the stream.
+- **GameMode by itself** (Settings › Desktop & Dock, "Game mode for games", on by default; `gamemode.rs`): while a
+  game fills a screen, the compositor registers it with Feral's GameMode (`RegisterGameByPID` on the session bus),
+  as `gamemoderun` would, and lets it go when it stops. A game is a fullscreen window that is Proton's (X11 class
+  `steam_app_…`), was started by Steam (`SteamGameId`/`SteamAppId` in its environment), is a Windows program
+  (`….exe`), or asked to tear. X11 windows' process ids come from the X server (XRes), so games in Steam from
+  Flathub (their own process numbering) count too. `/etc/polkit-1/rules.d/50-huginn-gamemode.rules` lets GameMode's
+  helpers run for whoever is at the computer (its own rule wants a `gamemode` group Ubuntu doesn't make, so the
+  processor governor never changed). Tested with a stand-in game in the nested session (`gamemoded -s`: active);
+  not yet with a real game.
+- **Games that start fullscreen** (`shell/x11.rs`): an X11 window that has `_NET_WM_STATE_FULLSCREEN` before it maps
+  (Wine/Proton, SDL) is made fullscreen as it maps, and the first-picture placing leaves it be; before, it opened
+  as a small window wherever new windows go.
 - **Tearing for games** (Settings › Desktop & Dock, "Let games tear"): a game that asks for it (wp-tearing-control,
   as with V-Sync off) gets page flips that don't wait for the refresh while it fills the screen. Smithay is vendored
   in `third_party/smithay` with that one patch (`AtomicDrmSurface::set_tearing`: an async atomic flip first, a

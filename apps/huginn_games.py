@@ -440,8 +440,11 @@ def build_launch(game: dict, protons: list, have: dict, steam_root: str = "") ->
             "prefix": env.get("WINEPREFIX") or env.get("STEAM_COMPAT_DATA_PATH") or ""}
 
 
-def steam_launch_options(profile: dict, have: dict = None) -> str:
-    """The line to paste into a Steam game's Launch Options so Steam starts it with this profile."""
+def steam_launch_options(profile: dict, have: dict = None, flatpak: bool = False) -> str:
+    """The line to paste into a Steam game's Launch Options so Steam starts it with this profile. Steam from Flathub
+    runs games in its sandbox, where the system's mangohud and gamemoderun aren't: there the overlay is MANGOHUD=1
+    (the Flatpak MangoHud layer, which the App Store adds with Steam), and GameMode comes by itself (the compositor
+    asks for it while a game fills the screen), so a line never names a command the game would fail to start on."""
     have = have if have is not None else {"mangohud": "mangohud", "gamemoderun": "gamemoderun"}
     env = {}
     overrides = dll_overrides(profile.get("dlls"), bool(profile.get("novideo")))
@@ -453,11 +456,13 @@ def steam_launch_options(profile: dict, have: dict = None) -> str:
         env["PROTON_NO_FSYNC"] = "1"
     elif profile.get("sync") == "none":
         env["PROTON_NO_FSYNC"] = env["PROTON_NO_ESYNC"] = "1"
+    if flatpak and profile.get("overlay"):
+        env["MANGOHUD"] = "1"
     env.update(parse_env(profile.get("env")))
     words = [f"{k}={shlex.quote(v)}" for k, v in env.items()]
-    if profile.get("gamemode") and have.get("gamemoderun"):
+    if not flatpak and profile.get("gamemode") and have.get("gamemoderun"):
         words.append("gamemoderun")
-    if profile.get("overlay") and have.get("mangohud"):
+    if not flatpak and profile.get("overlay") and have.get("mangohud"):
         words.append("mangohud")
     args = split_args(profile.get("args"))
     if not words and not args:
@@ -665,9 +670,13 @@ class Games(QObject):
         profile = self._profile(g)
         face.update(profile)
         face["dllList"] = [{"name": k, "how": v} for k, v in sorted((profile.get("dlls") or {}).items())]
-        face["line"] = steam_launch_options(profile, self._have) if face["kind"] == "steam" else ""
+        face["line"] = steam_launch_options(profile, self._have, self._steam_flatpak()) if face["kind"] == "steam" else ""
         face["prefix"] = "" if face["kind"] != "own" else str(g.get("prefix") or DATA_HOME / "games" / "bottles" / g["id"])
         return face
+
+    def _steam_flatpak(self) -> bool:
+        """Steam is Flathub's (its folder is in ~/.var/app), and the system has no Steam of its own."""
+        return not self._have.get("steam") and any(".var/app/com.valvesoftware.Steam" in str(r) for r in self._roots)
 
     def _get_featured(self) -> dict:
         faces = self._all()
@@ -712,7 +721,8 @@ class Games(QObject):
     steamFound = Property(bool, lambda self: bool(self._roots), notify=changed)
     steamInstalled = Property(bool, lambda self: bool(self._roots) or bool(self._have.get("steam")), notify=changed)
     tools = Property("QVariantMap", lambda self: {"mangohud": bool(self._have.get("mangohud")), "gamemode": bool(self._have.get("gamemoderun")), "wine": bool(self._have.get("wine")),
-                                                  "proton": len(self._protons), "umu": bool(self._have.get("umu-run"))}, notify=changed)
+                                                  "proton": len(self._protons), "umu": bool(self._have.get("umu-run")),
+                                                  "steamFlatpak": self._steam_flatpak()}, notify=changed)
     syncs = Property("QVariantList", lambda self: [{"id": k, "name": v} for k, v in SYNC.items()], constant=True)
     langs = Property("QVariantList", lambda self: [{"id": k, "name": v} for k, v in LANGS], constant=True)
     listing = Property("QVariantList", lambda self: self._listing, notify=changed)
