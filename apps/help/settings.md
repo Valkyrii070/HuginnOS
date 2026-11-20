@@ -55,6 +55,25 @@ changes it to yours, after the administrator password. **On the desktop** can sh
 pick one of your newest from Pictures, or Other… for any. It's copied into Huginn's own folder, so moving or deleting
 the original doesn't take it away; Realm's scene brings the realm back.
 
+## Live wallpapers you make
+Appearance › Wallpaper › **Made by you** › **Make one**. Start from a realm's scene in colours of your own (click a
+colour, then pick one), a picture of yours (drifting slowly, breathing in and out, or still) or a video of yours
+(it loops without sound). Add any of snow, rain, stars, fireflies, lights, leaves and embers on top, then choose how
+many, their colour and the speed. The preview at the top plays as you go; the Ideas row starts you off. Save and Use
+puts it on the desktop. Click one to use it, or its pencil to change it. **Share…** saves it as a .huginn-wallpaper file
+in Documents to give someone, and **Add from a file…** puts one you were given in your list. Live wallpapers rest
+while a window fills the screen (a game, a film), and stay still with Live wallpaper off or Reduce motion on.
+
+## Icons and the pointer
+Appearance › **Icons**: Huginn's own puts every app on smoked glass; Breeze, Breeze Dark and elementary change apps'
+and folders' icons everywhere (some apps show them after they're opened again). **Find More** opens gnome-look.org;
+download an icon theme there (a .tar.gz or .tar.xz), then **Add icons from a file…**. Ones you added can be removed.
+**Change an app's icon…** gives any app a picture of your own, on Huginn's glass or just as it is; **Its Own Again**
+puts its icon back.
+
+Appearance › **Pointer**: each pointer style shows its arrow, hand, text, waiting and moving pointers; click one to use
+it, and choose its size. Pointer styles you download are added the same way as icons.
+
 ## Accessibility
 Seeing: the screen reader (Orca) reads out what's on the screen (Super+Alt+S turns it on and off from anywhere); Zoom magnifies around the pointer (follow it, keep it centred, or push at the edges); Make everything bigger; High contrast; Solid surfaces instead of glass; Reduce motion; colour filters for colour blindness, or grey; and the pointer's size. Hearing: flash every screen white for a moment instead of playing the alert sound. Moving and typing: sticky keys (shortcuts one key at a time), slow keys (a key must be held a moment), bounce keys (ignore quick repeats), moving the pointer with the number keys, and the on-screen keyboard.
 

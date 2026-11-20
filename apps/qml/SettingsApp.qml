@@ -9,7 +9,7 @@ GlassWindow {
     property string query: ""
     property var sheet: null                     // {kind: "pick" | "ask" | "confirm", title, ...}
     readonly property var pages: [
-        { id: "appearance", label: "Appearance", glyph: "palette", a: "#9B8BFF", b: "#5A3FE0", group: "YOU", sub: "Light or dark, and the colour of everything." },
+        { id: "appearance", label: "Appearance", glyph: "palette", a: "#9B8BFF", b: "#5A3FE0", group: "YOU", sub: "Light or dark, the colour of everything, the wallpaper, icons and pointer." },
         { id: "desktop", label: "Desktop & Dock", glyph: "desktop", a: "#6AB4FF", b: "#2563EB", group: "YOU", sub: "The dock, the top bar, Today, windows, spaces and motion." },
         { id: "notifications", label: "Notifications", glyph: "bell", a: "#FF7A7A", b: "#D6336C", group: "YOU", sub: "Which apps may tell you things, and quiet hours." },
         { id: "a11y", label: "Accessibility", glyph: "eye", a: "#5EC8FF", b: "#1A73E8", group: "YOU", sub: "Seeing, hearing, typing and moving, made easier." },
@@ -29,12 +29,17 @@ GlassWindow {
         { id: "defaults", label: "Default Apps", glyph: "apps", a: "#FFC060", b: "#D97706", group: "SYSTEM", sub: "Which app opens what, and what starts when you sign in." },
         { id: "privacy", label: "Privacy & Security", glyph: "shield", a: "#7D8CA3", b: "#334155", group: "SYSTEM", sub: "Firewall, app permissions, screen lock and history." },
         { id: "updates", label: "Software Update", glyph: "refresh", a: "#4C8DFF", b: "#1E40AF", group: "SYSTEM", sub: "Keep the system, your apps and Huginn up to date." },
-        { id: "about", label: "About", glyph: "info", a: "#A3B1C4", b: "#475569", group: "SYSTEM", sub: "This computer and the version of Huginn OS." }
+        { id: "about", label: "About", glyph: "info", a: "#A3B1C4", b: "#475569", group: "SYSTEM", sub: "This computer and the version of Huginn OS." },
+        // reached from Appearance, not the rail
+        { id: "livemaker", label: "Make a Live Wallpaper", glyph: "sparkle", a: "#9B8BFF", b: "#5A3FE0", group: "YOU", hidden: true,
+          sub: "A scene in your colours, a picture or a video, with snow, rain, stars or more on top." }
     ]
+    readonly property var railPages: pages.filter(function (p) { return !p.hidden })
+    property string makerId: ""                  // the live wallpaper being changed in the maker ("" a new one)
     readonly property var files: ({ appearance: "SetAppearance", desktop: "SetDesktop", notifications: "SetNotifications", network: "SetNetwork", bluetooth: "SetBluetooth",
                                     accounts: "SetAccounts", ai: "SetAI", displays: "SetDisplays", sound: "SetSound", power: "SetPower", input: "SetInput", keys: "SetKeys", time: "SetTime",
                                     language: "SetLanguage", users: "SetUsers", defaults: "SetDefaults", privacy: "SetPrivacy", updates: "SetUpdates", about: "SetAbout",
-                                    a11y: "SetAccessibility", printers: "SetPrinters" })
+                                    a11y: "SetAccessibility", printers: "SetPrinters", livemaker: "SetLiveMaker" })
     readonly property var index: [
         ["a11y", "Screen reader", "orca blind read aloud speech voice spoken accessibility"], ["a11y", "Zoom", "magnifier magnify enlarge screen accessibility"],
         ["a11y", "Make everything bigger", "large text size font scale accessibility"], ["a11y", "High contrast", "contrast low vision accessibility"],
@@ -45,6 +50,9 @@ GlassWindow {
         ["a11y", "Mouse keys", "number pad pointer keyboard accessibility"], ["a11y", "Flash the screen", "deaf hearing beep bell alert visual accessibility"],
         ["appearance", "Dark mode", "light theme night"], ["appearance", "Realm", "accent colour color wallpaper tint"],
         ["appearance", "Wallpaper", "picture photo image background desktop own live scene"],
+        ["appearance", "Make a live wallpaper", "animated moving video snow rain stars fireflies particles create own design"],
+        ["appearance", "Icons", "icon theme app icons pack style papirus breeze change"], ["appearance", "Change an app's icon", "custom icon picture app"],
+        ["appearance", "Pointer", "cursor mouse pointer theme style arrow size"],
         ["sound", "Alert sound", "beep bell alert volume click feedback keys"],
         ["input", "Mouse acceleration", "pointer precision gaming games flat raw"], ["input", "Scroll speed", "wheel scrolling fast slow"],
         ["input", "Num Lock", "number pad numpad keypad"], ["input", "Right-click", "touchpad two fingers corner secondary click"],
@@ -113,11 +121,12 @@ GlassWindow {
     function confirm(title, message, button, done, danger) { sheet = { kind: "confirm", title: title, message: message || "", button: button, done: done, danger: danger !== false } }
     function say(msg, bad) { toast.say(msg, bad) }
     tintColor: info(page).a
-    onPageChanged: refresh()
+    onPageChanged: { refresh(); flick.contentY = 0 }
     Component.onCompleted: refresh()
     function refresh() {
         if (["network", "bluetooth", "displays", "sound", "notifications", "power", "input", "keys", "time", "language", "users", "defaults", "privacy", "about", "a11y", "printers"].indexOf(page) >= 0) Backend.load(page)
         if (page === "desktop") Backend.load("displays")            // (Where apps open names the screens)
+        if (page === "livemaker") Backend.load("look")
         if (page === "accounts" && typeof Accounts !== "undefined") Accounts.refresh()
         if (page === "ai" && typeof AI !== "undefined" && AI) AI.refresh()
         if (page === "updates" && typeof Updates !== "undefined") Updates.look(false)
@@ -135,11 +144,11 @@ GlassWindow {
                 onAccepted: if (win.results.length) win.go(win.results[0].page) } },
         Rail {
             x: 12; y: 64; width: 236; maxHeight: win.height - 64 - 14
-            Repeater { model: win.pages
+            Repeater { model: win.railPages
                 Column { required property var modelData; required property int index; width: parent.width
-                    SideTitle { visible: index === 0 || win.pages[index - 1].group !== modelData.group; text: modelData.group; height: visible ? implicitHeight : 0 }
+                    SideTitle { visible: index === 0 || win.railPages[index - 1].group !== modelData.group; text: modelData.group; height: visible ? implicitHeight : 0 }
                     Pressable { width: parent.width; height: 34; radius: 11; active: false
-                        color: win.page === modelData.id && win.query === "" ? Qt.alpha(Theme.t.accent, 0.18) : (hovered ? Theme.t.hover : "transparent")
+                        color: (win.page === modelData.id || (win.page === "livemaker" && modelData.id === "appearance")) && win.query === "" ? Qt.alpha(Theme.t.accent, 0.18) : (hovered ? Theme.t.hover : "transparent")
                         onClicked: win.go(modelData.id)
                         Rectangle { x: 6; width: 22; height: 22; radius: 7; anchors.verticalCenter: parent.verticalCenter
                             gradient: Gradient { GradientStop { position: 0; color: modelData.a } GradientStop { position: 1; color: modelData.b } }

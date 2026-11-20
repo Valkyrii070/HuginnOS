@@ -187,8 +187,11 @@ class Settings(QObject):
                 "spacesAllScreens": "true", "inAppMotion": "grow", "fillButtonLayouts": "true", "snapGaps": "true", "keepSnapped": "true",
                 # windows and screens on Huginn's own compositor
                 "reopenApps": "true", "rememberPlaces": "true", "adaptiveSync": "auto", "sharpX11": "true", "allowTearing": "true",
-                # Settings › Appearance › Wallpaper: a picture of your own (its path), instead of the realm's scene
-                "wallpaper": ""}
+                # Settings › Appearance › Wallpaper: a picture of your own (its path), or a live wallpaper someone made
+                # (its wallpaper.json), instead of the realm's scene; the stamp changes when that one is edited
+                "wallpaper": "", "wallpaperStamp": "0",
+                # Settings › Appearance › Icons: the icon theme ("" as the system says: Huginn's)
+                "iconTheme": ""}
     PICTURES = (".jpg", ".jpeg", ".png", ".webp", ".bmp", ".gif", ".avif", ".heic", ".jxl")
     SWITCHES = ("clock24", "barDate", "batteryPercent", "barEverywhere", "dockMakeRoom", "dockDots", "dockFollows", "frameTimes", "autoUpdate", "liveWallpaper", "contrast", "reduceTransparency", "reduceMotion",
                 "dockClickHides", "hotCorner", "spacesAllScreens", "fillButtonLayouts", "snapGaps", "keepSnapped", "reopenApps", "rememberPlaces", "sharpX11", "allowTearing")
@@ -227,9 +230,29 @@ class Settings(QObject):
             pass
 
     def _allowed(self, key: str, value) -> bool:
-        if key == "wallpaper":                         # a path, not a choice: a picture that's there, or none
-            return value == "" or (isinstance(value, str) and value.lower().endswith(self.PICTURES) and os.path.isfile(value))
+        if key == "wallpaper":                         # a path, not a choice: a picture or a live wallpaper that's there, or none
+            return value == "" or (isinstance(value, str) and (value.lower().endswith(self.PICTURES) or value.endswith("/wallpaper.json"))
+                                   and os.path.isfile(value))
+        if key == "wallpaperStamp":
+            return isinstance(value, str) and value.isdigit() and len(value) < 20
+        if key == "iconTheme":                         # a theme's folder name (Settings checks it's installed)
+            return value == "" or (isinstance(value, str) and re.fullmatch(r"[\w.+ -]{1,80}", value) is not None and ".." not in value)
         return value in self._choices.get(key, ())
+
+    def _wallpaper_spec(self) -> dict:
+        """A live wallpaper someone made: its wallpaper.json, and its folder (where its picture or video is)."""
+        path = self._values.get("wallpaper", "")
+        if not path.endswith("/wallpaper.json"):
+            return {}
+        try:
+            spec = json.loads(Path(path).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return {}
+        if not isinstance(spec, dict):
+            return {}
+        spec["folder"] = QUrl.fromLocalFile(str(Path(path).parent) + "/").toString()
+        spec["stamp"] = self._values.get("wallpaperStamp", "0")
+        return spec
 
     def _reload(self) -> None:
         before = dict(self._values)
@@ -274,6 +297,8 @@ class Settings(QObject):
     sharpX11 = Property(bool, lambda self: self._values["sharpX11"] == "true", notify=changed)
     allowTearing = Property(bool, lambda self: self._values["allowTearing"] == "true", notify=changed)
     wallpaper = Property(str, lambda self: self._values["wallpaper"], notify=changed)
+    wallpaperSpec = Property("QVariantMap", lambda self: self._wallpaper_spec(), notify=changed)
+    iconTheme = Property(str, lambda self: self._values["iconTheme"], notify=changed)
 
     def override(self, key: str, value: str) -> None:
         """Set a value for this run only (command-line flags)."""
@@ -391,7 +416,26 @@ def make_theme(dark: bool, light: bool, realm: str, persist: bool, app: str = ""
     gui = QGuiApplication.instance()
     if isinstance(gui, QGuiApplication):                     # text with no family of its own is in Inter too
         gui.setFont(QFont(tokens["font"]["ui"], 10))
+        follow_icons(settings)
     return tokens, settings, Theme(tokens, settings, app)
+
+
+def follow_icons(settings) -> None:
+    """Settings › Appearance › Icons, in this process at once (and again whenever it changes): Qt's icon theme. Other
+    apps read it from kdeglobals, which Settings writes too."""
+    from PySide6.QtGui import QIcon
+
+    def apply():
+        want = settings.property("iconTheme")
+        if want and want != QIcon.themeName():
+            QIcon.setThemeName(want)
+    apply()
+    settings.changed.connect(apply)
+
+
+def icon_theme() -> str:
+    from PySide6.QtGui import QIcon
+    return QIcon.themeName() or "Huginn"
 
 
 DEMO_APPS = [("News", True), ("Maps", True), ("Huginn", False), ("Files", False), ("Mail", False),
@@ -450,7 +494,7 @@ class SysIcon(QQuickImageProvider):
 
     def requestPixmap(self, name, size, requested):
         side = max(requested.width(), requested.height(), 64)
-        return QIcon.fromTheme(name).pixmap(side, side)
+        return QIcon.fromTheme(name.split("?", 1)[0]).pixmap(side, side)      # (?v=N: asked again after the theme changed)
 
 
 def own_icon(key: str) -> str:
@@ -548,7 +592,7 @@ class Apps(QObject):
             return ""
         if os.path.isabs(icon):
             return QUrl.fromLocalFile(icon).toString() if os.path.isfile(icon) else ""
-        return "image://sysicon/" + icon if QIcon.hasThemeIcon(icon) else ""
+        return f"image://sysicon/{icon}?v={QIcon.themeName()}" if QIcon.hasThemeIcon(icon) else ""
 
     @staticmethod
     def _app_dirs() -> list:
@@ -593,8 +637,8 @@ class Apps(QObject):
     def _wrap_new(self) -> None:
         """Apps whose icon isn't on Huginn's glass yet (just installed): wrap them in the background, then look
         again. Each set of new icons is tried once, so an icon that can't be found doesn't keep it busy."""
-        if self._demo or getattr(self, "_wrapping", None) is not None:
-            return
+        if self._demo or getattr(self, "_wrapping", None) is not None or icon_theme() != "Huginn":
+            return                                    # (another icon theme: apps show its icons, not glass)
         missing = sorted({a["icon"] for a in self._apps if not a.get("own") and not a.get("web") and a.get("icon") and not a.get("glyph")})
         tried = getattr(self, "_wrap_tried", set())
         if not missing or set(missing) <= tried:
@@ -619,6 +663,7 @@ class Apps(QObject):
         dirs = cls._app_dirs()
         seen, apps = set(), []
         colours = app_colours()
+        huginn_icons = icon_theme() == "Huginn"
         for folder in dirs:
             for path in sorted(folder.glob("*.desktop")) if folder.is_dir() else []:
                 if path.name in seen:
@@ -634,6 +679,7 @@ class Apps(QObject):
                     continue
                 command = re.sub(r"\s*%[a-zA-Z]", "", entry.get("Exec", ""))
                 name = entry.get("Name", path.stem)
+                mine = entry.get("X-Huginn-Own-Icon", "false").lower() == "true"
                 glyph = APP_GLYPHS.get(app_key(command), "globe" if name == "Huginn" else "")
                 key = app_key(command)
                 apps.append({"name": name, "icon": entry.get("Icon", ""), "exec": command, "id": path.stem,
@@ -644,9 +690,12 @@ class Apps(QObject):
                              "colours": colours.get(key, []),
                              "wm": entry.get("StartupWMClass", "") or (f"huginn-{key}" if key else path.stem),
                              "web": entry.get(WEB_APP_KEY, "false").lower() == "true",
-                             "glyph": glyph, "image": "" if glyph else cls._image(entry.get("Icon", "")),
-                             "own": own_icon("browser" if name == "Huginn" else app_key(command) if app_key(command) in APP_GLYPHS else "")
-                                    or wrapped_icon(entry.get("Icon", ""), path.stem),
+                             "glyph": "" if mine else glyph, "image": "" if glyph and not mine else cls._image(entry.get("Icon", "")),
+                             # an icon of your own (Settings › Appearance) is the whole tile; then Huginn's own picture;
+                             # then another app's icon on Huginn's glass, while the icons are Huginn's
+                             "own": (QUrl.fromLocalFile(entry.get("Icon", "")).toString() if mine and os.path.isfile(entry.get("Icon", "")) else "")
+                                    or ("" if mine else own_icon("browser" if name == "Huginn" else app_key(command) if app_key(command) in APP_GLYPHS else ""))
+                                    or (wrapped_icon(entry.get("Icon", ""), path.stem) if huginn_icons and not mine else ""),
                              "execRaw": entry.get("Exec", ""), "mimes": [m for m in entry.get("MimeType", "").split(";") if m],
                              "actions": cls._actions(parser, entry), "file": str(path),
                              "flatpak": "flatpak" in str(path) or bool(entry.get("X-Flatpak", ""))})
@@ -1099,6 +1148,13 @@ def main() -> int:
     if args.menu_style:
         settings.override("menuStyle", args.menu_style)
     apps = Apps(demo=args.preview)
+    shown_icons = [icon_theme()]
+
+    def icons_changed():                                      # Settings › Appearance › Icons: every app's tile again
+        if icon_theme() != shown_icons[0]:
+            shown_icons[0] = icon_theme()
+            apps.rescan()
+    settings.changed.connect(icons_changed)
     from huginn_island import Live
     tabs, live = Tabs(apps, demo=args.preview), Live(demo=args.preview, scenario=args.live)
     engine = QQmlApplicationEngine()

@@ -170,6 +170,17 @@ QtObject {
             }
         }
     }
+    // A window on the space in view covers (nearly) all of this screen: its wallpaper can rest (it's hidden anyway).
+    function filled(sc) {
+        if (!sc) return false
+        var g = sc.geometry, cur = (Status.spaces || {}).current || 0                        // (a QScreen: its geometry)
+        if (!g) return false
+        var sx = g.x, sy = g.y, sw = g.width, sh = g.height
+        return (Status.windows || []).some(function (w) {
+            if (w.minimised || (w.space || 0) !== cur) return false
+            var ix = Math.min(w.x + w.w, sx + sw) - Math.max(w.x, sx), iy = Math.min(w.y + w.h, sy + sh) - Math.max(w.y, sy)
+            return ix > 0 && iy > 0 && ix * iy >= 0.88 * sw * sh })
+    }
     function frontWindow() { var a = Status.windows.filter(function (w) { return w.active && !w.minimised }); return a.length ? a[0] : null }
     // a stack opened over its dock tile
     property string stackFolder: ""
@@ -222,7 +233,7 @@ QtObject {
             LayerShell.Window.layer: LayerShell.Window.LayerBackground
             LayerShell.Window.anchors: LayerShell.Window.AnchorTop | LayerShell.Window.AnchorBottom | LayerShell.Window.AnchorLeft | LayerShell.Window.AnchorRight
             LayerShell.Window.exclusionZone: -1
-            Wallpaper { anchors.fill: parent }
+            Wallpaper { anchors.fill: parent; covered: shell.filled(wall.modelData) }
             Widgets { visible: wall.main; x: 22; y: 52; opacity: shell.settled ? 1 : 0; Behavior on opacity { NumberAnimation { duration: 600; easing.type: Easing.OutCubic } } }
         }
     }

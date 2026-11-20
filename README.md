@@ -1995,6 +1995,38 @@ screen reader's shortcut, every page drawn in the preview with no new QML warnin
 notify_r_test (10), lock_r_test (8). Not checked here: monitors' brightness, mouse acceleration and scroll speed, Num
 Lock's light, automatic sign-in and renaming (they need the real hardware and system services).
 
+## Make it yours: live wallpapers, icons and pointers (2026-11-19)
+
+- **Live wallpapers you make** (Settings › Appearance › Wallpaper › Made by you › Make one; `SetLiveMaker.qml`): a
+  realm's scene (its shader) in colours of your own, a picture of yours (drift, breathe or still) or a video of yours
+  (looping, without sound), with snow, rain, stars, fireflies, lights, leaves or embers over it (Qt Quick Particles,
+  sprites in `live/sprites`), how many, their colour, the speed, and darkening a picture or video under them. A live
+  preview plays as you go; five ideas start you off. Kept in ~/.local/share/huginn/wallpapers/live/<id>/ (wallpaper.json,
+  its picture or video copied in, still.jpg for the choices); `CustomWallpaper.qml` (next to the realms' scenes) draws
+  it on the desktop and in the preview. Share… makes a .huginn-wallpaper (a zip of the folder) in Documents; Add from a
+  file takes only its wallpaper.json, its one picture or video and its still (`huginn_looks.py`).
+- **Every live wallpaper rests while a window fills its screen** (≥ 88 % of it, on the space in view: a game, a film,
+  a filled window), the realms' scenes too (`Shell.qml`: `filled`). Measured here: the shell's work fell to what it is
+  with the wallpaper still.
+- **Icons** (Appearance › Icons): each icon theme shown with its own folder and six app icons (Huginn's own with its
+  glass tiles); choosing one sets Qt's theme in Huginn's shell and apps at once (`iconTheme` in the shared settings,
+  `follow_icons`), kdeglobals for KDE's and Qt's apps and GNOME's setting for GTK's. Other apps' icons are on Huginn's
+  glass only with Huginn's own; with another theme they show that theme's. **Change an app's icon…**: a picture of
+  yours made a 256-pixel icon (on Huginn's glass with `huginn_iconwrap`, or as it is) and the app's .desktop file in
+  ~/.local/share/applications pointing at it (a marked copy; **Its Own Again** takes it away, or puts the icon back in a
+  file of your own).
+- **Pointer** (Appearance › Pointer): each pointer theme shown by its own arrow, hand, text, wait and move pointers
+  (read from its Xcursor files), with the size; choosing one sets the compositor's pointer at once (`ReloadAccess`),
+  kcminputrc, GNOME's setting and X11's default (~/.icons/default).
+- **Themes from a file** (both cards: Add from a file, Find More → gnome-look.org): a downloaded .tar.gz, .tar.xz, .tar.bz2
+  or .zip, unpacked with tarfile's "data" filter (nothing outside, no odd links), every icon or pointer theme in it put in
+  ~/.local/share/icons; ones added can be removed (the system's can't).
+- In the image: elementary's icons and pointers, DMZ (white, black) and Oxygen's pointers (five colours).
+- Checked in the compositor's window: making, saving and using a live wallpaper (scene, picture, video), the ideas,
+  effects coming and going, a window filling the screen resting it, switching icon themes (the start menu's other apps
+  changed, Huginn's kept their tiles), a pointer theme written everywhere, Files given a picture of its own in the dock.
+  looks_test (42).
+
 ## Huginn, the browser
 
 Inside the Huginn repository (this kit is its `os/` folder) the image ships the repository's own browser. A kit used

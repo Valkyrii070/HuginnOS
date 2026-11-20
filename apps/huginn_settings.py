@@ -1108,12 +1108,15 @@ def all_apps(dirs: list = None) -> dict:
             seen[f.name] = None if (e.get("Type", "Application") != "Application" or e.get("Hidden") == "true") else {
                 "id": f.name, "name": e.get("Name", f.stem), "icon": e.get("Icon", ""), "path": str(f),
                 "mimes": [m for m in e.get("MimeType", "").split(";") if m], "nodisplay": e.get("NoDisplay") == "true",
+                "ownIcon": e.get("X-Huginn-Own-Icon") == "true",                # Settings › Appearance gave it an icon of your own
                 "terminal": "TerminalEmulator" in e.get("Categories", "") or e.get("X-Huginn-Terminal") == "true"}
     return {k: v for k, v in seen.items() if v}
 
 
 def icon_url(app: dict) -> str:
     icon = (app or {}).get("icon", "")
+    if app and app.get("ownIcon") and icon.startswith("/"):
+        return "file://" + icon
     if app and app["id"].startswith("huginn-"):
         try:
             from huginn_shell import own_icon
@@ -1451,7 +1454,32 @@ def load_look() -> dict:
                 realm = m.group(1)
         except OSError:
             pass
-    return {"loginRealm": realm, "canChange": os.access(LOGIN_LOOK, os.X_OK) and bool(HAVE("pkexec"))}
+    import huginn_looks as hl
+    pointers = hl.list_pointer_themes()
+    for p in pointers:
+        try:
+            p["previews"] = hl.pointer_previews(p)
+        except Exception:                                        # noqa: BLE001  (a theme that can't be read: no pictures)
+            p["previews"] = []
+    apps = all_apps()
+    changed = []
+    for row in hl.changed_app_icons():
+        a = apps.get(row["id"]) or {"id": row["id"], "name": row["id"][:-len(".desktop")], "icon": row["icon"], "ownIcon": True}
+        changed.append({"id": row["id"], "name": a["name"], "icon": "file://" + row["icon"] if row["icon"].startswith("/") else icon_url(a)})
+    try:
+        size = int(kconfig_read(CONFIG / "kcminputrc", ["Mouse"], "cursorSize", "24") or 24)
+    except ValueError:
+        size = 24
+    return {"loginRealm": realm, "canChange": os.access(LOGIN_LOOK, os.X_OK) and bool(HAVE("pkexec")),
+            "iconThemes": hl.list_icon_themes(), "iconTheme": current_icon_theme(),
+            "pointerThemes": pointers, "pointerTheme": kconfig_read(CONFIG / "kcminputrc", ["Mouse"], "cursorTheme", "") or "breeze_cursors",
+            "pointerSize": size, "live": hl.list_live(), "appIcons": sorted(changed, key=lambda a: a["name"].lower())}
+
+
+def current_icon_theme() -> str:
+    """The icon theme in use: yours (kdeglobals), else the system's (Huginn's)."""
+    return (kconfig_read(CONFIG / "kdeglobals", ["Icons"], "Theme", "") or kconfig_read(Path("/etc/xdg/kdeglobals"), ["Icons"], "Theme", "")
+            or "Huginn")
 
 
 # ---------------------------------------------------------------------------------------------- the backend Settings talks to
@@ -1536,6 +1564,13 @@ class SystemSettings(QObject):
         if page == "!report":
             self._report = data
             self.reportChanged.emit()
+            return
+        if page == "!live":                                      # a live wallpaper saved or added
+            if data.get("use"):
+                self.useLiveWallpaper(data["id"])
+            if data.get("said"):
+                self.said.emit(f"“{data.get('name', '')}” is saved.", False)
+            self._load("look")
             return
         self._busy.discard(page)
         if isinstance(data, dict):
@@ -2634,6 +2669,200 @@ class SystemSettings(QObject):
             self.said.emit(f"The picture couldn't be copied: {err.strerror or err}", True)
             return
         self._shell.set("wallpaper", str(dest))
+
+    # -------------------------------------------------------------- Appearance: live wallpapers you make
+    def _shell_set(self, key: str, value: str) -> None:
+        if self._shell is not None:
+            self._shell.set(key, value)
+
+    @Slot(str, "QVariant", str, bool, result=str)
+    def saveLiveWallpaper(self, ident: str, spec, media: str, use: bool) -> str:
+        """Save a live wallpaper made in Settings (ident "" for a new one), copying in its picture or video; use it on
+        the desktop too if `use`. Returns its id at once (the copying goes on in the background)."""
+        import huginn_looks as hl
+        spec = spec.toVariant() if hasattr(spec, "toVariant") else dict(spec or {})
+        try:
+            ident = ident or hl._slug(hl.clean_spec(spec)["name"])
+            folder = hl.live_folder(ident)
+        except hl.Refused as err:
+            self.said.emit(str(err), True)
+            return ""
+        folder.mkdir(parents=True, exist_ok=True)
+        in_use = self._shell is not None and self._shell.wallpaper == str(folder / "wallpaper.json")
+
+        def work():
+            try:
+                hl.save_live(ident, spec, media)
+            except (hl.Refused, OSError) as err:
+                self._back.emit("!said", (str(err) if isinstance(err, hl.Refused) else f"It couldn't be saved: {err}", True))
+                return
+            self._back.emit("!live", {"id": ident, "use": use or in_use, "name": hl.clean_spec(spec)["name"], "said": not use})
+        if self._demo:
+            return ident
+        threading.Thread(target=work, daemon=True).start()
+        return ident
+
+    @Slot(str, result=str)
+    def liveStillPath(self, ident: str) -> str:
+        """Where the picture of a live wallpaper goes (Settings takes it from its preview)."""
+        import huginn_looks as hl
+        try:
+            folder = hl.live_folder(ident)
+        except hl.Refused:
+            return ""
+        folder.mkdir(parents=True, exist_ok=True)
+        return str(folder / "still.jpg")
+
+    @Slot(str)
+    def useLiveWallpaper(self, ident: str) -> None:
+        import huginn_looks as hl
+        try:
+            path = hl.live_folder(ident) / "wallpaper.json"
+        except hl.Refused:
+            return
+        if path.is_file():
+            self._shell_set("wallpaperStamp", str(int(time.time() * 1000)))
+            self._shell_set("wallpaper", str(path))
+            self._shell_set("liveWallpaper", "true")
+
+    @Slot(str)
+    def deleteLiveWallpaper(self, ident: str) -> None:
+        import huginn_looks as hl
+        try:
+            path = hl.live_folder(ident) / "wallpaper.json"
+        except hl.Refused:
+            return
+        if self._shell is not None and self._shell.wallpaper == str(path):
+            self._shell_set("wallpaper", "")
+        self._act("look", lambda: hl.delete_live(ident) or "", ok="The live wallpaper is gone.")
+
+    @Slot(str)
+    def shareLiveWallpaper(self, ident: str) -> None:
+        import huginn_looks as hl
+        self._act("look", lambda: f"Saved in Documents as “{hl.export_live(ident).name}”. Whoever gets it adds it in Settings › Appearance.", reload=False)
+
+    @Slot(str)
+    def addLiveWallpaper(self, path: str) -> None:
+        import huginn_looks as hl
+
+        def work():
+            ident = hl.import_live(path)
+            self._back.emit("!live", {"id": ident, "use": False, "name": hl.list_live()[0]["name"] if hl.list_live() else "", "said": True})
+            return ""
+        self._act("look", work)
+
+    # -------------------------------------------------------------- Appearance: icons and pointers
+    @Slot(str)
+    def setIconTheme(self, ident: str) -> None:
+        """An icon theme for everything: Huginn's own apps and shell (at once), KDE's and Qt's apps (kdeglobals),
+        GTK's (GNOME's setting)."""
+        import huginn_looks as hl
+        if not hl.theme_folders(ident):
+            return
+
+        def work():
+            kconfig_write(CONFIG / "kdeglobals", ["Icons"], "Theme", ident)
+            if HAVE("gsettings"):
+                RUN(["gsettings", "set", "org.gnome.desktop.interface", "icon-theme", ident], None, 5)
+            return "Some apps show the new icons after they're opened again."
+        self._shell_set("iconTheme", ident)
+        self._state.setdefault("look", {})["iconTheme"] = ident
+        self.changed.emit()
+        self._act("look", work, reload=False, demo_change=lambda st: st.update(iconTheme=ident))
+
+    @Slot(str)
+    def setPointerTheme(self, ident: str) -> None:
+        """A pointer theme: the compositor's own pointer (at once), KDE's and Qt's apps, GTK's, and X11 apps' (the
+        next time they open; all of them after signing in again)."""
+        import huginn_looks as hl
+        if not any(t["id"] == ident for t in hl.list_pointer_themes()):
+            return
+
+        def work():
+            kconfig_write(CONFIG / "kcminputrc", ["Mouse"], "cursorTheme", ident)
+            if HAVE("gsettings"):
+                RUN(["gsettings", "set", "org.gnome.desktop.interface", "cursor-theme", ident], None, 5)
+            default = HOME / ".icons" / "default" / "index.theme"           # X11's own way to a default pointer theme
+            try:
+                default.parent.mkdir(parents=True, exist_ok=True)
+                default.write_text(f"[Icon Theme]\nName=Default\nComment=Set by Settings › Appearance\nInherits={ident}\n", encoding="utf-8")
+            except OSError:
+                pass
+            own_compositor("ReloadAccess")
+            return ""
+        self._state.setdefault("look", {})["pointerTheme"] = ident
+        self.changed.emit()
+        self._act("look", work, reload=False, demo_change=lambda st: st.update(pointerTheme=ident))
+
+    @Slot(int)
+    def setPointerSize(self, size: int) -> None:
+        self._state.setdefault("look", {})["pointerSize"] = int(size)
+        self.setA11y("cursor", int(size))
+
+    @Slot(str)
+    def addTheme(self, path: str) -> None:
+        """Icons or pointers from a downloaded file (gnome-look.org, store.kde.org): put in, then shown to choose."""
+        import huginn_looks as hl
+
+        def work():
+            self._back.emit("!said", ("Adding it…", False))
+            try:
+                added = hl.add_theme(path)
+            except hl.Refused as err:
+                raise Failed(str(err))
+            kinds = {"icons": "Icons", "pointers": "Pointer", "both": "Icons and Pointer"}
+            names = ", ".join(i for i, _k in added)
+            return f"Added {names}: choose it under {kinds[added[0][1]]}."
+        self._act("look", work)
+
+    @Slot(str)
+    def removeTheme(self, ident: str) -> None:
+        import huginn_looks as hl
+        look = self._state.get("look", {})
+        if look.get("iconTheme") == ident:
+            self.setIconTheme("Huginn")
+        if look.get("pointerTheme") == ident:
+            self.setPointerTheme("breeze_cursors")
+        self._act("look", lambda: hl.remove_theme(ident) or f"{ident} is gone.")
+
+    @Slot(str)
+    def findThemes(self, kind: str) -> None:
+        """gnome-look.org's icon or pointer themes, in the browser (what's downloaded there is added with Add from a file)."""
+        from PySide6.QtCore import QUrl
+        from PySide6.QtGui import QDesktopServices
+        url = {"icons": "https://www.gnome-look.org/browse?cat=132&ord=rating", "pointers": "https://www.gnome-look.org/browse?cat=107&ord=rating"}.get(kind)
+        if url and not self._demo:
+            QDesktopServices.openUrl(QUrl(url))
+
+    @Slot(str, str, bool)
+    def setAppIcon(self, desktop_id: str, picture: str, glass: bool) -> None:
+        """One app's icon, from a picture of yours (on Huginn's glass, or as it is)."""
+        import huginn_looks as hl
+        original = next((d / desktop_id for d in app_dirs() if d != DATA / "applications" and (d / desktop_id).is_file()), None)
+
+        def work():
+            try:
+                hl.set_app_icon(desktop_id, picture, original, glass)
+            except hl.Refused as err:
+                raise Failed(str(err))
+            self._apps = None
+            return ""
+        self._act("look", work, ok="It has its new icon.")
+
+    @Slot(str)
+    def resetAppIcon(self, desktop_id: str) -> None:
+        import huginn_looks as hl
+
+        def work():
+            hl.reset_app_icon(desktop_id)
+            self._apps = None
+            return ""
+        self._act("look", work, ok="It has its own icon again.")
+
+    @Slot(result="QVariantList")
+    def iconAppChoices(self) -> list:
+        return [{"id": a["id"], "label": a["name"], "icon": icon_url(a)} for a in sorted(self._known_apps().values(), key=lambda a: a["name"].lower())
+                if not a["nodisplay"]]
 
     @Slot(result="QVariantList")
     def recentPictures(self):

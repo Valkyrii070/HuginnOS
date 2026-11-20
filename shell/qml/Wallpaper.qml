@@ -9,14 +9,31 @@ Item {
     property bool comingIn: typeof arriving !== "undefined" && arriving      // `arriving`: the shell was just started by signing in
     readonly property bool live: scene.status === Loader.Ready
     Timer { running: paper.comingIn; interval: 2600; onTriggered: paper.comingIn = false }
-    // Settings › Appearance › Wallpaper: a picture of your own, over the realm's scene (which then isn't drawn)
-    readonly property bool own: Settings.wallpaper !== "" && picture.status !== Image.Error
+    // A window fills this screen (a game, a film, a filled window): nothing behind it needs to move (Shell.qml)
+    property bool covered: false
+    readonly property bool moving: !covered && (paper.comingIn || (Settings.liveWallpaper && !Settings.reduceMotion))
+    // Settings › Appearance › Wallpaper: a live wallpaper someone made (CustomWallpaper.qml, next to the realms' scenes)
+    readonly property bool made: Settings.wallpaper.slice(-15) === "/wallpaper.json"
+    Loader {
+        id: madeScene
+        anchors.fill: parent
+        z: 3
+        active: paper.made && Theme.t.liveDir !== ""
+        source: active ? Theme.t.liveDir + "CustomWallpaper.qml" : ""
+        onLoaded: {
+            item.spec = Qt.binding(function () { return Settings.wallpaperSpec })
+            item.folder = Qt.binding(function () { return Settings.wallpaperSpec.folder || "" })
+            item.moving = Qt.binding(function () { return paper.moving })
+        }
+    }
+    // a picture of your own, over the realm's scene (which then isn't drawn)
+    readonly property bool own: (Settings.wallpaper !== "" && !made && picture.status !== Image.Error) || (made && madeScene.status === Loader.Ready)
     Image {
         id: picture
         anchors.fill: parent
         z: 2
-        visible: Settings.wallpaper !== "" && status === Image.Ready
-        source: Settings.wallpaper ? "file://" + Settings.wallpaper : ""
+        visible: Settings.wallpaper !== "" && !paper.made && status === Image.Ready
+        source: Settings.wallpaper && !paper.made ? "file://" + Settings.wallpaper : ""
         fillMode: Image.PreserveAspectCrop
         asynchronous: true; cache: false; smooth: true; mipmap: true
         sourceSize: Qt.size(paper.width * 2, paper.height * 2)
@@ -25,7 +42,7 @@ Item {
         id: scene
         anchors.fill: parent
         z: 1
-        active: Theme.t.liveDir !== "" && !(paper.own && picture.status === Image.Ready)
+        active: Theme.t.liveDir !== "" && !(paper.own && (picture.status === Image.Ready || paper.made))
         source: Theme.t.liveDir ? Theme.t.liveDir + "LiveWallpaper.qml" : ""
         onLoaded: {
             item.realm = Qt.binding(function () { return Theme.t.realm })
@@ -35,11 +52,11 @@ Item {
             item.glowA = Qt.binding(function () { return Theme.t.glowA })
             item.glowB = Qt.binding(function () { return Theme.t.glowB })
             item.pace = 0.6
-            item.moving = Qt.binding(function () { return paper.comingIn || (Settings.liveWallpaper && !Settings.reduceMotion) })
+            item.moving = Qt.binding(function () { return paper.moving })
         }
     }
     Rectangle {
-        visible: !paper.live && !picture.visible
+        visible: !paper.live && !picture.visible && !paper.made
         anchors.fill: parent
         gradient: Gradient {
             orientation: Gradient.Vertical
@@ -50,7 +67,7 @@ Item {
     }
     Canvas {
         id: sky
-        visible: !paper.live && !picture.visible
+        visible: !paper.live && !picture.visible && !paper.made
         anchors.fill: parent
         property string key: [Theme.t.dark, Theme.t.realm, Theme.t.glowA, Theme.t.tintA, Theme.t.tintB].join()   // what it's painted from
         onKeyChanged: requestPaint()
