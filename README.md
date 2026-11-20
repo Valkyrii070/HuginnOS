@@ -2209,7 +2209,8 @@ daemon (85), the file chooser portal (82), the password prompt (76) and four sma
 - **Memory, measured rather than guessed**: building the shell's search, emoji, clipboard and game bar panels only when
   opened saved nothing (the shell was 111 MB either way in the nested session: its memory is Qt and drawing, not those
   panels), so that change was taken back. The password prompt now also loads Huginn's look only with its window
-  (−14 MB while it waits). KDE's portal and secret service (about 50 MB each in the virtual PC) start in the live
+  (70 → 64 MB while it waits, in the virtual PC). The rebuilt drive (one kernel) was booted in the virtual PC: it
+  starts 7.0.0-44 and reaches the desktop and installer as before. KDE's portal and secret service (about 50 MB each in the virtual PC) start in the live
   session after the installer opens, not in the desktop session here, so they were left as they are.
 
 ## Huginn, the browser
