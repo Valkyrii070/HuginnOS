@@ -6,7 +6,11 @@ Column {
     width: parent ? parent.width : 600; spacing: 18
     readonly property var look: Backend.look
     function realmLabel(id) { var r = (Theme.t.realms || []).filter(function (x) { return x.id === id }); return r.length ? r[0].label : id }
-    Component.onCompleted: Backend.load("look")
+    Component.onCompleted: { Backend.load("look"); pictures = Backend.recentPictures() }
+    function choosePicture() {
+        Picker.open("Choose a picture for the desktop", [["Pictures", "*.jpg *.jpeg *.png *.webp *.bmp *.gif *.avif *.heic *.jxl *.JPG *.JPEG *.PNG"]],
+                    function (paths) { if (paths.length) Backend.setWallpaper(paths[0]) })
+    }
     Row { spacing: 14
         Repeater { model: [["false", "Light", "#F4F5F8", "#DDE1E8", "#14171C"], ["true", "Dark", "#1B1E26", "#0E1015", "#F3F4F6"]]
             Column { required property var modelData; spacing: 8
@@ -36,9 +40,24 @@ Column {
                             Label { id: signLabel; anchors.centerIn: parent; text: "Sign-in screen"; color: "#FFFFFF"; font.pixelSize: 10; font.weight: Font.DemiBold } }
                         MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: Theme.setRealm(modelData.id) } }
                     Label { text: modelData.label; anchors.horizontalCenter: parent.horizontalCenter; font.weight: Theme.t.realm === modelData.id ? Font.DemiBold : Font.Normal } } } } }
-    SetCard { title: "Wallpaper"
+    property var pictures: []
+    SetCard { title: "Wallpaper"; note: Settings.wallpaper !== "" ? "Your picture is kept in Huginn's own folder, so moving or deleting the original doesn't take it off the desktop. The sign-in screen keeps the realm's scene." : ""
+        SetRow { glyph: "image"; tile: "#7C3AED"; title: "On the desktop"; sub: Settings.wallpaper !== "" ? Settings.wallpaper.split("/").pop() : "The realm's living scene"
+            SetChoice { objectName: "wallChoice"; each: 112; options: [["scene", "Realm's scene"], ["picture", "A picture"]]; value: Settings.wallpaper !== "" ? "picture" : "scene"
+                onPicked: function (v) { if (v === "scene") Backend.setWallpaper(""); else pg.choosePicture() } } }
+        Flow { visible: pg.pictures.length > 0; x: 16; width: parent.width - 32; spacing: 8; topPadding: 4; bottomPadding: 12
+            Repeater { model: pg.pictures
+                Rectangle { required property var modelData; width: 96; height: 60; radius: 8; clip: true; color: Theme.t.hover
+                    border.width: Settings.wallpaper.split("/").pop() === modelData.path.split("/").pop() ? 3 : 0; border.color: Theme.t.accent
+                    Image { anchors.fill: parent; anchors.margins: parent.border.width; source: modelData.url; sourceSize.width: 192; fillMode: Image.PreserveAspectCrop; asynchronous: true }
+                    MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: Backend.setWallpaper(modelData.path) } } }
+            Pressable { width: 96; height: 60; radius: 8; color: hovered ? Theme.t.hover : (Theme.t.dark ? "#14FFFFFF" : "#0C141E28"); onClicked: pg.choosePicture()
+                Column { anchors.centerIn: parent; spacing: 2
+                    Glyph { anchors.horizontalCenter: parent.horizontalCenter; name: "folder"; size: 16 }
+                    Label { anchors.horizontalCenter: parent.horizontalCenter; text: "Other…"; font.pixelSize: 11 } } } }
         SetRow { glyph: "sparkle"; tile: Theme.t.accent; title: "Live wallpaper"; sub: "The realm's scene keeps moving on the desktop too, slowly. It always moves on the sign-in screen, and comes to rest after you sign in. Uses a little more power."
-            Toggle { objectName: "liveToggle"; on: Settings.liveWallpaper; enabled: !Settings.reduceMotion; onToggled: function (v) { Settings.set("liveWallpaper", v ? "true" : "false") } } }
+            enabled: Settings.wallpaper === ""; opacity: enabled ? 1 : 0.5
+            Toggle { objectName: "liveToggle"; on: Settings.liveWallpaper; enabled: !Settings.reduceMotion && Settings.wallpaper === ""; onToggled: function (v) { Settings.set("liveWallpaper", v ? "true" : "false") } } }
         SetRow { visible: Settings.reduceMotion; glyph: "info"; tile: "#64748B"; title: "Reduce motion is on"; sub: "The wallpaper stays still everywhere, as Accessibility asks." }
         SetRow { glyph: "lock"; tile: "#0EA5E9"; title: "Sign-in screen"; sub: pg.look.loginRealm === Theme.t.realm ? "It wears " + pg.realmLabel(Theme.t.realm) + ", like your desktop."
                                                                                    : "It wears " + pg.realmLabel(pg.look.loginRealm || "aurora") + ". Everyone on this computer sees it."

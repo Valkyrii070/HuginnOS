@@ -213,6 +213,10 @@ pub struct SceneView {
     /// Zoom (access.rs): how far, and the pointer in the screen's pixels (only the screen it's on is zoomed)
     pub zoom: f64,
     pub zoom_at: Point<f64, smithay::utils::Physical>,
+    /// the top left of the part a zoomed screen shows (look::zoom_origin)
+    pub zoom_origin: Point<f64, smithay::utils::Physical>,
+    /// white over everything but the pointer: the bell, seen (access::flash_alpha)
+    pub flash: f32,
 }
 
 impl SceneView {
@@ -1292,7 +1296,7 @@ impl<B: Backend + 'static> HuginnState<B> {
 
     // ------------------------------------------------------------------------------------------- what to draw
     pub fn scene_view(&mut self, output: &Output) -> SceneView {
-        let mut view = SceneView::default();
+        let mut view = SceneView { flash: crate::access::flash_alpha(), ..SceneView::default() };
         // zoom, on the screen the pointer is on
         if self.huginn.zoom > 1.0 {
             let geo = self.space.output_geometry(output).unwrap_or_default();
@@ -1300,6 +1304,8 @@ impl<B: Backend + 'static> HuginnState<B> {
             if geo.to_f64().contains(at) {
                 view.zoom = self.huginn.zoom;
                 view.zoom_at = (at - geo.loc.to_f64()).to_physical(output.current_scale().fractional_scale());
+                let size = output.current_mode().map(|m| output.current_transform().transform_size(m.size)).unwrap_or_default();
+                view.zoom_origin = crate::look::zoom_origin(size, view.zoom, view.zoom_at);
             }
         }
         // the Overview

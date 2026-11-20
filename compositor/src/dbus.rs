@@ -69,6 +69,10 @@ pub enum Request {
     ReloadInput,
     /// Settings changed accessibility (colour filters, sticky and bounce keys, Reduce Motion)
     ReloadAccess,
+    /// The keyboard layouts and the one in use: JSON {"layouts": ["us", "de"], "names", "active"}
+    KeyboardLayout(mpsc::Sender<String>),
+    /// Use one of them by its place (-1: the next)
+    SetKeyboardLayout(i32),
     /// Sign out: the apps are asked to close, then the compositor ends, and with it the session (so the sign-in
     /// screen comes back: ending it through logind takes SDDM's helper down too, which SDDM takes for a crash).
     SignOut,
@@ -263,6 +267,21 @@ impl Compositor {
     /// Settings changed the keyboard (kxkbrc, kcminputrc): read it again.
     fn reload_input(&self) {
         let _ = self.to_loop.send(Request::ReloadInput);
+    }
+
+    /// The keyboard layouts and the one in use, as JSON: {"layouts": ["us", "de"], "names": […], "active": 0} (the top
+    /// bar shows it when there's more than one).
+    fn keyboard_layout(&self) -> String {
+        let (tx, rx) = mpsc::channel();
+        if self.to_loop.send(Request::KeyboardLayout(tx)).is_err() {
+            return String::new();
+        }
+        rx.recv_timeout(Duration::from_secs(1)).unwrap_or_default()
+    }
+
+    /// Use one of the keyboard layouts, by its place in the list (-1: the next one).
+    fn set_keyboard_layout(&self, which: i32) {
+        let _ = self.to_loop.send(Request::SetKeyboardLayout(which));
     }
 
     /// A small picture of one window (by the id the window list gives it), for the dock's window cards: JSON

@@ -16,7 +16,25 @@ export GDK_DEBUG=portals
 # (Shift+Tab) and its screenshots only work in X11 games, and SDL 3 would otherwise pick Wayland on a compositor as
 # capable as Huginn's. A game can still be told otherwise in its launch options (SDL_VIDEODRIVER=wayland %command%).
 export SDL_VIDEODRIVER="${SDL_VIDEODRIVER:-x11}" SDL_VIDEO_DRIVER="${SDL_VIDEO_DRIVER:-x11}"
-# The pointer: Breeze's (the compositor draws it, and so does X11 apps' server).
-export XCURSOR_THEME=breeze_cursors XCURSOR_SIZE=24
+cfg="${XDG_CONFIG_HOME:-$HOME/.config}"
+# KDE-style settings files (Settings writes them): one value from a [group]
+kread() { [ -r "$cfg/$1" ] && sed -n "/^\[$2\]/,/^\[/{s/^$3=//p}" "$cfg/$1" | head -n 1; }
+# The pointer: Breeze's at Settings › Accessibility's size (the compositor draws it, and so does X11 apps' server).
+size=$(kread kcminputrc Mouse cursorSize); case "$size" in ''|*[!0-9]*) size=24 ;; esac
+theme=$(kread kcminputrc Mouse cursorTheme); [ -n "$theme" ] || theme=breeze_cursors
+export XCURSOR_THEME="$theme" XCURSOR_SIZE="$size"
+# Settings › Language & Region (plasma-localerc, as KDE keeps it): the language, and how dates, numbers and money
+# look, when the system has that language (Settings makes it when it's chosen).
+have_locale() { locale -a 2>/dev/null | grep -qix "$(printf %s "$1" | sed 's/\.UTF-8$/.utf8/I')"; }
+lang=$(kread plasma-localerc Translations LANGUAGE)
+first="${lang%%:*}"
+if [ -n "$first" ] && have_locale "$first.UTF-8"; then
+    export LANG="$first.UTF-8" LANGUAGE="$lang"
+fi
+fmt=$(kread plasma-localerc Formats LANG)
+if [ -n "$fmt" ] && have_locale "$fmt"; then
+    export LC_NUMERIC="$fmt" LC_TIME="$fmt" LC_MONETARY="$fmt" LC_MEASUREMENT="$fmt" LC_PAPER="$fmt" LC_ADDRESS="$fmt" LC_TELEPHONE="$fmt" LC_NAME="$fmt"
+fi
+unset lang first fmt size theme
 # The compositor starts the session (services, then the shell) once it's listening, and ends when the shell does.
 exec dbus-run-session -- huginn-compositor -- /usr/libexec/huginn-session-apps

@@ -16,6 +16,12 @@ Column {
             Label { text: "Version 0.1 · built on Ubuntu 26.04 LTS"; secondary: true }
             Btn { text: "Check for Updates"; pill: true; onClicked: win.go("updates") } } }
     SetCard { title: "This computer"
+        SetRow { title: "Name"; sub: pg.a.hostname && pg.a.hostname !== pg.a.name ? "Other devices see “" + pg.a.name + "”; on the network it's " + pg.a.hostname : "What other devices see: Bluetooth, sharing, the network"
+            Row { spacing: 10
+                Label { text: pg.a.name || ""; secondary: true; anchors.verticalCenter: parent.verticalCenter; width: Math.min(implicitWidth, 260); elide: Text.ElideRight }
+                Btn { visible: pg.a.canRename !== false; text: "Rename…"
+                    onClicked: win.ask("Rename this computer", "Other devices and the network see this name.", [{ key: "n", label: "Name", text: pg.a.name || "" }], "Rename",
+                                       function (v) { Backend.setComputerName(v.n) }) } } }
         Repeater { model: pg.a.rows || []
             SetRow { required property var modelData; title: modelData.name; Label { text: modelData.value; secondary: true; width: Math.min(implicitWidth, 420); elide: Text.ElideRight } } } }
     SetCard { id: report; title: "Something not right?"

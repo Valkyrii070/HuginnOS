@@ -30,9 +30,27 @@ def _load():
     return book
 
 
+def remembering() -> bool:
+    """Settings › Privacy & Security › Remember recent files (kdeglobals' [RecentDocuments] UseRecent, as KDE's own
+    apps read it)."""
+    rc = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "kdeglobals"
+    try:
+        inside = False
+        for line in rc.read_text(encoding="utf-8", errors="replace").splitlines():
+            s = line.strip()
+            if s.startswith("["):
+                inside = s == "[RecentDocuments]"
+            elif inside and s.replace(" ", "").startswith("UseRecent="):
+                return s.split("=", 1)[1].strip().lower() != "false"
+    except OSError:
+        pass
+    return True
+
+
 def note(path: str, app: str, command: str) -> None:
-    """Add (or bring forward) a file in the shared list, opened by `app` (its desktop id, e.g. huginn-writer)."""
-    if GLib is None or not path or not os.path.isfile(path):
+    """Add (or bring forward) a file in the shared list, opened by `app` (its desktop id, e.g. huginn-writer), unless
+    Settings says not to remember."""
+    if GLib is None or not path or not os.path.isfile(path) or not remembering():
         return
     uri = Path(path).resolve().as_uri()
     book = _load()

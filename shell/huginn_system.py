@@ -190,6 +190,7 @@ class System(QObject):
         QTimer.singleShot(1500, self._read_power)
         QTimer.singleShot(1200, self._ask_kwin)            # KWin's own script reports changes; this asks for the start
         QTimer.singleShot(1300, self._ask_windows)
+        QTimer.singleShot(1600, self.readLayouts)
 
     def _ask_kwin(self):
         """When the shell (re)starts after KWin, ask once which window is in front."""
@@ -770,6 +771,64 @@ for (var i = 0; i < all.length; i++) {{ var win = all[i]; if (String(win.interna
         subprocess.run(["kwriteconfig6", "--file", "kwinrc", "--group", "NightColor", "--key", "Active", "true" if on else "false"], check=False)
         if self.sb:
             self.sb.call("org.kde.KWin", "/KWin", "org.kde.KWin", "reconfigure", None, None, 0, 3000, None, None)
+
+    # ------------------------------------------------------------------ keyboard layouts, the screen reader, the bell
+    layoutsChanged = Signal()
+
+    @Slot()
+    def readLayouts(self) -> None:
+        """The keyboard layouts and the one in use (Huginn's compositor), for the top bar's indicator."""
+        if self._demo or not self.sb or not self._own_compositor():
+            return
+        got = self._compositor("KeyboardLayout", None, "(s)")
+        try:
+            data = json.loads(got[0]) if got and got[0] else {}
+        except ValueError:
+            data = {}
+        if data != getattr(self, "_layouts", {}):
+            self._layouts = data
+            self.layoutsChanged.emit()
+
+    @Slot()
+    def nextLayout(self) -> None:
+        if not self._demo and self.sb:
+            self._compositor("SetKeyboardLayout", GLib.Variant("(i)", (-1,)), None)
+
+    keyboardLayouts = Property("QVariantMap", lambda self: getattr(self, "_layouts", {}), notify=layoutsChanged)
+
+    @Slot()
+    def toggleReader(self) -> None:
+        """Super+Alt+S: the screen reader (Orca) on or off, from anywhere, the same switch as Settings › Accessibility."""
+        if self._demo:
+            return
+        import huginn_settings as hs
+        acc = hs.CONFIG / "kaccessrc"
+        on = hs.kconfig_read(acc, ["ScreenReader"], "Enabled", "false") != "true"
+        if on and not shutil.which("orca"):
+            return
+        hs.kconfig_write(acc, ["ScreenReader"], "Enabled", on)
+
+        def work():                                        # (waited for here, so nothing is left behind as a zombie)
+            quiet = {"stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL}
+            if shutil.which("gsettings"):
+                subprocess.run(["gsettings", "set", "org.gnome.desktop.a11y.applications", "screen-reader-enabled", "true" if on else "false"],
+                               timeout=10, check=False, **quiet)
+            if on:
+                subprocess.run(["setsid", "-f", "orca", "--replace"], timeout=10, check=False, **quiet)   # Orca outlives the call
+            else:
+                subprocess.run(["pkill", "-x", "orca"], timeout=10, check=False, **quiet)
+        threading.Thread(target=work, daemon=True).start()
+
+    @Slot(str)
+    def playEffect(self, kind: str) -> None:
+        """One of Huginn's little sounds (huginn_sounds.py): "bell" is the alert sound Settings › Sound chose."""
+        if self._demo:
+            return
+        try:
+            import huginn_sounds
+            huginn_sounds.play(kind)
+        except Exception:                                  # noqa: BLE001  (no sound is better than a stuck shell)
+            pass
 
     @Slot()
     def clearNotifications(self) -> None:

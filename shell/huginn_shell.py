@@ -186,7 +186,10 @@ class Settings(QObject):
                 "dockSize": "44", "hideStyle": "drop", "dockClickHides": "true", "overviewOpen": "glide", "hotCorner": "false",
                 "spacesAllScreens": "true", "inAppMotion": "grow", "fillButtonLayouts": "true", "snapGaps": "true", "keepSnapped": "true",
                 # windows and screens on Huginn's own compositor
-                "reopenApps": "true", "rememberPlaces": "true", "adaptiveSync": "auto", "sharpX11": "true", "allowTearing": "true"}
+                "reopenApps": "true", "rememberPlaces": "true", "adaptiveSync": "auto", "sharpX11": "true", "allowTearing": "true",
+                # Settings › Appearance › Wallpaper: a picture of your own (its path), instead of the realm's scene
+                "wallpaper": ""}
+    PICTURES = (".jpg", ".jpeg", ".png", ".webp", ".bmp", ".gif", ".avif", ".heic", ".jxl")
     SWITCHES = ("clock24", "barDate", "batteryPercent", "barEverywhere", "dockMakeRoom", "dockDots", "dockFollows", "frameTimes", "autoUpdate", "liveWallpaper", "contrast", "reduceTransparency", "reduceMotion",
                 "dockClickHides", "hotCorner", "spacesAllScreens", "fillButtonLayouts", "snapGaps", "keepSnapped", "reopenApps", "rememberPlaces", "sharpX11", "allowTearing")
     SCALES = ("1", "1.25", "1.5", "1.75", "2")
@@ -219,9 +222,14 @@ class Settings(QObject):
     def _load(self) -> None:
         try:
             saved = json.loads(self._path.read_text(encoding="utf-8"))
-            self._values.update({k: v for k, v in saved.items() if v in self._choices.get(k, ())})
+            self._values.update({k: v for k, v in saved.items() if self._allowed(k, v)})
         except (OSError, ValueError, AttributeError):
             pass
+
+    def _allowed(self, key: str, value) -> bool:
+        if key == "wallpaper":                         # a path, not a choice: a picture that's there, or none
+            return value == "" or (isinstance(value, str) and value.lower().endswith(self.PICTURES) and os.path.isfile(value))
+        return value in self._choices.get(key, ())
 
     def _reload(self) -> None:
         before = dict(self._values)
@@ -265,15 +273,16 @@ class Settings(QObject):
     adaptiveSync = Property(str, lambda self: self._values["adaptiveSync"], notify=changed)
     sharpX11 = Property(bool, lambda self: self._values["sharpX11"] == "true", notify=changed)
     allowTearing = Property(bool, lambda self: self._values["allowTearing"] == "true", notify=changed)
+    wallpaper = Property(str, lambda self: self._values["wallpaper"], notify=changed)
 
     def override(self, key: str, value: str) -> None:
         """Set a value for this run only (command-line flags)."""
-        if value in self._choices.get(key, ()):
+        if self._allowed(key, value):
             self._values[key] = value
 
     @Slot(str, str)
     def set(self, key: str, value: str) -> None:
-        if value not in self._choices.get(key, ()) or self._values[key] == value:
+        if key not in self._values or not self._allowed(key, value) or self._values[key] == value:
             return
         self._values[key] = value
         self.changed.emit()

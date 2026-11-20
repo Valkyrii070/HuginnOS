@@ -1938,6 +1938,63 @@ Before the first start on a desktop PC (a Radeon RX 9070 XT and three screens):
   Files on the second screen kept on top, Settings' rule editor writing it, a Qt dialog opening over its window and a
   click on that window leaving the modal dialog in front with the keyboard.
 
+## Settings, gone over (2026-11-19)
+
+Every page checked against what really acts on it in Huginn's own session. What didn't take effect:
+
+- **Language & Region**: nothing read plasma-localerc, and only en_US existed. `huginn-session` now exports `LANG`,
+  `LANGUAGE` and the `LC_*` formats from it when the system has the locale, and choosing one it hasn't makes it first
+  (`/usr/libexec/huginn-system-settings locale ll_CC`, through pkexec: `org.huginn.system-settings`).
+- **Notification sounds**: nothing played one. The session daemon now plays the app's own (`sound-file`,
+  `sound-name`) or Huginn's for each new notification, unless sounds are off for every app or that one, Do Not
+  Disturb holds it, or the app asked for none (`suppress-sound`). **Show what a notification says** is used: Never
+  keeps banners to the app's name ("Open the Control Centre to read it"); When unlocked does that while locked.
+- **Screen lock › Lock after**: only turning the screen off locked it. The daemon now locks after the minutes chosen
+  (kscreenlockerrc's Autolock and Timeout), once each time it's left, held off like the screen by anything keeping
+  it awake; a screen that turns off sooner stays unlocked until then. Lock before sleep follows LockOnResume.
+- **Empty the Trash by itself**: nothing emptied it. The daemon deletes what's been in the Trash longer than the days
+  chosen (ktrashrc), a minute after signing in and every six hours, by each item's DeletionDate.
+- **Remember recent files** (off): Huginn's apps still noted files. It's now kdeglobals' `[RecentDocuments]
+  UseRecent` (which `huginn_recent.note` and KDE's apps read) and GNOME's `remember-recent-files` for GTK apps.
+- **Pointer size**: the compositor drew 24 pixels whatever was chosen. It reads kcminputrc's `cursorSize` and
+  `cursorTheme` (again on `ReloadAccess`, for X11 apps' pointer too), and the session exports them.
+- **Zoom › When the pointer moves**: only "follow it" worked. Keep it centred and Push at edges now work
+  (`look::zoom_origin`), and the pointer is drawn over what it points at as the zoom shows it.
+- **Flash the screen for alert sounds**: nothing rang. The compositor now has the system bell (xdg-system-bell-v1):
+  it flashes every screen white for 0.3 s (`render.rs`: `flash`) when Accessibility says so, else the shell plays
+  the alert sound.
+- **Keyboard layouts**: no way to switch, and the page named Search's shortcut. Super+Ctrl+Space (or a click on the
+  letters the top bar now shows with more than one) goes to the next (`org.huginn.Compositor.KeyboardLayout`,
+  `SetKeyboardLayout`). **Super+Alt+S** (screen reader), which Accessibility named, now exists.
+- "Meta" became "Super" where Settings still said it.
+
+Added:
+
+- **Appearance › Wallpaper › A picture**: one of your own (the newest in Pictures, or any through the Open window),
+  copied to ~/.local/share/huginn/wallpapers; the shell's `wallpaper` setting, drawn over the realm's scene, which
+  then isn't drawn.
+- **Sound › Alerts**: the alert sound (Bell, Chime, Soft, Knock, Question, Warning, None), its volume, and a click
+  when the volume keys change it (`huginn_sounds.py`, ~/.config/huginn/sound.json).
+- **Keyboard & Mouse**: Num Lock when you sign in (kcminputrc's NumLock), and for each mouse and touchpad: mouse
+  acceleration (off is libinput's flat profile, for games), scroll speed (the compositor scales what the device
+  sends), and a touchpad's right-click (two fingers or the corner).
+- **Displays › Brightness** for monitors over the cable (DDC/CI, with ddcutil, now in the image, i2c-dev loaded and a
+  uaccess rule), each by its own slider; only the last value waiting goes, as monitors answer slowly. **Night light**
+  "Sunset to sunrise" uses the real times, from the time zone's city (`huginn_sun.py`, zone1970.tab): nothing asks
+  where the computer is.
+- **Users › Sign in by itself** (SDDM's [Autologin], the file the installer writes; through the same helper).
+- **About › Name › Rename…** (hostnamed: the pretty name, and the host name made from it).
+- **Wi‑Fi & Network › DNS › Change…**: servers of your own for the network in use (NetworkManager, reapplied at once).
+- **Printers & Scanners**, a page of its own: the printers CUPS knows, which is used first, removing one, adding one
+  by its address, the print queue, and the scanners (as Print & Scan reads them).
+- Search finds all of these.
+
+Checked in the compositor's window: the wallpaper picture, switching layouts by keys and by the top bar, the alert
+sound saved, Num Lock written, night light's sunset times, the bell flashing (measured), the three zoom modes, the
+screen reader's shortcut, every page drawn in the preview with no new QML warnings. Tests: settings_r_test (40),
+notify_r_test (10), lock_r_test (8). Not checked here: monitors' brightness, mouse acceleration and scroll speed, Num
+Lock's light, automatic sign-in and renaming (they need the real hardware and system services).
+
 ## Huginn, the browser
 
 Inside the Huginn repository (this kit is its `os/` folder) the image ships the repository's own browser. A kit used

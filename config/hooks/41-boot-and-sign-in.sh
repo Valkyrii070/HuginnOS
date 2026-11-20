@@ -13,7 +13,7 @@ for realm in aurora bifrost muspelheim niflheim; do
     test -f "/usr/share/huginn-os/live/stills/$realm.jpg"
 done
 test -f /usr/share/huginn-os/live/LiveWallpaper.qml
-chmod 755 /usr/libexec/huginn-login-look
+chmod 755 /usr/libexec/huginn-login-look /usr/libexec/huginn-system-settings
 # The session: "Huginn OS" (huginn.desktop: Huginn's own compositor). huginn-session-preview is an old name for it.
 rm -f /usr/share/wayland-sessions/huginnos-preview.desktop /usr/share/xdg-desktop-portal/huginn-own-portals.conf
 chmod 755 /usr/bin/huginn-session /usr/bin/huginn-session-preview /usr/libexec/huginn-session-apps

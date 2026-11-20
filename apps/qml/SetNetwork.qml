@@ -42,7 +42,13 @@ Column {
             Btn { text: pg.reveal ? "Hide addresses" : "Show addresses"; onClicked: pg.reveal = !pg.reveal } }
         SetRow { title: "IP address"; Label { text: pg.hidden(pg.here ? pg.here.ip : ""); secondary: true; font.family: Theme.t.fontMono } }
         SetRow { title: "Router"; Label { text: pg.hidden(pg.here ? pg.here.gateway : ""); secondary: true; font.family: Theme.t.fontMono } }
-        SetRow { title: "DNS"; Label { text: pg.hidden(pg.here ? pg.here.dns : ""); secondary: true; font.family: Theme.t.fontMono } }
+        SetRow { title: "DNS"; sub: pg.here && pg.here.customDns ? "Your own servers" : "The network's own servers"
+            Row { spacing: 10
+                Label { text: pg.hidden(pg.here ? pg.here.dns : ""); secondary: true; font.family: Theme.t.fontMono; anchors.verticalCenter: parent.verticalCenter; width: Math.min(implicitWidth, 260); elide: Text.ElideRight }
+                Btn { visible: !!(pg.here && pg.here.uuid); text: "Change…"
+                    onClicked: { var u = pg.here.uuid
+                        win.ask("DNS servers for " + pg.hereName, "The servers that look up names like huginn.org. Leave it empty to use the network's own. Private ones: Quad9 9.9.9.9, 149.112.112.112; Cloudflare 1.1.1.1, 1.0.0.1.",
+                                [{ key: "dns", label: "Servers (by commas)", text: pg.here.customDns || "", placeholder: "Automatic" }], "Save", function (v) { Backend.setDns(u, v.dns) }) } } } }
         SetRow { title: "Hardware address"; sub: "Some routers use it to recognise this computer"; Label { text: pg.hidden(pg.here ? pg.here.mac : ""); secondary: true; font.family: Theme.t.fontMono } }
         SetRow { visible: pg.onWifi; title: ""; Row { spacing: 8
             Btn { text: "Disconnect"; onClicked: Backend.disconnect(pg.n.wifiDevice) }

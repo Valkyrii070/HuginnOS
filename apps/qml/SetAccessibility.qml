@@ -21,10 +21,10 @@ Column {
                            Number(Settings.uiScale) > 1 ? "everything " + Math.round(Number(Settings.uiScale) * 100) + "%" : "", pg.a.reader ? "screen reader on" : "",
                            pg.a.filter ? pg.filterNames[pg.a.filter] : ""].filter(function (x) { return x }).join(" · ") || "Nothing changed yet. Everything here can be turned back at any time." } } } }
 
-    SetCard { title: "Seeing"; note: "Meta+Alt+S turns the screen reader on and off from anywhere. Meta and + or − zooms; Meta+0 goes back to normal."
+    SetCard { title: "Seeing"; note: "Super+Alt+S turns the screen reader on and off from anywhere. Super and + or − zooms; Super+0 goes back to normal."
         SetRow { glyph: "speaker"; tile: "#1A73E8"; title: "Screen reader"; sub: pg.a.hasReader ? "Reads out what's on the screen and what you type (Orca)." : "Needs Orca, which isn't installed."
             Toggle { enabled: !!pg.a.hasReader; on: !!pg.a.reader; onToggled: function (v) { Backend.setA11y("reader", v) } } }
-        SetRow { glyph: "zoom"; tile: "#0EA5E9"; title: "Zoom"; sub: "Meta and + or − magnifies the whole screen, around the pointer."
+        SetRow { glyph: "zoom"; tile: "#0EA5E9"; title: "Zoom"; sub: "Super and + or − magnifies the screen the pointer is on."
             Toggle { on: !!pg.a.zoom; onToggled: function (v) { Backend.setA11y("zoom", v) } } }
         SetRow { visible: !!pg.a.zoom; title: "Each step zooms"
             SetChoice { each: 64; options: [["1.2", "A little"], ["1.5", "More"], ["2", "Double"]]; value: String(pg.a.zoomStep || 1.2); onPicked: function (v) { Backend.setA11y("zoomStep", v) } } }
@@ -62,7 +62,7 @@ Column {
             Toggle { on: Settings.reduceMotion; onToggled: function (v) { Settings.set("reduceMotion", v ? "true" : "false"); Backend.setA11y("animations", !v) } } }
         SetRow { glyph: "keyboard"; tile: "#8B5CF6"; title: "On-screen keyboard"; sub: pg.a.hasOsk ? "A keyboard on the screen whenever you tap where text goes." : "Needs an on-screen keyboard, which isn't installed."
             Toggle { enabled: !!pg.a.hasOsk; on: !!pg.a.osk; onToggled: function (v) { Backend.setA11y("osk", v) } } }
-        SetRow { title: "Sticky keys"; sub: "Press Shift, Ctrl, Alt or Meta, let go, then press the next key, instead of holding them together."
+        SetRow { title: "Sticky keys"; sub: "Press Shift, Ctrl, Alt or Super, let go, then press the next key, instead of holding them together."
             Toggle { on: !!pg.a.sticky; onToggled: function (v) { Backend.setA11y("sticky", v) } } }
         SetRow { visible: !!pg.a.sticky; title: "Pressing one twice keeps it down"
             Toggle { on: pg.a.stickyLock !== false; onToggled: function (v) { Backend.setA11y("stickyLock", v) } } }

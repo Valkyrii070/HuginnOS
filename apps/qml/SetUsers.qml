@@ -30,7 +30,11 @@ Column {
         SetRow { title: "Password"; sub: "Used to sign in, unlock the screen and make system changes"; glyph: "key"; tile: "#6D28D9"
             Btn { text: "Change…"; onClicked: win.ask("Change your password", "Use something long that you don't use anywhere else. A short sentence works well.",
                                                      [{ key: "old", label: "Current password", secret: true }, { key: "new", label: "New password", secret: true }, { key: "again", label: "New password again", secret: true }],
-                                                     "Change Password", function (v) { Backend.changePassword(v.old, v.new, v.again) }) } } }
+                                                     "Change Password", function (v) { Backend.changePassword(v.old, v.new, v.again) }) } }
+        SetRow { visible: pg.u.canAutologin !== false; title: "Sign in by itself"; glyph: "user"; tile: "#8B5CF6"
+            sub: pg.u.autologin && pg.u.autologin !== pg.me.name ? (pg.u.autologin + " is signed in by itself when the computer starts")
+               : "When the computer starts, without asking for the password. Anyone who can switch it on gets in, so only for a computer at home."
+            Toggle { on: !!pg.u.autologin && pg.u.autologin === pg.me.name; onToggled: function (v) { Backend.setAutoLogin(v) } } } }
     SetCard { title: "Other people"; note: pg.me.admin ? "New people choose their own password the first time they sign in. The system asks for your password before adding or removing anyone." : "Only an administrator can add or remove people."
         Repeater { model: pg.u.others || []
             SetRow { required property var modelData; title: modelData.full; sub: modelData.name + (modelData.admin ? " · administrator" : " · standard"); picture: modelData.picture; round: true; glyph: "user"; tile: "#8B7BD8"

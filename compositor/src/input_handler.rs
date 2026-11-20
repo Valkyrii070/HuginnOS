@@ -93,6 +93,7 @@ impl<BackendData: Backend> HuginnState<BackendData> {
             }
             KeyAction::ShowDesktop => self.show_desktop(),
             KeyAction::MoveToScreen(dir) => self.move_to_screen(dir),
+            KeyAction::NextLayout => self.next_layout(),
         }
     }
 
@@ -592,14 +593,18 @@ impl<BackendData: Backend> HuginnState<BackendData> {
     }
 
     fn on_pointer_axis<B: InputBackend>(&mut self, evt: B::PointerAxisEvent) {
+        // Settings › Keyboard & Mouse › Scroll speed, for this device (input.rs)
+        let k = crate::input::scroll_factor(&smithay::backend::input::Device::name(&evt.device()));
         let horizontal_amount = evt
             .amount(input::Axis::Horizontal)
-            .unwrap_or_else(|| evt.amount_v120(input::Axis::Horizontal).unwrap_or(0.0) * 15.0 / 120.);
+            .unwrap_or_else(|| evt.amount_v120(input::Axis::Horizontal).unwrap_or(0.0) * 15.0 / 120.)
+            * k;
         let vertical_amount = evt
             .amount(input::Axis::Vertical)
-            .unwrap_or_else(|| evt.amount_v120(input::Axis::Vertical).unwrap_or(0.0) * 15.0 / 120.);
-        let horizontal_amount_discrete = evt.amount_v120(input::Axis::Horizontal);
-        let vertical_amount_discrete = evt.amount_v120(input::Axis::Vertical);
+            .unwrap_or_else(|| evt.amount_v120(input::Axis::Vertical).unwrap_or(0.0) * 15.0 / 120.)
+            * k;
+        let horizontal_amount_discrete = evt.amount_v120(input::Axis::Horizontal).map(|v| v * k);
+        let vertical_amount_discrete = evt.amount_v120(input::Axis::Vertical).map(|v| v * k);
 
         {
             let mut frame = AxisFrame::new(evt.time()).source(evt.source());
@@ -1297,6 +1302,8 @@ enum KeyAction {
     KeepOnTop,
     /// Super+Alt+←/→: the window in front to the screen beside
     MoveToScreen(i32),
+    /// Settings › Keyboard: the next of the keyboard layouts (Super+Ctrl+Space)
+    NextLayout,
     /// Do nothing more
     None,
 }
@@ -1354,6 +1361,8 @@ fn process_keyboard_shortcut(modifiers: ModifiersState, keysym: Keysym, raw: Opt
             "desktop" => KeyAction::ShowDesktop,
             "ontop" => KeyAction::KeepOnTop,
             "frames" => KeyAction::Shell("frames"),
+            "reader" => KeyAction::Shell("reader"),
+            "layout" => KeyAction::NextLayout,
             "files" | "settings" | "terminal" => KeyAction::Run(format!("open:{name}")),
             "space-left" => KeyAction::SpaceStep(-1, false),
             "space-right" => KeyAction::SpaceStep(1, false),

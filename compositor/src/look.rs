@@ -1166,14 +1166,63 @@ pub struct ZoomElement {
 }
 
 impl ZoomElement {
-    /// `at`: the pointer, in the screen's pixels (it stays where it is on the screen, and so does what's under it)
-    pub fn new(whole: Rectangle<i32, Physical>, zoom: f64, at: Point<f64, Physical>) -> Self {
+    /// `origin`: the top left of the part shown, in the screen's pixels (zoom_origin).
+    pub fn new(whole: Rectangle<i32, Physical>, zoom: f64, origin: Point<f64, Physical>) -> Self {
         let (w, h) = (whole.size.w as f64 / zoom, whole.size.h as f64 / zoom);
-        let x = (at.x - at.x / zoom).clamp(0.0, whole.size.w as f64 - w);
-        let y = (at.y - at.y / zoom).clamp(0.0, whole.size.h as f64 - h);
-        Self { id: Id::new(), commit: CommitCounter::default(), whole, part: Rectangle::new((x, y).into(), (w, h).into()) }
+        Self { id: Id::new(), commit: CommitCounter::default(), whole, part: Rectangle::new(origin, (w, h).into()) }
     }
 }
+
+/// Where a zoomed screen's view starts (its top left, in the screen's pixels), with the pointer at `at`. How the view
+/// follows the pointer is Settings › Accessibility's choice (access::ZOOM_FOLLOW): what's under the pointer stays
+/// where it is on the screen (0), the pointer stays in the middle (1), or the view stays put until the pointer pushes
+/// at its edge (2).
+pub fn zoom_origin(size: Size<i32, Physical>, zoom: f64, at: Point<f64, Physical>) -> Point<f64, Physical> {
+    static PUSHED: std::sync::Mutex<Option<(f64, f64, f64)>> = std::sync::Mutex::new(None);
+    let (w, h) = (size.w as f64 / zoom, size.h as f64 / zoom);
+    let (max_x, max_y) = ((size.w as f64 - w).max(0.0), (size.h as f64 - h).max(0.0));
+    let (x, y) = match crate::access::ZOOM_FOLLOW.load(std::sync::atomic::Ordering::Relaxed) {
+        1 => (at.x - w / 2.0, at.y - h / 2.0),
+        2 => {
+            let mut last = PUSHED.lock().unwrap();
+            let (mut x, mut y) = match *last {
+                Some((lx, ly, lz)) if (lz - zoom).abs() < 1e-6 => (lx, ly),
+                _ => (at.x - at.x / zoom, at.y - at.y / zoom),
+            };
+            let (mx, my) = (w * 0.04, h * 0.04);
+            if at.x < x + mx {
+                x = at.x - mx;
+            } else if at.x > x + w - mx {
+                x = at.x - w + mx;
+            }
+            if at.y < y + my {
+                y = at.y - my;
+            } else if at.y > y + h - my {
+                y = at.y - h + my;
+            }
+            let (x, y) = (x.clamp(0.0, max_x), y.clamp(0.0, max_y));
+            *last = Some((x, y, zoom));
+            (x, y)
+        }
+        _ => (at.x - at.x / zoom, at.y - at.y / zoom),
+    };
+    (x.clamp(0.0, max_x), y.clamp(0.0, max_y)).into()
+}
+
+/// Where the pointer is drawn on a zoomed screen (`pos`: its place on the screen, logical): over what it points at,
+/// as the zoom shows it.
+pub fn zoomed_pointer(
+    view: &crate::wm::SceneView,
+    pos: Point<f64, smithay::utils::Logical>,
+    scale: Scale<f64>,
+) -> Point<f64, smithay::utils::Logical> {
+    if view.zoom <= 1.0 {
+        return pos;
+    }
+    let p = pos.to_physical(scale);
+    Point::<f64, Physical>::from(((p.x - view.zoom_origin.x) * view.zoom, (p.y - view.zoom_origin.y) * view.zoom)).to_logical(scale)
+}
+
 
 impl Element for ZoomElement {
     fn id(&self) -> &Id {

@@ -9,11 +9,23 @@ Item {
     property bool comingIn: typeof arriving !== "undefined" && arriving      // `arriving`: the shell was just started by signing in
     readonly property bool live: scene.status === Loader.Ready
     Timer { running: paper.comingIn; interval: 2600; onTriggered: paper.comingIn = false }
+    // Settings › Appearance › Wallpaper: a picture of your own, over the realm's scene (which then isn't drawn)
+    readonly property bool own: Settings.wallpaper !== "" && picture.status !== Image.Error
+    Image {
+        id: picture
+        anchors.fill: parent
+        z: 2
+        visible: Settings.wallpaper !== "" && status === Image.Ready
+        source: Settings.wallpaper ? "file://" + Settings.wallpaper : ""
+        fillMode: Image.PreserveAspectCrop
+        asynchronous: true; cache: false; smooth: true; mipmap: true
+        sourceSize: Qt.size(paper.width * 2, paper.height * 2)
+    }
     Loader {
         id: scene
         anchors.fill: parent
         z: 1
-        active: Theme.t.liveDir !== ""
+        active: Theme.t.liveDir !== "" && !(paper.own && picture.status === Image.Ready)
         source: Theme.t.liveDir ? Theme.t.liveDir + "LiveWallpaper.qml" : ""
         onLoaded: {
             item.realm = Qt.binding(function () { return Theme.t.realm })
@@ -27,7 +39,7 @@ Item {
         }
     }
     Rectangle {
-        visible: !paper.live
+        visible: !paper.live && !picture.visible
         anchors.fill: parent
         gradient: Gradient {
             orientation: Gradient.Vertical
@@ -38,7 +50,7 @@ Item {
     }
     Canvas {
         id: sky
-        visible: !paper.live
+        visible: !paper.live && !picture.visible
         anchors.fill: parent
         property string key: [Theme.t.dark, Theme.t.realm, Theme.t.glowA, Theme.t.tintA, Theme.t.tintB].join()   // what it's painted from
         onKeyChanged: requestPaint()

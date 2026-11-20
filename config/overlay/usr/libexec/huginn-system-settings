@@ -1,0 +1,37 @@
+#!/bin/sh
+# Huginn OS: the few system-wide changes Settings makes that the system has no service for. Runs as root through
+# pkexec (org.huginn.system-settings), which asks for the administrator password; each takes one checked value.
+#   autologin USER | off     Users › Sign in by itself (SDDM's [Autologin], the same file the installer writes)
+#   locale ll_CC             Language & Region: make a language's UTF-8 locale, so the session can use it
+set -eu
+conf=/etc/sddm.conf.d/20-autologin.conf
+case "${1:-}" in
+    autologin)
+        who="${2:-}"
+        if [ "$who" = off ]; then
+            rm -f "$conf"
+            exit 0
+        fi
+        printf %s "$who" | grep -Eq '^[a-z_][a-z0-9_-]{0,31}$' || { echo "huginn-system-settings: not a user name: $who" >&2; exit 2; }
+        uid=$(getent passwd "$who" | cut -d: -f3)
+        [ -n "$uid" ] && [ "$uid" -ge 1000 ] && [ "$uid" -lt 60000 ] || { echo "huginn-system-settings: no such person: $who" >&2; exit 2; }
+        mkdir -p /etc/sddm.conf.d
+        tmp=$(mktemp /etc/sddm.conf.d/.autologin.XXXXXX)
+        printf '[Autologin]\n# Set by Settings › Users.\nUser=%s\nSession=huginn\nRelogin=false\n' "$who" > "$tmp"
+        chmod 644 "$tmp"
+        mv -f "$tmp" "$conf"
+        ;;
+    locale)
+        code="${2:-}"
+        printf %s "$code" | grep -Eq '^[a-z]{2,3}_[A-Z]{2}$' || { echo "huginn-system-settings: not a locale: $code" >&2; exit 2; }
+        grep -q "^$code.UTF-8 UTF-8\$" /usr/share/i18n/SUPPORTED || { echo "huginn-system-settings: $code isn't a language this system knows" >&2; exit 2; }
+        if locale -a | grep -qix "$code.utf8"; then
+            exit 0
+        fi
+        locale-gen "$code.UTF-8" >/dev/null
+        ;;
+    *)
+        echo "huginn-system-settings: autologin USER|off, or locale ll_CC" >&2
+        exit 2
+        ;;
+esac

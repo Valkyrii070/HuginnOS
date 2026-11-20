@@ -189,6 +189,9 @@ QtObject {
             else if (what.indexOf("run:") === 0) shell.runKey(what.slice(4))
             else if (what.indexOf("edge:") === 0) shell.pointerAtEdge(what.slice(5))
             else if (what === "frames") Settings.set("frameTimes", Settings.frameTimes ? "false" : "true")
+            else if (what === "layout") Status.readLayouts()
+            else if (what === "reader") Status.toggleReader()
+            else if (what === "bell") Status.playEffect("bell")     // an app's bell (the compositor flashes the screen itself, if Settings says)
             else if (what.indexOf("identify:") === 0) { try { shell.identify = JSON.parse(what.slice(9)) } catch (e) { shell.identify = ({}) } identifyEnd.restart() }
         }
     }

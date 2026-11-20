@@ -5,12 +5,16 @@
 //! KWin's (`Pointers`), changed one setting at a time (`SetPointer`), and kept by device name in
 //! ~/.config/huginn/input.json, put back whenever the device appears.
 
-use std::path::PathBuf;
+use std::{
+    collections::HashMap,
+    path::PathBuf,
+    sync::{LazyLock, Mutex},
+};
 
 use serde_json::{Value, json};
 use smithay::{
-    input::keyboard::XkbConfig,
-    reexports::input::{Device, DeviceCapability},
+    input::keyboard::{Layout, ModifiersState, XkbConfig},
+    reexports::input::{AccelProfile, ClickMethod, Device, DeviceCapability},
 };
 use tracing::warn;
 
@@ -72,13 +76,31 @@ fn is_touchpad(d: &Device) -> bool {
     d.config_tap_finger_count() > 0
 }
 
-/// A mouse or touchpad as Settings lists them.
+/// Scroll speed, by device name (Settings › Keyboard & Mouse): how much each turn of the wheel or swipe moves.
+/// libinput has no such setting, so the compositor scales what the device sends (input_handler.rs).
+static SCROLL: LazyLock<Mutex<HashMap<String, f64>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
+
+/// How far a scroll from this device goes (1: as the device says).
+pub fn scroll_factor(name: &str) -> f64 {
+    SCROLL.lock().map(|m| m.get(name).copied().unwrap_or(1.0)).unwrap_or(1.0)
+}
+
+/// A mouse or touchpad as Settings lists them. "flat": no pointer acceleration (the pointer moves exactly as far
+/// as the mouse, as games want); "clickfinger": a touchpad clicked with two fingers is a right-click (else its
+/// bottom-right corner is); "scroll": the scroll speed.
 pub fn describe(d: &mut Device) -> Value {
+    let profiles = d.config_accel_profiles();
+    let methods = d.config_click_methods();
     json!({
         "sys": d.sysname(), "name": d.name(), "touchpad": is_touchpad(d),
         "tap": d.config_tap_enabled(), "natural": d.config_scroll_natural_scroll_enabled(),
         "left": d.config_left_handed(), "speed": d.config_accel_speed(),
         "dwt": d.config_dwt_enabled(), "canDwt": d.config_dwt_is_available(), "canTap": is_touchpad(d),
+        "flat": d.config_accel_profile() == Some(AccelProfile::Flat),
+        "canFlat": profiles.contains(&AccelProfile::Flat) && profiles.contains(&AccelProfile::Adaptive),
+        "clickfinger": d.config_click_method() == Some(ClickMethod::Clickfinger),
+        "canClickfinger": methods.contains(&ClickMethod::Clickfinger) && methods.contains(&ClickMethod::ButtonAreas),
+        "scroll": scroll_factor(&d.name()),
     })
 }
 
@@ -91,6 +113,15 @@ fn set(d: &mut Device, prop: &str, value: &Value) -> bool {
         "left" => d.config_left_handed_set(b).is_ok(),
         "speed" => d.config_accel_set_speed(value.as_f64().unwrap_or(0.0).clamp(-1.0, 1.0)).is_ok(),
         "dwt" => d.config_dwt_set_enabled(b).is_ok(),
+        "flat" => d.config_accel_set_profile(if b { AccelProfile::Flat } else { AccelProfile::Adaptive }).is_ok(),
+        "clickfinger" => d.config_click_set_method(if b { ClickMethod::Clickfinger } else { ClickMethod::ButtonAreas }).is_ok(),
+        "scroll" => {
+            let k = value.as_f64().unwrap_or(1.0).clamp(0.2, 5.0);
+            if let Ok(mut m) = SCROLL.lock() {
+                m.insert(d.name().to_string(), k);
+            }
+            true
+        }
         _ => false,
     }
 }
@@ -139,5 +170,71 @@ impl<B: Backend + 'static> HuginnState<B> {
         }
         let (rate, delay) = repeat();
         keyboard.change_repeat_info(rate, delay);
+        self.apply_numlock();
+        self.say(crate::dbus::Outgoing::ShellKey("layout".into()));
+    }
+
+    /// Settings › Keyboard › "Num Lock on when you sign in" (kcminputrc's NumLock, as KDE: 0 on, 1 off, 2 as it
+    /// was). Done when the compositor starts, and when the setting itself changes (not on every other change, which
+    /// would undo the Num Lock key).
+    pub fn apply_numlock(&mut self) {
+        static LAST: Mutex<Option<String>> = Mutex::new(None);
+        let want = kconfig("kcminputrc", "Keyboard", "NumLock").unwrap_or_else(|| "2".into());
+        {
+            let mut last = LAST.lock().unwrap();
+            if last.as_deref() == Some(want.as_str()) {
+                return;
+            }
+            *last = Some(want.clone());
+        }
+        let on = match want.as_str() {
+            "0" => true,
+            "1" => false,
+            _ => return,
+        };
+        let Some(keyboard) = self.seat.get_keyboard() else { return };
+        let now = keyboard.modifier_state();
+        tracing::info!("Num Lock {} (Settings)", if on { "on" } else { "off" });
+        if now.num_lock != on {
+            keyboard.set_modifier_state(ModifiersState { num_lock: on, ..now });
+            keyboard.advertise_modifier_state(self);
+            let leds = keyboard.led_state();
+            self.backend_data.update_led_state(leds);
+        }
+    }
+
+    /// The keyboard layouts (their codes, as Settings set them: "us", "de"…) and which is in use.
+    pub fn keyboard_layouts(&mut self) -> Value {
+        let codes: Vec<String> = layouts()
+            .map(|(l, _, _)| l.split(',').map(|x| x.trim().to_string()).filter(|x| !x.is_empty()).collect())
+            .unwrap_or_default();
+        let Some(keyboard) = self.seat.get_keyboard() else { return json!({"layouts": codes, "active": 0}) };
+        let (names, active) = keyboard.with_xkb_state(self, |ctx| {
+            let xkb = ctx.xkb().lock().unwrap();
+            (xkb.layouts().map(|l| xkb.layout_name(l).to_string()).collect::<Vec<_>>(), xkb.active_layout().0)
+        });
+        let codes = if codes.len() == names.len() { codes } else { names.iter().map(|n| n.chars().take(2).collect::<String>().to_lowercase()).collect() };
+        json!({"layouts": codes, "names": names, "active": active})
+    }
+
+    /// One of the layouts by its place in the list (-1: the next one, Super+Ctrl+Space).
+    pub fn set_keyboard_layout(&mut self, which: i32) {
+        let Some(keyboard) = self.seat.get_keyboard() else { return };
+        keyboard.with_xkb_state(self, |mut ctx| {
+            let count = ctx.xkb().lock().unwrap().layouts().count() as i32;
+            if count < 2 {
+                return;
+            }
+            if which < 0 {
+                ctx.cycle_next_layout();
+            } else if which < count {
+                ctx.set_layout(Layout(which as u32));
+            }
+        });
+        self.say(crate::dbus::Outgoing::ShellKey("layout".into()));
+    }
+
+    pub fn next_layout(&mut self) {
+        self.set_keyboard_layout(-1);
     }
 }

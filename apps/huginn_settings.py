@@ -5,15 +5,22 @@ tool would make, and a change made elsewhere shows up here:
 
     Wi-Fi & Network      NetworkManager (nmcli)              Bluetooth          BlueZ (bluetoothctl)
     Displays             kscreen-doctor, or Huginn's compositor   Night light        kwinrc (KWin, or huginn_sessiond)
-    Sound                PipeWire through pactl               Battery & Power    UPower, power-profiles-daemon, Huginn's session daemon
+                         monitors' brightness over the cable: ddcutil (DDC/CI)
+    Sound                PipeWire through pactl; the alert sound: ~/.config/huginn/sound.json (huginn_sounds.py)
+    Battery & Power      UPower, power-profiles-daemon, Huginn's session daemon
     Keyboard & Mouse     KWin's input devices or Huginn's compositor (D-Bus), kcminputrc, kxkbrc
-    Date & Time          systemd's timedated (timedatectl)    Language           plasma-localerc (your account)
-    Users                AccountsService (D-Bus)              Default Apps       mimeapps.list, ~/.config/autostart
-    Privacy & Security   ufw, Flatpak's permission store, kscreenlockerrc, ktrashrc, recently-used files
-    Notifications        ~/.config/huginn-shell/notifications.json, which the shell reads
+    Date & Time          systemd's timedated (timedatectl)
+    Language             plasma-localerc (your account; huginn-session reads it), languages made with locale-gen
+    Users                AccountsService (D-Bus); signing in by itself: SDDM's [Autologin]
+    Default Apps         mimeapps.list, ~/.config/autostart
+    Printers & Scanners  CUPS (lpstat, lpadmin, lpoptions) and SANE, as Print & Scan
+    Privacy & Security   ufw, Flatpak's permission store, kscreenlockerrc, ktrashrc, recently-used files (kdeglobals)
+    Notifications        ~/.config/huginn-shell/notifications.json, which the session daemon reads
+    About                systemd's hostnamed (hostnamectl) for the computer's name
 
 Nothing here asks for the administrator password itself. Where the system guards a change (the firewall, the time
-zone, other people's accounts) the system asks for it in its own window (polkit), never this app.
+zone, other people's accounts, the computer's name, signing in by itself) the system asks for it in its own window
+(polkit), never this app. The two changes no system service makes go through /usr/libexec/huginn-system-settings.
 With --demo, or where a tool is missing, a page shows sample values or says what's missing.
 """
 import json
@@ -233,6 +240,8 @@ def parse_details(text: str) -> dict:
         value = value.replace("\\:", ":")
         if key == "GENERAL.HWADDR":
             d["mac"] = value
+        elif key == "GENERAL.CON-UUID":
+            d["uuid"] = value
         elif key.startswith("IP4.ADDRESS") and not d["ip"]:
             d["ip"] = value.split("/")[0]
         elif key == "IP4.GATEWAY":
@@ -265,8 +274,13 @@ def load_network() -> dict:
     details = {}
     for d in (wifi_dev, wired):
         if d and d["state"] == "connected":
-            _, info, _ = RUN(["nmcli", "-t", "-f", "GENERAL.HWADDR,IP4.ADDRESS,IP4.GATEWAY,IP4.DNS,IP6.ADDRESS", "device", "show", d["device"]])
+            _, info, _ = RUN(["nmcli", "-t", "-f", "GENERAL.HWADDR,GENERAL.CON-UUID,IP4.ADDRESS,IP4.GATEWAY,IP4.DNS,IP6.ADDRESS", "device", "show", d["device"]])
             details[d["device"]] = parse_details(info)
+            uuid = details[d["device"]].get("uuid", "")
+            if uuid:
+                _, own, _ = RUN(["nmcli", "-g", "ipv4.ignore-auto-dns,ipv4.dns", "connection", "show", uuid])
+                lines = own.splitlines() + ["", ""]
+                details[d["device"]]["customDns"] = lines[1].replace("\\,", ",").replace(",", ", ") if lines[0].strip() == "yes" else ""
     code, rf, _ = RUN(["rfkill", "-J"])
     airplane = False
     if code == 0:
@@ -416,6 +430,15 @@ def load_displays() -> dict:
     elif HAVE("kscreen-doctor"):
         _, out, _ = RUN(["kscreen-doctor", "-j"])
         screens = parse_screens(out)
+    if night["mode"] == "Automatic":
+        try:
+            import huginn_sun
+            sun = huginn_sun.today()
+            if sun:
+                night["sunrise"], night["sunset"] = huginn_sun.hhmm(sun[0]), huginn_sun.hhmm(sun[1])
+            night["place"] = huginn_sun.local_zone().rsplit("/", 1)[-1].replace("_", " ")
+        except Exception:                                        # noqa: BLE001
+            pass
     brightness = -1
     if HAVE("brightnessctl"):
         code, out, _ = RUN(["brightnessctl", "-m", "-c", "backlight"])
@@ -424,7 +447,53 @@ def load_displays() -> dict:
                 brightness = int(out.split(",")[3].rstrip("%"))
             except ValueError:
                 pass
-    return {"available": bool(own) or HAVE("kscreen-doctor") is not None, "screens": screens, "night": night, "brightness": brightness}
+    monitors = ddc_monitors()
+    for m in monitors:
+        sc = next((x for x in screens if x["name"] == m["name"]), None)
+        m["label"] = sc["label"] if sc else m["model"] or m["name"].replace("-", " ")
+    return {"available": bool(own) or HAVE("kscreen-doctor") is not None, "screens": screens, "night": night, "brightness": brightness,
+            "monitors": monitors}
+
+
+# Monitors' brightness over the cable (DDC/CI, VCP code 10), with ddcutil. Finding them is slow (a second or more),
+# so what was found is kept a minute; each monitor answers by its i2c bus.
+_DDC = {"at": 0.0, "found": []}
+
+
+def parse_ddc_detect(text: str) -> list:
+    out = []
+    for block in re.split(r"\n(?=Display \d+|Invalid display)", "\n" + text):
+        if not block.strip().startswith("Display"):
+            continue                                             # "Invalid display": no DDC/CI (or it's turned off)
+        bus = re.search(r"I2C bus:\s*/dev/i2c-(\d+)", block)
+        conn = re.search(r"DRM[_ ]connector:\s*card\d+-(\S+)", block)
+        model = re.search(r"Model:\s*(.+)", block)
+        if bus:
+            out.append({"bus": int(bus.group(1)), "name": conn.group(1) if conn else f"i2c-{bus.group(1)}", "model": model.group(1).strip() if model else ""})
+    return out
+
+
+def parse_ddc_brightness(text: str) -> int:
+    """'VCP 10 C 50 100' (ddcutil --brief): the brightness as a percentage of the monitor's most; -1 if it didn't say."""
+    m = re.search(r"VCP\s+10\s+C\s+(\d+)\s+(\d+)", text)
+    if not m or int(m.group(2)) <= 0:
+        return -1
+    return round(100 * int(m.group(1)) / int(m.group(2)))
+
+
+def ddc_monitors() -> list:
+    if not HAVE("ddcutil"):
+        return []
+    if time.monotonic() - _DDC["at"] > 60 or not _DDC["found"]:
+        code, out, _ = RUN(["ddcutil", "detect", "--sleep-multiplier", "0.5"], None, 20)
+        _DDC["found"], _DDC["at"] = (parse_ddc_detect(out) if code == 0 else []), time.monotonic()
+    rows = []
+    for m in _DDC["found"]:
+        code, out, _ = RUN(["ddcutil", "getvcp", "10", "--brief", "--bus", str(m["bus"]), "--sleep-multiplier", "0.5"], None, 8)
+        level = parse_ddc_brightness(out) if code == 0 else -1
+        if level >= 0:
+            rows.append(dict(m, brightness=level))
+    return rows
 
 
 def _hhmm(text: str) -> str:
@@ -477,14 +546,20 @@ def parse_streams(text: str) -> list:
 
 def load_sound() -> dict:
     if not HAVE("pactl"):
-        return {"available": False}
+        return {"available": False, **load_effects()}
     _, dsink, _ = RUN(["pactl", "get-default-sink"])
     _, dsource, _ = RUN(["pactl", "get-default-source"])
     _, sinks, _ = RUN(["pactl", "-f", "json", "list", "sinks"])
     _, sources, _ = RUN(["pactl", "-f", "json", "list", "sources"])
     _, streams, _ = RUN(["pactl", "-f", "json", "list", "sink-inputs"])
     return {"available": True, "outputs": parse_endpoints(sinks, dsink.strip()), "inputs": parse_endpoints(sources, dsource.strip()),
-            "apps": parse_streams(streams)}
+            "apps": parse_streams(streams), **load_effects()}
+
+
+def load_effects() -> dict:
+    import huginn_sounds
+    prefs = huginn_sounds.settings()
+    return {"effects": prefs, "alerts": [{"id": i, "label": l} for i, l, f in huginn_sounds.ALERTS if not f or huginn_sounds.find(f)]}
 
 
 # ---------------------------------------------------------------------------------------------- battery and power
@@ -648,6 +723,8 @@ SHORTCUTS = [  # id, what it does, group, default keys ("|" between more than on
     ("zoom-reset", "Zoom back to the whole screen", "Screen", "Super+0|Super+KP_0"),
     ("lock", "Lock the screen", "Screen", "Super+L"),
     ("frames", "Show frame times (again: hide them)", "Screen", "Super+Alt+F"),
+    ("layout", "The next keyboard layout", "Typing and reading", "Super+Ctrl+Space"),
+    ("reader", "Screen reader on or off", "Typing and reading", "Super+Alt+S"),
 ]
 FIXED_SHORTCUTS = [("Start menu", "Super"), ("The app's menu", "Alt"), ("Go to space 1 to 9", "Super+1…9"), ("Switch between windows", "Alt+Tab")]
 MOD_ORDER = ("Super", "Ctrl", "Alt", "Shift")
@@ -717,7 +794,9 @@ def load_input() -> dict:
             "delay": int(kconfig_read(rc, ["Keyboard"], "RepeatDelay", "600") or 600), "rate": float(kconfig_read(rc, ["Keyboard"], "RepeatRate", "25") or 25),
             "layouts": [{"id": l, "label": names.get(l, l)} for l in layouts],
             "caps": next((o for o in options if o.startswith("caps:")), ""), "compose": "compose:ralt" in options,
-            "capsChoices": [{"id": i, "label": n} for i, n in CAPS]}
+            "capsChoices": [{"id": i, "label": n} for i, n in CAPS],
+            # Num Lock when signing in, as KDE keeps it (0 on, 1 off, 2 as it was)
+            "numlock": kconfig_read(rc, ["Keyboard"], "NumLock", "2") or "2"}
 
 
 # ---------------------------------------------------------------------------------------------- accessibility
@@ -869,7 +948,22 @@ def load_users() -> dict:
         found = busctl("system", "call", ACCOUNTS, "/org/freedesktop/Accounts", ACCOUNTS, "FindUserById", "x", str(me_uid))
         me = account_props((plain(found[0]) or [""])[0]) if found else {}
     return {"available": rows is not None, "me": me or {"name": os.environ.get("USER", ""), "full": "", "admin": False, "picture": ""},
-            "others": [p for p in people if p["uid"] != me_uid]}
+            "others": [p for p in people if p["uid"] != me_uid], "autologin": autologin_user(),
+            "canAutologin": os.access(SYSTEM_HELPER, os.X_OK) and bool(HAVE("pkexec"))}
+
+
+AUTOLOGIN = Path("/etc/sddm.conf.d/20-autologin.conf")
+SYSTEM_HELPER = "/usr/libexec/huginn-system-settings"       # the few system-wide changes no service makes (as root, through pkexec)
+
+
+def autologin_user() -> str:
+    """Who signs in by itself when the computer starts (SDDM's [Autologin], as the installer writes it), or ""."""
+    try:
+        text = AUTOLOGIN.read_text(encoding="utf-8")
+    except OSError:
+        return ""
+    m = re.search(r"^\s*User\s*=\s*(\S+)", text, re.M)
+    return m.group(1) if m and "[Autologin]" in text else ""
 
 
 def change_password(old: str, new: str, timeout: float = 25) -> str:
@@ -1121,7 +1215,7 @@ def load_privacy(apps: dict = None) -> dict:
     lock = CONFIG / "kscreenlockerrc"
     trash = CONFIG / "ktrashrc"
     group = [str(DATA / "Trash")]
-    remember = kconfig_read(CONFIG / "kactivitymanagerd-pluginsrc", ["Plugin-org.kde.ActivityManager.Resources.Scoring"], "what-to-remember", "0")
+    remember = "2" if kconfig_read(CONFIG / "kdeglobals", ["RecentDocuments"], "UseRecent", "true") == "false" else "0"
     return {"firewall": ufw.lower() == "yes", "hasFirewall": bool(ufw), "permissions": perms,
             "lockOn": kconfig_read(lock, ["Daemon"], "Autolock", "true") == "true", "lockAfter": int(kconfig_read(lock, ["Daemon"], "Timeout", "5") or 5),
             "lockOnWake": kconfig_read(lock, ["Daemon"], "LockOnResume", "true") == "true",
@@ -1149,6 +1243,25 @@ def _recent_count() -> int:
         return (DATA / "recently-used.xbel").read_text(encoding="utf-8", errors="replace").count("<bookmark ")
     except OSError:
         return 0
+
+
+# ---------------------------------------------------------------------------------------------- printers and scanners
+def load_printers() -> dict:
+    """The printers CUPS knows (network printers that need no driver appear by themselves) and the scanners SANE
+    finds, as Print & Scan shows them."""
+    from huginn_extra import PrintScan
+    if not HAVE("lpstat"):
+        return {"available": False, "printers": [], "scanners": []}
+    _, dests, _ = RUN(["lpstat", "-e"], None, 8)
+    _, states, _ = RUN(["lpstat", "-p"], None, 8)
+    _, default, _ = RUN(["lpstat", "-d"], None, 8)
+    printers = PrintScan.read_printers(dests, states, default)
+    scanners = []
+    if HAVE("scanimage"):
+        code, out, _ = RUN(["scanimage", "-L"], None, 20)
+        scanners = PrintScan.read_scanners(out) if code == 0 else []
+    _, jobs, _ = RUN(["lpstat", "-o"], None, 8)
+    return {"available": True, "printers": printers, "scanners": scanners, "jobs": len(PrintScan.read_jobs(jobs))}
 
 
 # ---------------------------------------------------------------------------------------------- notifications (Huginn's own)
@@ -1223,9 +1336,20 @@ def load_about() -> dict:
             pass
     def gb(n):
         return f"{n / 1e9:.0f} GB"
-    rows = [("Computer", model), ("Name", uname.nodename), ("Processor", re.sub(r"\s+", " ", cpu)), ("Graphics", gpu), ("Memory", mem),
+    pretty = _plain_kv(Path("/etc/machine-info")).get("PRETTY_HOSTNAME", "") or uname.nodename
+    rows = [("Computer", model), ("Processor", re.sub(r"\s+", " ", cpu)), ("Graphics", gpu), ("Memory", mem),
             ("Storage", f"{gb(disk.free)} free of {gb(disk.total)}"), ("System", info.get("PRETTY_NAME", "")), ("Kernel", uname.release)]
-    return {"rows": [{"name": k, "value": v} for k, v in rows if v], "used": round(1 - disk.free / disk.total, 3) if disk.total else 0}
+    return {"rows": [{"name": k, "value": v} for k, v in rows if v], "used": round(1 - disk.free / disk.total, 3) if disk.total else 0,
+            "name": pretty, "hostname": uname.nodename, "canRename": bool(HAVE("hostnamectl"))}
+
+
+def hostname_of(name: str) -> str:
+    """A computer's name as the network sees it: 'Astrid's Desk' -> 'astrids-desk'."""
+    import unicodedata
+    name = name.translate(str.maketrans({"Ø": "O", "ø": "o", "Æ": "AE", "æ": "ae", "ß": "ss", "Þ": "Th", "þ": "th", "Ð": "D", "ð": "d", "Ł": "L", "ł": "l"}))
+    plain = unicodedata.normalize("NFKD", name).encode("ascii", "ignore").decode().lower()
+    plain = re.sub(r"['’]", "", plain)
+    return re.sub(r"[^a-z0-9]+", "-", plain).strip("-")[:63] or "huginn"
 
 
 # ---------------------------------------------------------------------------------------------- sample values
@@ -1248,7 +1372,9 @@ def demo_state() -> dict:
                                   {"mac": "D4:22:CD:33:44:55", "name": "Raven Keyboard", "kind": "keyboard", "paired": True, "trusted": True, "connected": True, "battery": 41},
                                   {"mac": "F0:99:B6:66:77:88", "name": "Travel Mouse", "kind": "mouse", "paired": True, "trusted": True, "connected": False, "battery": -1},
                                   {"mac": "00:1A:7D:99:88:77", "name": "Living Room Speaker", "kind": "speaker", "paired": False, "trusted": False, "connected": False, "battery": -1}]},
-        "displays": {"available": True, "brightness": 70, "night": {"on": True, "mode": "Automatic", "temp": 4200, "from": "20:00", "to": "06:00"},
+        "displays": {"available": True, "brightness": 70, "night": {"on": True, "mode": "Automatic", "temp": 4200, "from": "20:00", "to": "06:00",
+                                                                   "sunset": "16:28", "sunrise": "06:44", "place": "Oslo"},
+                     "monitors": [{"name": "DP-2", "bus": 5, "model": "DELL U2723QE", "label": "DP 2", "brightness": 60}],
                      "screens": [{"name": "eDP-1", "builtIn": True, "enabled": True, "primary": False, "scale": 1.5, "rotation": "normal", "x": 0, "y": 360,
                                   "w": 2880, "h": 1800, "hz": 120, "modeId": "1", "resolution": "2880x1800", "label": "Built-in screen",
                                   "resolutions": [{"id": "2880x1800", "label": "2880 × 1800"}, {"id": "1920x1200", "label": "1920 × 1200"}, {"id": "1440x900", "label": "1440 × 900"}],
@@ -1257,7 +1383,8 @@ def demo_state() -> dict:
                                   "w": 3840, "h": 2160, "hz": 60, "modeId": "4", "resolution": "3840x2160", "label": "DP 2",
                                   "resolutions": [{"id": "3840x2160", "label": "3840 × 2160"}, {"id": "2560x1440", "label": "2560 × 1440"}, {"id": "1920x1080", "label": "1920 × 1080"}],
                                   "rates": [{"id": "60", "label": "60 Hz"}, {"id": "30", "label": "30 Hz"}], "modes": []}]},
-        "sound": {"available": True,
+        "sound": {"available": True, "effects": {"alert": "bell", "alertVolume": 0.7, "volumeFeedback": True},
+                  "alerts": [{"id": i, "label": l} for i, l in (("bell", "Bell"), ("chime", "Chime"), ("soft", "Soft"), ("knock", "Knock"), ("none", "None"))],
                   "outputs": [{"name": "hp", "label": "Studio Headphones", "port": "Bluetooth", "volume": 46, "mute": False, "default": True},
                               {"name": "spk", "label": "Built-in Speakers", "port": "Speakers", "volume": 70, "mute": False, "default": False},
                               {"name": "hdmi", "label": "DP 2 (monitor)", "port": "DisplayPort", "volume": 100, "mute": False, "default": False}],
@@ -1298,7 +1425,11 @@ def demo_state() -> dict:
                  "filters": [{"id": i, "label": l} for i, l in FILTERS], "cursor": 24, "sticky": False, "stickyLock": True, "slow": False,
                  "slowDelay": 300, "bounce": False, "bounceDelay": 500, "mouseKeys": False, "flash": False, "osk": False, "hasOsk": True, "animations": True},
         "look": {"loginRealm": "aurora", "canChange": True},
-        "about": {"rows": [{"name": "Computer", "value": "Framework Laptop 13"}, {"name": "Name", "value": "huginn-desk"},
+        "printers": {"available": True, "jobs": 0, "printers": [{"name": "Office_LaserJet", "label": "Office LaserJet", "state": "Ready", "ok": True, "default": True},
+                                                                {"name": "Canon_TS3300", "label": "Canon TS3300", "state": "Paused", "ok": False, "default": False}],
+                     "scanners": [{"id": "airscan:e0:Canon TS3300", "name": "Canon TS3300 flatbed"}]},
+        "about": {"name": "Astrid's Desk", "hostname": "astrids-desk", "canRename": True,
+                  "rows": [{"name": "Computer", "value": "Framework Laptop 13"},
                            {"name": "Processor", "value": "AMD Ryzen 7 7840U"}, {"name": "Graphics", "value": "Radeon 780M"},
                            {"name": "Memory", "value": "32 GB"}, {"name": "Storage", "value": "612 GB free of 1 TB"},
                            {"name": "System", "value": "Huginn OS 0.1 (Ubuntu 26.04 LTS)"}, {"name": "Kernel", "value": "6.17.0-8-generic"}], "used": 0.39},
@@ -1324,7 +1455,8 @@ def load_look() -> dict:
 
 
 # ---------------------------------------------------------------------------------------------- the backend Settings talks to
-PAGES = ("network", "bluetooth", "displays", "sound", "notifications", "power", "input", "keys", "time", "language", "users", "defaults", "privacy", "about", "a11y", "look")
+PAGES = ("network", "bluetooth", "displays", "sound", "notifications", "power", "input", "keys", "time", "language", "users", "defaults", "privacy", "about", "a11y", "look",
+         "printers")
 
 
 class SystemSettings(QObject):
@@ -1349,7 +1481,7 @@ class SystemSettings(QObject):
     network, bluetooth, displays, sound = _page("network", changed), _page("bluetooth", changed), _page("displays", changed), _page("sound", changed)
     notifications, power, input, time = _page("notifications", changed), _page("power", changed), _page("input", changed), _page("time", changed)
     language, users, defaults, privacy, about = _page("language", changed), _page("users", changed), _page("defaults", changed), _page("privacy", changed), _page("about", changed)
-    a11y, look, keys = _page("a11y", changed), _page("look", changed), _page("keys", changed)
+    a11y, look, keys, printers = _page("a11y", changed), _page("look", changed), _page("keys", changed), _page("printers", changed)
     del _page
     busy = Property("QVariantList", lambda self: sorted(self._busy), notify=changed)
     reportChanged = Signal()
@@ -1367,7 +1499,7 @@ class SystemSettings(QObject):
                 "sound": load_sound, "notifications": lambda: load_notifications(self._known_apps()), "power": load_power,
                 "input": load_input, "time": load_time, "language": load_language, "users": load_users,
                 "defaults": lambda: load_defaults(self._known_apps()), "privacy": lambda: load_privacy(self._known_apps()), "about": load_about,
-                "a11y": load_a11y, "look": load_look, "keys": lambda: load_keys(self._known_apps())}[page]
+                "a11y": load_a11y, "look": load_look, "keys": lambda: load_keys(self._known_apps()), "printers": load_printers}[page]
 
     @Slot(str)
     def load(self, page: str) -> None:
@@ -1749,7 +1881,62 @@ class SystemSettings(QObject):
             self._state.setdefault("displays", {})["brightness"] = percent
             self.changed.emit()
 
+    @Slot(str, int)
+    def setMonitorBrightness(self, name: str, percent: int) -> None:
+        """A monitor's own brightness, over the cable (ddcutil). A slider sends many: only the last one waiting goes,
+        since a monitor takes a moment to answer each."""
+        percent = max(0, min(100, int(percent)))
+        mon = next((m for m in self._state.get("displays", {}).get("monitors", []) if m["name"] == name), None)
+        if mon is None:
+            return
+        mon["brightness"] = percent
+        self.changed.emit()
+        if self._demo:
+            return
+        waiting = self.__dict__.setdefault("_ddc_waiting", {})
+        first = mon["bus"] not in waiting
+        waiting[mon["bus"]] = percent
+        if not first:
+            return
+
+        def work(bus=mon["bus"]):
+            while bus in waiting:
+                want = waiting[bus]
+                code, _, err = RUN(["ddcutil", "setvcp", "10", str(want), "--bus", str(bus), "--noverify", "--sleep-multiplier", "0.5"], None, 10)
+                if waiting.get(bus) == want:
+                    waiting.pop(bus, None)
+                if code != 0:
+                    self._back.emit("!said", ("That monitor didn't take the change: " + ((err or "").strip().splitlines() or ["it may have DDC/CI turned off in its own menu"])[-1][:140], True))
+                    waiting.pop(bus, None)
+        threading.Thread(target=work, daemon=True).start()
+
     # -------------------------------------------------------------- sound
+    @Slot(str, "QVariant")
+    def setSoundEffect(self, key: str, value) -> None:
+        """Settings › Sound › Alerts: which alert sound, how loud, and the volume keys' click (huginn_sounds.py)."""
+        import huginn_sounds
+        if key not in huginn_sounds.DEFAULTS:
+            return
+        value = value.toVariant() if hasattr(value, "toVariant") else value
+        if key == "alertVolume":
+            value = max(0.0, min(1.0, float(value)))
+        elif key == "volumeFeedback":
+            value = bool(value)
+        elif key == "alert" and value not in {i for i, _l, _f in huginn_sounds.ALERTS}:
+            return
+        self._state.setdefault("sound", {}).setdefault("effects", dict(huginn_sounds.DEFAULTS))[key] = value
+        self.changed.emit()
+        if not self._demo:
+            huginn_sounds.save({key: value})
+            if key in ("alert", "alertVolume"):
+                huginn_sounds.play("alert")
+
+    @Slot(str)
+    def tryAlert(self, ident: str) -> None:
+        if not self._demo:
+            import huginn_sounds
+            huginn_sounds.play("alert:" + ident)
+
     def _sound_now(self, kind: str, name: str, **change) -> None:
         for e in self._state.get("sound", {}).get(kind, []):
             if e.get("name") == name or e.get("index") == name:
@@ -1843,11 +2030,14 @@ class SystemSettings(QObject):
     # -------------------------------------------------------------- keyboard, mouse, touchpad
     @Slot(str, str, "QVariant")
     def setPointer(self, sysname: str, prop: str, value) -> None:
-        names = {"tap": ("tapToClick", "b"), "natural": ("naturalScroll", "b"), "left": ("leftHanded", "b"), "speed": ("pointerAcceleration", "d"), "dwt": ("disableWhileTyping", "b")}
+        names = {"tap": ("tapToClick", "b"), "natural": ("naturalScroll", "b"), "left": ("leftHanded", "b"), "speed": ("pointerAcceleration", "d"), "dwt": ("disableWhileTyping", "b"),
+                 "flat": ("pointerAccelerationProfileFlat", "b"), "clickfinger": ("clickMethodClickfinger", "b"), "scroll": ("scrollFactor", "d")}
         if prop not in names:
             return
         dbus_name, kind = names[prop]
-        text = ("true" if value else "false") if kind == "b" else f"{max(-1.0, min(1.0, float(value))):.2f}"
+        if prop == "scroll":
+            value = max(0.2, min(5.0, float(value)))
+        text = ("true" if value else "false") if kind == "b" else f"{float(value):.2f}" if prop == "scroll" else f"{max(-1.0, min(1.0, float(value))):.2f}"
 
         def work():
             own = own_compositor("SetPointer", (sysname, prop, json.dumps(value)), "(sss)")
@@ -1874,6 +2064,10 @@ class SystemSettings(QObject):
                 kconfig_write(rc, ["Keyboard"], "RepeatDelay", int(value))
             elif key == "rate":
                 kconfig_write(rc, ["Keyboard"], "RepeatRate", f"{float(value):g}")
+            elif key == "numlock":
+                if str(value) not in ("0", "1", "2"):
+                    return ""
+                kconfig_write(rc, ["Keyboard"], "NumLock", str(value))
             elif key in ("layouts", "caps", "compose"):
                 options = [o for o in kconfig_read(xkb, ["Layout"], "Options", "").split(",") if o]
                 if key == "caps":
@@ -1915,7 +2109,7 @@ class SystemSettings(QObject):
                     RUN(["gsettings", "set", "org.gnome.desktop.a11y.applications", "screen-reader-enabled", "true" if value else "false"], None, 5)
                 if value and HAVE("orca"):
                     subprocess.Popen(["orca", "--replace"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
-                    note = "The screen reader is on. Meta+Alt+S turns it on and off from anywhere."
+                    note = "The screen reader is on. Super+Alt+S turns it on and off from anywhere."
                 elif not value:
                     RUN(["pkill", "-x", "orca"], None, 5)
             elif key == "zoom":
@@ -1946,8 +2140,10 @@ class SystemSettings(QObject):
                 if HAVE("plasma-apply-cursortheme"):
                     theme = kconfig_read(CONFIG / "kcminputrc", ["Mouse"], "cursorTheme", "breeze_cursors") or "breeze_cursors"
                     RUN(["plasma-apply-cursortheme", "--size", str(size), theme], None, 10)
+                if HAVE("gsettings"):                                   # GTK apps
+                    RUN(["gsettings", "set", "org.gnome.desktop.interface", "cursor-size", str(size)], None, 5)
                 dbus_call("session", "org.kde.KWin", "/KWin", "org.kde.KWin.reconfigure")
-                note = "Some apps show the new pointer size after they're opened again."
+                note = "Some apps show the new pointer size over their windows after they're opened again."
             elif key in ("sticky", "stickyLock", "slow", "slowDelay", "bounce", "bounceDelay"):
                 names = {"sticky": "StickyKeys", "stickyLock": "StickyKeysLatch", "slow": "SlowKeys", "slowDelay": "SlowKeysDelay",
                          "bounce": "BounceKeys", "bounceDelay": "BounceKeysDelay"}
@@ -1971,9 +2167,9 @@ class SystemSettings(QObject):
                         RUN(["pkill", "-x", "squeekboard"], None, 5)
             elif key == "animations":
                 kconfig_write(CONFIG / "kdeglobals", ["KDE"], "AnimationDurationFactor", "1" if value else "0")
-            # Huginn's own compositor reads the same files: colour filters, sticky and bounce keys, Reduce Motion
-            if own_compositor("ReloadAccess") is not None and key == "zoomFollow":
-                note = "On Huginn's own compositor, zoom always keeps what's under the pointer where it is."
+            # Huginn's own compositor reads the same files: colour filters, zoom, sticky and bounce keys, the bell,
+            # the pointer's size, Reduce Motion
+            own_compositor("ReloadAccess")
             return note
 
         def demo(st):
@@ -2016,6 +2212,12 @@ class SystemSettings(QObject):
         rc = CONFIG / "plasma-localerc"
 
         def work():
+            code_, have, _ = RUN(["locale", "-a"])
+            if code_ == 0 and f"{code}.utf8" not in have.split() and f"{code}.UTF-8" not in have.split():
+                if not os.access(SYSTEM_HELPER, os.X_OK) or not HAVE("pkexec"):
+                    raise Failed(f"This system doesn't have {locale_label(code)} yet, and can't add it here.")
+                self._back.emit("!said", (f"Adding {locale_label(code)} to the system…", False))
+                must(["pkexec", SYSTEM_HELPER, "locale", code], None, 300, "Adding the language")
             if what == "language":
                 kconfig_write(rc, ["Translations"], "LANGUAGE", f"{code}:{code.split('_')[0]}")
             else:
@@ -2133,6 +2335,15 @@ class SystemSettings(QObject):
                   demo_change=lambda s: [o.update(admin=admin) for o in s["others"] if o["uid"] == uid])
 
     # -------------------------------------------------------------- default apps and start-up
+    @Slot(bool)
+    def setAutoLogin(self, on: bool) -> None:
+        """Sign in by itself when the computer starts: this account, or nobody (the system asks for the password)."""
+        me = (self._state.get("users", {}).get("me") or {}).get("name") or os.environ.get("USER", "")
+        self._act("users", lambda: must(["pkexec", SYSTEM_HELPER, "autologin", me if on else "off"], None, 130, "Changing how this computer signs in") and "",
+                  ok=("This computer signs you in by itself when it starts. The screen still locks when you leave it." if on else
+                      "The computer asks who's signing in when it starts."),
+                  demo_change=lambda st: st.update(autologin=me if on else ""))
+
     @Slot(str, str)
     def setDefault(self, category: str, app_id: str) -> None:
         def demo(s):
@@ -2300,11 +2511,151 @@ class SystemSettings(QObject):
                 import huginn_clipboard
                 huginn_clipboard.clear()
             elif key == "remember":
+                # Huginn's apps and KDE's read kdeglobals' UseRecent; GTK apps GNOME's own; KDE's activity manager its own
+                kconfig_write(CONFIG / "kdeglobals", ["RecentDocuments"], "UseRecent", bool(value))
                 kconfig_write(CONFIG / "kactivitymanagerd-pluginsrc", ["Plugin-org.kde.ActivityManager.Resources.Scoring"], "what-to-remember", 0 if value else 2)
+                if HAVE("gsettings"):
+                    RUN(["gsettings", "set", "org.gnome.desktop.privacy", "remember-recent-files", "true" if value else "false"], None, 5)
                 if not value:
                     return clear_history()
             return ""
         self._act("privacy", work, demo_change=lambda s: s.update({key: value}))
+
+    @Slot(str)
+    def setComputerName(self, name: str) -> None:
+        """The computer's name: as shown here and to other devices (its "pretty" name), and on the network (its host
+        name, made from it). systemd's hostnamed asks for the administrator password itself."""
+        name = re.sub(r"\s+", " ", (name or "").strip())[:64]
+        if not name:
+            return
+        host = hostname_of(name)
+
+        def work():
+            must(["hostnamectl", "set-hostname", "--pretty", name], None, 130, "Renaming the computer")
+            must(["hostnamectl", "set-hostname", "--static", host], None, 130, "Renaming the computer")
+            return f"This computer is now “{name}” ({host} on the network)."
+        self._act("about", work, demo_change=lambda st: st.update(name=name, hostname=host))
+
+    @Slot(str, str)
+    def setDns(self, uuid: str, servers: str) -> None:
+        """The DNS servers for one network: "" goes back to the network's own; else addresses, by commas or spaces."""
+        if not re.fullmatch(r"[0-9a-f-]{36}", uuid or ""):
+            return
+        found = [a for a in re.split(r"[\s,;]+", servers or "") if a]
+        import ipaddress
+        try:
+            addrs = [ipaddress.ip_address(a) for a in found]
+        except ValueError:
+            self.said.emit("Type DNS servers as addresses, like 9.9.9.9, 149.112.112.112.", True)
+            return
+        v4 = ",".join(str(a) for a in addrs if a.version == 4)
+        v6 = ",".join(str(a) for a in addrs if a.version == 6)
+
+        def work():
+            own = bool(addrs)
+            must(["nmcli", "connection", "modify", uuid, "ipv4.ignore-auto-dns", "yes" if own and v4 else "no", "ipv4.dns", v4,
+                  "ipv6.ignore-auto-dns", "yes" if own and v6 else "no", "ipv6.dns", v6], what="Changing the DNS servers")
+            _, devs, _ = RUN(["nmcli", "-g", "GENERAL.DEVICES", "connection", "show", uuid])
+            for dev in devs.split():
+                RUN(["nmcli", "device", "reapply", dev], None, 20)
+            return "This network now looks names up with " + ", ".join(found) + "." if own else "This network looks names up as it says."
+        self._act("network", work)
+
+    @Slot(str)
+    def makeDefaultPrinter(self, printer: str) -> None:
+        if not re.fullmatch(r"[\w.\-]+", printer or ""):
+            return
+        self._act("printers", lambda: must(["lpoptions", "-d", printer], what="Choosing the printer") and "",
+                  ok=f"{printer.replace('_', ' ')} is the printer apps use first.",
+                  demo_change=lambda st: [p.update(default=p["name"] == printer) for p in st.get("printers", [])])
+
+    @Slot(str)
+    def removePrinter(self, printer: str) -> None:
+        if not re.fullmatch(r"[\w.\-]+", printer or ""):
+            return
+
+        def work():
+            code, out, err = RUN(["lpadmin", "-x", printer], None, 20)
+            if code != 0:
+                text = (err or out).strip()
+                raise Failed("Your account isn't allowed to remove printers." if "Forbidden" in text or "authoriz" in text.lower() else
+                             f"The printer couldn't be removed: {(text.splitlines() or [''])[-1][:140]}")
+            return f"{printer.replace('_', ' ')} is gone. A printer on the network may come back by itself while it's switched on."
+        self._act("printers", work, demo_change=lambda st: st.update(printers=[p for p in st.get("printers", []) if p["name"] != printer]))
+
+    @Slot(str, str)
+    def addPrinter(self, address: str, label: str) -> None:
+        """A printer that doesn't appear by itself, by its address (driverless printers: nearly all made since 2015)."""
+        from huginn_extra import PrintScan
+        uri = PrintScan.printer_uri(address)
+        if not uri:
+            self.said.emit("Type the printer's address, like 192.168.1.40 or printer.local.", True)
+            return
+        name = PrintScan.queue_name(label, uri, {p["name"] for p in self._state.get("printers", {}).get("printers", [])})
+
+        def work():
+            self._back.emit("!said", ("Asking the printer what it can do…", False))
+            code, out, err = RUN(["lpadmin", "-p", name, "-E", "-v", uri, "-m", "everywhere", "-D", name.replace("_", " ")], None, 60)
+            text = (err or out).strip()
+            if code == 0:
+                return f"{name.replace('_', ' ')} is ready."
+            if "Forbidden" in text or "authoriz" in text.lower() or "permission" in text.lower():
+                raise Failed("Your account isn't allowed to add printers. Ask whoever set up this computer.")
+            raise Failed("No printer answered at that address. Check it's switched on and on this network." if code == 124 or "connect" in text.lower() or "unable" in text.lower()
+                         else (text.splitlines() or ["The printer couldn't be added."])[-1][:160])
+        self._act("printers", work)
+
+    @Slot(str)
+    def setWallpaper(self, path: str) -> None:
+        """Settings › Appearance: a picture of your own on the desktop ("" for the realm's scene again). It's copied
+        into Huginn's own folder first, so moving or deleting the original doesn't take it off the desktop."""
+        if self._shell is None:
+            return
+        if not path:
+            self._shell.set("wallpaper", "")
+            return
+        src = Path(path)
+        if not src.is_file() or not src.name.lower().endswith(self._shell.PICTURES):
+            self.said.emit("That isn't a picture Huginn can show.", True)
+            return
+        if self._demo:
+            self._shell.set("wallpaper", str(src))
+            return
+        folder = DATA / "huginn" / "wallpapers"
+        try:
+            folder.mkdir(parents=True, exist_ok=True)
+            dest = folder / src.name
+            if src.resolve() != dest.resolve():
+                for old in folder.iterdir():                     # only the picture in use is kept
+                    if old.is_file() and old != dest:
+                        old.unlink()
+                shutil.copy2(src, dest)
+        except OSError as err:
+            self.said.emit(f"The picture couldn't be copied: {err.strerror or err}", True)
+            return
+        self._shell.set("wallpaper", str(dest))
+
+    @Slot(result="QVariantList")
+    def recentPictures(self):
+        """The newest pictures in Pictures (and a folder down), for Appearance's wallpaper choices."""
+        if self._demo:
+            return []
+        exts = (".jpg", ".jpeg", ".png", ".webp")
+        found = []
+        root = HOME / "Pictures"
+        try:
+            for p in root.iterdir():
+                if p.is_dir() and not p.name.startswith("."):
+                    try:
+                        found += [q for q in p.iterdir() if q.suffix.lower() in exts and q.is_file()][:200]
+                    except OSError:
+                        pass
+                elif p.suffix.lower() in exts and p.is_file():
+                    found.append(p)
+        except OSError:
+            return []
+        found.sort(key=lambda q: -q.stat().st_mtime)
+        return [{"path": str(q), "url": q.as_uri()} for q in found[:12]]
 
     @Slot(result="QVariantList")
     def vpnFiles(self):

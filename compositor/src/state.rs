@@ -723,6 +723,24 @@ impl<BackendData: Backend> ImageCopyCaptureHandler for HuginnState<BackendData> 
 
 delegate_dispatch2!(@<BackendData: Backend + 'static> HuginnState<BackendData>);
 
+impl<BackendData: Backend + 'static> smithay::wayland::xdg_system_bell::XdgSystemBellHandler for HuginnState<BackendData> {
+    /// The bell: the alert sound (the shell plays it), or the screen flashing instead (Settings › Accessibility).
+    fn ring(&mut self, _surface: Option<WlSurface>) {
+        static LAST: std::sync::Mutex<Option<std::time::Instant>> = std::sync::Mutex::new(None);
+        let mut last = LAST.lock().unwrap();
+        if last.is_some_and(|t| t.elapsed() < Duration::from_millis(250)) {
+            return; // a burst of bells is one
+        }
+        *last = Some(std::time::Instant::now());
+        drop(last);
+        if self.huginn.access.flash {
+            *crate::access::FLASH_AT.lock().unwrap() = Some(std::time::Instant::now()); // every screen, white for a moment (render.rs)
+        } else {
+            self.say(crate::dbus::Outgoing::ShellKey("bell".into())); // the shell plays the alert sound
+        }
+    }
+}
+
 impl<BackendData: Backend + 'static> HuginnState<BackendData> {
     pub fn init(
         display: Display<HuginnState<BackendData>>,
@@ -791,6 +809,8 @@ impl<BackendData: Backend + 'static> HuginnState<BackendData> {
         // apps ask for pointer shapes by name (cursor.rs draws them from the theme), and say which windows are dialogs
         smithay::wayland::cursor_shape::CursorShapeManagerState::new::<Self>(&dh);
         smithay::wayland::shell::xdg::dialog::XdgDialogState::new::<Self>(&dh);
+        // apps ring the bell (a terminal's beep): the shell plays the alert sound, or flashes the screen (Settings)
+        smithay::wayland::xdg_system_bell::XdgSystemBellState::new::<Self>(&dh);
         TextInputManagerState::new::<Self>(&dh);
         InputMethodManagerState::new::<Self, _>(&dh, |_client| true);
         VirtualKeyboardManagerState::new::<Self, _>(&dh, |_client| true);
@@ -1335,6 +1355,8 @@ pub trait Backend {
     fn update_led_state(&mut self, led_state: LedState);
     /// Screens off (true) or on again.
     fn set_blank(&mut self, _off: bool) {}
+    /// Settings changed the pointer's size or theme: load it again.
+    fn reload_cursor(&mut self) {}
     /// A screen's resolution and refresh rate (displays.rs).
     fn set_mode(&mut self, _output: &Output, _mode: smithay::output::Mode) -> Result<(), String> {
         Err("This screen's resolution can't be changed here.".into())

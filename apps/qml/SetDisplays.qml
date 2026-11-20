@@ -58,13 +58,13 @@ Column {
             SetChoice { each: 62; options: pg.scales.map(function (s) { return [String(s[0]), s[1]] }); value: pg.cur ? String(pg.cur.scale) : "1"; onPicked: function (v) { Backend.setScale(pg.cur.name, Number(v)) } } }
         SetRow { visible: pg.cur && pg.cur.rates.length > 1; title: "Refresh rate"; sub: "Higher is smoother"
             SetChoice { each: 74; options: pg.cur ? pg.cur.rates.slice(0, 4).map(function (r) { return [r.id, r.label] }) : []; value: pg.cur ? String(pg.cur.hz) : ""; onPicked: function (v) { Backend.setRate(pg.cur.name, v) } } }
-        SetRow { visible: pg.cur && pg.cur.hdrCapable; title: "HDR"; sub: "Brighter highlights and deeper colours on an HDR screen. Everything else is shown as before."
-            Toggle { on: pg.cur ? pg.cur.hdr : false; onToggled: function (v) { Backend.setHdr(pg.cur.name, v) } } }
-        SetRow { visible: pg.cur && pg.cur.hdrCapable && pg.cur.hdr; title: "Brightness of everyday things"; sub: "How bright windows and text are while HDR is on"
+        SetRow { visible: !!(pg.cur && pg.cur.hdrCapable); title: "HDR"; sub: "Brighter highlights and deeper colours on an HDR screen. Everything else is shown as before."
+            Toggle { on: !!(pg.cur && pg.cur.hdr); onToggled: function (v) { Backend.setHdr(pg.cur.name, v) } } }
+        SetRow { visible: !!(pg.cur && pg.cur.hdrCapable && pg.cur.hdr); title: "Brightness of everyday things"; sub: "How bright windows and text are while HDR is on"
             SetChoice { each: 80; options: [["160", "Dim"], ["203", "Normal"], ["280", "Bright"], ["400", "Brighter"]]; value: pg.cur ? String(pg.cur.sdr) : "203"; onPicked: function (v) { Backend.setSdr(pg.cur.name, Number(v)) } } }
         SetRow { visible: pg.screens.filter(function (x) { return x.enabled }).length > 1 && pg.cur && pg.cur.enabled; title: "Show"
             sub: pg.cur && pg.cur.mirror ? "The same as another screen: for a projector or a TV" : "Its own part of the desktop"
-            SetChoice { each: 150; value: pg.cur ? pg.cur.mirror : ""
+            SetChoice { each: 150; value: pg.cur ? (pg.cur.mirror || "") : ""
                 options: pg.cur ? [["", "Its own desktop"]].concat(pg.screens.filter(function (x) { return x.name !== pg.cur.name && x.enabled && !x.mirror }).map(function (x) { return [x.name, "Same as " + x.label] })) : []
                 onPicked: function (v) { Backend.setMirror(pg.cur.name, v) } } }
         SetRow { title: "Turn"; sub: "For a screen on its side"
@@ -77,13 +77,17 @@ Column {
     SetCard { title: "Older apps"
         SetRow { title: "Sharp older apps"; sub: "Apps made for X11 draw themselves at the size of things you chose, instead of being stretched (Huginn's own compositor; opening them again shows the change)."
             Toggle { on: Settings.sharpX11; onToggled: function (v) { Settings.set("sharpX11", v ? "true" : "false") } } } }
-    SetCard { visible: pg.d.brightness >= 0; title: "Brightness"
-        SetRow { title: "Brightness"; SetSlider { width: 280; glyphLeft: "sun"; value: pg.d.brightness / 100; onMoved: function (v) { Backend.setBrightness(Math.round(v * 100)) } } } }
+    SetCard { visible: pg.d.brightness >= 0 || (pg.d.monitors || []).length > 0; title: "Brightness"
+        note: (pg.d.monitors || []).length ? "Monitors change their own brightness over the cable (DDC/CI). If one doesn't, turn DDC/CI on in the monitor's own menu." : ""
+        SetRow { visible: pg.d.brightness >= 0; title: "Built-in screen"; SetSlider { width: 280; glyphLeft: "sun"; value: pg.d.brightness / 100; onMoved: function (v) { Backend.setBrightness(Math.round(v * 100)) } } }
+        Repeater { model: pg.d.monitors || []
+            SetRow { required property var modelData; title: modelData.label
+                SetSlider { width: 280; glyphLeft: "sun"; value: modelData.brightness / 100; onMoved: function (v) { Backend.setMonitorBrightness(modelData.name, Math.round(v * 100)) } } } } }
     SetCard { title: "Night light"; note: "Warmer colours in the evening are easier on the eyes and help you sleep."
-        SetRow { title: "Night light"; glyph: "moon"; tile: "#F08C3B"; sub: pg.d.night && pg.d.night.on ? (pg.d.night.mode === "Times" ? "From " + pg.d.night.from + " to " + pg.d.night.to : pg.d.night.mode === "Constant" ? "On all the time" : "From sunset to sunrise") : "Off"
+        SetRow { title: "Night light"; glyph: "moon"; tile: "#F08C3B"; sub: pg.d.night && pg.d.night.on ? (pg.d.night.mode === "Times" ? "From " + pg.d.night.from + " to " + pg.d.night.to : pg.d.night.mode === "Constant" ? "On all the time" : pg.d.night.sunset ? "From sunset to sunrise: today " + pg.d.night.sunset + " to " + pg.d.night.sunrise + (pg.d.night.place ? " (" + pg.d.night.place + "'s time zone)" : "") : "From sunset to sunrise") : "Off"
             Toggle { on: !!(pg.d.night && pg.d.night.on); onToggled: function (v) { Backend.setNight("on", v) } } }
         SetRow { visible: !!(pg.d.night && pg.d.night.on); title: "When"
-            SetChoice { each: 100; options: [["Automatic", "Sunset to sunrise"], ["Times", "Set hours"], ["Constant", "Always"]]; value: pg.d.night ? pg.d.night.mode : ""; onPicked: function (v) { Backend.setNight("mode", v) } } }
+            SetChoice { each: 126; options: [["Automatic", "Sunset to sunrise"], ["Times", "Set hours"], ["Constant", "Always"]]; value: pg.d.night ? pg.d.night.mode : ""; onPicked: function (v) { Backend.setNight("mode", v) } } }
         SetRow { visible: !!(pg.d.night && pg.d.night.on && pg.d.night.mode === "Times"); title: "Hours"
             Row { spacing: 8
                 SetPick { text: pg.d.night ? pg.d.night.from : ""; onClicked: win.pick("Night light starts at", hours(), pg.d.night.from, function (v) { Backend.setNight("from", v) }) }

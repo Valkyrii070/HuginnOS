@@ -101,7 +101,7 @@ Item {
     }
 
     Row {   // the screen, the camera, the microphone: a dot for each while it's in use (it can't be turned off)
-        anchors { right: searchButton.left; rightMargin: 6; verticalCenter: parent.verticalCenter }
+        anchors { right: layoutButton.left; rightMargin: 6; verticalCenter: parent.verticalCenter }
         spacing: 5
         Repeater {
             model: [["screen", "#FF5A5F", "Your screen is being shared"], ["camera", "#3DD6B5", "The camera is on"], ["mic", "#FFB340", "The microphone is on"]]
@@ -114,6 +114,18 @@ Item {
                 Accessible.name: modelData[2]
             }
         }
+    }
+    Pressable {   // the keyboard layout in use, when there's more than one (Super+Ctrl+Space, or a click: the next)
+        id: layoutButton
+        readonly property var kl: Status.keyboardLayouts || ({})
+        readonly property var codes: kl.layouts || []
+        visible: codes.length > 1
+        anchors { right: searchButton.left; rightMargin: 2; verticalCenter: parent.verticalCenter }
+        width: visible ? layoutText.width + 14 : 0; height: 22; radius: 11
+        onClicked: Status.nextLayout()
+        Accessible.name: "Keyboard layout: " + ((kl.names || [])[kl.active || 0] || "")
+        Text { id: layoutText; anchors.centerIn: parent; text: String(layoutButton.codes[layoutButton.kl.active || 0] || "").toUpperCase()
+            color: Theme.t.text; font.pixelSize: 11; font.weight: Font.DemiBold; font.family: Theme.t.font }
     }
     Pressable {   // Search everything
         id: searchButton

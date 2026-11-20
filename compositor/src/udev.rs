@@ -242,6 +242,11 @@ impl Backend for UdevData {
         }
     }
 
+    fn reload_cursor(&mut self) {
+        self.pointer_image = crate::cursor::Cursor::load();
+        self.pointer_images.clear();
+    }
+
     fn set_mode(&mut self, output: &Output, mode: WlMode) -> Result<(), String> {
         let id = output.user_data().get::<UdevOutputId>().ok_or("That isn't a screen.")?;
         let drm_mode = output
@@ -1947,7 +1952,8 @@ fn render_surface<'a>(
         } else {
             named_hotspot
         };
-        let cursor_pos = pointer_location - output_geometry.loc.to_f64();
+        // on a zoomed screen, over what it points at as the zoom shows it (look.rs)
+        let cursor_pos = crate::look::zoomed_pointer(view, pointer_location - output_geometry.loc.to_f64(), scale);
 
         // set cursor
         pointer_element.set_buffer(pointer_image.clone());

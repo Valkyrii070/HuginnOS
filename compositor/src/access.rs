@@ -76,7 +76,30 @@ pub struct Settings {
     /// zoom: whether Super+= zooms, and by how much each time
     pub zoom: bool,
     pub zoom_step: f64,
+    /// what the zoomed view does as the pointer moves (KWin's MouseTracking): 0 what's under the pointer stays where
+    /// it is, 1 the pointer stays in the middle, 2 the view moves only when the pointer pushes at its edge
+    pub zoom_follow: u8,
+    /// Flash the screen for alert sounds (kaccessrc's VisibleBell), instead of the sound
+    pub flash: bool,
+    /// the pointer's size, to notice a change (kcminputrc)
+    pub cursor: String,
 }
+
+/// The bell, seen instead of heard (Settings › Accessibility › Flash the screen): when it last rang.
+pub static FLASH_AT: std::sync::Mutex<Option<Instant>> = std::sync::Mutex::new(None);
+const FLASH_MS: f32 = 300.0;
+
+/// How white the screens are now from the flash (0: not flashing).
+pub fn flash_alpha() -> f32 {
+    let at = *FLASH_AT.lock().unwrap();
+    match at {
+        Some(t) if (t.elapsed().as_millis() as f32) < FLASH_MS => 0.6 * (1.0 - t.elapsed().as_millis() as f32 / FLASH_MS),
+        _ => 0.0,
+    }
+}
+
+/// The zoom's way of following the pointer (Settings.zoom_follow), for the renderer.
+pub static ZOOM_FOLLOW: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
 
 fn yes(file: &str, group: &str, key: &str) -> bool {
     kconfig(file, group, key).is_some_and(|v| v == "true")
@@ -110,6 +133,13 @@ pub fn read() -> Settings {
         still,
         zoom: kconfig("kwinrc", "Plugins", "zoomEnabled").is_none_or(|v| v == "true"),
         zoom_step: kconfig("kwinrc", "Effect-zoom", "ZoomFactor").and_then(|v| v.parse().ok()).unwrap_or(1.2f64).clamp(1.05, 4.0),
+        zoom_follow: kconfig("kwinrc", "Effect-zoom", "MouseTracking").and_then(|v| v.parse().ok()).unwrap_or(0u8).min(2),
+        flash: yes("kaccessrc", "Bell", "VisibleBell"),
+        cursor: format!(
+            "{}/{}",
+            kconfig("kcminputrc", "Mouse", "cursorTheme").unwrap_or_default(),
+            kconfig("kcminputrc", "Mouse", "cursorSize").unwrap_or_default()
+        ),
     }
 }
 
@@ -274,7 +304,26 @@ impl<B: crate::state::Backend + 'static> crate::state::HuginnState<B> {
         if !now.zoom {
             self.huginn.zoom = 1.0;
         }
+        ZOOM_FOLLOW.store(now.zoom_follow, Ordering::Relaxed);
+        if now.cursor != self.huginn.access.cursor {
+            self.backend_data.reload_cursor();
+            self.x11_cursor();
+        }
         self.huginn.access = now;
+    }
+
+    /// The pointer X11 apps show over their windows (when they don't set their own), at Settings' size.
+    pub fn x11_cursor(&mut self) {
+        #[cfg(feature = "xwayland")]
+        if let Some(wm) = self.xwm.as_mut() {
+            let mut cursor = crate::cursor::Cursor::load();
+            let image = cursor.get_image(smithay::input::pointer::CursorIcon::Default, 1, Duration::ZERO);
+            let _ = wm.set_cursor(
+                &image.pixels_rgba,
+                smithay::utils::Size::from((image.width as u16, image.height as u16)),
+                smithay::utils::Point::from((image.xhot as u16, image.yhot as u16)),
+            );
+        }
     }
 
     /// Super+= (1), Super+- (-1), Super+0 (0): zoom in, out, or back to the whole screen.

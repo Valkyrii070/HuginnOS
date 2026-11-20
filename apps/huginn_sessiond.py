@@ -388,10 +388,15 @@ class Notifications(QObject):
         self._remember(item)
         if mine.get("allow") is False:
             return nid
+        fresh = nid != replaces                               # a new one, not one changing (a download's progress)
+        if fresh and not (self.quiet() and urgency < 2):
+            self._sound(mine, hints or {}, urgency, category)
         if (self.quiet() and urgency < 2) or mine.get("banner") is False:
             return nid                                        # kept in the history, not shown
         if busy_screen() and urgency < 2 and category not in ("call", "call.incoming", "x-huginn.alarm", "alarm"):
             return nid                                        # a film or game full screen, or the screen shared: it waits in the Control Centre
+        if self._private():                                   # Settings › Notifications › Show what it says: never (or locked)
+            item = dict(item, summary=item["app"] or "Notification", body="Open the Control Centre to read it.", reply=False, private=True)
         self._shown = [n for n in self._shown if n["id"] != nid]
         self._shown.insert(0, item)
         apps = []                                             # three apps' piles at most on screen; the oldest steps aside
@@ -404,6 +409,39 @@ class Notifications(QObject):
         self._arm(nid, wait)
         self.changed.emit()
         return nid
+
+    def _private(self) -> bool:
+        """Whether banners keep what a notification says to themselves (Settings › Notifications › Show what a
+        notification says: "Never", or "When unlocked" while the screen is locked)."""
+        how = self._prefs.get("previews", "always")
+        if how == "never":
+            return True
+        if how == "unlocked" and self.bus:
+            got = self.bus.call("org.huginn.Compositor", "/org/huginn/Compositor", "org.huginn.Compositor", "Locked", None, "(b)", timeout=500)
+            return bool(got and got[0])
+        return False
+
+    def _sound(self, mine: dict, hints: dict, urgency: int, category: str) -> None:
+        """A notification's sound: unless Settings › Notifications turned sounds off (for every app, or this one), or
+        the app asked for none. The app's own sound if it named one, else Huginn's."""
+        if self._demo or self._prefs.get("sounds") is False or mine.get("sound") is False or hints.get("suppress-sound"):
+            return
+        if category in ("call", "call.incoming", "x-huginn.alarm", "alarm"):
+            return                                            # those ring with their own sound (Phone, Clock)
+        try:
+            import huginn_sounds
+            own = str(hints.get("sound-file") or "")
+            if own.startswith("file://"):
+                own = own[7:]
+            if not own and hints.get("sound-name"):
+                own = huginn_sounds.find(f"{hints['sound-name']}.oga")
+            player = shutil.which("pw-play")
+            if own and os.path.isfile(own) and player:
+                huginn_sounds.run([player, "--volume=0.8", own])
+            else:
+                huginn_sounds.play("message", 0.8 if urgency < 2 else 1.0)
+        except Exception:                                     # noqa: BLE001  (a sound is never worth a lost notification)
+            pass
 
     def _arm(self, nid: int, wait: int) -> None:
         t = self._timers.pop(nid, None)
@@ -651,7 +689,11 @@ class Session(QObject):
         self._night = QTimer(self, interval=60000, timeout=self.night_light)
         self._night.start()
         self._night_watch = QFileSystemWatcher([str(Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config"))], self)
-        self._night_watch.directoryChanged.connect(lambda *_: QTimer.singleShot(300, self.night_light))
+        self._night_watch.directoryChanged.connect(lambda *_: QTimer.singleShot(300, self.config_changed))
+        # Settings › Privacy & Security › Empty the Trash by itself: a minute after signing in, then every six hours
+        QTimer.singleShot(60000, self.empty_old_trash)
+        self._trash = QTimer(self, interval=6 * 3600 * 1000, timeout=self.empty_old_trash)
+        self._trash.start()
         QTimer.singleShot(2500, self.night_light)
         QTimer.singleShot(4000, self.keyboard_on_screen)
         # the apps that were open, again (Settings › Desktop & Dock), then noting them as they change
@@ -721,6 +763,38 @@ class Session(QObject):
         if re.search(r"^InputMethod=\S", text, re.M):
             subprocess.Popen(["squeekboard"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
 
+    def config_changed(self) -> None:
+        """Something in ~/.config changed (Settings): night light, and the screen lock's rules."""
+        self._locks = None
+        self.night_light()
+
+    def empty_old_trash(self) -> None:
+        """Things in the Trash longer than Settings › Privacy & Security says go for good (ktrashrc, as KDE keeps it:
+        UseTimeLimit and Days, in the Trash folder's own group)."""
+        trash = Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local/share") / "Trash"
+        rc = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "ktrashrc"
+        try:
+            text = rc.read_text(encoding="utf-8")
+        except OSError:
+            return
+        group, days, on = f"[{trash}]", 0, False
+        inside = False
+        for line in text.splitlines():
+            line = line.strip()
+            if line.startswith("["):
+                inside = line == group
+            elif inside and "=" in line:
+                k, _, v = line.partition("=")
+                if k.strip() == "UseTimeLimit":
+                    on = v.strip() == "true"
+                elif k.strip() == "Days":
+                    days = int(v.strip()) if v.strip().isdigit() else 0
+        if not on or days <= 0:
+            return
+        removed = empty_trash_older(trash, days)
+        if removed:
+            print(f"huginn-sessiond: emptied {removed} things from the Trash older than {days} days", file=sys.stderr)
+
     def night_light(self) -> None:
         """Settings › Displays' night light ([NightColor] in kwinrc, which KWin reads too), as a colour temperature for
         Huginn's compositor: warm from the evening time to the morning one (\"Automatic\" has no location here, so
@@ -744,6 +818,14 @@ class Session(QObject):
             else:
                 times = (night.get("EveningBeginFixed", "2000"), night.get("MorningBeginFixed", "0600")) if mode == "Times" else ("2000", "0600")
                 eve, morn = (int(t[:2]) * 60 + int(t[2:4]) for t in (re.sub(r"\D", "", x).zfill(4) for x in times))
+                if mode != "Times":                     # "Sunset to sunrise": where the time zone's city is
+                    try:
+                        import huginn_sun
+                        sun = huginn_sun.today()
+                    except Exception:                   # noqa: BLE001
+                        sun = None
+                    if sun:
+                        morn, eve = sun[0], sun[1]
                 now = time.localtime()
                 m = now.tm_hour * 60 + now.tm_min
                 after_eve = (m - eve) % 1440            # minutes since the evening began
@@ -834,6 +916,12 @@ class Session(QObject):
             volume_change(0.05 if name == "volumeUp" else -0.05)
             level, muted = volume_get()
             self.osd("volume", level, muted)
+            try:                                              # Settings › Sound › "Play a sound when the volume changes"
+                import huginn_sounds
+                if not muted and huginn_sounds.settings().get("volumeFeedback", True):
+                    huginn_sounds.play("volume", 1.0)
+            except Exception:                                 # noqa: BLE001
+                pass
         elif name == "volumeMute":
             muted = mute_toggle()
             self.osd("volume", volume_get()[0], muted)
@@ -911,6 +999,23 @@ class Session(QObject):
                 return True
         return False
 
+    def lock_rules(self) -> dict:
+        """Settings › Privacy & Security › Screen lock (kscreenlockerrc, as KDE keeps it): whether the screen locks by
+        itself, after how many minutes without use, and whether it locks before the computer sleeps."""
+        import configparser
+        rc = configparser.ConfigParser(strict=False, interpolation=None)
+        rc.optionxform = str
+        try:
+            rc.read(Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "kscreenlockerrc", encoding="utf-8")
+        except (configparser.Error, OSError):
+            pass
+        d = rc["Daemon"] if rc.has_section("Daemon") else {}
+        try:
+            after = max(1, int(d.get("Timeout", "5") or 5))
+        except ValueError:
+            after = 5
+        return {"auto": d.get("Autolock", "true") != "false", "after": after * 60, "onSleep": d.get("LockOnResume", "true") != "false"}
+
     def tick(self) -> None:
         source = "battery" if self.on_battery() else "ac"
         rules = self.power.get(source) or {}
@@ -919,13 +1024,19 @@ class Session(QObject):
         if idle < 3:
             if self._stage:
                 self.wake_up()
+            self._idle_locked = False
             return
+        locks = self._locks = getattr(self, "_locks", None) or self.lock_rules()
+        if locks["auto"] and idle >= locks["after"] and not getattr(self, "_idle_locked", False) and not LIVE and not self.inhibited("screen"):
+            self._idle_locked = True                          # once each time it's left alone
+            self.lock()
         if sleep > 0 and idle >= sleep and self._stage != "slept" and not self.inhibited("sleep"):
             self._stage = "slept"
             self.do("sleep")
         elif off > 0 and idle >= off and self._stage in ("", "dim") and not self.inhibited("screen"):
             self._stage = "off"
-            if self.power.get("lockOnScreenOff", True) and not LIVE:
+            if locks["auto"] and locks["after"] <= off and not LIVE and not getattr(self, "_idle_locked", False):
+                self._idle_locked = True
                 self.lock()
             self.screen_off(True)
         elif off > 0 and idle >= max(15, off - 30) and self._stage == "" and not self.inhibited("screen") and self.screen.ok():
@@ -975,7 +1086,7 @@ class Session(QObject):
             self.screen_off(True)
             self._stage = "off"
         elif what in ("sleep", "hibernate", "shutdown", "restart") and self.yb:
-            if what in ("sleep", "hibernate") and not LIVE:
+            if what in ("sleep", "hibernate") and not LIVE and self.lock_rules()["onSleep"]:
                 self.lock()
             method = {"sleep": "Suspend", "hibernate": "Hibernate", "shutdown": "PowerOff", "restart": "Reboot"}[what]
             if what == "hibernate":
@@ -1236,6 +1347,32 @@ class Session(QObject):
 
 
 # ================================================================================================ start
+def empty_trash_older(trash: Path, days: int, now: float = None) -> int:
+    """Delete what went in the Trash more than `days` ago (by each item's DeletionDate); how many went."""
+    import datetime
+    now = now or time.time()
+    gone = 0
+    for info in (trash / "info").glob("*.trashinfo"):
+        try:
+            m = re.search(r"^DeletionDate=(\S+)", info.read_text(encoding="utf-8", errors="replace"), re.M)
+            when = datetime.datetime.fromisoformat(m.group(1)).timestamp() if m else info.stat().st_mtime
+        except (OSError, ValueError):
+            continue
+        if now - when < days * 86400:
+            continue
+        item = trash / "files" / info.name[:-len(".trashinfo")]
+        try:
+            if item.is_dir() and not item.is_symlink():
+                shutil.rmtree(item)
+            elif item.exists() or item.is_symlink():
+                item.unlink()
+            info.unlink()
+            gone += 1
+        except OSError:
+            continue
+    return gone
+
+
 def has_layer_shell(engine) -> bool:
     for d in engine.importPathList():
         if (Path(d) / "org" / "kde" / "layershell").is_dir():

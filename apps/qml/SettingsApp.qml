@@ -22,6 +22,7 @@ GlassWindow {
         { id: "power", label: "Battery & Power", glyph: "battery", a: "#4BDB97", b: "#109F5E", group: "THIS COMPUTER", sub: "Battery health, power mode and when to sleep." },
         { id: "input", label: "Keyboard & Mouse", glyph: "keyboard", a: "#A7B0BD", b: "#5A6474", group: "THIS COMPUTER", sub: "Layouts, typing, the touchpad and the mouse." },
         { id: "keys", label: "Keyboard Shortcuts", glyph: "command", a: "#8E9BB0", b: "#465266", group: "THIS COMPUTER", sub: "Change Huginn's shortcuts, and make your own to open apps." },
+        { id: "printers", label: "Printers & Scanners", glyph: "printer", a: "#38BDF8", b: "#0369A1", group: "THIS COMPUTER", sub: "The printers and scanners this computer can use." },
         { id: "time", label: "Date & Time", glyph: "clock", a: "#FFAA55", b: "#E8590C", group: "SYSTEM", sub: "Time zone and how the clock is set." },
         { id: "language", label: "Language & Region", glyph: "globe", a: "#3DD1C3", b: "#118C7E", group: "SYSTEM", sub: "The language of the system and how dates and numbers look." },
         { id: "users", label: "Users", glyph: "user", a: "#B39BFF", b: "#6D28D9", group: "SYSTEM", sub: "Your account, and other people who use this computer." },
@@ -33,7 +34,7 @@ GlassWindow {
     readonly property var files: ({ appearance: "SetAppearance", desktop: "SetDesktop", notifications: "SetNotifications", network: "SetNetwork", bluetooth: "SetBluetooth",
                                     accounts: "SetAccounts", ai: "SetAI", displays: "SetDisplays", sound: "SetSound", power: "SetPower", input: "SetInput", keys: "SetKeys", time: "SetTime",
                                     language: "SetLanguage", users: "SetUsers", defaults: "SetDefaults", privacy: "SetPrivacy", updates: "SetUpdates", about: "SetAbout",
-                                    a11y: "SetAccessibility" })
+                                    a11y: "SetAccessibility", printers: "SetPrinters" })
     readonly property var index: [
         ["a11y", "Screen reader", "orca blind read aloud speech voice spoken accessibility"], ["a11y", "Zoom", "magnifier magnify enlarge screen accessibility"],
         ["a11y", "Make everything bigger", "large text size font scale accessibility"], ["a11y", "High contrast", "contrast low vision accessibility"],
@@ -43,6 +44,16 @@ GlassWindow {
         ["a11y", "Slow keys", "typing accidental accessibility"], ["a11y", "Bounce keys", "tremor repeat accessibility"],
         ["a11y", "Mouse keys", "number pad pointer keyboard accessibility"], ["a11y", "Flash the screen", "deaf hearing beep bell alert visual accessibility"],
         ["appearance", "Dark mode", "light theme night"], ["appearance", "Realm", "accent colour color wallpaper tint"],
+        ["appearance", "Wallpaper", "picture photo image background desktop own live scene"],
+        ["sound", "Alert sound", "beep bell alert volume click feedback keys"],
+        ["input", "Mouse acceleration", "pointer precision gaming games flat raw"], ["input", "Scroll speed", "wheel scrolling fast slow"],
+        ["input", "Num Lock", "number pad numpad keypad"], ["input", "Right-click", "touchpad two fingers corner secondary click"],
+        ["displays", "Monitor brightness", "ddc ddcci external screen dim bright"],
+        ["users", "Sign in by itself", "automatic login autologin password start boot"],
+        ["about", "Computer name", "hostname rename network bluetooth device"],
+        ["network", "DNS", "dns servers quad9 cloudflare 1.1.1.1 privacy lookup"],
+        ["printers", "Printers", "print printer add cups queue default airprint ipp"], ["printers", "Scanners", "scan scanner sane"],
+        ["keys", "Switch keyboard layout", "language input source layout super ctrl space"],
         ["desktop", "App menus", "top bar menu one menu row"], ["desktop", "Clock", "24-hour time seconds top bar"], ["desktop", "Battery percentage", "top bar"], ["desktop", "Top bar on every screen", "monitors screens displays second menu bar clock"],
         ["desktop", "Dock size", "dock bigger smaller icons"], ["desktop", "Hiding a window", "minimise minimize hide dock drop line comet"],
         ["desktop", "Stacks", "downloads folder dock stack"], ["desktop", "Today", "date calendar weather clocks world time agenda"],
@@ -105,7 +116,7 @@ GlassWindow {
     onPageChanged: refresh()
     Component.onCompleted: refresh()
     function refresh() {
-        if (["network", "bluetooth", "displays", "sound", "notifications", "power", "input", "keys", "time", "language", "users", "defaults", "privacy", "about", "a11y"].indexOf(page) >= 0) Backend.load(page)
+        if (["network", "bluetooth", "displays", "sound", "notifications", "power", "input", "keys", "time", "language", "users", "defaults", "privacy", "about", "a11y", "printers"].indexOf(page) >= 0) Backend.load(page)
         if (page === "desktop") Backend.load("displays")            // (Where apps open names the screens)
         if (page === "accounts" && typeof Accounts !== "undefined") Accounts.refresh()
         if (page === "ai" && typeof AI !== "undefined" && AI) AI.refresh()

@@ -21,13 +21,16 @@ pub struct Cursor {
 
 impl Cursor {
     pub fn load() -> Cursor {
-        let name = std::env::var("XCURSOR_THEME")
-            .ok()
+        // Settings › Accessibility › Pointer size (kcminputrc, as KDE keeps it), else the session's
+        let name = crate::input::kconfig("kcminputrc", "Mouse", "cursorTheme")
+            .filter(|t| !t.is_empty())
+            .or_else(|| std::env::var("XCURSOR_THEME").ok())
             .unwrap_or_else(|| "default".into());
-        let size = std::env::var("XCURSOR_SIZE")
-            .ok()
+        let size = crate::input::kconfig("kcminputrc", "Mouse", "cursorSize")
             .and_then(|s| s.parse().ok())
-            .unwrap_or(24);
+            .or_else(|| std::env::var("XCURSOR_SIZE").ok().and_then(|s| s.parse().ok()))
+            .unwrap_or(24u32)
+            .clamp(16, 128);
 
         let theme = CursorTheme::load(&name);
         let icons = load_icon(&theme)

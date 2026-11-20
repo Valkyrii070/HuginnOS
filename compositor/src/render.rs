@@ -244,6 +244,26 @@ where
     out
 }
 
+/// The bell, seen: the whole screen white for a moment, under the pointer (Settings › Accessibility).
+fn flash<R, E>(output: &Output, view: &crate::wm::SceneView) -> Option<OutputRenderElements<R, E>>
+where
+    R: Look,
+    R::TextureId: Clone + Send + 'static,
+    E: RenderElement<R>,
+{
+    if view.flash <= 0.0 {
+        return None;
+    }
+    let mode = output.current_mode().map(|m| output.current_transform().transform_size(m.size)).unwrap_or_default();
+    Some(OutputRenderElements::Solid(SolidColorRenderElement::new(
+        Id::new(),
+        Rectangle::from_size(mode),
+        0usize,
+        [view.flash, view.flash, view.flash, view.flash],
+        Kind::Unspecified,
+    )))
+}
+
 /// Windows that were asked to close, fading out and shrinking a little once they're gone (capture.rs: Ghost).
 fn ghosts<R, E>(renderer: &mut R, space: &Space<WindowElement>, output: &Output) -> Vec<OutputRenderElements<R, E>>
 where
@@ -363,9 +383,10 @@ where
             AsRenderElements::<R>::render_elements(&window, renderer, (0, 0).into(), scale, 1.0);
 
         let mut elements = custom_elements.into_iter().map(OutputRenderElements::from).collect::<Vec<_>>();
+        elements.extend(flash(output, view));
         if view.zoom > 1.0 {
             let mode = output.current_mode().map(|m| output.current_transform().transform_size(m.size)).unwrap_or_default();
-            elements.push(OutputRenderElements::Zoom(crate::look::ZoomElement::new(Rectangle::from_size(mode), view.zoom, view.zoom_at)));
+            elements.push(OutputRenderElements::Zoom(crate::look::ZoomElement::new(Rectangle::from_size(mode), view.zoom, view.zoom_origin)));
         }
         elements.extend(window_render_elements.into_iter().map(|e| OutputRenderElements::Window(Wrap::from(e))));
         (elements, CLEAR_COLOR_FULLSCREEN)
@@ -374,13 +395,14 @@ where
             .into_iter()
             .map(OutputRenderElements::from)
             .collect::<Vec<_>>();
+        output_render_elements.extend(flash(output, view));
         // zoom (access.rs): over everything but the pointer
         if view.zoom > 1.0 {
             let mode = output.current_mode().map(|m| output.current_transform().transform_size(m.size)).unwrap_or_default();
             output_render_elements.push(OutputRenderElements::Zoom(crate::look::ZoomElement::new(
                 Rectangle::from_size(mode),
                 view.zoom,
-                view.zoom_at,
+                view.zoom_origin,
             )));
         }
 

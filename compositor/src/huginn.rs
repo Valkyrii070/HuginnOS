@@ -224,6 +224,10 @@ impl<B: Backend + 'static> HuginnState<B> {
             Request::ReloadInput => self.reload_input(),
             Request::WindowPicture(id, tx) => crate::capture::ask_window(id, crate::capture::WindowAsk::Card(tx)),
             Request::ReloadAccess => self.reload_access(),
+            Request::KeyboardLayout(tx) => {
+                let _ = tx.send(self.keyboard_layouts().to_string());
+            }
+            Request::SetKeyboardLayout(which) => self.set_keyboard_layout(which),
             Request::SignOut => self.sign_out(),
             Request::Displays(tx) => {
                 let _ = tx.send(self.displays_json());
@@ -747,6 +751,7 @@ impl<B: Backend + 'static> HuginnState<B> {
             return;
         }
         self.huginn.session_started = true;
+        self.apply_numlock(); // Settings › Keyboard › Num Lock (input.rs)
         let mut cmd = Command::new(&self.huginn.session[0]);
         cmd.args(&self.huginn.session[1..]).env("XDG_SESSION_TYPE", "wayland");
         if let Some(socket) = &self.socket_name {

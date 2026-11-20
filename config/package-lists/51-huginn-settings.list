@@ -25,3 +25,5 @@ orca
 speech-dispatcher
 espeak-ng
 maliit-keyboard
+# Displays: the brightness of screens plugged in by a cable (DDC/CI: most monitors), as laptops' own screens have
+ddcutil
