@@ -17,7 +17,7 @@ Choose the compatibility layer, launch arguments, environment variables, the per
 Proton-GE is a build of Proton with fixes for games that don't start or play badly with Steam's own. Press Proton-GE at the top, then Install. Restart Steam and choose it for a game in its Properties › Compatibility. Update and Remove are in the same place.
 
 ## Game Mode
-Game Mode is Steam's big-screen interface on its own, as on a Steam Deck or SteamOS: made for a controller and a TV. Choose Game Mode in Games or in the start menu's bottom row, or pick Huginn OS Game Mode on the sign-in screen. It fills your main screen and the others go dark. To come back, choose Power › Switch to Desktop in Steam. Steam needs to be installed and signed in once on the desktop first.
+Game Mode is Steam's big-screen interface on its own, as on a Steam Deck or SteamOS: made for a controller and a TV. Choose Game Mode in Games or in the start menu's bottom row, or pick Huginn OS Game Mode on the sign-in screen. It fills your main screen and the others go dark. To come back, choose Power › Switch to Desktop in Steam. Steam needs to be installed and signed in once on the desktop first. On an HDR screen, turn HDR on in Steam's Settings › Display; the frame rate and other stats are in Steam's quick menu › Performance.
 
 ## While you play
 Press Super+G for the game bar: frames per second, the graphics card and processor, Do Not Disturb, your microphone, the volume and a screenshot. Press Super+G again to close it. The screen doesn't dim or lock while a game fills it, even if you only use a controller.

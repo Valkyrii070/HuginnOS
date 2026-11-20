@@ -27,7 +27,15 @@ if command -v flatpak >/dev/null 2>&1 && flatpak info com.valvesoftware.Steam >/
     shared="$app/.local/state/huginn"
     mkdir -p "$bin" "$shared"
     cp -f "$helpers"/* "$bin/"
-    steam=(flatpak run "--env=PATH=$bin:/app/bin:/app/utils/bin:/usr/bin" com.valvesoftware.Steam)
+    # gamescope's own Wayland socket, which its HDR layer in the games talks to, isn't in Steam's sandbox by itself
+    steam=(flatpak run "--env=PATH=$bin:/app/bin:/app/utils/bin:/usr/bin" --filesystem=xdg-run/gamescope-0 com.valvesoftware.Steam)
+    # HDR in games needs gamescope's WSI layer inside the sandbox too: Flathub's, for Steam's runtime. The App Store
+    # adds it with Steam; added here (in the background, for next time) if Steam came before that.
+    branch=$(flatpak info --show-runtime com.valvesoftware.Steam 2>/dev/null)
+    branch=${branch##*/}
+    if [ -n "$branch" ] && ! flatpak info "org.freedesktop.Platform.VulkanLayer.gamescope//$branch" >/dev/null 2>&1; then
+        (flatpak install -y --noninteractive flathub "org.freedesktop.Platform.VulkanLayer.gamescope//$branch" >/dev/null 2>&1 &)
+    fi
 elif command -v steam >/dev/null 2>&1; then
     shared="$state"
     export PATH="$helpers:$PATH"
@@ -65,6 +73,28 @@ main=$(sed -n 's/.*"_main" *: *"\([^"]*\)".*/\1/p' "${XDG_CONFIG_HOME:-$HOME/.co
 
 args=(--steam --xwayland-count 2 --adaptive-sync)
 [ -n "$main" ] && args+=(--prefer-output "$main")
+has() { case "$options" in *"$1"*) return 0 ;; esac; return 1; }
+options=$(gamescope --help 2>&1)
+
+# gamescope's WSI layer in every game (Vulkan; DXVK and VKD3D for Windows games): frames handed straight to
+# gamescope, which paces and limits them better, and HDR when it's on
+export ENABLE_GAMESCOPE_WSI=1
+# HDR: gamescope may drive an HDR screen in HDR, and Steam shows its own switch for it (Settings › Display › Enable
+# HDR; off on a screen that can't). SDR games and Steam itself still look as they should.
+if has --hdr-enabled; then
+    args+=(--hdr-enabled)
+    export STEAM_GAMESCOPE_HDR_SUPPORTED=1 ENABLE_HDR_WSI=1 DXVK_HDR=1
+fi
+
+# Steam's performance overlay (its quick menu › Performance › Performance overlay level): mangoapp draws it over the
+# game from gamescope's own frame timing, at the level Steam writes into this file (nothing until Steam says).
+export MANGOHUD_CONFIGFILE="$shared/mangohud.conf"
+echo no_display > "$MANGOHUD_CONFIGFILE"
+if command -v mangoapp >/dev/null 2>&1 && has --mangoapp; then
+    args+=(--mangoapp)
+    export STEAM_USE_MANGOAPP=1 STEAM_MANGOAPP_PRESETS_SUPPORTED=1 STEAM_MANGOAPP_HORIZONTAL_SUPPORTED=1
+    export STEAM_DISABLE_MANGOAPP_ATOM_WORKAROUND=1
+fi
 
 # Game Mode is all game: the desktop's helpers that are still running make room as they do for a game on the
 # desktop (the local AI model unloads, update downloads wait); see the compositor's gamemode.rs

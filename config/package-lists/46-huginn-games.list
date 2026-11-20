@@ -4,3 +4,5 @@ mangohud
 gamemode
 # Game Mode at sign-in: Steam's big-screen interface in Valve's gamescope (multiverse), as on SteamOS
 gamescope
+# Steam's performance overlay levels in Game Mode (its quick menu › Performance), drawn by mangoapp
+mangoapp

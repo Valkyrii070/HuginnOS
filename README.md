@@ -2156,9 +2156,18 @@ daemon (85), the file chooser portal (82), the password prompt (76) and four sma
   and on its PATH; Ubuntu's Steam on the system PATH. If Game Mode can't start (no Steam, no gamescope, or Steam or
   gamescope closing within 20 seconds), the desktop comes back and says why. Tested with stand-ins for gamescope,
   Flatpak and Steam (`session_test.sh`, 20 checks, including Flathub's PATH and the main screen); gamescope itself
-  needs a real graphics card (its DRM extension), so the RX 9070 XT is its first real run. Not yet: HDR in Game Mode
-  (gamescope's WSI layer isn't inside Flathub's Steam) and Steam's performance overlay levels (Ubuntu's MangoHud has
-  no mangoapp).
+  needs a real graphics card (its DRM extension), so the RX 9070 XT is its first real run.
+- **HDR and Steam's performance overlay in Game Mode** (added the same morning): gamescope runs with `--hdr-enabled`
+  and its WSI layer on (`ENABLE_GAMESCOPE_WSI`, `ENABLE_HDR_WSI`, `DXVK_HDR`), and Steam is told it may offer HDR
+  (Settings › Display › Enable HDR, shown on an HDR screen). Games reach gamescope's HDR through its WSI layer: Ubuntu's
+  gamescope package has it for the system; for Flathub's Steam the App Store adds Flathub's
+  `org.freedesktop.Platform.VulkanLayer.gamescope` for Steam's runtime (Game Mode adds it too, in the background, if
+  Steam came first), and Steam's sandbox is given gamescope's socket (`xdg-run/gamescope-0`). The overlay levels in
+  Steam's quick menu › Performance come from `mangoapp` (Ubuntu's `mangoapp` package), run by gamescope
+  (`--mangoapp`) and set by Steam through `MANGOHUD_CONFIGFILE`, kept in Steam's own folder so its sandbox can write
+  it; it starts hidden. Each is used only where gamescope offers it (`gamescope --help`). Tested with stand-ins
+  (`session_test.sh`, now 29 checks); whether a game inside Flathub's Steam really reaches HDR through Flathub's layer
+  is for the PC to show.
 - **Faster Windows games**: `ntsync` is loaded at start (`/etc/modules-load.d/huginn-ntsync.conf`, with
   `/dev/ntsync` open to games: `62-huginn-ntsync.rules`); Wine 11 and GE-Proton use it by themselves in place of
   esync/fsync. As SteamOS does, the kernel no longer slows down games that do split locks (`kernel.split_lock_mitigate
