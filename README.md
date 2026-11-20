@@ -2027,6 +2027,13 @@ Lock's light, automatic sign-in and renaming (they need the real hardware and sy
   changed, Huginn's kept their tiles), a pointer theme written everywhere, Files given a picture of its own in the dock.
   looks_test (42).
 
+## Helpers out of the start menu (2026-11-19)
+
+Every app in the start menu is now Huginn's own. The programs that work behind them (KDE Connect behind Phone, FreeRDP
+behind Screen Sharing and Machines, Calf and setBfree behind Tempo, Kvantum's manager behind Huginn's theming of Qt
+apps) showed up in the start menu and Search too; `config/hooks/42-helpers-out-of-the-menu.sh` gives each a copy in
+/usr/local/share/applications with NoDisplay=true, so they still run and open files as before.
+
 ## Huginn, the browser
 
 Inside the Huginn repository (this kit is its `os/` folder) the image ships the repository's own browser. A kit used
