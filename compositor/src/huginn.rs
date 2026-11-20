@@ -95,6 +95,11 @@ pub struct Huginn {
     pub blank: bool,
     /// Surfaces that asked the computer not to go idle (idle-inhibit), while they live.
     pub inhibitors: Vec<smithay::reexports::wayland_server::Weak<smithay::reexports::wayland_server::protocol::wl_surface::WlSurface>>,
+    /// The screen Xwayland was last told is its main monitor (x11_primary_tick).
+    pub x11_primary: Option<String>,
+    /// A game fills a screen (game_mode_tick): the computer isn't idle, though a controller (which never reaches
+    /// the compositor) may be all that's being touched.
+    pub game_awake: bool,
 }
 
 impl std::fmt::Debug for Huginn {
@@ -184,15 +189,15 @@ impl<B: Backend + 'static> HuginnState<B> {
         if self.huginn.places_tick % 5 == 2 {
             self.game_mode_tick();
         }
+        if self.huginn.places_tick % 5 == 4 {
+            self.x11_primary_tick();
+        }
         self.report_active();
         self.report_windows();
         self.watch_lock();
         self.huginn.inhibitors.retain(|s| s.upgrade().is_ok());
-        self.huginn
-            .shared
-            .inhibited
-            .store(!self.huginn.inhibitors.is_empty(), Ordering::Relaxed);
-        let inhibited = !self.huginn.inhibitors.is_empty();
+        let inhibited = !self.huginn.inhibitors.is_empty() || self.huginn.game_awake;
+        self.huginn.shared.inhibited.store(inhibited, Ordering::Relaxed);
         self.idle_notifier_state.set_is_inhibited(inhibited);
     }
 
@@ -1032,8 +1037,47 @@ impl<B: Backend + 'static> HuginnState<B> {
     }
 
     /// Fullscreen on an output (for FreeSync: on while a game or a video fills the screen).
+    /// Xwayland's main monitor (RandR's primary output) is Huginn's main screen (the top bar and dock's), so Windows
+    /// games (Wine and Proton take it as Windows' main display) and X11 games open fullscreen there, not on whichever
+    /// screen comes first. Tried again until Xwayland knows the screen (it hears of a new one a moment later).
+    fn x11_primary_tick(&mut self) {
+        let main = crate::displays::main_name()
+            .and_then(|m| self.space.outputs().find(|o| o.name() == m).cloned())
+            .or_else(|| self.space.outputs().next().cloned());
+        let Some(main) = main else { return };
+        if self.huginn.x11_primary.as_deref() == Some(main.name().as_str()) {
+            return;
+        }
+        #[cfg(feature = "xwayland")]
+        if let Some(xwm) = self.xwm.as_mut() {
+            match xwm.set_randr_primary_output(Some(&main)) {
+                Ok(()) => {
+                    // Smithay skips the events that carry the setting request's sequence number (its own echo),
+                    // but X stamps every later event with the last request's number until another is sent, so
+                    // windows asking to be shown were skipped too. A question after it moves the number on.
+                    let _ = xwm.get_randr_primary_output();
+                    tracing::info!(screen = %main.name(), "Xwayland's main monitor");
+                    self.huginn.x11_primary = Some(main.name());
+                }
+                Err(err) => tracing::debug!(?err, "Xwayland doesn't know the main screen yet"),
+            }
+        }
+    }
+
     /// GameMode by itself (gamemode.rs): the games filling a screen now.
     fn game_mode_tick(&mut self) {
+        // the game stats overlay's windows: the one filling each screen, else the focused one where it is
+        let focused = self.focused_window();
+        let outputs: Vec<_> = self.space.outputs().cloned().collect();
+        for output in &outputs {
+            let full = output.user_data().get::<FullscreenSurface>().and_then(|f| f.get());
+            let here = full.clone().or_else(|| {
+                focused.clone().filter(|w| self.space.outputs_for_element(w).first().is_some_and(|o| o == output))
+            });
+            let surface = here.as_ref().and_then(|w| w.wl_surface().map(|s| smithay::reexports::wayland_server::Resource::id(&*s)));
+            let app = here.as_ref().map(|w| Self::window_names(w).0).unwrap_or_default();
+            crate::frames::watch(&output.name(), surface, &app, full.is_some());
+        }
         let mut games = std::collections::BTreeSet::new();
         if !self.is_locked() {
             for output in self.space.outputs() {
@@ -1053,6 +1097,7 @@ impl<B: Backend + 'static> HuginnState<B> {
                 }
             }
         }
+        self.huginn.game_awake = !games.is_empty();
         crate::gamemode::playing(games);
     }
 

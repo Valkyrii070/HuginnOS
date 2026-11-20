@@ -2098,6 +2098,45 @@ behind Screen Sharing and Machines, Calf and setBfree behind Tempo, Kvantum's ma
 apps) showed up in the start menu and Search too; `config/hooks/42-helpers-out-of-the-menu.sh` gives each a copy in
 /usr/local/share/applications with NoDisplay=true, so they still run and open files as before.
 
+## Gaming, round two (2026-11-20)
+
+- **The screen stays on while you play**: the compositor counts a fullscreen game (the same test as GameMode's,
+  `gamemode.rs`) as a reason not to dim, turn off, lock or sleep, so playing with only a controller (no keyboard or
+  mouse input) no longer blanks the screen. `huginn_sessiond.py` now also answers `org.freedesktop.ScreenSaver` on
+  the session bus (`Inhibit`/`UnInhibit`, `GetActive`, `GetSessionIdleTime`, `SimulateUserActivity`, `Lock`), which
+  Steam, SDL games, browsers and video players use to keep the screen on; an inhibitor goes when its program leaves
+  the bus. Checked in the nested session: idle time stays 0 while the stand-in game is fullscreen, and an Inhibit
+  call is listed until UnInhibit.
+- **Game stats in the corner** (Super+Alt+G, or Settings › Desktop & Dock › Game stats; `frames.rs`,
+  `shell/huginn_hwstats.py`, new): the frames a game hands over each second, counted by the compositor at each commit
+  of its window (so a game that tears can show more than the screen's Hz), with the average and longest frame time;
+  graphics card load, temperature, memory, clock and power; processor load and temperature; memory in use. Read from
+  the kernel's files once a second while it shows (NVIDIA's driver: `nvidia-smi`, from a thread). Checked in the
+  nested session over a window.
+- **A bigger shader cache**: `huginn-session` sets `MESA_SHADER_CACHE_MAX_SIZE=10G` (Mesa's default is 1 GB, which a
+  few big games outgrow and then compile shaders again, stuttering, on every start).
+- **Xwayland told its main screen afresh** when it restarts, so X11 games open on the main screen again after it has.
+- **Game bar on Super+G** (`shell/qml/GameBar.qml`, new): over the game, on the screen it's on: frames per second,
+  graphics card load, its memory, processor load; switches for Do Not Disturb, the microphone (`wpctl` on the
+  default source), the stats in the corner, and a screenshot (taken once the bar has gone); a volume slider; whether
+  GameMode is on. Super+G again, or Escape, closes it. The shortcut can be changed in Settings › Keyboard. For this
+  the compositor now draws Overlay-layer surfaces above a fullscreen window and gives them the pointer and keyboard
+  first (`render.rs`, `input_handler.rs`); before, a fullscreen window covered everything.
+- **Settings › Graphics** (`apps/qml/SetGraphics.qml`, new): the card's name and driver, Mesa's version, and live
+  readings (busy, temperature, power against its cap, memory, fan, clocks) from the amdgpu files in sysfs
+  (`shell/huginn_hwstats.py`, `Readings.card()`). For AMD cards, Performance: Automatic, Highest clocks or Quietest
+  (`power_dpm_force_performance_level` auto/high/low), set through `huginn-system-settings gpu-level` (pkexec),
+  kept in `/etc/huginn/gpu-level` and applied again when the card appears at start
+  (`/etc/udev/rules.d/61-huginn-gpu.rules`). Readings and levels were tried on stand-in sysfs files only; the
+  RX 9070 XT on Friday is the first real card.
+- **Proton-GE in one click** (Games › Proton-GE; `apps/huginn_games.py`): asks GitHub for GloriousEggroll's newest
+  `GE-Proton` release, downloads the archive and its SHA-512 sum, checks the sum, refuses an archive with anything
+  outside its own folder, unpacks it (Python's `data` filter) into Steam's `compatibilitytools.d` (Flathub's Steam
+  included), and lists what's installed with Update and Remove. Nothing changes until the download checks out; a
+  half-done download is cleaned away. Tested against a stand-in server (good archive, wrong sum, no sum offered, an
+  archive that reaches outside its folder, a release name that isn't GE's); the sandbox here can't reach GitHub.
+- Sheets: a merged cell's outline no longer complains about cells that aren't merged (found by `ci-smoke`).
+
 ## Huginn, the browser
 
 Inside the Huginn repository (this kit is its `os/` folder) the image ships the repository's own browser. A kit used

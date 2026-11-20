@@ -31,9 +31,12 @@ import select
 import shutil
 import signal
 import subprocess
+import sys
 import threading
 import time
 from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
 
 from PySide6.QtCore import Property, QDateTime, QLocale, QObject, Signal, Slot
 
@@ -723,6 +726,8 @@ SHORTCUTS = [  # id, what it does, group, default keys ("|" between more than on
     ("zoom-reset", "Zoom back to the whole screen", "Screen", "Super+0|Super+KP_0"),
     ("lock", "Lock the screen", "Screen", "Super+L"),
     ("frames", "Show frame times (again: hide them)", "Screen", "Super+Alt+F"),
+    ("gamestats", "Show game stats: frame rate, graphics card, processor (again: hide them)", "Screen", "Super+Alt+G"),
+    ("gamebar", "Game bar: stats, Do Not Disturb, microphone, volume, a screenshot (again: close it)", "Screen", "Super+G"),
     ("layout", "The next keyboard layout", "Typing and reading", "Super+Ctrl+Space"),
     ("reader", "Screen reader on or off", "Typing and reading", "Super+Alt+S"),
 ]
@@ -1310,6 +1315,52 @@ def save_notifications(change) -> None:
 
 
 # ---------------------------------------------------------------------------------------------- about
+def card_name() -> str:
+    """The graphics card's name as Mesa's Vulkan driver gives it ("AMD Radeon RX 9070 XT"), else lspci's."""
+    if HAVE("vulkaninfo"):
+        try:
+            out = subprocess.run(["vulkaninfo", "--summary"], capture_output=True, text=True, timeout=8).stdout
+        except (OSError, subprocess.TimeoutExpired):
+            out = ""
+        names, kinds = re.findall(r"deviceName\s*=\s*(.+)", out), re.findall(r"deviceType\s*=\s*(\S+)", out)
+        for name, kind in zip(names, kinds):
+            if "DISCRETE" in kind:
+                return re.sub(r"\s*\((RADV|LLVM)[^)]*\)\s*$", "", name.strip())
+        for name, kind in zip(names, kinds):
+            if "CPU" not in kind:
+                return re.sub(r"\s*\((RADV|LLVM)[^)]*\)\s*$", "", name.strip())
+    if HAVE("lspci"):
+        try:
+            out = subprocess.run(["lspci", "-mm"], capture_output=True, text=True, timeout=5).stdout
+        except (OSError, subprocess.TimeoutExpired):
+            out = ""
+        for line in out.splitlines():
+            if '"VGA compatible controller"' in line or '"Display controller"' in line:
+                parts = re.findall(r'"([^"]*)"', line)
+                if len(parts) >= 3:
+                    return f"{parts[1]} {parts[2]}".replace("Advanced Micro Devices, Inc. [AMD/ATI]", "AMD")
+    return ""
+
+
+def load_graphics() -> dict:
+    """Settings › Graphics: the card (its name, driver, video memory) and, for AMD cards, the performance level.
+    Its live readings come from gpuNow(), once a second while the page shows."""
+    sys.path.insert(0, str(HERE.parent / "shell"))
+    sys.path.insert(0, "/usr/share/huginn-shell")
+    import huginn_hwstats
+    card = huginn_hwstats.Readings().card()
+    mesa = ""
+    for f in Path("/usr/share/doc").glob("mesa-vulkan-drivers/changelog.Debian.gz"):
+        try:
+            import gzip
+            mesa = re.search(r"\(([^)]+)\)", gzip.open(f, "rt").readline() or "").group(1).split("-")[0]
+        except (OSError, AttributeError):
+            mesa = ""
+    return {"available": bool(card), "name": card_name(), "driver": card.get("driver", ""), "amd": card.get("vendor") == "0x1002",
+            "memTotal": card.get("memTotal"), "level": card.get("level", ""), "mesa": mesa,
+            "capWatts": card.get("capWatts"), "capMaxWatts": card.get("capMaxWatts")}
+
+
 def load_about() -> dict:
     info = _plain_kv(Path("/etc/os-release"))
     mem = ""
@@ -1431,6 +1482,8 @@ def demo_state() -> dict:
         "printers": {"available": True, "jobs": 0, "printers": [{"name": "Office_LaserJet", "label": "Office LaserJet", "state": "Ready", "ok": True, "default": True},
                                                                 {"name": "Canon_TS3300", "label": "Canon TS3300", "state": "Paused", "ok": False, "default": False}],
                      "scanners": [{"id": "airscan:e0:Canon TS3300", "name": "Canon TS3300 flatbed"}]},
+        "graphics": {"available": True, "name": "AMD Radeon RX 9070 XT", "driver": "amdgpu", "amd": True, "memTotal": 15.9, "level": "auto", "mesa": "26.0.8",
+                     "capWatts": 304, "capMaxWatts": 334},
         "about": {"name": "Astrid's Desk", "hostname": "astrids-desk", "canRename": True,
                   "rows": [{"name": "Computer", "value": "Framework Laptop 13"},
                            {"name": "Processor", "value": "AMD Ryzen 7 7840U"}, {"name": "Graphics", "value": "Radeon 780M"},
@@ -1484,7 +1537,7 @@ def current_icon_theme() -> str:
 
 # ---------------------------------------------------------------------------------------------- the backend Settings talks to
 PAGES = ("network", "bluetooth", "displays", "sound", "notifications", "power", "input", "keys", "time", "language", "users", "defaults", "privacy", "about", "a11y", "look",
-         "printers")
+         "printers", "graphics")
 
 
 class SystemSettings(QObject):
@@ -1510,6 +1563,7 @@ class SystemSettings(QObject):
     notifications, power, input, time = _page("notifications", changed), _page("power", changed), _page("input", changed), _page("time", changed)
     language, users, defaults, privacy, about = _page("language", changed), _page("users", changed), _page("defaults", changed), _page("privacy", changed), _page("about", changed)
     a11y, look, keys, printers = _page("a11y", changed), _page("look", changed), _page("keys", changed), _page("printers", changed)
+    graphics = _page("graphics", changed)
     del _page
     busy = Property("QVariantList", lambda self: sorted(self._busy), notify=changed)
     reportChanged = Signal()
@@ -1527,7 +1581,8 @@ class SystemSettings(QObject):
                 "sound": load_sound, "notifications": lambda: load_notifications(self._known_apps()), "power": load_power,
                 "input": load_input, "time": load_time, "language": load_language, "users": load_users,
                 "defaults": lambda: load_defaults(self._known_apps()), "privacy": lambda: load_privacy(self._known_apps()), "about": load_about,
-                "a11y": load_a11y, "look": load_look, "keys": lambda: load_keys(self._known_apps()), "printers": load_printers}[page]
+                "a11y": load_a11y, "look": load_look, "keys": lambda: load_keys(self._known_apps()), "printers": load_printers,
+                "graphics": load_graphics}[page]
 
     @Slot(str)
     def load(self, page: str) -> None:
@@ -2370,6 +2425,31 @@ class SystemSettings(QObject):
                   demo_change=lambda s: [o.update(admin=admin) for o in s["others"] if o["uid"] == uid])
 
     # -------------------------------------------------------------- default apps and start-up
+    # -------------------------------------------------------------- graphics
+    @Slot(result="QVariantMap")
+    def gpuNow(self) -> dict:
+        """The graphics card's readings now (Settings › Graphics asks once a second while it shows)."""
+        if self._demo:
+            import random
+            return {"load": random.randint(88, 99), "temp": 63, "hot": 79, "memTemp": 72, "watts": random.randint(285, 300), "capWatts": 304,
+                    "coreMhz": random.choice([2950, 2970, 2990]), "memMhz": 1258, "memUsed": 9.4, "memTotal": 15.9, "fan": 1640, "fanPercent": 48}
+        if getattr(self, "_hw", None) is None:
+            sys.path.insert(0, str(HERE.parent / "shell"))
+            sys.path.insert(0, "/usr/share/huginn-shell")
+            import huginn_hwstats
+            self._hw = huginn_hwstats.Readings()
+        return self._hw.card()
+
+    @Slot(str)
+    def setGpuLevel(self, level: str) -> None:
+        """Automatic, highest clocks, or lowest: AMD's performance level, kept for the next start (as root)."""
+        if level not in ("auto", "high", "low"):
+            return
+        words = {"auto": "The card chooses its clocks itself again.", "high": "The card stays at its highest clocks: the most speed, more heat and power.",
+                 "low": "The card stays at its lowest clocks: quiet and cool, slower in games."}[level]
+        self._act("graphics", lambda: must(["pkexec", SYSTEM_HELPER, "gpu-level", level], None, 60, "Changing the graphics card's performance") and "",
+                  ok=words, demo_change=lambda st: st.update(level=level))
+
     @Slot(bool)
     def setAutoLogin(self, on: bool) -> None:
         """Sign in by itself when the computer starts: this account, or nobody (the system asks for the password)."""

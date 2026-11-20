@@ -388,6 +388,19 @@ where
             let mode = output.current_mode().map(|m| output.current_transform().transform_size(m.size)).unwrap_or_default();
             elements.push(OutputRenderElements::Zoom(crate::look::ZoomElement::new(Rectangle::from_size(mode), view.zoom, view.zoom_origin)));
         }
+        // over a window filling the screen: the overlay layer only (the game bar and stats, the volume, the start
+        // menu when it's asked for); the bar, dock and wallpaper stay hidden
+        {
+            let map = layer_map_for_output(output);
+            for layer in map.layers_on(smithay::wayland::shell::wlr_layer::Layer::Overlay).rev() {
+                let loc = map.layer_geometry(layer).unwrap_or_default().loc.to_physical_precise_round(scale);
+                elements.extend(
+                    AsRenderElements::<R>::render_elements::<WaylandSurfaceRenderElement<R>>(layer, renderer, loc, scale, 1.0)
+                        .into_iter()
+                        .map(|e| OutputRenderElements::Custom(CustomRenderElements::Surface(e))),
+                );
+            }
+        }
         elements.extend(window_render_elements.into_iter().map(|e| OutputRenderElements::Window(Wrap::from(e))));
         (elements, CLEAR_COLOR_FULLSCREEN)
     } else {

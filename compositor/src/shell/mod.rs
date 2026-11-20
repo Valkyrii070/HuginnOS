@@ -179,6 +179,9 @@ impl<BackendData: Backend> CompositorHandler for HuginnState<BackendData> {
             while let Some(parent) = get_parent(&root) {
                 root = parent;
             }
+            if &root == surface {
+                crate::frames::committed(&smithay::reexports::wayland_server::Resource::id(surface));   // the game stats overlay
+            }
             if let Some(window) = self.window_for_surface(&root) {
                 window.0.on_commit();
 

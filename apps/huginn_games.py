@@ -470,6 +470,92 @@ def steam_launch_options(profile: dict, have: dict = None, flatpak: bool = False
     return " ".join(words + ["%command%"] + [shlex.quote(a) for a in args])
 
 
+# ============================================================================================== GE-Proton
+# GloriousEggroll's Proton build: newer Wine, DXVK and VKD3D than Valve's, and fixes for games stock Proton struggles
+# with. Each release on GitHub is GE-ProtonX-Y.tar.gz with GE-ProtonX-Y.sha512sum beside it; it goes into Steam's
+# compatibilitytools.d (Steam lists it after a restart, in a game's Properties › Compatibility), where Games' own
+# Windows games find it too (find_protons).
+GE_LATEST = "https://api.github.com/repos/GloriousEggroll/proton-ge-custom/releases/latest"
+GE_NAME = re.compile(r"^GE-Proton\d+-\d+$")
+
+
+def _get(url: str, timeout: float = 30):
+    import urllib.request
+    req = urllib.request.Request(url, headers={"User-Agent": "Huginn-Games", "Accept": "application/vnd.github+json, */*"})
+    return urllib.request.urlopen(req, timeout=timeout)                 # noqa: S310  (https, the address is ours)
+
+
+def ge_latest(url: str = GE_LATEST) -> dict:
+    """The newest GE-Proton: {"tag", "tar" (its address), "size", "name", "sum" (the .sha512sum's address)}."""
+    data = json.loads(_get(url, 20).read().decode("utf-8"))
+    tag = str(data.get("tag_name") or "")
+    if not GE_NAME.match(tag):
+        raise ValueError("GitHub didn't give a GE-Proton release.")
+    assets = {a.get("name", ""): a for a in data.get("assets") or [] if isinstance(a, dict)}
+    tar, total = assets.get(f"{tag}.tar.gz"), assets.get(f"{tag}.sha512sum")
+    if not tar or not total:
+        raise ValueError(f"{tag} has no archive with a checksum.")
+    return {"tag": tag, "tar": tar.get("browser_download_url", ""), "size": int(tar.get("size") or 0), "name": f"{tag}.tar.gz",
+            "sum": total.get("browser_download_url", "")}
+
+
+def ge_installed(folder: Path) -> list:
+    """The GE-Protons in a compatibilitytools.d, newest first."""
+    try:
+        names = [p.name for p in folder.iterdir() if p.is_dir() and GE_NAME.match(p.name)]
+    except OSError:
+        return []
+    return sorted(names, key=lambda n: tuple(int(x) for x in re.findall(r"\d+", n)), reverse=True)
+
+
+def ge_install(rel: dict, folder: Path, progress=None) -> str:
+    """Download a GE-Proton release, check it against its SHA-512, and unpack it into `folder`. Returns its name.
+    Nothing is left half-unpacked: it's unpacked beside, then moved into place."""
+    import tarfile
+    tag = rel["tag"]
+    if not GE_NAME.match(tag):
+        raise ValueError("That isn't a GE-Proton release.")
+    folder.mkdir(parents=True, exist_ok=True)
+    line = _get(rel["sum"], 20).read().decode("utf-8", "replace").split()
+    expect = line[0].lower() if line else ""
+    if not re.fullmatch(r"[0-9a-f]{128}", expect):
+        raise ValueError("Its checksum couldn't be read, so it wasn't installed.")
+    part = folder / f".{tag}.tar.gz.part"
+    h, got = hashlib.sha512(), 0
+    try:
+        with _get(rel["tar"], 60) as resp, open(part, "wb") as out:
+            total = int(resp.headers.get("Content-Length") or rel.get("size") or 0)
+            while True:
+                chunk = resp.read(1 << 20)
+                if not chunk:
+                    break
+                out.write(chunk)
+                h.update(chunk)
+                got += len(chunk)
+                if progress:
+                    progress(got, total)
+        if h.hexdigest() != expect:
+            raise ValueError("The download didn't match its checksum, so it wasn't installed. Try again.")
+        staging = folder / f".{tag}.unpacking"
+        shutil.rmtree(staging, ignore_errors=True)
+        staging.mkdir()
+        with tarfile.open(part, "r:gz") as t:
+            names = t.getnames()
+            if not names or any(not (n == tag or n.startswith(tag + "/")) for n in names):
+                raise ValueError("The archive isn't laid out as a GE-Proton release.")
+            t.extractall(staging, filter="data")
+        if not (staging / tag / "proton").exists():
+            raise ValueError("The archive has no Proton in it.")
+        dest = folder / tag
+        if dest.exists():
+            shutil.rmtree(dest)
+        (staging / tag).rename(dest)
+        return tag
+    finally:
+        part.unlink(missing_ok=True)
+        shutil.rmtree(folder / f".{tag}.unpacking", ignore_errors=True)
+
+
 def hours_words(minutes: float) -> str:
     if minutes <= 0:
         return "Not played yet"
@@ -719,6 +805,83 @@ class Games(QObject):
     filter = Property(str, lambda self: self._filter, notify=changed)
     busy = Property(str, lambda self: self._busy, notify=changed)
     steamFound = Property(bool, lambda self: bool(self._roots), notify=changed)
+
+    # ---- GE-Proton (the Proton-GE sheet)
+    geChanged = Signal()
+
+    def _ge_folder(self):
+        return Path(self._roots[0]) / "compatibilitytools.d" if self._roots else None
+
+    def _ge_view(self) -> dict:
+        folder = self._ge_folder()
+        st = getattr(self, "_ge", None) or {"latest": "", "busy": "", "fraction": 0.0, "error": ""}
+        have = ge_installed(folder) if folder else []
+        if self._demo:
+            have = st.get("demoHave", ["GE-Proton10-20"])
+        return {"steam": bool(folder) or self._demo, "installed": have, "latest": st["latest"], "busy": st["busy"], "fraction": st["fraction"],
+                "error": st["error"], "upToDate": bool(st["latest"]) and st["latest"] in have}
+    ge = Property("QVariantMap", _ge_view, notify=geChanged)
+
+    def _ge_set(self, **kw) -> None:
+        self._ge = dict(getattr(self, "_ge", None) or {"latest": "", "busy": "", "fraction": 0.0, "error": ""}, **kw)
+        self.geChanged.emit()
+
+    @Slot()
+    def geCheck(self) -> None:
+        """What the newest GE-Proton is (asked of GitHub)."""
+        if self._demo:
+            self._ge_set(latest="GE-Proton10-25", release={"tag": "GE-Proton10-25"})
+            return
+        self._ge_set(busy="checking", error="")
+
+        def done(result):
+            if isinstance(result, Exception):
+                self._ge_set(busy="", error=f"Couldn't ask GitHub for the newest GE-Proton: {getattr(result, 'reason', result)}")
+            else:
+                self._ge_set(busy="", latest=result["tag"], release=result)
+        self.bg(ge_latest, done)
+
+    @Slot()
+    def geInstall(self) -> None:
+        """Download the newest GE-Proton into Steam's compatibilitytools.d (about 500 MB)."""
+        rel, folder = (getattr(self, "_ge", None) or {}).get("release"), self._ge_folder()
+        if self._demo:
+            self._ge_set(demoHave=["GE-Proton10-25", "GE-Proton10-20"])
+            self.said.emit("GE-Proton10-25 is installed. Restart Steam, then choose it in a game's Properties › Compatibility.", False)
+            return
+        if not rel or not folder or (getattr(self, "_ge", None) or {}).get("busy"):
+            return
+        self._ge_set(busy="downloading", fraction=0.0, error="")
+        last = [0.0]
+
+        def progress(got, total):
+            f = got / total if total else 0.0
+            if f - last[0] >= 0.01:
+                last[0] = f
+                self._back.emit(lambda: self._ge_set(fraction=f))
+
+        def done(result):
+            if isinstance(result, Exception):
+                self._ge_set(busy="", error=str(result) if isinstance(result, ValueError) else f"The download stopped: {getattr(result, 'reason', result)}")
+                return
+            self._ge_set(busy="", fraction=1.0)
+            self.said.emit(f"{result} is installed. Restart Steam, then choose it in a game's Properties › Compatibility.", False)
+            self.refresh()
+        self.bg(lambda: ge_install(rel, folder, progress), done)
+
+    @Slot(str)
+    def geRemove(self, name: str) -> None:
+        folder = self._ge_folder()
+        if not GE_NAME.match(name):
+            return
+        if self._demo:
+            self._ge_set(demoHave=[n for n in self._ge_view()["installed"] if n != name])
+            return
+        if folder and (folder / name).is_dir():
+            shutil.rmtree(folder / name, ignore_errors=True)
+            self.geChanged.emit()
+            self.said.emit(f"{name} is gone. Games set to use it go back to Steam's own Proton.", False)
+            self.refresh()
     steamInstalled = Property(bool, lambda self: bool(self._roots) or bool(self._have.get("steam")), notify=changed)
     tools = Property("QVariantMap", lambda self: {"mangohud": bool(self._have.get("mangohud")), "gamemode": bool(self._have.get("gamemoderun")), "wine": bool(self._have.get("wine")),
                                                   "proton": len(self._protons), "umu": bool(self._have.get("umu-run")),

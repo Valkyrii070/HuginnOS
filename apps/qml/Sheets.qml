@@ -646,7 +646,7 @@ GlassWindow {
             Rectangle { anchors.fill: parent; visible: cellItem.inSel && !cellItem.active; color: Qt.alpha(Theme.t.accent, 0.13) }
             Rectangle { anchors.right: parent.right; width: 1; height: parent.height; color: "#E3E6EA" }
             Rectangle { anchors.bottom: parent.bottom; width: parent.width; height: 1; color: "#E3E6EA" }
-            Rectangle { visible: cellItem.inSel && cellItem.r === win.r0 && cellItem.c === win.c0 && cellItem.r + cellItem.span[0] - 1 === win.r1 && cellItem.c + cellItem.span[1] - 1 === win.c1
+            Rectangle { visible: !!cellItem.span && cellItem.inSel && cellItem.r === win.r0 && cellItem.c === win.c0 && cellItem.r + cellItem.span[0] - 1 === win.r1 && cellItem.c + cellItem.span[1] - 1 === win.c1
                 anchors.fill: parent; color: "transparent"; border.width: 2; border.color: Theme.t.accent } }
         Rectangle { anchors.fill: parent; visible: cellItem.inSel && !cellItem.active && !cellItem.span; color: Qt.alpha(Theme.t.accent, 0.13) }
         Rectangle { visible: !cellItem.covered && !cellItem.span; anchors.right: parent.right; width: 1; height: parent.height; color: "#E3E6EA" }

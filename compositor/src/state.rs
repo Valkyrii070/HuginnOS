@@ -966,6 +966,7 @@ impl<BackendData: Backend + 'static> HuginnState<BackendData> {
                     )
                     .expect("Failed to set xwayland default cursor");
                     data.xwm = Some(wm);
+                    data.huginn.x11_primary = None;         // a new Xwayland: told its main monitor afresh
                     data.xdisplay = Some(display_number);
                     data.start_session();
                 }

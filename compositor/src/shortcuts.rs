@@ -26,6 +26,8 @@ pub const DEFAULTS: &[(&str, &str)] = &[
     ("desktop", "Super+D"),
     ("ontop", "Super+Ctrl+T"),
     ("frames", "Super+Alt+F"),
+    ("gamestats", "Super+Alt+G"),
+    ("gamebar", "Super+G"),
     ("layout", "Super+Ctrl+Space"),
     ("reader", "Super+Alt+S"),
     ("files", "Super+E"),

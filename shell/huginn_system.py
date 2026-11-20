@@ -436,6 +436,22 @@ for (var i = 0; i < all.length; i++) {{ var w = all[i]; if (String(w.internalId)
         return menus
 
     @Slot(result=str)
+    def gameStats(self) -> str:
+        """The game stats overlay (Super+Alt+G), as JSON: the frames of the window a game plays in on each screen
+        (Huginn's compositor counts them), and the graphics card's and processor's readings (huginn_hwstats)."""
+        if getattr(self, "_hw", None) is None:
+            import huginn_hwstats
+            self._hw = huginn_hwstats.Readings()
+        windows = []
+        if self.sb and self._own_compositor():
+            got = self._compositor("GameStats", None, "(s)")
+            try:
+                windows = json.loads(got[0]) if got else []
+            except ValueError:
+                windows = []
+        return json.dumps({"windows": windows, "gpu": self._hw.gpu(), "cpu": self._hw.cpu()})
+
+    @Slot(result=str)
     def frameStats(self) -> str:
         """Frame times on each screen over the last second (Huginn's compositor), as JSON."""
         if not self.sb or not self._own_compositor():
@@ -755,6 +771,27 @@ for (var i = 0; i < all.length; i++) {{ var win = all[i]; if (String(win.interna
         self.changed.emit()
         if not self._demo:
             self._session("SetMuted", GLib.Variant("(b)", (muted,)))
+
+    @Slot(result=bool)
+    def micMuted(self) -> bool:
+        """Whether the microphone (PipeWire's default source) is muted (the game bar)."""
+        if self._demo or not shutil.which("wpctl"):
+            return False
+        try:
+            out = subprocess.run(["wpctl", "get-volume", "@DEFAULT_AUDIO_SOURCE@"], capture_output=True, text=True, timeout=2).stdout
+        except (OSError, subprocess.TimeoutExpired):
+            return False
+        return "[MUTED]" in out
+
+    @Slot(bool)
+    def setMicMuted(self, muted: bool) -> None:
+        if self._demo or not shutil.which("wpctl"):
+            return
+        try:
+            subprocess.run(["wpctl", "set-mute", "@DEFAULT_AUDIO_SOURCE@", "1" if muted else "0"], timeout=3,
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except (OSError, subprocess.TimeoutExpired):
+            pass
 
     @Slot(bool)
     def setDnd(self, on: bool) -> None:

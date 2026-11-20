@@ -141,6 +141,67 @@ QtObject {
             }
         }
     }
+    // the game stats overlay (Super+Alt+G, Settings › Desktop & Dock): the game's own frame rate (its window's frames,
+    // counted by the compositor), the graphics card and processor, top left of the screen the game fills (else the
+    // screen of the window in front). Takes no clicks; read once a second only while it shows.
+    property var gameStats: ({})
+    property string gameBarOn: ""               // the screen the game bar opened on
+    property Timer gameTick: Timer {
+        interval: 1000; repeat: true; running: Settings.gameStats || shell.open === "gamebar"; triggeredOnStart: true
+        onTriggered: { try { shell.gameStats = JSON.parse(Status.gameStats()) } catch (e) { shell.gameStats = ({}) } }
+    }
+    function gameScreen() {     // where the overlay goes: a screen a window fills, else the one with the window in front
+        var w = shell.gameStats.windows || []
+        for (var i = 0; i < w.length; i++) if (w[i].full) return w[i].screen
+        for (var k = 0; k < w.length; k++) if (w[k].app) return w[k].screen
+        return shell.mainScreen ? shell.mainScreen.name : ""
+    }
+    property Instantiator gameIslands: Instantiator {
+        model: Settings.gameStats ? Status.screenList : []
+        delegate: Window {
+            id: gwin
+            required property var modelData
+            readonly property var win: (shell.gameStats.windows || []).filter(function (r) { return r.screen === gwin.modelData.name })[0] || null
+            readonly property var gpu: shell.gameStats.gpu || ({})
+            readonly property var cpu: shell.gameStats.cpu || ({})
+            readonly property bool here: shell.gameScreen() === modelData.name
+            function hot(t) { return t >= 90 ? "#FF8A8D" : t >= 80 ? "#F5C46B" : "#D5DAE0" }
+            visible: here; width: gcol.width + 36; height: gcol.height + 30 + (win && win.full ? 0 : 38); color: "transparent"
+            flags: Qt.WindowTransparentForInput
+            LayerShell.Window.screen: modelData
+            LayerShell.Window.wantsToBeOnActiveScreen: false
+            LayerShell.Window.scope: "huginn-gamestats"
+            LayerShell.Window.layer: LayerShell.Window.LayerOverlay
+            LayerShell.Window.anchors: LayerShell.Window.AnchorTop | LayerShell.Window.AnchorLeft
+            LayerShell.Window.exclusionZone: -1
+            LayerShell.Window.keyboardInteractivity: LayerShell.Window.KeyboardInteractivityNone
+            Rectangle {
+                x: 12; y: gwin.win && gwin.win.full ? 12 : 50; width: gcol.width + 24; height: gcol.height + 16; radius: 12
+                color: Qt.rgba(0.04, 0.05, 0.07, 0.78); border.width: 1; border.color: Qt.rgba(1, 1, 1, 0.12)
+                Column {
+                    id: gcol; x: 12; y: 8; spacing: 3
+                    Text { visible: !!gwin.win && !!gwin.win.app; text: gwin.win ? gwin.win.app : ""; color: "#B9C2CC"; font.pixelSize: 11; font.family: Theme.t.font
+                        width: Math.min(implicitWidth, 260); elide: Text.ElideRight }
+                    Row { spacing: 8
+                        Text { text: gwin.win && gwin.win.fps > 0 ? gwin.win.fps : "\u2013"; color: "#F5F7FA"; font.pixelSize: 26; font.weight: Font.DemiBold; font.family: Theme.t.font }
+                        Column { anchors.verticalCenter: parent.verticalCenter
+                            Text { text: "frames a second"; color: "#B9C2CC"; font.pixelSize: 10; font.family: Theme.t.font }
+                            Text { visible: !!gwin.win && gwin.win.fps > 1; text: gwin.win ? gwin.win.frameMs.toFixed(1) + " ms, longest " + gwin.win.worstMs.toFixed(1) : ""
+                                color: gwin.win && gwin.win.worstMs > 3 * Math.max(1, gwin.win.frameMs) ? "#F5C46B" : "#D5DAE0"; font.pixelSize: 10; font.family: Theme.t.font } } }
+                    Text { visible: gwin.gpu.load !== undefined || gwin.gpu.temp !== undefined; color: "#D5DAE0"; font.pixelSize: 12; font.family: Theme.t.font; textFormat: Text.StyledText
+                        text: "<b>GPU</b>  " + [gwin.gpu.load !== undefined ? gwin.gpu.load + "%" : "",
+                                                gwin.gpu.temp !== undefined ? "<font color='" + gwin.hot(gwin.gpu.hot || gwin.gpu.temp) + "'>" + gwin.gpu.temp + "\u00b0C" + (gwin.gpu.hot ? " (hot spot " + gwin.gpu.hot + ")" : "") + "</font>" : "",
+                                                gwin.gpu.ghz ? gwin.gpu.ghz.toFixed(2) + " GHz" : "", gwin.gpu.watts ? gwin.gpu.watts + " W" : ""].filter(Boolean).join("  \u00b7  ") }
+                    Text { visible: gwin.gpu.memTotal !== undefined; color: "#D5DAE0"; font.pixelSize: 12; font.family: Theme.t.font; textFormat: Text.StyledText
+                        text: "<b>VRAM</b>  " + gwin.gpu.memUsed + " of " + gwin.gpu.memTotal + " GB" + (gwin.gpu.fan !== undefined ? "  \u00b7  fan " + gwin.gpu.fan + " rpm" : "") }
+                    Text { visible: gwin.cpu.load !== undefined || gwin.cpu.temp !== undefined; color: "#D5DAE0"; font.pixelSize: 12; font.family: Theme.t.font; textFormat: Text.StyledText
+                        text: "<b>CPU</b>  " + [gwin.cpu.load !== undefined ? gwin.cpu.load + "%" : "",
+                                                gwin.cpu.temp !== undefined ? "<font color='" + gwin.hot(gwin.cpu.temp) + "'>" + gwin.cpu.temp + "\u00b0C</font>" : "",
+                                                gwin.cpu.memTotal ? "RAM " + gwin.cpu.memUsed + " of " + gwin.cpu.memTotal + " GB" : ""].filter(Boolean).join("  \u00b7  ") }
+                }
+            }
+        }
+    }
     // Settings › Displays › Identify: each screen's name over it for a few seconds
     property var identify: ({})
     property Timer identifyEnd: Timer { interval: 3500; onTriggered: shell.identify = ({}) }
@@ -200,6 +261,10 @@ QtObject {
             else if (what.indexOf("run:") === 0) shell.runKey(what.slice(4))
             else if (what.indexOf("edge:") === 0) shell.pointerAtEdge(what.slice(5))
             else if (what === "frames") Settings.set("frameTimes", Settings.frameTimes ? "false" : "true")
+            else if (what === "gamestats") Settings.set("gameStats", Settings.gameStats ? "false" : "true")
+            else if (what === "gamebar") {      // on the screen the game fills: read where that is first
+                if (shell.open !== "gamebar") { try { shell.gameStats = JSON.parse(Status.gameStats()) } catch (e) {} shell.gameBarOn = shell.gameScreen() }
+                shell.open = shell.open === "gamebar" ? "" : "gamebar" }
             else if (what === "layout") Status.readLayouts()
             else if (what === "reader") Status.toggleReader()
             else if (what === "bell") Status.playEffect("bell")     // an app's bell (the compositor flashes the screen itself, if Settings says)
@@ -566,6 +631,17 @@ QtObject {
         LayerShell.Window.keyboardInteractivity: shell.open === "search" ? LayerShell.Window.KeyboardInteractivityExclusive : LayerShell.Window.KeyboardInteractivityNone
         Rectangle { anchors.fill: parent; color: "black"; opacity: search.presence * 0.4 }
         Search { id: search; anchors.fill: parent; shown: shell.open === "search"; startText: shell.searchText; onDone: { shell.open = ""; shell.searchText = "" } }
+    },
+    Window {   // the game bar (Super+G): over the game, at the top of the screen it fills (GameBar.qml)
+        visible: shell.open === "gamebar" || gameBar.visible; color: "transparent"
+        LayerShell.Window.scope: "huginn-gamebar"
+        LayerShell.Window.screen: shell.screenNamed(shell.gameBarOn) || shell.mainScreen
+        LayerShell.Window.layer: LayerShell.Window.LayerOverlay
+        LayerShell.Window.anchors: LayerShell.Window.AnchorTop | LayerShell.Window.AnchorBottom | LayerShell.Window.AnchorLeft | LayerShell.Window.AnchorRight
+        LayerShell.Window.exclusionZone: -1
+        LayerShell.Window.keyboardInteractivity: shell.open === "gamebar" ? LayerShell.Window.KeyboardInteractivityExclusive : LayerShell.Window.KeyboardInteractivityNone
+        Rectangle { anchors.fill: parent; color: "black"; opacity: gameBar.presence * 0.18 }
+        GameBar { id: gameBar; anchors.fill: parent; shown: shell.open === "gamebar"; stats: shell.gameStats; screenName: shell.gameBarOn; onDone: shell.open = "" }
     },
     Window {   // clipboard history (Super+V): over everything, in the middle
         visible: shell.open === "clipboard" || clipPanel.visible; color: "transparent"

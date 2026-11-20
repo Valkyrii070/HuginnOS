@@ -478,10 +478,22 @@ impl<BackendData: Backend> HuginnState<BackendData> {
             let output = self.space.output_under(location).next().cloned();
             if let Some(output) = output.as_ref() {
                 let output_geo = self.space.output_geometry(output).unwrap();
-                if let Some(window) = output
-                    .user_data()
-                    .get::<FullscreenSurface>()
-                    .and_then(|f| f.get())
+                let overlay_hit = {
+                    let layers = layer_map_for_output(output);
+                    layers.layer_under(WlrLayer::Overlay, location - output_geo.loc.to_f64()).is_some_and(|layer| {
+                        layer
+                            .surface_under(
+                                location - output_geo.loc.to_f64() - layers.layer_geometry(layer).unwrap_or_default().loc.to_f64(),
+                                WindowSurfaceType::ALL,
+                            )
+                            .is_some()
+                    })
+                };
+                if !overlay_hit
+                    && let Some(window) = output
+                        .user_data()
+                        .get::<FullscreenSurface>()
+                        .and_then(|f| f.get())
                     && let Some((_, _)) =
                         window.surface_under(location - output_geo.loc.to_f64(), WindowSurfaceType::ALL)
                 {
@@ -571,11 +583,13 @@ impl<BackendData: Backend> HuginnState<BackendData> {
                 })
             })
         };
-        if let Some((surface, loc)) = output
-            .user_data()
-            .get::<FullscreenSurface>()
-            .and_then(|f| f.get())
-            .and_then(|w| w.surface_under(pos - output_geo.loc.to_f64(), WindowSurfaceType::ALL))
+        // the overlay layer (the game bar, the start menu, the volume…) is over even a window filling the screen
+        let full = output.user_data().get::<FullscreenSurface>().and_then(|f| f.get());
+        let over_full = if full.is_some() { in_layers(&[WlrLayer::Overlay]) } else { None };
+        if let Some(focus) = over_full {
+            under = Some(focus);
+        } else if let Some((surface, loc)) =
+            full.and_then(|w| w.surface_under(pos - output_geo.loc.to_f64(), WindowSurfaceType::ALL))
         {
             under = Some((surface, loc + output_geo.loc));
         } else if let Some(focus) = in_layers(&[WlrLayer::Overlay, WlrLayer::Top]) {
@@ -1361,6 +1375,8 @@ fn process_keyboard_shortcut(modifiers: ModifiersState, keysym: Keysym, raw: Opt
             "desktop" => KeyAction::ShowDesktop,
             "ontop" => KeyAction::KeepOnTop,
             "frames" => KeyAction::Shell("frames"),
+            "gamestats" => KeyAction::Shell("gamestats"),
+            "gamebar" => KeyAction::Shell("gamebar"),
             "reader" => KeyAction::Shell("reader"),
             "layout" => KeyAction::NextLayout,
             "files" | "settings" | "terminal" => KeyAction::Run(format!("open:{name}")),

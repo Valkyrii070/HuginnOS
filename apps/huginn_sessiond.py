@@ -189,6 +189,21 @@ INHIBIT_XML = """<node><interface name="org.freedesktop.PowerManagement.Inhibit"
   <signal name="HasInhibitChanged"><arg type="b"/></signal>
 </interface></node>"""
 
+# org.freedesktop.ScreenSaver, as games (SDL, Wine), players and browsers ask it to keep the screen on: nobody
+# answered it in Huginn's own session, so a game played with a controller (which the compositor never hears) let the
+# screen dim, turn off and lock. Answered only on Huginn's compositor (KDE's screen locker answers it under KWin).
+SCREENSAVER_XML = """<node><interface name="org.freedesktop.ScreenSaver">
+  <method name="Inhibit"><arg type="s" name="application_name" direction="in"/><arg type="s" name="reason_for_inhibit" direction="in"/>
+    <arg type="u" name="cookie" direction="out"/></method>
+  <method name="UnInhibit"><arg type="u" name="cookie" direction="in"/></method>
+  <method name="GetActive"><arg type="b" direction="out"/></method>
+  <method name="SetActive"><arg type="b" name="e" direction="in"/><arg type="b" direction="out"/></method>
+  <method name="GetActiveTime"><arg type="u" direction="out"/></method>
+  <method name="GetSessionIdleTime"><arg type="u" direction="out"/></method>
+  <method name="SimulateUserActivity"/>
+  <method name="Lock"/>
+  <signal name="ActiveChanged"><arg type="b"/></signal>
+</interface></node>"""
 POLICY_XML = """<node><interface name="org.kde.Solid.PowerManagement.PolicyAgent">
   <method name="AddInhibition"><arg type="u" name="types" direction="in"/><arg type="s" name="appName" direction="in"/>
     <arg type="s" name="reason" direction="in"/><arg type="u" direction="out"/></method>
@@ -671,6 +686,10 @@ class Session(QObject):
             self._compositor = session_bus.has("org.huginn.Compositor")
             if not self._compositor:
                 QTimer.singleShot(1500, self.register_keys)
+            else:
+                for path in ("/ScreenSaver", "/org/freedesktop/ScreenSaver"):
+                    session_bus.export(path, SCREENSAVER_XML, self._screensaver_call)
+                session_bus.own("org.freedesktop.ScreenSaver", replace=False)
         if system_bus:
             system_bus.export("/org/freedesktop/NetworkManager/SecretAgent", NM_AGENT_XML, self._nm_call)
             system_bus.export("/org/huginn/bluetooth/agent", BT_AGENT_XML, self._bt_call)
@@ -1186,6 +1205,33 @@ class Session(QObject):
             return None
         if method == "HasInhibit":
             return GLib.Variant("(b)", (bool(self._inhibits),))
+        return None
+
+    def _screensaver_call(self, method, args, inv, sender, iface):
+        if method == "Inhibit":                               # keeps the screen on, and the computer from sleeping by itself
+            return GLib.Variant("(u)", (self._add_inhibit(sender, args[0], args[1], 1 | 4),))
+        if method == "UnInhibit":
+            self._inhibits.pop(args[0], None)
+            return None
+        if method == "GetActive":
+            return GLib.Variant("(b)", (self._stage == "off",))
+        if method == "SetActive":
+            if args[0]:
+                self._stage = "off"
+                self.screen_off(True)
+            else:
+                self.wake_up()
+            return GLib.Variant("(b)", (True,))
+        if method == "GetActiveTime":
+            return GLib.Variant("(u)", (0,))
+        if method == "GetSessionIdleTime":
+            return GLib.Variant("(u)", (int(self.idle_ms() / 1000),))
+        if method == "SimulateUserActivity":
+            self.wake_up()
+            return None
+        if method == "Lock":
+            self.lock()
+            return None
         return None
 
     def _policy_call(self, method, args, inv, sender, iface):

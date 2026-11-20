@@ -11,7 +11,8 @@ GlassWindow {
     readonly property color pick: Qt.rgba(tintColor.r, tintColor.g, tintColor.b, 0.18)
     readonly property var cur: Backend.picked !== "" ? Backend.current : Backend.featured
     readonly property bool has: Backend.summary.games > 0
-    property string sheet: ""            // "", "accounts", "add"
+    property string sheet: ""            // "", "accounts", "add", "ge"
+    property string confirmGe: ""         // a GE-Proton about to be removed
     property bool profile: false
     property bool renaming: false
     // The carousel is fed the games' ids, and only when the line-up really changes: the backend hands over a fresh
@@ -84,6 +85,7 @@ GlassWindow {
         Island { anchors { right: parent.right; rightMargin: 12 } y: 12
             IslandField { objectName: "search"; width: 170; placeholder: "Find a game"; onTextChanged: Backend.search(text) }
             Seg { icon: "user"; tip: "Steam accounts"; onClicked: win.sheet = "accounts" }
+            Seg { objectName: "geButton"; text: "Proton-GE"; tip: "GE-Proton for Steam: fixes many Windows games"; onClicked: { win.sheet = "ge"; if (!Backend.ge.latest) Backend.geCheck() } }
             Seg { icon: "history"; tip: "Look again"; onClicked: Backend.refresh() }
             Seg { icon: "plus"; text: "Add a Game"; onClicked: win.openAdd() } },
         // ---------------- the shops, as chips
@@ -140,6 +142,49 @@ GlassWindow {
                     Btn { text: Backend.steamInstalled ? "Open Steam" : "Get Steam"; onClicked: Backend.steamInstalled ? Backend.openSteam() : Backend.getSteam() }
                     Btn { primary: true; text: "Done"; onClicked: win.sheet = "" } }
                 Label { anchors { left: parent.left; leftMargin: 24; bottom: parent.bottom; bottomMargin: 24 } width: 250; wrapMode: Text.WordWrap; secondary: true; font.pixelSize: 11; text: "Epic, GOG and Amazon accounts are signed in inside Heroic." } } },
+
+        // ---------------- GE-Proton: the newest from GitHub into Steam, checked against its SHA-512
+        Item { anchors.fill: parent; z: 20; visible: win.sheet === "ge"
+            readonly property var ge: Backend.ge
+            Rectangle { anchors.fill: parent; radius: win.r; color: "#66000000"; MouseArea { anchors.fill: parent; acceptedButtons: Qt.AllButtons; onClicked: if (!parent.parent.ge.busy) win.sheet = "" } }
+            Rectangle { anchors.centerIn: parent; width: 560; height: geCol.height + 48; radius: 18; color: Theme.t.menu_bg; border.width: 1; border.color: Theme.t.menu_border
+                MouseArea { anchors.fill: parent }
+                Column { id: geCol; x: 24; y: 22; width: parent.width - 48; spacing: 12
+                    readonly property var ge: parent.parent.ge
+                    Label { font.pixelSize: 17; font.weight: Font.DemiBold; text: "Proton-GE" }
+                    Label { width: parent.width; wrapMode: Text.WordWrap; secondary: true; font.pixelSize: 12
+                        text: "GloriousEggroll's build of Proton: newer than Steam's own, with fixes for games that don't start or play badly with it. Install it here, restart Steam, then choose it for a game in its Properties › Compatibility. Steam's own stays the default for every other game." }
+                    Label { visible: !geCol.ge.steam; width: parent.width; wrapMode: Text.WordWrap; color: Theme.t.danger; font.pixelSize: 12
+                        text: "Steam isn't set up on this computer yet: get Steam and open it once, then come back." }
+                    Repeater { model: geCol.ge.installed || []
+                        Rectangle { required property var modelData; required property int index; width: geCol.width; height: 46; radius: 12; color: Theme.t.island
+                            Label { x: 14; anchors.verticalCenter: parent.verticalCenter; text: modelData + (index === 0 ? "   ·   newest you have" : ""); font.pixelSize: 13 }
+                            Btn { anchors { right: parent.right; rightMargin: 8; verticalCenter: parent.verticalCenter } text: "Remove"
+                                onClicked: { var n = modelData; win.confirmGe = n } } } }
+                    Label { visible: geCol.ge.steam && !(geCol.ge.installed || []).length && !geCol.ge.busy; secondary: true; font.pixelSize: 12; text: "None installed yet." }
+                    Rectangle { visible: geCol.ge.busy === "downloading"; width: geCol.width; height: 8; radius: 4; color: Theme.t.hover
+                        Rectangle { width: parent.width * geCol.ge.fraction; height: parent.height; radius: 4; color: Theme.t.accent } }
+                    Label { width: parent.width; wrapMode: Text.WordWrap; font.pixelSize: 12
+                        color: geCol.ge.error ? Theme.t.danger : Theme.t.text_secondary
+                        text: geCol.ge.error ? geCol.ge.error
+                            : geCol.ge.busy === "checking" ? "Asking GitHub for the newest…"
+                            : geCol.ge.busy === "downloading" ? "Downloading " + geCol.ge.latest + "… " + Math.round(geCol.ge.fraction * 100) + "% (about 500 MB), then checking it and unpacking"
+                            : geCol.ge.upToDate ? "You have the newest, " + geCol.ge.latest + "."
+                            : geCol.ge.latest ? "The newest is " + geCol.ge.latest + "." : "" }
+                    Row { anchors.right: parent.right; spacing: 8
+                        Btn { text: "Look Again"; visible: !geCol.ge.busy; onClicked: Backend.geCheck() }
+                        Btn { objectName: "geInstall"; primary: true; enabled: geCol.ge.steam && !!geCol.ge.latest && !geCol.ge.busy && !geCol.ge.upToDate
+                            text: (geCol.ge.installed || []).length ? "Update to " + (geCol.ge.latest || "the newest") : "Install " + (geCol.ge.latest || "the newest")
+                            onClicked: Backend.geInstall() }
+                        Btn { text: "Done"; enabled: geCol.ge.busy !== "downloading"; onClicked: win.sheet = "" } } } }
+            // removing one: asked first
+            Rectangle { visible: win.confirmGe !== ""; anchors.centerIn: parent; width: 420; height: 150; radius: 16; color: Theme.t.menu_bg; border.width: 1; border.color: Theme.t.menu_border; z: 2
+                Label { x: 22; y: 20; width: parent.width - 44; wrapMode: Text.WordWrap; font.pixelSize: 14; font.weight: Font.DemiBold; text: "Remove " + win.confirmGe + "?" }
+                Label { x: 22; y: 48; width: parent.width - 44; wrapMode: Text.WordWrap; secondary: true; font.pixelSize: 12; text: "Games set to use it go back to Steam's own Proton." }
+                Row { anchors { right: parent.right; rightMargin: 18; bottom: parent.bottom; bottomMargin: 16 } spacing: 8
+                    Btn { text: "Cancel"; onClicked: win.confirmGe = "" }
+                    Btn { primary: true; text: "Remove"; onClicked: { Backend.geRemove(win.confirmGe); win.confirmGe = "" } } } }
+        },
 
         // ---------------- add a game of your own
         Item { anchors.fill: parent; z: 20; visible: win.sheet === "add"

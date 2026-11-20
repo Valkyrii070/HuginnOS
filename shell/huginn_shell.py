@@ -180,7 +180,7 @@ class Settings(QObject):
     Each process watches the file, so a change made anywhere (realm, dark mode, menu style) shows everywhere."""
     changed = Signal()
     DEFAULTS = {"menuStyle": "one", "dark": "true", "realm": "aurora", "clock24": "true", "barDate": "true", "batteryPercent": "false", "barEverywhere": "true",
-                "dockMakeRoom": "true", "dockDots": "true", "dockFollows": "true", "glass": "full", "frameTimes": "false", "autoUpdate": "true", "liveWallpaper": "false",
+                "dockMakeRoom": "true", "dockDots": "true", "dockFollows": "true", "glass": "full", "frameTimes": "false", "gameStats": "false", "autoUpdate": "true", "liveWallpaper": "false",
                 "contrast": "false", "reduceTransparency": "false", "reduceMotion": "false", "uiScale": "1",       # accessibility
                 # Settings › Desktop & Dock
                 "dockSize": "44", "hideStyle": "drop", "dockClickHides": "true", "overviewOpen": "glide", "hotCorner": "false",
@@ -193,7 +193,7 @@ class Settings(QObject):
                 # Settings › Appearance › Icons: the icon theme ("" as the system says: Huginn's)
                 "iconTheme": ""}
     PICTURES = (".jpg", ".jpeg", ".png", ".webp", ".bmp", ".gif", ".avif", ".heic", ".jxl")
-    SWITCHES = ("clock24", "barDate", "batteryPercent", "barEverywhere", "dockMakeRoom", "dockDots", "dockFollows", "frameTimes", "autoUpdate", "liveWallpaper", "contrast", "reduceTransparency", "reduceMotion",
+    SWITCHES = ("clock24", "barDate", "batteryPercent", "barEverywhere", "dockMakeRoom", "dockDots", "dockFollows", "frameTimes", "gameStats", "autoUpdate", "liveWallpaper", "contrast", "reduceTransparency", "reduceMotion",
                 "dockClickHides", "hotCorner", "spacesAllScreens", "fillButtonLayouts", "snapGaps", "keepSnapped", "reopenApps", "rememberPlaces", "sharpX11", "allowTearing", "gameMode")
     SCALES = ("1", "1.25", "1.5", "1.75", "2")
 
@@ -271,6 +271,7 @@ class Settings(QObject):
     dockFollows = Property(bool, lambda self: self._values["dockFollows"] == "true", notify=changed)       # the dock comes to the screen whose bottom the pointer rests at
     glass = Property(str, lambda self: self._values["glass"], notify=changed)                               # the frosted glass: full, light (cheaper) or off
     frameTimes = Property(bool, lambda self: self._values["frameTimes"] == "true", notify=changed)          # the frame-time display (Super+Alt+F)
+    gameStats = Property(bool, lambda self: self._values["gameStats"] == "true", notify=changed)            # the game stats overlay (Super+Alt+G)
     # "Make room for windows": the dock slides away while a window covers its place (a filled one, or one dragged
     # over it), and comes back when the pointer reaches the bottom edge. (Was "dockHide", which nothing read.)
     dockMakeRoom = Property(bool, lambda self: self._values["dockMakeRoom"] == "true", notify=changed)

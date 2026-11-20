@@ -8,6 +8,10 @@
 //! to tear (tearing.rs). GameMode is told over the session bus, by process id, from a thread of its own (starting
 //! gamemoded can take a moment, and the drawing mustn't wait); X11 windows' ids come from the X server (XRes), so a
 //! game in Flatpak's own process numbering still counts. A game that ends is let go (gamemoded also notices).
+//!
+//! While any game plays, the computer's power mode is also held at Performance (power-profiles-daemon's
+//! HoldProfile, on the system bus; let go when the last game stops, or by the daemon if Huginn goes), where the
+//! computer has one (a desktop with amd-pstate does). The mode the person chose comes back after.
 
 use std::{
     collections::BTreeSet,
@@ -68,10 +72,12 @@ fn worker(rx: mpsc::Receiver<BTreeSet<u32>>) {
     let me = std::process::id() as i32;
     let mut told: BTreeSet<u32> = BTreeSet::new();
     let mut bus: Option<zbus::blocking::Connection> = None;
+    let mut power = Power::default();
     while let Ok(mut want) = rx.recv() {
         while let Ok(newer) = rx.try_recv() {
             want = newer;
         }
+        power.playing(!want.is_empty());
         if bus.is_none() {
             bus = zbus::blocking::Connection::session().ok();
         }
@@ -92,6 +98,49 @@ fn worker(rx: mpsc::Receiver<BTreeSet<u32>>) {
                 }
             }
             told.insert(pid);
+        }
+    }
+}
+
+/// The Performance power mode held while games play (power-profiles-daemon).
+#[derive(Default)]
+struct Power {
+    bus: Option<zbus::blocking::Connection>,
+    cookie: Option<(&'static str, &'static str, u32)>,
+}
+
+impl Power {
+    const NAMES: [(&'static str, &'static str); 2] = [
+        ("org.freedesktop.UPower.PowerProfiles", "/org/freedesktop/UPower/PowerProfiles"),
+        ("net.hadess.PowerProfiles", "/net/hadess/PowerProfiles"),
+    ];
+
+    fn playing(&mut self, on: bool) {
+        if on == self.cookie.is_some() {
+            return;
+        }
+        if self.bus.is_none() {
+            self.bus = zbus::blocking::Connection::system().ok();
+        }
+        let Some(bus) = self.bus.as_ref() else { return };
+        if on {
+            for (name, path) in Self::NAMES {
+                let held = bus
+                    .call_method(Some(name), path, Some(name), "HoldProfile", &("performance", "A game is playing", "org.huginn.Games"))
+                    .and_then(|reply| reply.body().deserialize::<u32>());
+                match held {
+                    Ok(cookie) => {
+                        tracing::info!("Performance power mode while a game plays");
+                        self.cookie = Some((name, path, cookie));
+                        return;
+                    }
+                    // no Performance mode on this computer, or the daemon under its other name
+                    Err(err) => tracing::debug!(?err, name, "power mode not held"),
+                }
+            }
+        } else if let Some((name, path, cookie)) = self.cookie.take() {
+            let _ = bus.call_method(Some(name), path, Some(name), "ReleaseProfile", &(cookie,));
+            tracing::info!("power mode back as it was");
         }
     }
 }

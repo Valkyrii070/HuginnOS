@@ -209,6 +209,11 @@ impl Compositor {
         crate::frames::report()
     }
 
+    /// The game stats overlay: the frames of the window a game plays in, per screen (frames.rs: game_report).
+    fn game_stats(&self) -> String {
+        crate::frames::game_report()
+    }
+
     /// The screens, in kscreen-doctor's JSON (`kscreen-doctor -j`), for Settings › Displays.
     fn displays(&self) -> String {
         let (tx, rx) = mpsc::channel();
