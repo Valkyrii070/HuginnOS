@@ -100,9 +100,9 @@ every screen. Not tested: anything needing a click or a real desktop session.
 
 | App | Works now | Not yet |
 | --- | --- | --- |
-| Writer | Real pages (Letter, A4, Legal, A5; margins; headers, footers, page numbers), styles, fonts, lists with levels and checklists, tables, pictures, links, find and replace, spelling, printing, Word in and out (see "Office, pro round one") | Comments, tracked changes, footnotes, columns, text wrapping round pictures |
-| Sheets | An Excel-compatible engine with about 120 functions; several sheets; frozen panes; formats; fill handle; sort, filters and charts; Excel files both ways with formulas, formats and charts | Conditional formatting, data validation, pivot tables, comments |
-| Slides | A free canvas: text boxes, shapes and pictures anywhere, sized and turned, with smart guides; six layouts, six themes, backgrounds; bullets with levels; transitions and builds; presenter view; PowerPoint both ways and vector PDF | Tables as real tables, charts, SmartArt, motion paths, audio and video |
+| Writer | Real pages (Letter, A4, Legal, A5; margins; headers, footers, page numbers), styles, fonts, lists with levels and checklists, tables, pictures, links, find and replace, spelling, printing, Word in and out (see "Office, pro round one") | Page columns; drawn shapes (their words come in), equations |
+| Sheets | An Excel-compatible engine with about 120 functions; several sheets; frozen panes; formats; fill handle; sort, filters and charts; Excel files both ways with formulas, formats and charts | Icon sets; pictures on a sheet |
+| Slides | A free canvas: text boxes, shapes and pictures anywhere, sized and turned, with smart guides; six layouts, six themes, backgrounds; bullets with levels; transitions and builds; presenter view; PowerPoint both ways and vector PDF | Motion paths, audio and video |
 
 Each app keeps its own work in an open format: Writer in HTML, Sheets and Slides in JSON (`.hsheet`, `.hslides`).
 
@@ -1931,6 +1931,33 @@ Before the first start on a desktop PC (a Radeon RX 9070 XT and three screens):
   the earlier suites still pass (Sheets 47 and 79, Slides 69 and 12, Writer 61, review 40). On screen: a list picked
   from and a value turned away, a note shown on hover, the Choices panel, a group chosen and sized, the footer on a
   slide, a footnote written and shown at the bottom of its page.
+
+## Office, round four (2026-11-19)
+
+- **Sheets: merged cells** (Format › Merge and centre, Unmerge; right-click): Excel's merged cells were kept but shown
+  as separate cells; now the first cell draws over all of them (its value, fill and alignment), the cells it covers
+  draw nothing, and a selection never cuts one (clicking a covered cell chooses the whole of it; arrows step over it).
+  Merging keeps the first cell's value, as Excel does, and says how many others went. Merged cells move with rows
+  and columns put in and taken out (and go when all their rows or columns do), undo with the sheet, and go to and
+  come from Excel as `mergeCells` (openpyxl reads them back).
+- **Writer: pictures beside the text** (the picture's island › Text beside: No, On its right, On its left): the
+  picture floats to that side and the text wraps round it (Qt's `float`). Word's pictures with Square, Tight or
+  Through wrapping come in that way (the side from their alignment, else from where they sit across the text), and
+  go out as Word's anchored pictures with Square wrapping (`wp:anchor`, `wp:wrapSquare`, aligned left or right).
+  Pictures placed freely elsewhere (in front of the text, behind it) still come in line, and the notice says so.
+- **Writer: text boxes' words**: they were dropped. A text box (Word 2010's `wps:txbx`, or VML's `v:textbox`; only
+  the first of `mc:AlternateContent`'s choices, so not twice) comes in as boxed text, a one-cell table with a thin
+  border, after the paragraph it was anchored to, at its width and to the right when Word had it there.
+- **Slides: SmartArt** comes in as the shapes PowerPoint last drew it with (the diagram's drawing part, which
+  PowerPoint keeps beside its data for apps that can't lay diagrams out, found through the data part's
+  `dataModelExt`): its boxes, arrows and words, where they were, as a group. Only a diagram without that drawing is
+  still left out.
+- Tested: 21 checks of merged cells (an openpyxl workbook in, shown, merging and unmerging, rows and columns in and
+  out, undo, out to Excel and read back by openpyxl), 11 of Word's side pictures and text boxes (python-docx files in,
+  Qt keeping the float, out to Word and read back by python-docx, and in again), 9 of setting a picture's side in
+  Writer (left, right, back in line, saved and opened), 7 of SmartArt (a python-pptx deck with a diagram); the
+  earlier suites still pass (Writer 57, review 40, footnotes 24, Sheets 47, 37 and 79, Slides 75, 22 and 12). On
+  screen: a sheet with a title merged across five columns, a label down two rows and a note block.
 
 ## Huginn's compositor, round six (2026-11-19)
 

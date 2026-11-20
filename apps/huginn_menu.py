@@ -69,6 +69,7 @@ APP_MENUS = {
                            item("Note…", "qml:noteCell"), item("Today's date", "qml:today")]),
                ("Format", [item("Bold", "qml:apply:bold", "Ctrl+B"), item("Italic", "qml:apply:italic", "Ctrl+I"), item("Underline", "qml:apply:underline", "Ctrl+U"), SEP,
                            item("Number", "qml:apply:number"), item("Currency", "qml:apply:currency"), item("Percent", "qml:apply:percent"), item("Date", "qml:apply:date"), SEP,
+                           item("Merge and centre", "qml:apply:merge"), item("Unmerge", "qml:apply:unmerge"), SEP,
                            item("Highlight cells…", "qml:highlightCells"), item("Clear the formatting", "qml:apply:clear")]),
                ("Data", [item("Sort smallest first", "qml:apply:sortUp"), item("Sort largest first", "qml:apply:sortDown"), item("Filter", "qml:filter"), SEP,
                          item("Choices for cells…", "qml:choices"), item("Pivot table…", "qml:summarise"), item("Refresh the pivot table", "qml:refreshSummary"), SEP,

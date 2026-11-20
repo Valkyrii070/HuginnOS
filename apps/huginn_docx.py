@@ -19,13 +19,15 @@ from xml.sax.saxutils import escape
 from PySide6.QtCore import Qt, QUrl
 
 import huginn_review as rv
-from PySide6.QtGui import QFont, QTextBlockFormat, QTextCharFormat, QTextDocument, QTextFormat, QTextListFormat
+from PySide6.QtGui import QFont, QTextBlockFormat, QTextCharFormat, QTextDocument, QTextFormat, QTextFrameFormat, QTextListFormat
 
 W = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
 R = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
 A = "http://schemas.openxmlformats.org/drawingml/2006/main"
 WP = "http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"
 PIC = "http://schemas.openxmlformats.org/drawingml/2006/picture"
+MC = "http://schemas.openxmlformats.org/markup-compatibility/2006"
+WPS = "http://schemas.microsoft.com/office/word/2010/wordprocessingShape"
 PKG = "http://schemas.openxmlformats.org/package/2006/relationships"
 REL = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
 MAX_PART = 64 * 1024 * 1024
@@ -153,7 +155,9 @@ def _text_runs(text: str, rpr: str) -> str:
     return "".join(out)
 
 
-def _picture(o: _Out, name: str, w: float, h: float) -> str:
+def _picture(o: _Out, name: str, w: float, h: float, side: str = "") -> str:
+    """A picture as Word's drawing: in line with the text, or (side "left"/"right") beside it, text wrapping round
+    it (Word's "Square")."""
     data, ext = None, "png"
     if name.startswith("data:"):
         m = re.match(r"data:image/([a-z+]+);base64,(.*)", name, re.S)
@@ -177,12 +181,21 @@ def _picture(o: _Out, name: str, w: float, h: float) -> str:
     o.media[fname] = data
     rid = o.rel(f"{REL}/image", f"media/{fname}")
     cx, cy = int(w * EMU_PX), int(h * EMU_PX)
+    graphic = (f'<wp:docPr id="{o.pic}" name="Picture {o.pic}"/><wp:cNvGraphicFramePr><a:graphicFrameLocks noChangeAspect="1"/></wp:cNvGraphicFramePr>'
+               f'<a:graphic><a:graphicData uri="{PIC}"><pic:pic><pic:nvPicPr><pic:cNvPr id="{o.pic}" name="{fname}"/><pic:cNvPicPr/></pic:nvPicPr>'
+               f'<pic:blipFill><a:blip r:embed="{rid}"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill>'
+               f'<pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="{cx}" cy="{cy}"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr>'
+               f'</pic:pic></a:graphicData></a:graphic>')
+    if side in ("left", "right"):
+        gap = 114300                                        # 0.125 in between the picture and the text
+        return (f'<w:r><w:drawing><wp:anchor distT="0" distB="0" distL="{gap}" distR="{gap}" simplePos="0" relativeHeight="{251658240 + o.pic}" '
+                f'behindDoc="0" locked="0" layoutInCell="1" allowOverlap="1"><wp:simplePos x="0" y="0"/>'
+                f'<wp:positionH relativeFrom="column"><wp:align>{side}</wp:align></wp:positionH>'
+                f'<wp:positionV relativeFrom="paragraph"><wp:posOffset>0</wp:posOffset></wp:positionV>'
+                f'<wp:extent cx="{cx}" cy="{cy}"/><wp:effectExtent l="0" t="0" r="0" b="0"/><wp:wrapSquare wrapText="bothSides"/>'
+                f'{graphic}</wp:anchor></w:drawing></w:r>')
     return (f'<w:r><w:drawing><wp:inline distT="0" distB="0" distL="0" distR="0"><wp:extent cx="{cx}" cy="{cy}"/>'
-            f'<wp:docPr id="{o.pic}" name="Picture {o.pic}"/><wp:cNvGraphicFramePr><a:graphicFrameLocks noChangeAspect="1"/></wp:cNvGraphicFramePr>'
-            f'<a:graphic><a:graphicData uri="{PIC}"><pic:pic><pic:nvPicPr><pic:cNvPr id="{o.pic}" name="{fname}"/><pic:cNvPicPr/></pic:nvPicPr>'
-            f'<pic:blipFill><a:blip r:embed="{rid}"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill>'
-            f'<pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="{cx}" cy="{cy}"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr>'
-            f'</pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r>')
+            f'{graphic}</wp:inline></w:drawing></w:r>')
 
 
 def _paragraph(o: _Out, block, default_family: str, in_cell: bool = False) -> str:
@@ -252,8 +265,13 @@ def _paragraph(o: _Out, block, default_family: str, in_cell: bool = False) -> st
         cf = frag.charFormat()
         if cf.isImageFormat():
             imf = cf.toImageFormat()
+            side = ""
+            holder = o.doc.objectForFormat(imf)              # an <img style="float: …">: Qt ties a floating frame to it
+            if holder is not None:
+                pos = holder.format().toFrameFormat().position()
+                side = "left" if pos == QTextFrameFormat.FloatLeft else "right" if pos == QTextFrameFormat.FloatRight else ""
             for _ in frag.text():
-                runs.append(_picture(o, imf.name(), imf.width(), imf.height()))
+                runs.append(_picture(o, imf.name(), imf.width(), imf.height(), side))
             continue
         fn = cf.anchorHref() if cf.isAnchor() else ""
         if fn.startswith("#fn-"):                       # a footnote's mark: Word numbers it itself
@@ -673,7 +691,8 @@ class _Reader:
         self.style_kind = {}            # styleId -> title | h1 | h2 | h3 | quote | code | list
         self.style_rpr = {}             # styleId -> its run properties (font, size, bold...)
         self.style_based = {}
-        self.pictures = self.anchored = 0
+        self.pictures = self.anchored = self.boxes = 0
+        self.pending_boxes = []                 # text boxes met in a paragraph: (inner html, width px, side)
         self.review, self.ids, self.next_id = {"next": 1, "changes": {}, "notes": {}}, {}, 1
         self.comments, self.open_notes = {}, []
         self.footnotes, self.fn_used = {}, []      # Word's footnotes and endnotes ("w<id>", "e<id>"), and those marked in the text, in order
@@ -906,7 +925,20 @@ class _Reader:
                 else:
                     text.append("<br/>")
             elif child.tag == _q("drawing") or child.tag == _q("pict"):
-                text.append(self.picture(child))
+                if any(True for _ in child.iter(_q("txbxContent"))):
+                    self.text_box(child)                    # its words go after this paragraph (body: pending_boxes)
+                else:
+                    text.append(self.picture(child))
+            elif child.tag == _q("AlternateContent", MC):
+                # Word 2010's shapes and text boxes, with an older form to fall back on: the first choice only
+                choice = child.find(_q("Choice", MC))
+                chosen = choice if choice is not None else child.find(_q("Fallback", MC))
+                for inner in (chosen if chosen is not None else []):
+                    if inner.tag in (_q("drawing"), _q("pict")):
+                        if any(True for _ in inner.iter(_q("txbxContent"))):
+                            self.text_box(inner)
+                        else:
+                            text.append(self.picture(inner))
             elif child.tag == _q("sym"):
                 text.append(html.escape(chr(int(child.get(_q("char"), "20"), 16)) if re.fullmatch(r"[0-9A-Fa-f]{1,4}", child.get(_q("char"), "")) else ""))
             elif child.tag == _q("noBreakHyphen"):
@@ -932,13 +964,64 @@ class _Reader:
         if not uri:
             return ""
         self.pictures += 1
-        if any(True for _ in el.iter(_q("anchor", WP))):
-            self.anchored += 1
         ext = next((e for e in el.iter(_q("extent", WP))), None)
         size = ""
         if ext is not None and (ext.get("cx") or "").isdigit() and (ext.get("cy") or "").isdigit():
             size = f' width="{int(ext.get("cx")) / EMU_PX:.0f}" height="{int(ext.get("cy")) / EMU_PX:.0f}"'
+        side = self.beside(el, ext)
+        if side:
+            return f'<img src="{uri}"{size} align="{side}"/>'
+        if any(True for _ in el.iter(_q("anchor", WP))) and not self.wrap_of(el) in ("topAndBottom", "none"):
+            self.anchored += 1
         return f'<img src="{uri}"{size}/>'
+
+    @staticmethod
+    def wrap_of(el) -> str:
+        """How Word wraps text round an anchored drawing: square, tight, through, topAndBottom, none ('' in line)."""
+        anchor = next((a for a in el.iter(_q("anchor", WP))), None)
+        if anchor is None:
+            return ""
+        for kind in ("wrapSquare", "wrapTight", "wrapThrough", "wrapTopAndBottom", "wrapNone"):
+            if anchor.find(_q(kind, WP)) is not None:
+                return kind[4].lower() + kind[5:]
+        return "none"
+
+    def beside(self, el, ext) -> str:
+        """A picture Word places beside the text, the text wrapping round it: which side ('left', 'right'), or ''.
+        From its horizontal alignment, else from where it sits across the text's width (about 6.5 in)."""
+        if self.wrap_of(el) not in ("square", "tight", "through"):
+            return ""
+        anchor = next((a for a in el.iter(_q("anchor", WP))), None)
+        pos = anchor.find(_q("positionH", WP)) if anchor is not None else None
+        if pos is None:
+            return "left"
+        align = pos.find(_q("align", WP))
+        if align is not None and (align.text or "").strip():
+            a = align.text.strip()
+            return {"right": "right", "outside": "right", "center": "right"}.get(a, "left")
+        off = pos.find(_q("posOffset", WP))
+        try:
+            x = int((off.text or "0").strip()) if off is not None else 0
+        except ValueError:
+            x = 0
+        width = int(ext.get("cx")) if ext is not None and (ext.get("cx") or "").isdigit() else 0
+        if pos.get("relativeFrom") == "page":
+            x -= 914400                                     # a usual 1 in margin
+        return "right" if x + width / 2 > 2971800 else "left"
+
+    def text_box(self, el) -> None:
+        """A text box (DrawingML's wps:txbx, or VML's v:textbox): its words, kept for after the paragraph it's in."""
+        content = next((c for c in el.iter(_q("txbxContent")) ), None)
+        if content is None:
+            return
+        anchor = next((a for a in el.iter(_q("anchor", WP))), None)
+        ext = next((e for e in el.iter(_q("extent", WP))), None)
+        width = int(ext.get("cx")) / EMU_PX if ext is not None and (ext.get("cx") or "").isdigit() else 0
+        side = ""
+        if anchor is not None:
+            side = self.beside(el, ext) if self.wrap_of(el) in ("square", "tight", "through") else ""
+        self.boxes += 1
+        self.pending_boxes.append((self.body(content), width, side))
 
     # ---- paragraphs
     def paragraph(self, par) -> tuple:
@@ -1010,9 +1093,24 @@ class _Reader:
             while stack and stack[-1][1] >= level:
                 out.append(f"</{stack.pop()[2]}>")
 
+        def boxes_after():
+            """The text boxes the last paragraph held: each a one-cell table with a thin border (Writer has no
+            floating text box), at its width, to the side Word placed it."""
+            if not self.pending_boxes:
+                return
+            close_to(0)
+            for inner, width, side in self.pending_boxes:
+                w = f' width="{min(width, 640):.0f}"' if width >= 40 else ' width="100%"'
+                al = f' align="{side}"' if side == "right" else ""
+                out.append(f'<table border="1" cellspacing="0" cellpadding="8"{w}{al} style="border-collapse:collapse;border-color:#9AA0A6">'
+                           f'<tr><td>{inner or "<p><br/></p>"}</td></tr></table>')
+            self.pending_boxes = []
+
         for child in body:
             if child.tag == _q("p"):
+                saved, self.pending_boxes = self.pending_boxes, []
                 info, opening, inner, closing, brk, check = self.paragraph(child)
+                mine, self.pending_boxes = self.pending_boxes, saved
                 pieces = inner.split("\x0c")
                 for k, piece in enumerate(pieces):
                     page_break = brk if k == 0 else True
@@ -1039,6 +1137,9 @@ class _Reader:
                         stack.append((nid, depth, tag))
                     mark = "" if check is None else (' class="checked"' if check else ' class="unchecked"')
                     out.append(f"<li{mark}>{piece}</li>")
+                if mine:
+                    self.pending_boxes = mine
+                    boxes_after()
             elif child.tag == _q("tbl"):
                 close_to(0)
                 out.append(self.table(child))
@@ -1152,14 +1253,22 @@ class _Reader:
             out.append("endnotes (they're footnotes now)")
         if any(el.tag.endswith("}oMath") for el in doc.iter()):
             out.append("equations")
-        shapes = sum(1 for el in doc.iter() if el.tag.endswith("}wsp") or el.tag.endswith("}txbx"))
+        # shapes with no words (text boxes come in as boxed text; a shape is counted once, not with its fallback)
+        shapes = 0
+        for alt in doc.iter(_q("AlternateContent", MC)):
+            choice = alt.find(_q("Choice", MC))
+            if choice is not None and any(el.tag == _q("wsp", WPS) for el in choice.iter()) and not any(True for _ in choice.iter(_q("txbxContent"))) \
+                    and not any(True for _ in choice.iter(_q("blip", A))):
+                shapes += 1
         if shapes:
-            out.append(_plural(shapes, "shape or text box", "shapes and text boxes"))
+            out.append(_plural(shapes, "shape", "shapes") + " (drawn shapes aren't kept; their words are)")
+        if self.boxes:
+            out.append(_plural(self.boxes, "text box", "text boxes") + " (kept as boxed text where they were)")
         charts = sum(1 for el in doc.iter() if el.tag.endswith("}chart") or el.tag.endswith("}relIds"))
         if charts:
             out.append(_plural(charts, "chart or diagram", "charts and diagrams"))
         if self.anchored:
-            out.append(_plural(self.anchored, "picture placed beside the text", "pictures placed beside the text") + " (kept in line with it)")
+            out.append(_plural(self.anchored, "picture placed freely on the page", "pictures placed freely on the page") + " (kept in line with the text)")
         return out
 
 

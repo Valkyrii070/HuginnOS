@@ -279,7 +279,88 @@ class Sheets(FileList):
             chk = self.check_at(r, c)
             if chk and chk["kind"] == "list":
                 out["pick"] = True
+        if self.sh.get("merges"):
+            m = self.merge_at(r, c)
+            if m:
+                if (r, c) == (m[0], m[1]):
+                    out["span"] = [m[2] - m[0] + 1, m[3] - m[1] + 1]       # rows, columns: the first cell draws them all
+                else:
+                    out["covered"] = True
+                    out["t"] = ""
         return out
+
+    # ------------------------------------------------------------------ merged cells (Excel's mergeCells)
+    def merges(self) -> list:
+        """The sheet's merged cells as [r0, c0, r1, c1]; they're kept as Excel writes them ("A1:C1")."""
+        key = tuple(self.sh.get("merges") or ())
+        if getattr(self, "_merge_key", None) != (id(self.sh), key):
+            spans = []
+            for text in key:
+                got = parse_span(text) if isinstance(text, str) else None
+                if got and (got[0], got[1]) != (got[2], got[3]):
+                    spans.append(list(got))
+            self._merge_key, self._merge_spans = (id(self.sh), key), spans
+            self._merge_cells = {(r, c): m for m in spans for r in range(m[0], m[2] + 1) for c in range(m[1], m[3] + 1)} \
+                if sum((m[2] - m[0] + 1) * (m[3] - m[1] + 1) for m in spans) <= 200_000 else None
+        return self._merge_spans
+
+    def merge_at(self, r: int, c: int):
+        spans = self.merges()
+        if not spans:
+            return None
+        if self._merge_cells is not None:
+            return self._merge_cells.get((r, c))
+        return next((m for m in spans if m[0] <= r <= m[2] and m[1] <= c <= m[3]), None)
+
+    @Slot(int, int, result="QVariantList")
+    def mergeAt(self, r: int, c: int) -> list:
+        m = self.merge_at(r, c)
+        return list(m) if m else []
+
+    @Slot(int, int, int, int, result="QVariantList")
+    def mergeBounds(self, r0: int, c0: int, r1: int, c1: int) -> list:
+        """The selection grown until no merged cell is cut by its edges."""
+        spans = self.merges()
+        grown = True
+        while grown and spans:
+            grown = False
+            for m in spans:
+                if m[2] >= r0 and m[0] <= r1 and m[3] >= c0 and m[1] <= c1:
+                    n0, n1, d0, d1 = min(r0, m[0]), max(r1, m[2]), min(c0, m[1]), max(c1, m[3])
+                    if (n0, n1, d0, d1) != (r0, r1, c0, c1):
+                        r0, r1, c0, c1, grown = n0, n1, d0, d1, True
+        return [r0, c0, r1, c1]
+
+    @Slot(int, int, int, int, result=str)
+    def mergeCells(self, r0: int, c0: int, r1: int, c1: int) -> str:
+        """Merge and centre, as Excel's button: one cell over these, keeping the first cell's value (the others'
+        values go, as in Excel), centred. Returns what to tell the person, or ''."""
+        r0, c0, r1, c1 = self.mergeBounds(r0, c0, r1, c1)
+        if (r0, c0) == (r1, c1):
+            return "Choose two or more cells to merge."
+        self._keep("merge")
+        lost = [k for k in self.sh["raw"] if r0 <= k[0] <= r1 and c0 <= k[1] <= c1 and k != (r0, c0)]
+        for k in lost:
+            self.sh["raw"].pop(k, None)
+        kept = [t for t in self.sh.get("merges") or [] if not ((m := parse_span(t)) and m[2] >= r0 and m[0] <= r1 and m[3] >= c0 and m[1] <= c1)]
+        kept.append(span_name(r0, c0, r1, c1))
+        self.sh["merges"] = kept
+        f = dict(self.sh["fmt"].get((r0, c0)) or {})
+        f["align"] = "center"
+        self.sh["fmt"][(r0, c0)] = f
+        self._done()
+        return f"Merged. Only the first cell's value is kept ({len(lost)} other {'value' if len(lost) == 1 else 'values'} went)." if lost else ""
+
+    @Slot(int, int, int, int, result=bool)
+    def unmergeCells(self, r0: int, c0: int, r1: int, c1: int) -> bool:
+        merges = self.sh.get("merges") or []
+        kept = [t for t in merges if not ((m := parse_span(t)) and m[2] >= r0 and m[0] <= r1 and m[3] >= c0 and m[1] <= c1)]
+        if len(kept) == len(merges):
+            return False
+        self._keep("merge")
+        self.sh["merges"] = kept
+        self._done()
+        return True
 
     @Slot(int, int, result=str)
     def raw(self, r: int, c: int) -> str:
@@ -622,6 +703,17 @@ class Sheets(FileList):
                 chk["range"] = span
                 kept.append(chk)
         self.sh["checks"] = kept
+        merges = []
+        for text in self.sh.get("merges") or []:
+            m = parse_span(text)
+            if not m:
+                continue
+            if count < 0 and m[lo] >= at and m[hi] < at - count:
+                continue                                    # all of it deleted
+            span = shifted(m)
+            if (span[0], span[1]) != (span[2], span[3]):
+                merges.append(span_name(*span))
+        self.sh["merges"] = merges
         self._done()
 
     # ------------------------------------------------------------------ what may go in cells (data validation)

@@ -93,6 +93,7 @@ GlassWindow {
         if (editing) endEdit(true)
         if (!extend) { ar = r; ac = c }
         cr = r; cc = c
+        snapToMerges()
         Backend.growTo(r); Backend.growCols(c)
         show(cr, cc)
         if (!inBar) gridKeys.forceActiveFocus()
@@ -177,6 +178,18 @@ GlassWindow {
         else if (what === "freezeTop") Backend.freeze(1, 0)
         else if (what === "freezeLeft") Backend.freeze(0, 1)
         else if (what === "unfreeze") Backend.freeze(0, 0)
+        else if (what === "merge") mergeSel()
+        else if (what === "unmerge") { if (Backend.unmergeCells(r0, c0, r1, c1)) tick++; else say("There are no merged cells here.") }
+    }
+    // merged cells (Excel's): one cell over several, its first cell's value and look drawn over them all
+    function mergeSel() { var why = Backend.mergeCells(r0, c0, r1, c1); tick++; snapToMerges(); if (why) say(why) }
+    function snapToMerges() {     // a selection never cuts a merged cell: it takes all of it
+        var b = Backend.mergeBounds(r0, c0, r1, c1)
+        if (b[0] === r0 && b[1] === c0 && b[2] === r1 && b[3] === c1) return
+        var m = Backend.mergeAt(ar, ac)
+        if (m.length && ar === cr && ac === cc) { ar = m[0]; ac = m[1]; cr = m[2]; cc = m[3]; return }   // one merged cell: its first cell is active
+        if (ar <= cr) { ar = Math.min(ar, b[0]); cr = Math.max(cr, b[2]) } else { cr = Math.min(cr, b[0]); ar = Math.max(ar, b[2]) }
+        if (ac <= cc) { ac = Math.min(ac, b[1]); cc = Math.max(cc, b[3]) } else { cc = Math.min(cc, b[1]); ac = Math.max(ac, b[3]) }
     }
     // the menus' Edit items: on the typing when there is some, else on the cells
     function typing() { var f = win.activeFocusItem; return f && f !== gridKeys && typeof f.selectAll === "function" && typeof f.paste === "function" ? f : null }
@@ -621,15 +634,28 @@ GlassWindow {
         readonly property bool inSel: r >= win.r0 && r <= win.r1 && c >= win.c0 && c <= win.c1
         readonly property bool active: r === win.ar && c === win.ac
         readonly property var flt: Backend.filterRange
+        // merged cells: the first draws the whole of it, over the cells it covers (which draw nothing of their own)
+        readonly property var span: cell.span || null
+        readonly property bool covered: !!cell.covered
+        readonly property real mw: { win.tick; if (!span) return width; var w = 0; for (var k = 0; k < span[1]; k++) w += Backend.colWidth(c + k); return w }
+        readonly property real mh: { win.tick; if (!span) return height; var h = 0; for (var k = 0; k < span[0]; k++) h += Backend.rowHeight(r + k); return h }
+        z: span ? 1 : 0
         implicitWidth: 100; implicitHeight: 26
-        color: cell.fill ? cell.fill : "#FFFFFF"
-        Rectangle { anchors.fill: parent; visible: cellItem.inSel && !cellItem.active; color: Qt.alpha(Theme.t.accent, 0.13) }
-        Rectangle { anchors.right: parent.right; width: 1; height: parent.height; color: "#E3E6EA" }
-        Rectangle { anchors.bottom: parent.bottom; width: parent.width; height: 1; color: "#E3E6EA" }
+        color: covered ? "transparent" : cell.fill ? cell.fill : "#FFFFFF"
+        Rectangle { visible: !!cellItem.span; width: cellItem.mw; height: cellItem.mh; color: cellItem.cell.fill ? cellItem.cell.fill : "#FFFFFF"
+            Rectangle { anchors.fill: parent; visible: cellItem.inSel && !cellItem.active; color: Qt.alpha(Theme.t.accent, 0.13) }
+            Rectangle { anchors.right: parent.right; width: 1; height: parent.height; color: "#E3E6EA" }
+            Rectangle { anchors.bottom: parent.bottom; width: parent.width; height: 1; color: "#E3E6EA" }
+            Rectangle { visible: cellItem.inSel && cellItem.r === win.r0 && cellItem.c === win.c0 && cellItem.r + cellItem.span[0] - 1 === win.r1 && cellItem.c + cellItem.span[1] - 1 === win.c1
+                anchors.fill: parent; color: "transparent"; border.width: 2; border.color: Theme.t.accent } }
+        Rectangle { anchors.fill: parent; visible: cellItem.inSel && !cellItem.active && !cellItem.span; color: Qt.alpha(Theme.t.accent, 0.13) }
+        Rectangle { visible: !cellItem.covered && !cellItem.span; anchors.right: parent.right; width: 1; height: parent.height; color: "#E3E6EA" }
+        Rectangle { visible: !cellItem.covered && !cellItem.span; anchors.bottom: parent.bottom; width: parent.width; height: 1; color: "#E3E6EA" }
         Rectangle { visible: cellItem.cell.bar !== undefined; x: 2; y: 3; height: parent.height - 7; radius: 2; width: Math.max(0, (parent.width - 5) * (cellItem.cell.bar || 0))   // a data bar
             gradient: Gradient { orientation: Gradient.Horizontal
                 GradientStop { position: 0; color: Qt.alpha(cellItem.cell.barColor || "#638EC6", 0.85) } GradientStop { position: 1; color: Qt.alpha(cellItem.cell.barColor || "#638EC6", 0.25) } } }
-        Text { anchors { fill: parent; leftMargin: 5; rightMargin: cellItem.flt.length && cellItem.r === cellItem.flt[0] && cellItem.c >= cellItem.flt[1] && cellItem.c <= cellItem.flt[3] ? 22 : 5 }
+        Text { width: cellItem.mw; height: cellItem.mh; leftPadding: 5
+            rightPadding: cellItem.flt.length && cellItem.r === cellItem.flt[0] && cellItem.c >= cellItem.flt[1] && cellItem.c <= cellItem.flt[3] ? 22 : 5
             text: cellItem.cell.t; textFormat: Text.PlainText; verticalAlignment: cellItem.cell.wrap ? Text.AlignTop : Text.AlignVCenter; topPadding: cellItem.cell.wrap ? 4 : 0
             horizontalAlignment: cellItem.cell.align === "right" ? Text.AlignRight : cellItem.cell.align === "center" ? Text.AlignHCenter : Text.AlignLeft
             wrapMode: cellItem.cell.wrap ? Text.Wrap : Text.NoWrap; elide: cellItem.cell.wrap || !cellItem.cell.n ? Text.ElideNone : Text.ElideNone; clip: !!cellItem.cell.n || !!cellItem.cell.wrap
@@ -821,6 +847,8 @@ GlassWindow {
         if (chartSel && (e.key === Qt.Key_Delete || e.key === Qt.Key_Backspace)) { var id = chartSel; chartSel = ""; Backend.removeChart(id); e.accepted = true; return }
         if (alt && e.key === Qt.Key_Down) { openPick(); e.accepted = true; return }
         if (moves[e.key]) { var d = moves[e.key], r = shift ? cr : ar, c = shift ? cc : ac
+            var on = !shift && !ctrl ? Backend.mergeAt(ar, ac) : []          // out of a merged cell: past its far side
+            if (on.length) { r = d[0] > 0 ? on[2] : on[0]; c = d[1] > 0 ? on[3] : on[1] }
             if (ctrl) { var to = Backend.edge(r, c, d[0], d[1]); select(to[0], to[1], shift) } else select(stepRow(r, d[0]), c + d[1], shift)
             e.accepted = true; return }
         if (e.key === Qt.Key_PageDown || e.key === Qt.Key_PageUp) { var n = Math.max(1, main.bottomRow - main.topRow - 1) * (e.key === Qt.Key_PageDown ? 1 : -1); select((shift ? cr : ar) + n, shift ? cc : ac, shift); e.accepted = true; return }
@@ -878,6 +906,9 @@ GlassWindow {
             MenuItem { label: "Sort Largest First"; onClicked: { win.menu = null; win.sortBy(true) } }
             MenuItem { label: "Clear"; keys: "Delete"; onClicked: { win.menu = null; Backend.clear(win.r0, win.c0, win.r1, win.c1, "contents"); win.tick++ } }
             MenuItem { label: "Clear the Formatting"; onClicked: { win.menu = null; Backend.clear(win.r0, win.c0, win.r1, win.c1, "formats"); win.tick++ } }
+            MenuItem { readonly property bool merged: (win.tick, Backend.mergeAt(win.ar, win.ac).length > 0)
+                visible: merged || win.r1 > win.r0 || win.c1 > win.c0; label: merged ? "Unmerge" : "Merge and Centre"
+                onClicked: { win.menu = null; win.apply(merged ? "unmerge" : "merge") } }
             Rectangle { width: parent.width; height: 1; color: Theme.t.islandLine }
             MenuItem { label: (win.tick, Backend.noteAt(win.ar, win.ac).text) ? "Edit the Note…" : "Add a Note…"; onClicked: { win.menu = null; win.noteCell() } }
             MenuItem { visible: (win.tick, !!Backend.noteAt(win.ar, win.ac).text); label: "Delete the Note"; onClicked: { win.menu = null; win.deleteNote() } }

@@ -881,8 +881,7 @@ def _read_sheet(z, target, root, sh, sst, fmts, unknown, lost, names, dxfs=(), d
             sh["filter"] = {"range": [p[0], p[1], q[0], q[1]], "hide": {}}
     merges = [m.get("ref") for m in root.iter(_q("mergeCell")) if m.get("ref")]
     if merges:
-        sh["merges"] = merges
-        lost["merges"] += 1
+        sh["merges"] = merges                               # shown merged (huginn_sheets: merges, merge_at)
     sh["rules"], skipped = _read_cf(root, list(dxfs))
     lost["cf"] += skipped
     sh["checks"], skipped = _read_dv(root, day_first)

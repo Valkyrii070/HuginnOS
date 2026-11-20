@@ -1148,7 +1148,15 @@ def read(path) -> tuple:
                     else:
                         rd.drop("charts Slides can't draw (kept out)")
                 else:
-                    rd.drop("diagrams (SmartArt)")
+                    drawn = smartart_items(part, sp, (x, y), theme, layout_key, locked)
+                    if drawn:
+                        if not locked and len(drawn) > 1:   # the diagram's shapes stay together, as a group
+                            counter[0] += 1
+                            for it in drawn:
+                                it["group"] = f"g{counter[0]}"
+                        out += drawn
+                    else:
+                        rd.drop("diagrams (SmartArt)")
                 continue
             if tag == "pic":
                 blip = sp.find(f"{p_('blipFill')}/{a_('blip')}")
@@ -1257,6 +1265,34 @@ def read(path) -> tuple:
         item = dict(base, kind="table", cells=cells, header=header, banded=banded, accent=accent, size=round(size or 18, 1))
         item.pop("paras", None)
         return item
+
+    def smartart_items(part: str, frame, at, theme: Theme, layout_key: str, locked: bool) -> list:
+        """A SmartArt diagram as the shapes PowerPoint last drew it with (its drawing part, kept beside the diagram's
+        data for apps that can't lay diagrams out): boxes, arrows and their words, where they were. The data part
+        says which drawing is its own (dataModelExt relId, a relationship of the slide); else the slide's only one."""
+        dgm = next((e for e in frame.iter() if e.tag.endswith("}relIds")), None)
+        rels = rd.rels(part)
+        drawing = ""
+        if dgm is not None:
+            data_part = rels.get(dgm.get(f"{{{R}}}dm", ""), ("", ""))[0]
+            data = rd.part(data_part) if data_part else None
+            ext = next((e for e in data.iter() if e.tag.endswith("}dataModelExt")), None) if data is not None else None
+            if ext is not None and ext.get("relId") in rels:
+                drawing = rels[ext.get("relId")][0]
+        if not drawing:
+            drawings = [t for t, k in rels.values() if k == "diagramDrawing"]
+            drawing = drawings[0] if len(drawings) == 1 else ""
+        root = rd.part(drawing) if drawing else None
+        tree = next((e for e in root.iter() if e.tag.endswith("}spTree")), None) if root is not None else None
+        if tree is None:
+            return []
+        # its shapes are DrawingML's in the diagram drawing's own namespace: read as a slide's would be
+        p_ns = f"{{{P}}}"
+        copy = ET.fromstring(ET.tostring(tree))
+        for el in copy.iter():
+            if el.tag.startswith("{http://schemas.microsoft.com/office/drawing/2008/diagram}"):
+                el.tag = p_ns + el.tag.split("}", 1)[1]
+        return items_from(copy, drawing, theme, lambda k, i: [], layout_key, (at[0], at[1], 1.0, 1.0), locked)
 
     def chart_item(part: str, rid: str, base: dict):
         """A chart from its own part (the numbers it keeps with it): columns, bars, lines and pies."""

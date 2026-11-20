@@ -305,7 +305,14 @@ GlassWindow {
             Repeater { model: [25, 50, 75, 100]
                 Seg { required property int modelData; text: modelData + "%"; on: Math.abs(Backend.pictureShare(editor.cursorPosition) - modelData) <= 1
                     onClicked: { Backend.sizePicture(editor.cursorPosition, modelData); win.refresh() } } }
-            Seg { text: "Left"; onClicked: win.apply("left") } Seg { text: "Centre"; onClicked: win.apply("center") } },
+            Seg { text: "Left"; onClicked: win.apply("left") } Seg { text: "Centre"; onClicked: win.apply("center") }
+            // text round it (Word's "Square"): the picture to one side, the words beside it
+            IslandGap {}
+            Label { text: "Text beside"; font.pixelSize: 11; secondary: true; leftPadding: 4; rightPadding: 2; anchors.verticalCenter: parent.verticalCenter }
+            Repeater { model: [["", "No"], ["left", "On its right"], ["right", "On its left"]]
+                Seg { required property var modelData; text: modelData[1]; objectName: "picSide-" + (modelData[0] || "none")
+                    on: (win.st, Backend.pictureSide(editor.cursorPosition)) === modelData[0]
+                    onClicked: { Backend.placePicture(editor.cursorPosition, modelData[0]); win.refresh() } } } },
         Island {   // formatting: the main island
             id: bar; visible: Backend.current !== ""; x: Math.max(12, Math.min(win.width - width - (zoomIsland.visible ? zoomIsland.width + 24 : 12), win.pageX + (win.width - win.pageX - width - (zoomIsland.visible ? zoomIsland.width + 30 : 0)) / 2))
             anchors { bottom: parent.bottom; bottomMargin: 14 }

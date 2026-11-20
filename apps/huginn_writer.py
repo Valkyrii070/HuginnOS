@@ -1521,6 +1521,41 @@ class Writer(FileList):
         fmt.setHeight(round(w * h0 / max(1, w0)))
         c.setCharFormat(fmt)
 
+    @Slot(int, result=str)
+    def pictureSide(self, position: int) -> str:
+        """Where a picture sits with the text wrapping round it: 'left', 'right', or '' (in line with the text)."""
+        hit = self._image_at(position)
+        if hit is None:
+            return ""
+        # Qt ties a floating frame to a floating picture; a cursor's format leaves that link out, the text's own keeps it
+        at = hit[0].selectionStart()
+        holder, it = None, self._doc.findBlock(at).begin()
+        while not it.atEnd():
+            frag = it.fragment()
+            if frag.position() <= at < frag.position() + frag.length() and frag.charFormat().isImageFormat():
+                holder = self._doc.objectForFormat(frag.charFormat())
+                break
+            it += 1
+        if holder is None:
+            return ""
+        pos = holder.format().toFrameFormat().position()
+        return "left" if pos == QTextFrameFormat.FloatLeft else "right" if pos == QTextFrameFormat.FloatRight else ""
+
+    @Slot(int, str)
+    def placePicture(self, position: int, side: str) -> None:
+        """Text round a picture (Word's "Square"): the picture to the left or right with the text beside it, or ''
+        back in line. Qt makes a picture float only as it reads one in, so it's put in again, the same picture."""
+        hit = self._image_at(position)
+        if hit is None or side not in ("", "left", "right") or side == self.pictureSide(position):
+            return
+        c, fmt = hit
+        name = fmt.name().replace('"', "%22")
+        size = (f' width="{round(fmt.width())}"' if fmt.width() > 0 else "") + (f' height="{round(fmt.height())}"' if fmt.height() > 0 else "")
+        c.beginEditBlock()
+        c.removeSelectedText()
+        c.insertHtml(f'<img src="{name}"{size}' + (f' style="float: {side};"' if side else "") + "/>")
+        c.endEditBlock()
+
     @Slot(int, result=int)
     def pictureShare(self, position: int) -> int:
         hit = self._image_at(position)
