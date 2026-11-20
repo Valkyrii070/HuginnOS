@@ -18,7 +18,8 @@ GlassWindow {
         { id: "accounts", label: "Online Accounts", glyph: "cloud", a: "#40CFE0", b: "#1479A8", group: "CONNECTIONS", sub: "Sign in once for mail, calendars, contacts and files." },
         { id: "ai", label: "AI", glyph: "sparkle", a: "#A48BFF", b: "#6D3FE0", group: "CONNECTIONS", sub: "Huginn AI: a model on this computer, or your account with Claude, OpenAI, Gemini or Copilot's models." },
         { id: "displays", label: "Displays", glyph: "display", a: "#6D7BFF", b: "#3640C9", group: "THIS COMPUTER", sub: "Resolution, size, arrangement and night light." },
-        { id: "graphics", label: "Graphics", glyph: "gamepad", a: "#FF6A3D", b: "#C2410C", group: "THIS COMPUTER", sub: "The graphics card: what it's doing, and how fast it runs." },
+        { id: "graphics", label: "Graphics", glyph: "cpu", a: "#FF6A3D", b: "#C2410C", group: "THIS COMPUTER", sub: "The graphics card: what it's doing, and how fast it runs." },
+        { id: "controllers", label: "Controllers", glyph: "gamepad", a: "#B07CFF", b: "#7A3FE0", group: "THIS COMPUTER", sub: "Game controllers: battery, and a test of every button and stick." },
         { id: "sound", label: "Sound", glyph: "volume", a: "#FF6E97", b: "#C2185B", group: "THIS COMPUTER", sub: "Speakers, headphones, microphones and each app's volume." },
         { id: "power", label: "Battery & Power", glyph: "battery", a: "#4BDB97", b: "#109F5E", group: "THIS COMPUTER", sub: "Battery health, power mode and when to sleep." },
         { id: "input", label: "Keyboard & Mouse", glyph: "keyboard", a: "#A7B0BD", b: "#5A6474", group: "THIS COMPUTER", sub: "Layouts, typing, the touchpad and the mouse." },
@@ -40,7 +41,7 @@ GlassWindow {
     readonly property var files: ({ appearance: "SetAppearance", desktop: "SetDesktop", notifications: "SetNotifications", network: "SetNetwork", bluetooth: "SetBluetooth",
                                     accounts: "SetAccounts", ai: "SetAI", displays: "SetDisplays", sound: "SetSound", power: "SetPower", input: "SetInput", keys: "SetKeys", time: "SetTime",
                                     language: "SetLanguage", users: "SetUsers", defaults: "SetDefaults", privacy: "SetPrivacy", updates: "SetUpdates", about: "SetAbout",
-                                    a11y: "SetAccessibility", printers: "SetPrinters", livemaker: "SetLiveMaker", graphics: "SetGraphics" })
+                                    a11y: "SetAccessibility", printers: "SetPrinters", livemaker: "SetLiveMaker", graphics: "SetGraphics", controllers: "SetControllers" })
     readonly property var index: [
         ["a11y", "Screen reader", "orca blind read aloud speech voice spoken accessibility"], ["a11y", "Zoom", "magnifier magnify enlarge screen accessibility"],
         ["a11y", "Make everything bigger", "large text size font scale accessibility"], ["a11y", "High contrast", "contrast low vision accessibility"],
@@ -67,7 +68,7 @@ GlassWindow {
         ["desktop", "Dock size", "dock bigger smaller icons"], ["desktop", "Hiding a window", "minimise minimize hide dock drop line comet"],
         ["desktop", "Stacks", "downloads folder dock stack"], ["desktop", "Today", "date calendar weather clocks world time agenda"],
         ["desktop", "Snapping windows", "snap layout halves thirds quarters tile fill button gaps"], ["desktop", "Games", "game mode gamemode performance freesync g-sync adaptive sync vrr tearing v-sync vsync stats overlay fps frame rate temperature mangohud"],
-        ["graphics", "Graphics card", "gpu amd radeon nvidia temperature clocks fan power vram video memory performance overclock game bar"], ["desktop", "Overview", "spaces workspaces virtual desktops hot corner mission control"],
+        ["graphics", "Graphics card", "gpu amd radeon nvidia temperature clocks fan power vram video memory performance overclock game bar"], ["controllers", "Game controllers", "controller gamepad joystick xbox playstation dualsense dualshock switch pro 8bitdo steam controller battery test buttons stick drift"], ["desktop", "Overview", "spaces workspaces virtual desktops hot corner mission control"],
         ["desktop", "Opening things in apps", "motion animation grow slide"],
         ["notifications", "Do Not Disturb", "quiet silence focus hours"], ["notifications", "App notifications", "banners sounds alerts badges"], ["notifications", "Previews", "lock screen private"],
         ["network", "Wi‑Fi", "wireless internet join password network"], ["network", "Airplane mode", "flight offline radio"], ["network", "VPN", "wireguard openvpn private network"],
@@ -126,7 +127,7 @@ GlassWindow {
     onPageChanged: { refresh(); flick.contentY = 0 }
     Component.onCompleted: refresh()
     function refresh() {
-        if (["network", "bluetooth", "displays", "sound", "notifications", "power", "input", "keys", "time", "language", "users", "defaults", "privacy", "about", "a11y", "printers", "graphics"].indexOf(page) >= 0) Backend.load(page)
+        if (["network", "bluetooth", "displays", "sound", "notifications", "power", "input", "keys", "time", "language", "users", "defaults", "privacy", "about", "a11y", "printers", "graphics", "controllers"].indexOf(page) >= 0) Backend.load(page)
         if (page === "desktop") Backend.load("displays")            // (Where apps open names the screens)
         if (page === "livemaker") Backend.load("look")
         if (page === "accounts" && typeof Accounts !== "undefined") Accounts.refresh()

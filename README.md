@@ -2194,6 +2194,24 @@ daemon (85), the file chooser portal (82), the password prompt (76) and four sma
   /dev/zram0 (2.9 GB in that 3 GB virtual PC), /dev/ntsync, earlyoom running and fluidsynth not. The password prompt
   saved less than hoped (76 → 70 MB: most of it is Qt itself, which the agent needs while it waits).
 
+## Controllers, a smaller image, and memory measured (2026-11-20)
+
+- **Settings › Controllers** (`apps/qml/SetControllers.qml`, `apps/huginn_pads.py`): the game controllers connected
+  now (the kernel's input devices a joystick handler took; motion sensors and touchpads left out), whether by USB or
+  Bluetooth, which maker's, and the battery and charging where the controller reports it. Test draws the controller
+  and lights each button, the D-pad, bumpers and triggers (how far) and both sticks (where they point, with their
+  numbers, so a drifting stick shows) as they move, read straight from its event device; the face buttons wear the
+  maker's marks (✕ ○ △ □, A B X Y). Looked at again every two seconds while the page shows. Pairing goes to Bluetooth.
+  Tested on a made-up device list and battery (15 checks) and drawn in demo mode; a real controller is for the PC.
+- **One kernel in the image**: the build kept the kernel it started with beside the one the upgrade brought (7.0.0-43
+  and -44: images, modules, headers and initramfs). `purge_old_kernels` (`scripts/build.sh`) now takes out every
+  kernel but the newest.
+- **Memory, measured rather than guessed**: building the shell's search, emoji, clipboard and game bar panels only when
+  opened saved nothing (the shell was 111 MB either way in the nested session: its memory is Qt and drawing, not those
+  panels), so that change was taken back. The password prompt now also loads Huginn's look only with its window
+  (−14 MB while it waits). KDE's portal and secret service (about 50 MB each in the virtual PC) start in the live
+  session after the installer opens, not in the desktop session here, so they were left as they are.
+
 ## Huginn, the browser
 
 Inside the Huginn repository (this kit is its `os/` folder) the image ships the repository's own browser. A kit used

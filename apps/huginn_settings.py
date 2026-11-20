@@ -1342,6 +1342,12 @@ def card_name() -> str:
     return ""
 
 
+def load_controllers() -> dict:
+    """Settings › Controllers: the game controllers connected now (huginn_pads.py)."""
+    import huginn_pads
+    return {"pads": huginn_pads.list_controllers()}
+
+
 def load_graphics() -> dict:
     """Settings › Graphics: the card (its name, driver, video memory) and, for AMD cards, the performance level.
     Its live readings come from gpuNow(), once a second while the page shows."""
@@ -1484,6 +1490,10 @@ def demo_state() -> dict:
                      "scanners": [{"id": "airscan:e0:Canon TS3300", "name": "Canon TS3300 flatbed"}]},
         "graphics": {"available": True, "name": "AMD Radeon RX 9070 XT", "driver": "amdgpu", "amd": True, "memTotal": 15.9, "level": "auto", "mesa": "26.0.8",
                      "capWatts": 304, "capMaxWatts": 334},
+        "controllers": {"pads": [{"id": "event21", "name": "DualSense Wireless Controller", "kind": "sony", "conn": "Bluetooth", "battery": 70,
+                                  "charging": False, "path": "/dev/input/event21"},
+                                 {"id": "event24", "name": "Xbox Wireless Controller", "kind": "xbox", "conn": "USB", "battery": -1, "charging": False,
+                                  "path": "/dev/input/event24"}]},
         "about": {"name": "Astrid's Desk", "hostname": "astrids-desk", "canRename": True,
                   "rows": [{"name": "Computer", "value": "Framework Laptop 13"},
                            {"name": "Processor", "value": "AMD Ryzen 7 7840U"}, {"name": "Graphics", "value": "Radeon 780M"},
@@ -1537,7 +1547,7 @@ def current_icon_theme() -> str:
 
 # ---------------------------------------------------------------------------------------------- the backend Settings talks to
 PAGES = ("network", "bluetooth", "displays", "sound", "notifications", "power", "input", "keys", "time", "language", "users", "defaults", "privacy", "about", "a11y", "look",
-         "printers", "graphics")
+         "printers", "graphics", "controllers")
 
 
 class SystemSettings(QObject):
@@ -1563,7 +1573,7 @@ class SystemSettings(QObject):
     notifications, power, input, time = _page("notifications", changed), _page("power", changed), _page("input", changed), _page("time", changed)
     language, users, defaults, privacy, about = _page("language", changed), _page("users", changed), _page("defaults", changed), _page("privacy", changed), _page("about", changed)
     a11y, look, keys, printers = _page("a11y", changed), _page("look", changed), _page("keys", changed), _page("printers", changed)
-    graphics = _page("graphics", changed)
+    graphics, controllers = _page("graphics", changed), _page("controllers", changed)
     del _page
     busy = Property("QVariantList", lambda self: sorted(self._busy), notify=changed)
     reportChanged = Signal()
@@ -1582,7 +1592,7 @@ class SystemSettings(QObject):
                 "input": load_input, "time": load_time, "language": load_language, "users": load_users,
                 "defaults": lambda: load_defaults(self._known_apps()), "privacy": lambda: load_privacy(self._known_apps()), "about": load_about,
                 "a11y": load_a11y, "look": load_look, "keys": lambda: load_keys(self._known_apps()), "printers": load_printers,
-                "graphics": load_graphics}[page]
+                "graphics": load_graphics, "controllers": load_controllers}[page]
 
     @Slot(str)
     def load(self, page: str) -> None:
@@ -2425,6 +2435,23 @@ class SystemSettings(QObject):
                   demo_change=lambda s: [o.update(admin=admin) for o in s["others"] if o["uid"] == uid])
 
     # -------------------------------------------------------------- default apps and start-up
+    # -------------------------------------------------------------- controllers
+    def _tester(self):
+        if getattr(self, "_pad", None) is None:
+            import huginn_pads
+            self._pad = huginn_pads.PadTester(self)
+        return self._pad
+
+    padTester = Property(QObject, _tester, constant=True)
+
+    @Slot(str)
+    def testPad(self, path: str) -> None:
+        """Settings › Controllers › Test: show this controller's buttons, sticks and triggers as they move."""
+        if self._demo:
+            self._tester().pretend()
+        else:
+            self._tester().start(path)
+
     # -------------------------------------------------------------- graphics
     @Slot(result="QVariantMap")
     def gpuNow(self) -> dict:

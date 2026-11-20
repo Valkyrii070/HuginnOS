@@ -187,6 +187,23 @@ purge_unwanted() {
         in_chroot apt-get -y install "${missing[@]}"
     fi
     in_chroot apt-mark manual "${pkgs[@]}" >/dev/null
+    purge_old_kernels
+}
+
+# Only the newest kernel. A dist-upgrade brings a new one in beside the one before (its image, modules, headers and
+# initramfs, about 450 MB in all) and nothing boots the old: the drive and the installed system start from /boot/vmlinuz,
+# the newest.
+purge_old_kernels() {
+    local newest base old
+    newest=$(in_chroot sh -c 'ls /lib/modules' | sort -V | tail -n 1)
+    base=${newest%-generic}
+    [ -n "$base" ] || return 0
+    mapfile -t old < <(in_chroot dpkg-query -W -f='${db:Status-Abbrev} ${Package}\n' 'linux-*' 2>/dev/null \
+        | awk '$1 == "ii" {print $2}' | grep -E -- '-[0-9]+\.[0-9]+\.[0-9]+-[0-9]+' | grep -vE -- "-${base//./\\.}(-|$)")
+    if (( ${#old[@]} )); then
+        log "Taking out older kernels (keeping $newest): ${old[*]}"
+        in_chroot apt-get -y purge "${old[@]}"
+    fi
 }
 
 # Rounded corners for every window, as Huginn's own apps draw theirs: KDE-Rounded-Corners (a KWin effect, GPL-3.0,

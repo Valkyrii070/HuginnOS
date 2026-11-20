@@ -336,13 +336,10 @@ def main() -> int:
     ap.add_argument("--dark", action="store_true")
     args = ap.parse_args()
     from PySide6.QtGui import QGuiApplication
-    from PySide6.QtQml import QQmlApplicationEngine
-    from huginn_shell import make_theme
     app = QGuiApplication(sys.argv[:1])
     app.setApplicationName("Authenticate")
     app.setDesktopFileName("huginn-authenticate")
     app.setQuitOnLastWindowClosed(False)                       # the window comes and goes; the agent stays
-    tokens, settings, theme = make_theme(args.dark, False, "", persist=False, app="authenticate")
     agent = Agent(args.process)
     if not agent.start():
         print("huginn-polkit: couldn't register with polkit (another agent may have this session)", file=sys.stderr)
@@ -359,9 +356,13 @@ def main() -> int:
     def load() -> None:
         if "engine" in ui:
             return
+        from PySide6.QtQml import QQmlApplicationEngine
+        if "theme" not in ui:                                   # Huginn's look (the shell's code: about 14 MB), once
+            from huginn_shell import make_theme
+            _tokens, ui["settings"], ui["theme"] = make_theme(args.dark, False, "", persist=False, app="authenticate")
         engine = QQmlApplicationEngine()
         ctx = engine.rootContext()
-        for name, obj in (("Theme", theme), ("Settings", settings), ("Agent", agent)):
+        for name, obj in (("Theme", ui["theme"]), ("Settings", ui["settings"]), ("Agent", agent)):
             ctx.setContextProperty(name, obj)
         engine.load(QUrl.fromLocalFile(str(HERE / "qml" / "Authenticate.qml")))
         ui["engine"] = engine
