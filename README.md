@@ -1932,6 +1932,15 @@ Before the first start on a desktop PC (a Radeon RX 9070 XT and three screens):
   from and a value turned away, a note shown on hover, the Choices panel, a group chosen and sized, the footer on a
   slide, a footnote written and shown at the bottom of its page.
 
+## Three screens, first start (2026-11-19)
+
+- **Arrange them, once**: two or more screens that have never been arranged (no place saved for any in
+  `~/.config/huginn/displays.json`) stand side by side in the order their sockets come, which may not be how they
+  stand on the desk. Fifteen seconds after signing in, a notification ("Huginn OS found three screens") offers
+  Arrange Them, which opens Settings › Displays (drag the screens, Identify, Make Main). It's asked once
+  (`~/.local/state/huginn/asked-to-arrange`), and tried again a little later if the notification server isn't up
+  yet. Checked in the nested session with a second screen: the banner and its button.
+
 ## Office, round four (2026-11-19)
 
 - **Sheets: merged cells** (Format › Merge and centre, Unmerge; right-click): Excel's merged cells were kept but shown

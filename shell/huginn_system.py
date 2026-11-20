@@ -175,6 +175,7 @@ class System(QObject):
             self._displays_watch.directoryChanged.connect(displays_changed)
             self._displays_watch.fileChanged.connect(displays_changed)
             displays_changed()
+            QTimer.singleShot(15000, self._offer_arranging)
         self._pump = QTimer(self, interval=40, timeout=lambda: GLib.MainContext.default().iteration(False))
         if not qt_runs_glib():
             self._pump.start()
@@ -909,6 +910,59 @@ for (var i = 0; i < all.length; i++) {{ var win = all[i]; if (String(win.interna
             cmd = ["systemctl", {"sleep": "suspend", "restart": "reboot", "shutdown": "poweroff"}[what]]
         if shutil.which(cmd[0]):
             subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+
+    def _offer_arranging(self, tries: int = 4) -> None:
+        """Two or more screens that have never been arranged (displays.json has no place for any of them): they stand
+        side by side in the order their sockets come, which may not be how they stand on the desk, so the pointer
+        leaves one screen by the wrong edge. Once, a notification offers to arrange them (Settings › Displays, with
+        each screen's name shown over it)."""
+        from PySide6.QtGui import QGuiApplication
+        app = QGuiApplication.instance()
+        if self._demo or self.sb is None or app is None or len(app.screens()) < 2:
+            return
+        asked = Path(os.environ.get("XDG_STATE_HOME") or Path.home() / ".local/state") / "huginn" / "asked-to-arrange"
+        if asked.exists():
+            return
+        try:
+            saved = json.loads((Path.home() / ".config/huginn/displays.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            saved = {}
+        if any(not k.startswith("_") and isinstance(v, dict) and "x" in v for k, v in (saved or {}).items()):
+            return                                      # arranged before (Settings › Displays saves each screen's place)
+        n = len(app.screens())
+        words = {2: "two", 3: "three", 4: "four"}.get(n, str(n))
+
+        def sent(conn, res):
+            try:
+                self._arrange_note = conn.call_finish(res).unpack()[0]
+            except GLib.Error:                          # the notification server isn't up yet: again in a while
+                self._arrange_note = 0
+                if tries > 1:
+                    QTimer.singleShot(10000, lambda: self._offer_arranging(tries - 1))
+                return
+            try:                                        # asked once, ever
+                asked.parent.mkdir(parents=True, exist_ok=True)
+                asked.touch()
+            except OSError:
+                pass
+        self._arrange_note = -1
+        if not getattr(self, "_arrange_listen", 0):
+            self._arrange_listen = self.sb.signal_subscribe(
+                "org.freedesktop.Notifications", "org.freedesktop.Notifications", "ActionInvoked", "/org/freedesktop/Notifications", None,
+                Gio.DBusSignalFlags.NONE, self._arrange_action)
+        self.sb.call("org.freedesktop.Notifications", "/org/freedesktop/Notifications", "org.freedesktop.Notifications", "Notify",
+                     GLib.Variant("(susssasa{sv}i)", ("Displays", 0, "preferences-desktop-display", f"Huginn OS found {words} screens",
+                                                       "They're side by side in the order they're plugged in. If the pointer leaves a screen "
+                                                       "by the wrong edge, put them in the order they stand on your desk, and choose the main "
+                                                       "one (it has the dock).",
+                                                       ["arrange", "Arrange Them", "default", "Arrange Them"], {}, 0)),
+                     None, Gio.DBusCallFlags.NONE, 3000, None, sent)
+
+    def _arrange_action(self, conn, sender, path, iface, signal, params) -> None:
+        nid, key = params.unpack()
+        if nid != getattr(self, "_arrange_note", -2) or key not in ("arrange", "default"):
+            return
+        self.openSettings("displays")
 
     @Slot(str)
     def openSettings(self, page: str) -> None:
