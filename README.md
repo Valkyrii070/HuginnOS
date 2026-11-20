@@ -2181,6 +2181,9 @@ daemon (85), the file chooser portal (82), the password prompt (76) and four sma
   password prompt loads its window only when polkit asks and lets it go five minutes after (`huginn_polkit.py`); the
   shortcuts agent, privacy watcher, automatic updates and accounts run as threads of one process
   (`huginn_helpers.py`: 44 MB in place of about 85).
+- **Measured again** the same way on the rebuilt drive: about 1.04 GB in place of 1.30 GB (−256 MB, −20%), with
+  /dev/zram0 (2.9 GB in that 3 GB virtual PC), /dev/ntsync, earlyoom running and fluidsynth not. The password prompt
+  saved less than hoped (76 → 70 MB: most of it is Qt itself, which the agent needs while it waits).
 
 ## Huginn, the browser
 
