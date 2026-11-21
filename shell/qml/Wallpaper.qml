@@ -11,7 +11,8 @@ Item {
     Timer { running: paper.comingIn; interval: 2600; onTriggered: paper.comingIn = false }
     // A window fills this screen (a game, a film, a filled window): nothing behind it needs to move (Shell.qml)
     property bool covered: false
-    readonly property bool moving: !covered && (paper.comingIn || (Settings.liveWallpaper && !Settings.reduceMotion))
+    property bool forceMoving: false                      // the screen saver's scene moves whatever the desktop's does
+    readonly property bool moving: !covered && (forceMoving || paper.comingIn || (Settings.liveWallpaper && !Settings.reduceMotion))
     // Settings › Appearance › Wallpaper: a live wallpaper someone made (CustomWallpaper.qml, next to the realms' scenes)
     readonly property bool made: Settings.wallpaper.slice(-15) === "/wallpaper.json"
     Loader {

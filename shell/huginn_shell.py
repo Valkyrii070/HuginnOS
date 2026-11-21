@@ -251,11 +251,21 @@ class Settings(QObject):
                 # Settings › Appearance › Icons: the icon theme ("" as the system says: Huginn's)
                 "iconTheme": "",
                 # the desktop's widgets, in order (Widgets.qml; edited on the desktop or in Settings › Desktop & Dock)
-                "widgets": "weather,privacy,next"}
+                "widgets": "weather,privacy,next",
+                # Settings › Desktop & Dock › Screen corners: what pushing the pointer into each does ("" nothing; the
+                # top right one also follows the older hotCorner switch)
+                "cornerTL": "", "cornerTR": "", "cornerBL": "", "cornerBR": "",
+                # Settings › Notifications: keep a week of them for the Control Centre's History
+                "notifHistory": "true",
+                # Settings › Appearance › Screen saver: what shows when the computer is left alone, and after how long
+                "saver": "clock", "saverAfter": "5"}
+    CORNERS = ("", "overview", "desktop", "launcher", "control", "today", "search", "lookup", "saver", "lock")
+    SAVERS = ("off", "clock", "photos", "wallpaper")
     WIDGETS = ("weather", "privacy", "next", "clock", "month", "system", "music", "photo")
     PICTURES = (".jpg", ".jpeg", ".png", ".webp", ".bmp", ".gif", ".avif", ".heic", ".jxl")
     SWITCHES = ("clock24", "barDate", "batteryPercent", "barEverywhere", "dockMakeRoom", "dockDots", "dockFollows", "frameTimes", "gameStats", "autoUpdate", "liveWallpaper", "contrast", "reduceTransparency", "reduceMotion",
-                "dockClickHides", "hotCorner", "spacesAllScreens", "fillButtonLayouts", "snapGaps", "keepSnapped", "reopenApps", "rememberPlaces", "sharpX11", "allowTearing", "gameMode")
+                "dockClickHides", "hotCorner", "spacesAllScreens", "fillButtonLayouts", "snapGaps", "keepSnapped", "reopenApps", "rememberPlaces", "sharpX11", "allowTearing", "gameMode",
+                "notifHistory")
     SCALES = ("1", "1.25", "1.5", "1.75", "2")
 
     def __init__(self, path: Path, realms: list, persist: bool = True):
@@ -264,6 +274,8 @@ class Settings(QObject):
         self._choices = {"menuStyle": ("one", "row", "dropdown", "inline"), "dark": ("true", "false"), "realm": tuple(realms), "uiScale": self.SCALES,
                          "dockSize": ("36", "40", "44", "52", "60"), "hideStyle": ("drop", "line", "comet"), "overviewOpen": ("glide", "light"),
                          "inAppMotion": ("grow", "slide"), "adaptiveSync": ("auto", "off"), "glass": ("full", "light", "off"),
+                         **{k: self.CORNERS for k in ("cornerTL", "cornerTR", "cornerBL", "cornerBR")},
+                         "saver": self.SAVERS, "saverAfter": ("1", "2", "5", "10", "15", "30"),
                          **{k: ("true", "false") for k in self.SWITCHES}}
         self._load()
         self._watcher = QFileSystemWatcher(self)
@@ -351,6 +363,13 @@ class Settings(QObject):
     dockClickHides = Property(bool, lambda self: self._values["dockClickHides"] == "true", notify=changed)
     overviewOpen = Property(str, lambda self: self._values["overviewOpen"], notify=changed)
     hotCorner = Property(bool, lambda self: self._values["hotCorner"] == "true", notify=changed)
+    cornerTL = Property(str, lambda self: self._values["cornerTL"], notify=changed)
+    cornerTR = Property(str, lambda self: self._values["cornerTR"] or ("overview" if self._values["hotCorner"] == "true" else ""), notify=changed)
+    cornerBL = Property(str, lambda self: self._values["cornerBL"], notify=changed)
+    cornerBR = Property(str, lambda self: self._values["cornerBR"], notify=changed)
+    notifHistory = Property(bool, lambda self: self._values["notifHistory"] == "true", notify=changed)
+    saver = Property(str, lambda self: self._values["saver"], notify=changed)
+    saverAfter = Property(int, lambda self: int(self._values["saverAfter"]), notify=changed)
     spacesAllScreens = Property(bool, lambda self: self._values["spacesAllScreens"] == "true", notify=changed)
     inAppMotion = Property(str, lambda self: self._values["inAppMotion"], notify=changed)
     fillButtonLayouts = Property(bool, lambda self: self._values["fillButtonLayouts"] == "true", notify=changed)

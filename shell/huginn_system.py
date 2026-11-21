@@ -21,7 +21,7 @@ import time
 from pathlib import Path
 
 from gi.repository import Gio, GLib
-from PySide6.QtCore import Property, QFileSystemWatcher, QObject, QTimer, Signal, Slot
+from PySide6.QtCore import Property, QFileSystemWatcher, QObject, QTimer, QUrl, Signal, Slot
 
 # KWin script: the window list for the shell (the same as huginnactive's main.js, for a shell started after KWin)
 WINDOWS_JS = """var lastWindows = "";
@@ -66,6 +66,7 @@ SHELL_XML = """<node><interface name="org.huginn.Shell">
 </interface></node>"""
 HISTORY = Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local/share") / "huginn" / "notifications.jsonl"
 SEEN_NOTES = Path(os.environ.get("XDG_STATE_HOME") or Path.home() / ".local/state") / "huginn" / "notifications-seen"
+CLEARED_NOTES = HISTORY.with_name("notifications-cleared")     # sessiond: Clear all, from when on the list shows them
 BUSY_FLAG = Path(os.environ.get("XDG_RUNTIME_DIR") or "/tmp") / "huginn-busy-screen"
 
 
@@ -855,17 +856,27 @@ for (var i = 0; i < all.length; i++) {{ var win = all[i]; if (String(win.interna
         self.refresh()
 
     @staticmethod
-    def _read_notes() -> list:
-        """What came, grouped by app (the newest of each, and how many more), newest app first."""
+    def _history_lines() -> list:
         try:
-            lines = HISTORY.read_text(encoding="utf-8").splitlines()[-60:]
+            return HISTORY.read_text(encoding="utf-8").splitlines()
         except OSError:
             return []
+
+    @staticmethod
+    def _read_notes() -> list:
+        """What came since Clear all, grouped by app (the newest of each, and how many more), newest app first."""
+        lines = System._history_lines()[-60:]
+        try:
+            cleared = int(CLEARED_NOTES.read_text(encoding="utf-8").strip() or 0)
+        except (OSError, ValueError):
+            cleared = 0
         out, at = [], {}
         for line in reversed(lines):
             try:
                 n = json.loads(line)
             except ValueError:
+                continue
+            if int(n.get("at", 0)) <= cleared:
                 continue
             app = n.get("app", "")
             if app in at:
@@ -1115,6 +1126,66 @@ for (var i = 0; i < all.length; i++) {{ var win = all[i]; if (String(win.interna
         self.changed.emit()
         if not self._demo:
             self._session("ClearNotifications")
+
+    @Slot(result="QVariantList")
+    def notificationHistory(self) -> list:
+        """Every notification of the last week (Settings › Notifications › Keep a history), newest first, each with its
+        day ("Today", "Yesterday", "Thu 19 Nov") for the Control Centre's History."""
+        if self._demo:
+            now = time.time()
+            rows = [("Mail", "Astrid Berg", "Lunch on Friday? I found a place by the harbour.", now - 600),
+                    ("Calendar", "Dentist in 30 minutes", "Tomorrow 09:00", now - 3600 * 3),
+                    ("Steam", "Download complete", "Hollow Knight is ready to play.", now - 3600 * 7),
+                    ("Software Update", "Updates installed", "Restart to finish.", now - 86400 * 1.2),
+                    ("Messages", "Sam", "See you at 6!", now - 86400 * 2.5)]
+            lines = [json.dumps({"app": a, "summary": t, "body": b, "time": time.strftime("%H:%M", time.localtime(at)), "at": int(at), "icon": ""})
+                     for a, t, b, at in reversed(rows)]
+        else:
+            lines = self._history_lines()
+        out, today = [], time.localtime()
+        for line in reversed(lines):
+            try:
+                n = json.loads(line)
+                t = time.localtime(int(n.get("at", 0)))
+            except (ValueError, OverflowError):
+                continue
+            days = (time.mktime((today.tm_year, today.tm_mon, today.tm_mday, 0, 0, 0, 0, 0, -1))
+                    - time.mktime((t.tm_year, t.tm_mon, t.tm_mday, 0, 0, 0, 0, 0, -1))) // 86400
+            day = "Today" if days <= 0 else "Yesterday" if days == 1 else time.strftime("%a %d %b", t)
+            out.append({"app": n.get("app", ""), "summary": n.get("summary", ""), "body": n.get("body", ""), "icon": n.get("icon", ""),
+                        "time": time.strftime("%H:%M", t), "day": day})
+        return out
+
+    @Slot(result="QVariantList")
+    def saverPhotos(self) -> list:
+        """The screen saver's photos: pictures in Pictures (not screenshots), newest first, up to 300."""
+        try:
+            from gi.repository import GLib
+            pictures = Path(GLib.get_user_special_dir(GLib.UserDirectory.DIRECTORY_PICTURES) or Path.home() / "Pictures")
+        except (ImportError, ValueError, TypeError):
+            pictures = Path.home() / "Pictures"
+        found, deadline = [], time.monotonic() + 1.5
+        for root, dirs, files in os.walk(pictures):
+            dirs[:] = [d for d in dirs if not d.startswith(".") and d.lower() != "screenshots"]
+            for f in files:
+                if f.lower().endswith((".jpg", ".jpeg", ".png", ".webp", ".heic", ".avif")) and not f.startswith("."):
+                    p = os.path.join(root, f)
+                    try:
+                        if os.path.getsize(p) > 60 * 1024:          # (icons and tiny pictures aren't photos)
+                            found.append((os.path.getmtime(p), p))
+                    except OSError:
+                        continue
+            if time.monotonic() > deadline or len(found) > 2000:
+                break
+        found.sort(reverse=True)
+        return [QUrl.fromLocalFile(p).toString() for _t, p in found[:300]]
+
+    @Slot()
+    def clearHistory(self) -> None:
+        self._notes = []
+        self.changed.emit()
+        if not self._demo:
+            self._session("ClearHistory")
 
     # ------------------------------------------------------------------ power (the start menu's bottom row)
     def _read_power(self) -> None:

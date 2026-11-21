@@ -51,6 +51,10 @@ Column {
                         onClicked: Dictation.choose(modelData.name) }
                     Seg { visible: modelData.here && !mrow.inUse; icon: "trash"; tip: "Remove"; anchors.verticalCenter: parent.verticalCenter
                         onClicked: Dictation.remove(modelData.name) } } } }
+        SetRow { title: "Tidy it up with Huginn AI"
+            sub: pg.d.aiReady ? "Punctuation and paragraphs, without the ums and false starts; lists where you list things. With a model on this computer it stays here too."
+                              : "Turn on Huginn AI in Settings › AI first"
+            Toggle { on: !!pg.d.tidy; enabled: !!pg.d.aiReady || !!pg.d.tidy; onToggled: function (v) { Dictation.set("tidy", v) } } }
         SetRow { title: "Stop when I pause"; sub: "Off: it listens until you press Super+H again (two minutes at most)"
             Toggle { on: pg.d.autoStop !== false; onToggled: function (v) { Dictation.set("autoStop", v) } } }
         SetRow { title: "Language"; sub: "What you'll speak. Automatic works it out each time."

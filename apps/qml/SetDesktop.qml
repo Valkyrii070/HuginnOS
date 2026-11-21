@@ -231,9 +231,18 @@ Column {
             SetChoice { each: 120; options: [["glide", "Glide apart"], ["light", "Glide with light"]]; value: Settings.overviewOpen
                 onPicked: function (v) { Settings.set("overviewOpen", v); pg.show("overview:" + v) }
                 HoverHandler { onHoveredChanged: if (hovered) pg.show("overview:" + Settings.overviewOpen) } } }
-        SetRow { title: "Hot corner"; sub: "Push the pointer into the top-right corner for the Overview."; Toggle { on: Settings.hotCorner; onToggled: function (v) { pg.sw("hotCorner")(v) } } }
         SetRow { title: "Spaces on every screen"; sub: "Switching space switches every screen together. Off: only the main screen has spaces, the others keep their windows."; Toggle { on: Settings.spacesAllScreens; onToggled: function (v) { pg.sw("spacesAllScreens")(v) } } }
     }
+    // ---------------------------------------------------------------- screen corners
+    readonly property var cornerActions: [["", "Nothing"], ["overview", "Overview"], ["desktop", "Show the desktop"], ["launcher", "Start menu"],
+        ["control", "Control Centre"], ["today", "Today"], ["search", "Search"], ["lookup", "Look Up"], ["saver", "Screen saver"], ["lock", "Lock the screen"]]
+    function cornerName(v) { var a = pg.cornerActions.filter(function (c) { return c[0] === v })[0]; return a ? a[1] : "Nothing" }
+    SetCard { title: "Screen corners"; note: "Push the pointer into a corner to do something at once. Only the outer corners of your screens count, so moving from one screen to the next never sets one off."
+        Repeater { model: [["cornerTL", "Top left"], ["cornerTR", "Top right"], ["cornerBL", "Bottom left"], ["cornerBR", "Bottom right"]]
+            SetRow { required property var modelData; title: modelData[1]
+                SetPick { text: pg.cornerName(Settings[modelData[0]])
+                    onClicked: win.pick(modelData[1] + " corner", pg.cornerActions.map(function (c) { return { id: c[0] || "none", label: c[1], sub: "" } }), Settings[modelData[0]] || "none",
+                                        function (v) { if (modelData[0] === "cornerTR") Settings.set("hotCorner", "false"); Settings.set(modelData[0], v === "none" ? "" : v) }) } } } }
     // ---------------------------------------------------------------- motion
     SetCard { title: "Motion"
         SetRow { title: "Opening things in apps"; sub: "A message, a photo or a dialog opens out of what you clicked, or slides in from the side."

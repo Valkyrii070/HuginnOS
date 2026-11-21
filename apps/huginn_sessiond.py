@@ -47,6 +47,8 @@ NOTIFY_FILE = CONFIG / "huginn-shell" / "notifications.json"
 SYSFS = Path(os.environ.get("HUGINN_SYSFS") or "/sys/class")      # tests point this at a pretend /sys/class
 TESTING = os.environ.get("HUGINN_SESSIOND_TEST") == "1"          # tests may answer questions over D-Bus
 HISTORY = DATA / "huginn" / "notifications.jsonl"
+CLEARED = DATA / "huginn" / "notifications-cleared"          # Clear all in the Control Centre: from when on it lists them
+HISTORY_DAYS = 7                                            # Settings › Notifications › Keep a history (on): this long
 # The installation drive's session: its account has no password, so nothing locks it by itself (asking still does).
 LIVE = os.path.exists("/cdrom/casper/filesystem.squashfs")
 
@@ -171,6 +173,7 @@ SESSION_XML = """<node><interface name="org.huginn.Session">
   <method name="Shown"><arg type="s" direction="out"/></method>
   <method name="Notifications"><arg type="s" direction="out"/></method>
   <method name="ClearNotifications"/>
+  <method name="ClearHistory"/>
   <method name="Reload"/>
   <method name="Levels"><arg type="d" name="brightness" direction="out"/><arg type="d" name="volume" direction="out"/><arg type="b" name="muted" direction="out"/></method>
   <method name="SetBrightness"><arg type="d" name="level" direction="in"/></method>
@@ -471,14 +474,35 @@ class Notifications(QObject):
     def _expire(self, nid):
         self.close(nid, 1)
 
+    @staticmethod
+    def keeps_history() -> bool:
+        try:
+            cfg = json.loads((Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "huginn-shell" / "settings.json").read_text())
+            return cfg.get("notifHistory", True) not in (False, "false")
+        except (OSError, ValueError):
+            return True
+
     def _remember(self, item: dict) -> None:
+        """Every notification goes here: the Control Centre lists the newest, its History all of the last week (or,
+        with Keep a history off, only what came since Clear all)."""
         if self._demo:
             return
         try:
             HISTORY.parent.mkdir(parents=True, exist_ok=True)
-            lines = HISTORY.read_text(encoding="utf-8").splitlines()[-99:] if HISTORY.exists() else []
-            lines.append(json.dumps({k: item[k] for k in ("app", "summary", "body", "time", "icon")} | {"at": int(time.time())}))
-            HISTORY.write_text("\n".join(lines) + "\n", encoding="utf-8")
+            lines = HISTORY.read_text(encoding="utf-8").splitlines()[-299:] if HISTORY.exists() else []
+            now = int(time.time())
+            oldest = now - (HISTORY_DAYS * 86400 if self.keeps_history() else 86400)
+            kept = []
+            for line in lines:
+                try:
+                    if int(json.loads(line).get("at", 0)) >= oldest:
+                        kept.append(line)
+                except ValueError:
+                    continue
+            kept.append(json.dumps({k: item[k] for k in ("app", "summary", "body", "time", "icon")} | {"at": now}))
+            tmp = HISTORY.with_suffix(".part")
+            tmp.write_text("\n".join(kept) + "\n", encoding="utf-8")
+            os.replace(tmp, HISTORY)
         except OSError:
             pass
 
@@ -918,11 +942,22 @@ class Session(QObject):
             if args[0] in ("lock", "sleep", "hibernate", "restart", "shutdown", "signout", "gamemode"):
                 self.do(args[0], interactive=True)
             return None
-        if method == "ClearNotifications":
+        if method == "ClearNotifications":                   # Clear all: the list empties; the history stays, if it's kept
             try:
-                HISTORY.unlink()
+                if self.notes.keeps_history():
+                    CLEARED.parent.mkdir(parents=True, exist_ok=True)
+                    CLEARED.write_text(str(int(time.time())), encoding="utf-8")
+                else:
+                    HISTORY.unlink()
             except OSError:
                 pass
+            return None
+        if method == "ClearHistory":
+            for f in (HISTORY, CLEARED):
+                try:
+                    f.unlink()
+                except OSError:
+                    pass
             return None
         if method == "Reload":
             self.reload()
@@ -1063,8 +1098,18 @@ class Session(QObject):
         if idle < 3:
             if self._stage:
                 self.wake_up()
+            if getattr(self, "_saver_on", False):
+                self._saver_on = False
+                self.shell_key("saver-off")
             self._idle_locked = False
             return
+        # the screen saver (Settings › Appearance › Screen saver): shown by the shell after its time left alone, before
+        # the screen dims; never over a film or a game, or while an app asks the screen to stay on
+        mode, after = self.saver_rules()
+        if mode != "off" and idle >= after and not getattr(self, "_saver_on", False) and self._stage == "" and not LIVE \
+                and not busy_screen() and not self.inhibited("screen"):
+            self._saver_on = True
+            self.shell_key("saver")
         locks = self._locks = getattr(self, "_locks", None) or self.lock_rules()
         if locks["auto"] and idle >= locks["after"] and not getattr(self, "_idle_locked", False) and not LIVE and not self.inhibited("screen"):
             self._idle_locked = True                          # once each time it's left alone
@@ -1082,6 +1127,24 @@ class Session(QObject):
             self._stage = "dim"
             self._dimmed_from = self.screen.now()
             self.screen.set(max(1, round(self._dimmed_from * 0.3)))
+
+    @staticmethod
+    def saver_rules() -> tuple:
+        try:
+            cfg = json.loads((Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "huginn-shell" / "settings.json").read_text())
+        except (OSError, ValueError):
+            cfg = {}
+        mode = cfg.get("saver", "clock")
+        try:
+            after = max(1, int(cfg.get("saverAfter", "5"))) * 60
+        except (TypeError, ValueError):
+            after = 300
+        return (mode if mode in ("off", "clock", "photos", "wallpaper") else "clock"), after
+
+    def shell_key(self, what: str) -> None:
+        """Tell the shell something (as the compositor's keys do: org.huginn.Shell.Key)."""
+        if self.sb:
+            self.sb.fire("org.huginn.Shell", "/org/huginn/Shell", "org.huginn.Shell", "Key", GLib.Variant("(s)", (what,)), timeout=2000)
 
     def wake_up(self) -> None:
         if self._stage == "off":

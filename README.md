@@ -2394,6 +2394,31 @@ backend in `huginn_app.py` went) and `apps/qml/Monitor.qml`.
 - **What's new for 0.4**, after updating: layouts, dictation, earlier versions and sync. The first tour mentions
   Super+Z and Super+H.
 
+## Ideas from Googlebook, done Huginn's way (2026-11-21, evening)
+
+- **Look Up (Super+A)**, like Circle to Search: the screen freezes, you circle or drag over anything (or click on
+  words), and its words are read on this computer with tesseract (as Scan uses). Copy Text, Translate (opens
+  Translate), Search the Web (in Huginn), Copy or Save Picture, or ask Huginn AI about it. The picture comes from the
+  compositor's Capture before the window shows (`apps/huginn_lens.py`, `Lens.qml`); copying goes through wl-copy, so
+  it stays after the window closes. Also on a screen corner.
+- **Dictation, tidied.** Settings › Keyboard & Mouse › Dictation › Tidy it up: what you said goes through Huginn AI
+  before it's typed (punctuation, paragraphs, no filler, lists where you listed things), like Googlebook's Rambler.
+  On this computer with a local model; what was heard is typed if it can't.
+- **Summaries in Files.** Quick Look on a document, PDF or text file has Summarize (Huginn AI); summaries are kept
+  until the file changes. `Files.doc_text` reads Word, OpenDocument, PowerPoint, PDF, HTML and text.
+- **Notification history.** The Control Centre's History: every notification of the last week, grouped by day.
+  Clear all now empties the list and keeps the history; Settings › Notifications › Keep a history turns it off.
+- **Screen corners.** Each corner of your screens can open the Overview, show the desktop, open the start menu, the
+  Control Centre, Today, Search or Look Up, start the screen saver, or lock. Only the outer corners of all your
+  screens together count, so crossing from one screen to the next never sets one off. (The old top-right hot corner
+  carries over.)
+- **Screen savers.** The time (drifting a little every minute), your photos (crossfading, from Pictures, screenshots
+  left out) or the realm's scene, after 1–30 minutes left alone and before the screen dims; never over a film, a game
+  or while an app keeps the screen on. The session daemon starts it (org.huginn.Shell.Key "saver"); Settings ›
+  Appearance has a Preview.
+- Huginn AI's new places (Dictation, Files, Look Up) each have their switch in Settings › AI › Where it shows, and a
+  one-shot call (`huginn_ai.ask_once`) for tools without a window of their own.
+
 ## Huginn, the browser
 
 Inside the Huginn repository (this kit is its `os/` folder) the image ships the repository's own browser. A kit used

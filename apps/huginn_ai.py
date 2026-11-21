@@ -54,7 +54,7 @@ USED = RUNTIME / "ai-used"
 # there while a game fills a screen (huginn-compositor: gamemode.rs) or Game Mode runs (huginn-game-session)
 GAME_PLAYING = Path(os.environ.get("XDG_RUNTIME_DIR") or f"/run/user/{os.getuid()}") / "huginn" / "game-playing"
 IDLE_STOP = 15 * 60
-SURFACES = ("search", "writer", "mail", "code", "notes", "documents", "feeds", "translate")
+SURFACES = ("search", "writer", "mail", "code", "notes", "documents", "feeds", "translate", "dictation", "files", "lens")
 HF = "https://huggingface.co"
 
 # ------------------------------------------------------------------------------------------- where it can run
@@ -135,10 +135,19 @@ TASKS = {
                      "indentation, nothing that's already there, no explanation, no code fences.\n\n{text}",
     "translate": "Translate the text below into {target}. Keep its meaning, tone, names and numbers. Reply with only the "
                  "translation.\n\n{text}",
+    "dictation": "Below is what a person said out loud, written down as it was heard. Make it into clean written text: "
+                 "punctuation, capital letters and paragraphs; leave out filler words (um, uh, like, you know), false starts "
+                 "and words said twice. Where they list things or say what needs doing, make it a list with '- '. Keep their "
+                 "own words, meaning and language (if they switch language, keep each part in its language). Add nothing. "
+                 "Reply with only the text.\n\n{text}",
+    "file-summary": "Summarise the file below in two or three short sentences: what it is and what matters in it. Use the "
+                    "file's language. Reply with only the summary.\n\nFile name: {ask}\n\n{text}",
+    "lens": "Someone pointed at this text on their screen and asks: {ask}\nAnswer briefly and plainly.\n\nText on the screen:\n{text}",
 }
 TITLES = {"ask": "Answer", "rewrite": "Rewritten", "proofread": "Proofread", "summarise": "Summary", "continue": "Continued",
           "reply": "Reply", "improve": "Improved", "explain-code": "What it does", "fix-code": "Fixed", "write-code": "Written",
-          "edit-code": "Changed", "tidy": "Tidied", "checklist": "Checklist", "ask-about": "Answer", "translate": "Translation"}
+          "edit-code": "Changed", "tidy": "Tidied", "checklist": "Checklist", "ask-about": "Answer", "translate": "Translation",
+          "dictation": "Tidied", "file-summary": "Summary", "lens": "Answer"}
 
 
 def prompt(task: str, text: str, extra: dict) -> str:
@@ -392,6 +401,29 @@ def chat(provider: str, model: str, messages: list, on_text, stopped=lambda: Fal
     if provider == "local":
         touch_used()
     return "".join(out)
+
+
+def ready(surface: str = "", cfg: dict = None) -> bool:
+    """Huginn AI is on, has somewhere to run, and isn't turned off for this place."""
+    cfg = cfg or load_config()
+    return bool(cfg.get("enabled")) and cfg.get("provider", "") in PROVIDERS and (not surface or cfg.get("where", {}).get(surface, True) is not False)
+
+
+def ask_once(task: str, text: str, extra: dict = None, surface: str = "", stopped=lambda: False, max_tokens: int = 1024) -> str:
+    """One answer, all at once, for tools without a window of their own (dictation, Files' summaries, the lens).
+    Raises Failed with words for the person."""
+    cfg = load_config()
+    if not ready(surface, cfg):
+        raise Failed("Huginn AI is off. Turn it on in Settings › AI.")
+    prov = cfg.get("provider", "")
+    model = cfg.get("local", {}).get("model") if prov == "local" else cfg.get("models", {}).get(prov, "")
+    if prov != "local" and not model:
+        rows = list_models(prov, cfg)
+        if not rows:
+            raise Failed("No model to use there yet: pick one in Settings › AI.")
+        model = rows[0]["id"]
+    msgs = [{"role": "system", "content": SYSTEM}, {"role": "user", "content": prompt(task, text, dict(extra or {}))}]
+    return chat(prov, model, msgs, lambda piece: None, stopped, cfg, max_tokens=max_tokens).strip()
 
 
 def list_models(provider: str, cfg: dict = None) -> list:

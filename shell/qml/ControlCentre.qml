@@ -78,6 +78,11 @@ Glass {
                 onPositionChanged: function (m) { if (pressed) to(m) } onPressed: function (m) { to(m) } }
         }
     }
+    // the notifications' history (Settings › Notifications › Keep a history): the last week, read when it's opened
+    property bool historyOpen: false
+    property var history: []
+    readonly property bool keepsHistory: Settings.notifHistory !== false && Settings.notifHistory !== "false"
+    onVisibleChanged: if (!visible) historyOpen = false
     // each app playing sound, with its own volume (under Sound): read every second and a half while this is open
     property bool appsOpen: false
     readonly property var appLevels: Status.appVolumes || []
@@ -381,17 +386,38 @@ Glass {
 
             // what came
             Item { width: parent.width; height: 20
-                Label { x: 2; text: "Notifications"; font.pixelSize: 12; font.weight: Font.DemiBold; anchors.verticalCenter: parent.verticalCenter }
-                Rectangle { visible: Status.notifications.length > 0; anchors { right: parent.right; verticalCenter: parent.verticalCenter }
-                    width: clearL.width + 18; height: 22; radius: 11; color: clr.containsMouse ? Theme.t.hover : "transparent"; border.width: 1; border.color: Theme.t.line
-                    Label { id: clearL; anchors.centerIn: parent; text: "Clear all"; font.pixelSize: 11 }
-                    MouseArea { id: clr; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor; onClicked: Status.clearNotifications() } } }
-            Block { visible: Status.notifications.length === 0; width: parent.width; height: 52
+                Label { x: 2; text: cc.historyOpen ? "Notifications · the last week" : "Notifications"; font.pixelSize: 12; font.weight: Font.DemiBold; anchors.verticalCenter: parent.verticalCenter }
+                Row { anchors { right: parent.right; verticalCenter: parent.verticalCenter } spacing: 6
+                    Rectangle { visible: cc.keepsHistory; width: histL.width + 18; height: 22; radius: 11; color: hst.containsMouse || cc.historyOpen ? Theme.t.hover : "transparent"; border.width: 1; border.color: Theme.t.line
+                        Label { id: histL; anchors.centerIn: parent; text: cc.historyOpen ? "Back" : "History"; font.pixelSize: 11 }
+                        MouseArea { id: hst; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
+                            onClicked: { if (!cc.historyOpen) cc.history = Status.notificationHistory(); cc.historyOpen = !cc.historyOpen } } }
+                    Rectangle { visible: cc.historyOpen ? cc.history.length > 0 : Status.notifications.length > 0; width: clearL.width + 18; height: 22; radius: 11
+                        color: clr.containsMouse ? Theme.t.hover : "transparent"; border.width: 1; border.color: Theme.t.line
+                        Label { id: clearL; anchors.centerIn: parent; text: cc.historyOpen ? "Clear history" : "Clear all"; font.pixelSize: 11 }
+                        MouseArea { id: clr; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
+                            onClicked: { if (cc.historyOpen) { Status.clearHistory(); cc.history = [] } else Status.clearNotifications() } } } } }
+            Column { visible: cc.historyOpen; width: parent.width; spacing: 6
+                Block { visible: cc.history.length === 0; width: parent.width; height: 52
+                    Glyph { x: 14; anchors.verticalCenter: parent.verticalCenter; name: "history"; size: 16; ink: Theme.t.text_secondary }
+                    Label { x: 40; width: parent.width - 54; anchors.verticalCenter: parent.verticalCenter; secondary: true; font.pixelSize: 12; text: "No notifications in the last week." } }
+                Repeater { model: cc.historyOpen ? cc.history : []
+                    Column { required property var modelData; required property int index; width: col.width; spacing: 6
+                        Label { visible: index === 0 || cc.history[index - 1].day !== modelData.day; x: 4; topPadding: index === 0 ? 0 : 6
+                            text: modelData.day; secondary: true; font.pixelSize: 11; font.weight: Font.DemiBold }
+                        Block { width: parent.width; height: hc.height + 18
+                            Column { id: hc; x: 14; y: 9; width: parent.width - 28; spacing: 2
+                                Row { width: parent.width; spacing: 6
+                                    Label { text: modelData.app; secondary: true; font.pixelSize: 11; font.weight: Font.DemiBold }
+                                    Label { text: modelData.time; secondary: true; font.pixelSize: 11 } }
+                                Label { text: modelData.summary; font.weight: Font.DemiBold; font.pixelSize: 12; width: parent.width; elide: Text.ElideRight }
+                                Label { visible: modelData.body !== ""; text: modelData.body; secondary: true; font.pixelSize: 12; width: parent.width; wrapMode: Text.WordWrap; maximumLineCount: 3; elide: Text.ElideRight } } } } } }
+            Block { visible: !cc.historyOpen && Status.notifications.length === 0; width: parent.width; height: 52
                 Glyph { x: 14; anchors.verticalCenter: parent.verticalCenter; name: Status.dnd ? "moon" : "bell"; size: 16; ink: Theme.t.text_secondary }
                 Label { x: 40; width: parent.width - 54; anchors.verticalCenter: parent.verticalCenter; wrapMode: Text.WordWrap; secondary: true; font.pixelSize: 12
                     text: Status.dnd ? "Do Not Disturb is on: they wait here quietly." : "Nothing new." } }
             Repeater {
-                model: Status.notifications
+                model: cc.historyOpen ? [] : Status.notifications
                 Block { required property var modelData; width: col.width; height: nc.height + 22
                     Column { id: nc; x: 14; y: 11; width: parent.width - 28; spacing: 2
                         Row { width: parent.width; spacing: 6

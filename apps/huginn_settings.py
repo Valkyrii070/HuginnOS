@@ -705,6 +705,7 @@ SHORTCUTS = [  # id, what it does, group, default keys ("|" between more than on
     ("emoji", "Emoji and symbols", "Finding and opening", "Super+period"),
     ("clipboard", "Clipboard history", "Finding and opening", "Super+V"),
     ("dictate", "Dictation: talk, and it types (again: done)", "Finding and opening", "Super+H"),
+    ("lookup", "Look Up: circle anything on the screen", "Finding and opening", "Super+A"),
     ("today", "Today", "Finding and opening", "Super+T"),
     ("snap-left", "Snap to the left (again: a third, two-thirds)", "Windows", "Super+Left"),
     ("snap-right", "Snap to the right (again: a third, two-thirds)", "Windows", "Super+Right"),
@@ -1968,6 +1969,16 @@ class SystemSettings(QObject):
                                                                  GLib.Variant("(s)", ("identify:" + json.dumps(names),)), None, 0, 3000, None)
         except Exception:                                      # noqa: BLE001  (no shell of ours to show them)
             self.said.emit("The names can't be shown on the screens here.", True)
+
+    @Slot()
+    def previewSaver(self) -> None:
+        """Settings › Appearance › Screen saver › Preview: the shell shows it now (any key or movement ends it)."""
+        try:
+            from gi.repository import Gio, GLib
+            Gio.bus_get_sync(Gio.BusType.SESSION, None).call_sync("org.huginn.Shell", "/org/huginn/Shell", "org.huginn.Shell", "Key",
+                                                                 GLib.Variant("(s)", ("saver-now",)), None, 0, 3000, None)
+        except Exception:                                      # noqa: BLE001
+            self.said.emit("The screen saver can be previewed in Huginn's own session.", True)
 
     @Slot(str, int, int)
     def placeScreen(self, name: str, x: int, y: int) -> None:

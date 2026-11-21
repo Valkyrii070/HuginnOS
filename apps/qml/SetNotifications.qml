@@ -18,7 +18,9 @@ Column {
                 SetPick { text: pg.n.to || ""; onClicked: win.pick("Quiet until", pg.hours(), pg.n.to, function (v) { Backend.setNotify("to", v) }) } } }
         SetRow { title: "Show what a notification says"
             SetChoice { each: 104; options: [["always", "Always"], ["unlocked", "When unlocked"], ["never", "Never"]]; value: pg.n.previews || "always"; onPicked: function (v) { Backend.setNotify("previews", v) } } }
-        SetRow { title: "Notification sounds"; Toggle { on: pg.n.sounds !== false; onToggled: function (v) { Backend.setNotify("sounds", v) } } } }
+        SetRow { title: "Notification sounds"; Toggle { on: pg.n.sounds !== false; onToggled: function (v) { Backend.setNotify("sounds", v) } } }
+        SetRow { title: "Keep a history"; sub: "The last week's notifications, missed or dismissed, under History in the Control Centre. Off: Clear all removes them."
+            Toggle { on: Settings.notifHistory; onToggled: function (v) { Settings.set("notifHistory", v ? "true" : "false") } } } }
     SetCard { title: "Apps"
         Item { width: parent.width; height: 30
             Label { anchors { right: parent.right; rightMargin: 16 + 2 * 58 + 6; verticalCenter: parent.verticalCenter } text: "Allow"; secondary: true; font.pixelSize: 11; width: 46; horizontalAlignment: Text.AlignHCenter }

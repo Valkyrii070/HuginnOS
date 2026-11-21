@@ -140,7 +140,10 @@ Column {
                            ["notes", "Notes", "edit", "Tidy up a note, make a checklist of it, summarise it or carry it on."],
                            ["documents", "Documents", "doc", "Summarise a PDF or a text, or ask questions about it."],
                            ["feeds", "Feeds", "list", "Summarise a story."],
-                           ["translate", "Translate", "translate", "Translate into any language, also ones with no pack on this computer."]]
+                           ["translate", "Translate", "translate", "Translate into any language, also ones with no pack on this computer."],
+                           ["dictation", "Dictation", "mic", "Tidy up what you say into clean text, when that's turned on in Keyboard & Mouse."],
+                           ["files", "Files", "folder", "Summarise a document or a PDF in Quick Look and Details."],
+                           ["lens", "Look Up (Super+A)", "search", "Answer questions about what you point at on the screen."]]
             SetRow { required property var modelData; title: modelData[1]; glyph: modelData[2]; sub: modelData[3]
                 Toggle { on: !pg.st.where || pg.st.where[modelData[0]] !== false; onToggled: function (v) { AI.setWhere(modelData[0], v) } } } }
         SetRow { title: "Suggest code as you type"; glyph: "code"

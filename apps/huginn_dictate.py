@@ -6,7 +6,9 @@ dock's live island, or a pause in what you say ends it. Everything happens on th
                 listening, and two and a half seconds of quiet after you've spoken ends it by itself (two minutes at
                 most). Cancel throws it away.
     writing     whisper.cpp (whisper-cli, built into the image from vendor/whisper.cpp) turns it into text, then it's
-                typed into the window in front, the way the emoji picker types (huginn_clipboard.type_text).
+                typed into the window in front, the way the emoji picker types (huginn_clipboard.type_text). With
+                "Tidy it up" on, Huginn AI first makes it into clean written text: punctuation, no filler words, lists
+                where you listed things (huginn_ai's "dictation" task; on this computer with a local model).
     the model   speech models are large, so none is in the image: one is downloaded the first time, from whisper.cpp's
                 own models on Hugging Face, and checked against the SHA-1 whisper.cpp publishes for it. Three sizes:
                 Quick (base, 142 MB), Balanced (small, 466 MB) and Accurate (large-v3-turbo, quantised, 547 MB).
@@ -71,6 +73,7 @@ def prefs() -> dict:
     p.setdefault("model", DEFAULT_MODEL)
     p.setdefault("language", "auto")
     p.setdefault("autoStop", True)
+    p.setdefault("tidy", False)
     return p
 
 
@@ -104,9 +107,31 @@ def have_model(name: str) -> bool:
     return model_path(name).is_file()
 
 
+def ai_ready() -> bool:
+    try:
+        import huginn_ai
+        return huginn_ai.ready("dictation")
+    except Exception:                                             # noqa: BLE001
+        return False
+
+
+def tidy_with_ai(text: str) -> str:
+    """Huginn AI makes what was said into clean written text (Settings › Keyboard & Mouse › Tidy it up). What was
+    heard is kept if it can't."""
+    try:
+        import huginn_ai
+        tidied = huginn_ai.ask_once("dictation", text, surface="dictation", max_tokens=max(256, len(text)))
+    except Exception as err:                                      # noqa: BLE001 — the words as heard are still typed
+        print("dictation: not tidied:", err, file=sys.stderr)
+        return text
+    tidied = tidied.strip().strip('"').strip()
+    return tidied if tidied and len(tidied) < len(text) * 3 + 200 else text   # (a runaway answer isn't what was said)
+
+
 def status() -> dict:
     p = prefs()
     return {"engine": bool(engine()), "cpuOk": cpu_ok(), "model": p["model"], "language": p["language"], "autoStop": p["autoStop"],
+            "tidy": bool(p.get("tidy")), "aiReady": ai_ready(),
             "models": [{"name": n, "label": m[0], "size": m[1], "here": have_model(n)} for n, m in MODELS.items()],
             "listening": _running_pid() is not None}
 
@@ -331,6 +356,11 @@ def dictate() -> int:
         except (RuntimeError, OSError, subprocess.SubprocessError) as err:
             text = ""
             say("Dictation stopped", str(err))
+    if text and p.get("tidy") and ai_ready():
+        show("Tidying it up…", "Huginn AI", actions=False)
+        if app is not None:
+            app.processEvents()
+        text = tidy_with_ai(text)
     if island is not None:
         island.end("dictation")
         if app is not None:
@@ -361,7 +391,7 @@ if QObject is not object:
 
         @staticmethod
         def _demo_status() -> dict:
-            return {"engine": True, "cpuOk": True, "model": "small", "language": "auto", "autoStop": True, "listening": False,
+            return {"engine": True, "cpuOk": True, "model": "small", "language": "auto", "autoStop": True, "listening": False, "tidy": False, "aiReady": True,
                     "models": [{"name": n, "label": m[0], "size": m[1], "here": n == "small"} for n, m in MODELS.items()]}
 
         st = Property("QVariantMap", lambda self: self._st, notify=changed)
@@ -425,14 +455,14 @@ if QObject is not object:
 
         @Slot(str, "QVariant")
         def set(self, key: str, value) -> None:
-            if key not in ("language", "autoStop"):
+            if key not in ("language", "autoStop", "tidy"):
                 return
             if self._demo:
                 self._st = dict(self._st, **{key: value})
                 self.changed.emit()
                 return
             p = prefs()
-            p[key] = bool(value) if key == "autoStop" else str(value)
+            p[key] = bool(value) if key in ("autoStop", "tidy") else str(value)
             save_prefs(p)
             self._refresh()
 

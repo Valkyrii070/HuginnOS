@@ -106,7 +106,14 @@ GlassWindow {
         if (sel.length > 1) { var first = entryOf(ordered()[0]); sheet = { kind: "renames", name: first ? first.name.replace(/\.[^.]*$/, "").replace(/[ _-]*\d+$/, "") : "", dir: true, why: "" }; return }
         var e = entryOf(sel[0]); if (e) sheet = { kind: "rename", path: e.path, name: e.name, dir: e.dir, why: "" } }
     function ordered() { return shown.filter(function (e) { return isSel(e.path) }).map(function (e) { return e.path }) }       // the selection, in the order shown
-    function look(i) { if (i < 0 || i >= shown.length) return; pick(i, false, false); var k = Backend.peek(shown[i].path); if (k.name !== undefined) sheet = { kind: "peek", data: k } }
+    function look(i) { if (i < 0 || i >= shown.length) return; pick(i, false, false); var k = Backend.peek(shown[i].path)
+        if (k.name !== undefined) { sheet = { kind: "peek", data: k }; sumPath = k.path || ""; sumText = sumPath ? Backend.summaryFor(sumPath) : ""; sumWhy = ""; summing = false } }
+    // Quick Look's summary (Huginn AI): kept for a file until it changes
+    property string sumPath: ""
+    property string sumText: ""
+    property string sumWhy: ""
+    property bool summing: false
+    Connections { target: Backend; function onSummarized(path, text, why) { if (path === win.sumPath) { win.sumText = text; win.sumWhy = why; win.summing = false } } }
     function paste() { if (!Backend.clipCount || !Backend.canWrite) return; var c = Backend.pasteClashes(); if (c.length) sheet = { kind: "clash", names: c, op: null }; else Backend.paste("keep") }
     function bin() { if (sel.length === 0) return; if (trash) sheet = { kind: "sure", what: "forever", paths: sel.slice() }; else Backend.trash(sel) }
     function nameNew(p) { if (p !== "") { search.text = ""; var i = place(p); if (i >= 0) { pick(i, false, false); startRename() } } }
@@ -468,7 +475,17 @@ GlassWindow {
                 visible: d !== null; anchors.centerIn: parent; width: Math.min(940, parent.width - 80); height: parent.height - 120; radius: 16; color: Theme.t.menu_bg; border.width: 1; border.color: Theme.t.menu_border
                 Label { x: 22; y: 16; width: parent.width - 240; elide: Text.ElideMiddle; font.pixelSize: 15; font.weight: Font.DemiBold; text: looker.d ? looker.d.name : "" }
                 Label { anchors { right: parent.right; rightMargin: 22 } y: 18; secondary: true; font.pixelSize: 12; text: looker.d ? looker.d.facts : "" }
-                Item { x: 16; y: 50; width: parent.width - 32; height: parent.height - 66; clip: true
+                readonly property bool sums: d !== null && (win.sumText !== "" || Backend.canSummarize(d.path || ""))
+                Rectangle { id: sumBox; visible: looker.sums; x: 16; y: 48; width: parent.width - 32; height: visible ? Math.max(44, sumCol.height + 20) : 0; radius: 10
+                    color: Qt.rgba(0.36, 0.55, 1, 0.12); border.width: 1; border.color: Qt.rgba(0.36, 0.55, 1, 0.3)
+                    Glyph { x: 12; y: 13; name: "sparkle"; size: 16; ink: Theme.t.accent }
+                    Column { id: sumCol; x: 38; y: 10; width: parent.width - 50 - (sumBtn.visible ? sumBtn.width + 10 : 0); spacing: 4
+                        Label { width: parent.width; wrapMode: Text.Wrap; font.pixelSize: 13; visible: win.sumText !== ""; text: win.sumText }
+                        Label { width: parent.width; wrapMode: Text.Wrap; font.pixelSize: 12; secondary: true; visible: win.sumText === ""
+                            text: win.summing ? "Summarizing…" : win.sumWhy !== "" ? win.sumWhy : "A few sentences on what this is and what matters in it, from Huginn AI." } }
+                    Btn { id: sumBtn; visible: win.sumText === "" && !win.summing; anchors { right: parent.right; rightMargin: 10; verticalCenter: parent.verticalCenter } text: "Summarize"
+                        onClicked: { win.summing = true; win.sumWhy = ""; Backend.summarize(looker.d.path) } } }
+                Item { x: 16; y: 50 + (sumBox.visible ? sumBox.height + 8 : 0); width: parent.width - 32; height: parent.height - 66 - (sumBox.visible ? sumBox.height + 8 : 0); clip: true
                     Image { visible: looker.d !== null && looker.d.kind === "picture"; anchors.fill: parent; fillMode: Image.PreserveAspectFit; asynchronous: true
                         horizontalAlignment: Image.AlignHCenter; verticalAlignment: looker.d && /\.pdf$/i.test(looker.d.name) ? Image.AlignTop : Image.AlignVCenter
                         source: looker.d && looker.d.kind === "picture" ? looker.d.source : "" }

@@ -14,7 +14,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 OUT = Path(os.environ.get("SMOKE_OUT", "/tmp/huginn-smoke"))
 APPS = """archives authenticator backup books calculator calendar camera characters clips clock code contacts disks documents
-easel feeds files fonts games help installer machines mail maps messages money monitor music notes passwords phone photos
+easel feeds files fonts games help installer lens machines mail maps messages money monitor music notes passwords phone photos
 podcasts print privacy recorder reminders scan screenshot settings sharing sheets shortcuts slides store tempo translate
 video weather welcome writer""".split()
 PROBLEM = re.compile(r"\.qml:\d+|(qml|QML).*(Error|error)|Traceback|ReferenceError|TypeError|is not a type|Cannot assign|No module")

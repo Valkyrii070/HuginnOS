@@ -621,6 +621,7 @@ impl<B: Backend + 'static> HuginnState<B> {
             "close" => self.overview_close(None),
             "open" => self.overview_open(),
             "toggle" => self.overview_toggle(),
+            "desktop" => self.show_desktop(),                    // (a screen corner set to Show the desktop)
             "activate" => {
                 let w = arg.parse::<u64>().ok().and_then(|id| self.any_window_by_id(id));
                 if let Some(w) = &w {

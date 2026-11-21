@@ -268,6 +268,9 @@ QtObject {
                 for (var wi = 0; wi < ws.length; wi++) if (ws[wi].active && !ws[wi].minimised) front = ws[wi].id
                 shell.layoutsFor = front; shell.open = "layouts" }
             else if (what === "menu") shell.appMenu("")
+            else if (what === "saver") shell.saverOn = Settings.saver !== "off"
+            else if (what === "saver-now") shell.saverOn = true
+            else if (what === "saver-off") shell.saverOn = false
             else if (what.indexOf("run:") === 0) shell.runKey(what.slice(4))
             else if (what.indexOf("edge:") === 0) shell.pointerAtEdge(what.slice(5))
             else if (what === "frames") Settings.set("frameTimes", Settings.frameTimes ? "false" : "true")
@@ -867,15 +870,85 @@ QtObject {
                 NumberAnimation { target: spaceName; property: "opacity"; to: 0; duration: 300 }
             }
         }
-    },
-    Window {   // the hot corner (top right; off until turned on): the Overview
-        visible: Settings.hotCorner; width: 2; height: 2; color: "transparent"
-        LayerShell.Window.scope: "huginn-hot-corner"
-        LayerShell.Window.layer: LayerShell.Window.LayerOverlay
-        LayerShell.Window.anchors: LayerShell.Window.AnchorTop | LayerShell.Window.AnchorRight
-        LayerShell.Window.exclusionZone: -1
-        LayerShell.Window.keyboardInteractivity: LayerShell.Window.KeyboardInteractivityNone
-        MouseArea { anchors.fill: parent; hoverEnabled: true; onEntered: Status.overviewDo("toggle") }
     }
     ]
+    // Screen corners (Settings › Desktop & Dock): pushing the pointer into one does what it's set to. Only the outer
+    // corners of all the screens together, so moving from one screen to the next never sets one off.
+    function cornerDo(what) {
+        if (what === "overview") Status.overviewDo("toggle")
+        else if (what === "desktop") Status.overviewDo("desktop")
+        else if (what === "launcher") shell.open = shell.open === "launcher" ? "" : "launcher"
+        else if (what === "control") shell.open = shell.open === "cc" ? "" : "cc"
+        else if (what === "today") shell.open = shell.open === "today" ? "" : "today"
+        else if (what === "search") { shell.searchText = ""; shell.open = shell.open === "search" ? "" : "search" }
+        else if (what === "lookup") Apps.launch("python3 /usr/share/huginn-apps/huginn_app.py lens")
+        else if (what === "saver") shell.saverOn = true
+        else if (what === "lock") Status.power("lock")
+    }
+    function outerCorner(sc, right, bottom) {
+        var all = Status.screenList, g = sc.geometry
+        var cx = right ? g.x + g.width : g.x - 1, cy = bottom ? g.y + g.height - 1 : g.y      // just beside it
+        var vx = right ? g.x + g.width - 1 : g.x, vy = bottom ? g.y + g.height : g.y - 1       // just above or below it
+        for (var i = 0; i < all.length; i++) {
+            if (all[i] === sc) continue
+            var o = all[i].geometry
+            if ((cx >= o.x && cx < o.x + o.width && cy >= o.y && cy < o.y + o.height) || (vx >= o.x && vx < o.x + o.width && vy >= o.y && vy < o.y + o.height)) return false
+        }
+        return true
+    }
+    property Instantiator corners: Instantiator {
+        model: {
+            var out = [], all = Status.screenList, names = [["cornerTL", false, false], ["cornerTR", true, false], ["cornerBL", false, true], ["cornerBR", true, true]]
+            for (var i = 0; i < all.length; i++)
+                for (var k = 0; k < 4; k++)
+                    if (Settings[names[k][0]] !== "" && shell.outerCorner(all[i], names[k][1], names[k][2]))
+                        out.push({ screen: all[i], what: Settings[names[k][0]], right: names[k][1], bottom: names[k][2] })
+            return out
+        }
+        delegate: Window {
+            required property var modelData
+            visible: true; width: 2; height: 2; color: "transparent"
+            LayerShell.Window.screen: modelData.screen
+            LayerShell.Window.wantsToBeOnActiveScreen: false
+            LayerShell.Window.scope: "huginn-hot-corner"
+            LayerShell.Window.layer: LayerShell.Window.LayerOverlay
+            LayerShell.Window.anchors: (modelData.bottom ? LayerShell.Window.AnchorBottom : LayerShell.Window.AnchorTop) | (modelData.right ? LayerShell.Window.AnchorRight : LayerShell.Window.AnchorLeft)
+            LayerShell.Window.exclusionZone: -1
+            LayerShell.Window.keyboardInteractivity: LayerShell.Window.KeyboardInteractivityNone
+            MouseArea { anchors.fill: parent; hoverEnabled: true; onEntered: shell.cornerDo(modelData.what) }
+        }
+    }
+    // The screen saver (Saver.qml), on every screen: the session daemon starts it (org.huginn.Shell.Key "saver") after
+    // Settings' time left alone; a corner or Settings' Preview can too. Any key or movement ends it.
+    property bool saverOn: false
+    property var saverPhotos: []
+    onSaverOnChanged: if (saverOn && Settings.saver === "photos") saverPhotos = Status.saverPhotos()
+    property Instantiator savers: Instantiator {
+        model: shell.saverOn ? Status.screenList : []
+        delegate: Window {
+            id: saverWin
+            required property var modelData
+            readonly property bool main: modelData.name === Status.primaryScreen || (Status.primaryScreen === "" && Status.screenList[0] === modelData)
+            property real since: Date.now()
+            visible: true; color: "black"
+            LayerShell.Window.screen: modelData
+            LayerShell.Window.wantsToBeOnActiveScreen: false
+            LayerShell.Window.scope: "huginn-screen-saver"
+            LayerShell.Window.layer: LayerShell.Window.LayerOverlay
+            LayerShell.Window.anchors: LayerShell.Window.AnchorTop | LayerShell.Window.AnchorBottom | LayerShell.Window.AnchorLeft | LayerShell.Window.AnchorRight
+            LayerShell.Window.exclusionZone: -1
+            LayerShell.Window.keyboardInteractivity: saverWin.main ? LayerShell.Window.KeyboardInteractivityExclusive : LayerShell.Window.KeyboardInteractivityNone
+            Saver { id: saverItem; anchors.fill: parent; mode: Settings.saver === "off" ? "clock" : Settings.saver; photos: shell.saverPhotos; main: saverWin.main
+                opacity: 0; NumberAnimation on opacity { to: 1; duration: 900; easing.type: Easing.OutCubic }
+                focus: true; Keys.onPressed: function (e) { shell.saverOn = false; e.accepted = true } }
+            MouseArea { anchors.fill: parent; hoverEnabled: true; acceptedButtons: Qt.AllButtons
+                property point first: Qt.point(-1, -1)
+                // (appearing under the pointer counts as no movement: a small shift or a click ends it)
+                onPositionChanged: function (m) { if (first.x < 0) { first = Qt.point(m.x, m.y); return }
+                    if (Date.now() - saverWin.since > 800 && Math.abs(m.x - first.x) + Math.abs(m.y - first.y) > 6) shell.saverOn = false }
+                onPressed: shell.saverOn = false
+                onWheel: shell.saverOn = false }
+            Component.onCompleted: if (main) saverItem.forceActiveFocus()
+        }
+    }
 }

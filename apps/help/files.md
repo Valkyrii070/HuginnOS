@@ -9,6 +9,8 @@ Select a file and press Space for a quick look at pictures, videos, PDFs and tex
 
 Pictures, videos, PDFs, documents, sheets and presentations show a small picture of themselves instead of an icon (a video a frame from it, a document its first page).
 
+With Huginn AI on, Quick Look on a document, a PDF or a text file has Summarize: a few sentences on what it is and what matters in it. A summary is kept until the file changes, so it shows at once the next time.
+
 ## Copy, move and undo
 Drag files onto a folder, a place on the left or a drive. Ctrl+C, Ctrl+X and Ctrl+V work as usual, and Ctrl+Z undoes the last rename, move, copy or move to Trash.
 

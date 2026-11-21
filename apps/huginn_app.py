@@ -232,6 +232,8 @@ class Files(QObject):
     undoChanged = Signal()
     _finished = Signal(str, str, bool)
     _found = Signal(int)
+    summarized = Signal(str, str, str)   # a file's path, its summary, or why there isn't one (Huginn AI)
+    _summed = Signal(str, str, str)
 
     def __init__(self, start: Path, persist: bool = True):
         super().__init__()
@@ -1925,7 +1927,7 @@ class Files(QObject):
             st = p.stat()
         except OSError:
             return {}
-        out = {"name": shown, "kind": "facts", "text": "", "source": "", "facts": human_size(st.st_size) + " · " + self._time(st.st_mtime)}
+        out = {"name": shown, "path": str(p), "kind": "facts", "text": "", "source": "", "facts": human_size(st.st_size) + " · " + self._time(st.st_mtime)}
         if p.is_dir():
             try:
                 n = len(os.listdir(p))
@@ -1946,6 +1948,126 @@ class Files(QObject):
             except OSError:
                 pass
         return out
+
+    # ------------------------------------------------------------------ summaries (Huginn AI, in Quick Look)
+    SUMMARISED = {".pdf", ".docx", ".odt", ".pptx", ".odp", ".txt", ".md", ".markdown", ".rtf", ".html", ".htm", ".eml"}
+    SUMMARY_CACHE = Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache") / "huginn" / "summaries.json"
+
+    @classmethod
+    def doc_text(cls, path: str, limit: int = 24000) -> str:
+        """The words of a document, a PDF or a text file, as far as `limit` characters."""
+        suffix = os.path.splitext(path)[1].lower()
+        try:
+            if os.path.getsize(path) > 60 * 1024 * 1024:
+                return ""
+            if suffix == ".pdf":
+                from PySide6.QtPdf import QPdfDocument
+                doc, parts = QPdfDocument(None), []
+                try:
+                    if doc.load(path) != QPdfDocument.Error.None_:
+                        return ""
+                    for page in range(min(doc.pageCount(), 40)):
+                        parts.append(doc.getAllText(page).text())
+                        if sum(len(t) for t in parts) > limit:
+                            break
+                finally:
+                    doc.close()
+                return "\n".join(parts)[:limit]
+            if suffix in (".docx", ".odt", ".pptx", ".odp"):
+                import html
+                import zipfile
+                with zipfile.ZipFile(path) as z:
+                    names = z.namelist()
+                    if suffix == ".docx":
+                        members = ["word/document.xml"]
+                    elif suffix == ".pptx":
+                        members = sorted((n for n in names if re.fullmatch(r"ppt/slides/slide\d+\.xml", n)), key=lambda n: int(re.findall(r"\d+", n)[-1]))
+                    else:
+                        members = ["content.xml"]
+                    out = []
+                    for m in members:
+                        if m in names and z.getinfo(m).file_size < 30 * 1024 * 1024:
+                            xml = z.read(m).decode("utf-8", "replace")
+                            xml = re.sub(r"</(w:p|a:p|text:p|text:h)>", "\n", xml)
+                            out.append(html.unescape(re.sub(r"<[^>]+>", "", xml)))
+                    return re.sub(r"\n\s*\n+", "\n\n", "\n".join(out)).strip()[:limit]
+            with open(path, "rb") as f:
+                data = f.read(limit * 2)
+            if b"\0" in data[:4096]:
+                return ""
+            text = data.decode("utf-8", errors="replace")
+            if suffix in (".html", ".htm"):
+                import html
+                text = html.unescape(re.sub(r"<[^>]+>", " ", re.sub(r"(?is)<(script|style)[^>]*>.*?</\1>", " ", text)))
+            return text[:limit]
+        except Exception:                                          # noqa: BLE001 — a damaged file has no summary
+            return ""
+
+    @staticmethod
+    def _summary_key(path: str) -> str:
+        try:
+            st = os.stat(path)
+            return f"{path}|{st.st_mtime_ns}|{st.st_size}"
+        except OSError:
+            return ""
+
+    def _summaries(self) -> dict:
+        try:
+            data = json.loads(self.SUMMARY_CACHE.read_text(encoding="utf-8"))
+            return data if isinstance(data, dict) else {}
+        except (OSError, ValueError):
+            return {}
+
+    @Slot(str, result=bool)
+    def canSummarize(self, path: str) -> bool:
+        if os.path.splitext(path)[1].lower() not in self.SUMMARISED or self._in_trash:
+            return False
+        try:
+            import huginn_ai
+            return huginn_ai.ready("files")
+        except Exception:                                          # noqa: BLE001
+            return False
+
+    @Slot(str, result=str)
+    def summaryFor(self, path: str) -> str:
+        """A summary made before, while the file hasn't changed since."""
+        return self._summaries().get(self._summary_key(path), "")
+
+    @Slot(str)
+    def summarize(self, path: str) -> None:
+        if not getattr(self, "_sum_wired", False):
+            self._summed.connect(self._summary_done)
+            self._sum_wired = True
+        key = self._summary_key(path)
+
+        def work():
+            text = self.doc_text(path)
+            if not text.strip():
+                self._summed.emit(path, "", "There are no words in it to summarise.")
+                return
+            try:
+                import huginn_ai
+                summary = huginn_ai.ask_once("file-summary", text, {"ask": os.path.basename(path)}, surface="files", max_tokens=400)
+            except Exception as err:                               # noqa: BLE001 — said in Quick Look
+                self._summed.emit(path, "", str(err))
+                return
+            try:
+                cache = self._summaries()
+                cache[key] = summary
+                if len(cache) > 400:
+                    cache = dict(list(cache.items())[-300:])
+                self.SUMMARY_CACHE.parent.mkdir(parents=True, exist_ok=True)
+                tmp = self.SUMMARY_CACHE.with_suffix(".part")
+                tmp.write_text(json.dumps(cache), encoding="utf-8")
+                os.replace(tmp, self.SUMMARY_CACHE)
+            except OSError:
+                pass
+            self._summed.emit(path, summary, "")
+        threading.Thread(target=work, daemon=True).start()
+
+    @Slot(str, str, str)
+    def _summary_done(self, path: str, summary: str, why: str) -> None:
+        self.summarized.emit(path, summary, why)
 
     # ------------------------------------------------------------------ computers nearby that share folders
     nearby = Property("QVariantList", lambda self: list(self._nearby), notify=drivesChanged)
@@ -4877,7 +4999,7 @@ APPS = {"files": ("Files", "Files.qml"), "calendar": ("Calendar", "Calendar.qml"
         "store": ("App Store", "Store.qml"), "video": ("Media Player", "Video.qml"), "music": ("Music", "Music.qml"),
         "notes": ("Notes", "Notes.qml"), "photos": ("Photos", "Photos.qml"), "documents": ("Documents", "Documents.qml"),
         "calculator": ("Calculator", "Calculator.qml"), "clock": ("Clock", "Clock.qml"), "terminal": ("Terminal", "Terminal.qml"),
-        "screenshot": ("Screenshot", "Screenshot.qml"), "archives": ("Archives", "Archives.qml"), "welcome": ("Welcome", "Welcome.qml"),
+        "screenshot": ("Screenshot", "Screenshot.qml"), "lens": ("Look Up", "Lens.qml"), "archives": ("Archives", "Archives.qml"), "welcome": ("Welcome", "Welcome.qml"),
         "writer": ("Writer", "Writer.qml"), "sheets": ("Sheets", "Sheets.qml"), "slides": ("Slides", "Slides.qml"),
         "passwords": ("Passwords", "Passwords.qml"), "contacts": ("Contacts", "Contacts.qml"), "weather": ("Weather", "Weather.qml"),
         "backup": ("Backup", "Backup.qml"), "disks": ("Disks", "Disks.qml"), "camera": ("Camera", "Camera.qml"),
@@ -5310,6 +5432,9 @@ def main() -> int:
     elif args.app == "terminal":
         backend = Terminal(settings, target, args.run)
         app.aboutToQuit.connect(backend.stop)
+    elif args.app == "lens":
+        import huginn_lens
+        backend = huginn_lens.Lens(args.demo)
     elif args.app == "screenshot":
         backend = Capture(str(target) if target and target.is_file() else "")
         backend._framing = args.page == "frame" and bool(backend._image)      # for previews: start with the frame up

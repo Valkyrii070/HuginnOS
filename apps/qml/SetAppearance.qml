@@ -101,6 +101,16 @@ Column {
                 onClicked: Backend.setLoginRealm(Theme.t.realm) } } }
 
     // ---------------------------------------------------------------- icons
+    SetCard { title: "Screen saver"; note: "When the computer is left alone, before the screen dims. Never over a film or a game, or while an app keeps the screen on. Any key or movement ends it."
+        SetRow { title: "Show"
+            SetChoice { each: 92; options: [["off", "Nothing"], ["clock", "The time"], ["photos", "Photos"], ["wallpaper", "The scene"]]; value: Settings.saver
+                onPicked: function (v) { Settings.set("saver", v) } } }
+        SetRow { visible: Settings.saver === "photos"; title: "Photos from"; sub: "Your Pictures folder, newest first (screenshots left out), with the time in a corner" }
+        SetRow { visible: Settings.saver !== "off"; title: "Start after"
+            SetChoice { each: 64; options: [["1", "1 min"], ["2", "2 min"], ["5", "5 min"], ["10", "10 min"], ["15", "15 min"], ["30", "30 min"]]; value: String(Settings.saverAfter)
+                onPicked: function (v) { Settings.set("saverAfter", v) } } }
+        SetRow { visible: Settings.saver !== "off"; title: "Preview"; sub: "Shows it now"
+            Btn { text: "Preview"; onClicked: Backend.previewSaver() } } }
     SetCard { title: "Icons"; note: "Huginn's own puts every app on smoked glass. Another set changes apps' and folders' icons everywhere; some apps show it after they're opened again. Get more from gnome-look.org (a .tar.gz or .tar.xz), then Add from a File."
         Flow { x: 12; width: parent.width - 24; spacing: 10; topPadding: 12; bottomPadding: 6
             Repeater { model: pg.look.iconThemes || []
