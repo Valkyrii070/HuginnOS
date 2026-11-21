@@ -619,7 +619,7 @@ GlassWindow {
                 Item { required property var modelData; width: menu.width; height: modelData[0] ? 30 : 9
                     Rectangle { visible: !modelData[0]; y: 4; width: parent.width; height: 1; color: Theme.t.separator }
                     Pressable { visible: modelData[0] !== ""; anchors.fill: parent; radius: Theme.t.radiusControl
-                        onClicked: { var it = win.menuFor.item, a = modelData[2]; win.menuFor = null; win.act(a, it) }
+                        onClicked: { var it = win.menuFor.item, a = modelData[2]; win.act(a, it); win.menuFor = null }   // (the menu last: this entry goes with it)
                         Glyph { x: 8; anchors.verticalCenter: parent.verticalCenter; name: modelData[1]; size: 14; ink: modelData[2] === "force" ? Theme.t.danger : Theme.t.icon }
                         Label { x: 32; width: parent.width - 40; anchors.verticalCenter: parent.verticalCenter; text: modelData[0]; elide: Text.ElideRight; color: modelData[2] === "force" ? Theme.t.danger : Theme.t.text } } } } }
     }
@@ -638,7 +638,6 @@ GlassWindow {
                     Pressable { visible: modelData[0] !== ""; anchors.fill: parent; radius: Theme.t.radiusControl
                         onClicked: {
                             var e = win.startMenu.e, a = modelData[2]
-                            win.startMenu = null
                             if (a === "switch") Backend.setStartup(e.id, !e.enabled)
                             else if (a === "where") Backend.showFile(e.path)
                             else if (a === "remove") Backend.removeStartup(e.id)
@@ -646,6 +645,7 @@ GlassWindow {
                                                                      { name: "Status", value: e.why ? e.why : e.enabled ? "On" : "Off" },
                                                                      { name: "At sign-in", value: e.cpu >= 0 ? e.cpu.toFixed(2) + " s of the processor, " + win.size(Math.max(0, e.disk)) + " read" : "Not measured" },
                                                                      { name: "Now", value: e.running ? win.size(e.memoryNow) + " of memory" : "Not running" }] }
+                            win.startMenu = null                  // last: this entry goes with the menu
                         }
                         Glyph { x: 8; anchors.verticalCenter: parent.verticalCenter; name: modelData[1]; size: 14; ink: modelData[2] === "remove" ? Theme.t.danger : Theme.t.icon }
                         Label { x: 32; width: parent.width - 40; anchors.verticalCenter: parent.verticalCenter; text: modelData[0]; elide: Text.ElideRight; color: modelData[2] === "remove" ? Theme.t.danger : Theme.t.text } } } } }

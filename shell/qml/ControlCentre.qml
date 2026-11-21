@@ -80,19 +80,34 @@ Glass {
     }
     readonly property var net: Status.network
     readonly property var levels: Status.levels
-    // apps with no window that are still running: closed to the tray (Discord, Steam), or watching for something (Mail)
+    // what's running in the background: apps with a tray icon (Steam, Discord: their icon, their own menu), then apps
+    // still running with no window (Mail watching the inbox), then tray icons of programs that aren't installed apps
     readonly property var background: {
         var wins = {}, all = Status.windows || []
         for (var i = 0; i < all.length; i++) if (all[i].name) wins[all[i].name] = true
-        var out = [], run = Apps.running || [], apps = Apps.all || []
+        var apps = Apps.all || [], byName = {}
+        for (var a = 0; a < apps.length; a++) byName[apps[a].name] = apps[a]
+        var out = [], seen = {}, tray = Tray.items || []
+        for (var t = 0; t < tray.length; t++) {
+            var app = tray[t].app && byName[tray[t].app] ? byName[tray[t].app] : null
+            var name = app ? app.name : (tray[t].title || "A program")
+            if (seen[name]) continue
+            seen[name] = true
+            out.push({ name: name, app: app, tray: tray[t], windowed: !!wins[name] })
+        }
+        var run = Apps.running || []
         for (var j = 0; j < run.length; j++) {
-            if (wins[run[j]]) continue
-            var a = apps.filter(function (x) { return x.name === run[j] })[0]
-            if (a && !a.web) out.push(a)
+            if (wins[run[j]] || seen[run[j]]) continue
+            var b = byName[run[j]]
+            if (b && !b.web) { out.push({ name: b.name, app: b, tray: null, windowed: false }); seen[b.name] = true }
         }
         return out
     }
-    property var bgMenu: null              // {app, x, y}: the menu of one of them
+    property var bgMenu: null              // {row, x, y, items}: the menu of one of them (its own, from its tray icon, then ours)
+    function openRow(r) {
+        if (r.tray && !r.tray.isMenu) { cc.done(); Tray.activate(r.tray.key, 0, 0) }
+        else if (r.app) { cc.done(); Apps.launch(r.app.exec) }
+    }
     readonly property var playing: {
         var all = [Live.main].concat(Live.bubbles || [])
         for (var i = 0; i < all.length; i++) if (all[i] && String(all[i].id || "").indexOf("mpris:") === 0) return all[i]
@@ -107,23 +122,52 @@ Glass {
     MouseArea { visible: cc.bgMenu !== null; anchors.fill: parent; z: 9; acceptedButtons: Qt.AllButtons; onClicked: cc.bgMenu = null }
     Rectangle {
         objectName: "backgroundMenu"
-        visible: cc.bgMenu !== null; z: 10; width: 200; height: bgMenuCol.height + 10; radius: 12
+        visible: cc.bgMenu !== null; z: 10; width: 230; height: bgMenuCol.height + 10; radius: 12
         color: Theme.t.dark ? "#F21E2228" : "#FAFFFFFF"; border.width: 1; border.color: Theme.t.line
-        x: cc.bgMenu ? Math.min(cc.bgMenu.x, cc.width - width - 8) : 0; y: cc.bgMenu ? Math.min(cc.bgMenu.y, cc.height - height - 8) : 0
+        x: cc.bgMenu ? Math.max(8, Math.min(cc.bgMenu.x, cc.width - width - 8)) : 0; y: cc.bgMenu ? Math.max(8, Math.min(cc.bgMenu.y, cc.height - height - 8)) : 0
+        // its tray menu's entries (one level of submenu shown in place, indented), then Open, Quit and Force Quit
+        readonly property var entries: {
+            if (!cc.bgMenu) return []
+            var out = [], own = cc.bgMenu.items || [], r = cc.bgMenu.row
+            for (var i = 0; i < own.length; i++) {
+                var e = own[i]
+                if (e.separator) { out.push({ kind: "sep" }); continue }
+                if (e.children.length) {
+                    out.push({ kind: "head", label: e.label })
+                    for (var j = 0; j < e.children.length; j++) if (!e.children[j].separator)
+                        out.push({ kind: "tray", id: e.children[j].id, label: e.children[j].label, enabled: e.children[j].enabled, check: e.children[j].check, checked: e.children[j].checked, indent: true })
+                } else out.push({ kind: "tray", id: e.id, label: e.label, enabled: e.enabled, check: e.check, checked: e.checked, indent: false })
+            }
+            if (r.app) {
+                if (out.length) out.push({ kind: "sep" })
+                out.push({ kind: "ours", what: "open", label: "Open " + r.name, glyph: "window" })
+                out.push({ kind: "ours", what: "quit", label: "Quit " + r.name, glyph: "x" })
+                out.push({ kind: "ours", what: "force", label: "Force Quit", glyph: "trash" })
+            } else if (!out.length && r.tray) out.push({ kind: "ours", what: "activate", label: "Open", glyph: "window" })
+            return out
+        }
         Column { id: bgMenuCol; x: 5; y: 5; width: parent.width - 10
             Repeater {
-                model: cc.bgMenu ? [["Open " + cc.bgMenu.app.name, "open", "window"], ["Quit " + cc.bgMenu.app.name, "quit", "x"], ["Force Quit", "force", "trash"]] : []
-                Rectangle { required property var modelData; width: bgMenuCol.width; height: 32; radius: 8; color: mh.containsMouse ? Theme.t.hover : "transparent"
-                    Glyph { x: 8; anchors.verticalCenter: parent.verticalCenter; name: modelData[2]; size: 14; ink: modelData[1] === "force" ? Theme.t.danger : Theme.t.text }
-                    Label { x: 32; width: parent.width - 40; anchors.verticalCenter: parent.verticalCenter; text: modelData[0]; font.pixelSize: 13; elide: Text.ElideRight
-                        color: modelData[1] === "force" ? Theme.t.danger : Theme.t.text }
-                    MouseArea { id: mh; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
-                        onClicked: {
-                            var app = cc.bgMenu.app, what = modelData[1]
-                            cc.bgMenu = null
-                            if (what === "open") { cc.done(); Apps.launch(app.exec) }
-                            else Apps.quit(app.name, what === "force")
-                        } } } } }
+                model: parent.parent.entries
+                Item { required property var modelData; width: bgMenuCol.width; height: modelData.kind === "sep" ? 9 : modelData.kind === "head" ? 24 : 32
+                    Rectangle { visible: modelData.kind === "sep"; y: 4; width: parent.width; height: 1; color: Theme.t.line }
+                    Label { visible: modelData.kind === "head"; x: 10; anchors.verticalCenter: parent.verticalCenter; text: modelData.label || ""; secondary: true; font.pixelSize: 11 }
+                    Rectangle { visible: modelData.kind === "tray" || modelData.kind === "ours"; anchors.fill: parent; radius: 8
+                        color: mh.containsMouse && modelData.enabled !== false ? Theme.t.hover : "transparent"
+                        Glyph { visible: modelData.kind === "ours" || (modelData.check && modelData.checked); x: modelData.indent ? 18 : 8; anchors.verticalCenter: parent.verticalCenter
+                            name: modelData.kind === "ours" ? modelData.glyph : "check"; size: 14; ink: modelData.what === "force" ? Theme.t.danger : Theme.t.text }
+                        Label { x: (modelData.indent ? 18 : 8) + (modelData.kind === "ours" || modelData.check ? 24 : 2); width: parent.width - x - 8; anchors.verticalCenter: parent.verticalCenter
+                            text: modelData.label || ""; font.pixelSize: 13; elide: Text.ElideRight; opacity: modelData.enabled === false ? 0.45 : 1
+                            color: modelData.what === "force" ? Theme.t.danger : Theme.t.text }
+                        MouseArea { id: mh; anchors.fill: parent; hoverEnabled: true; enabled: modelData.enabled !== false; cursorShape: Qt.PointingHandCursor
+                            onClicked: {
+                                var r = cc.bgMenu.row, e = modelData
+                                if (e.kind === "tray") Tray.click(r.tray.key, e.id)
+                                else if (e.what === "open") { Apps.launch(r.app.exec); cc.done() }
+                                else if (e.what === "activate") { Tray.activate(r.tray.key, 0, 0); cc.done() }
+                                else Apps.quit(r.name, e.what === "force")
+                                cc.bgMenu = null              // last: this entry goes with the menu
+                            } } } } } }
     }
     Flickable {
         anchors { fill: parent; margins: 14 }
@@ -198,10 +242,10 @@ Glass {
                             MouseArea { id: ph; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
                                 onClicked: if (cc.playing) Live.act(cc.playing.id, modelData[1]) } } } } }
 
-            // what's still running with no window, and quitting it
+            // what's running in the background, its tray menu, and quitting it
             Item { visible: cc.background.length > 0; width: parent.width; height: 20
                 Label { x: 2; text: "Running in the background"; font.pixelSize: 12; font.weight: Font.DemiBold; anchors.verticalCenter: parent.verticalCenter }
-                Label { anchors { right: parent.right; verticalCenter: parent.verticalCenter } text: "Right-click to quit"; secondary: true; font.pixelSize: 11 } }
+                Label { anchors { right: parent.right; verticalCenter: parent.verticalCenter } text: "Right-click for more"; secondary: true; font.pixelSize: 11 } }
             Block { visible: cc.background.length > 0; width: parent.width; height: bgCol.height + 12
                 objectName: "backgroundApps"
                 Column { id: bgCol; x: 6; y: 6; width: parent.width - 12
@@ -210,22 +254,32 @@ Glass {
                             id: bgRow
                             required property var modelData
                             width: bgCol.width; height: 42; radius: 11; color: bgHit.containsMouse ? Theme.t.hover : "transparent"
-                            AppIcon { x: 6; size: 28; anchors.verticalCenter: parent.verticalCenter
-                                name: bgRow.modelData.name; glyph: bgRow.modelData.glyph || ""; image: bgRow.modelData.image || ""; own: bgRow.modelData.own || "" }
+                            Item { x: 6; width: 28; height: 28; anchors.verticalCenter: parent.verticalCenter
+                                AppIcon { visible: !!bgRow.modelData.app; size: 28
+                                    name: bgRow.modelData.name; glyph: bgRow.modelData.app ? bgRow.modelData.app.glyph || "" : ""
+                                    image: bgRow.modelData.app ? bgRow.modelData.app.image || "" : ""; own: bgRow.modelData.app ? bgRow.modelData.app.own || "" : "" }
+                                Image { visible: !bgRow.modelData.app; anchors.fill: parent; sourceSize: Qt.size(56, 56); asynchronous: true
+                                    source: !bgRow.modelData.tray ? "" : bgRow.modelData.tray.icon || (bgRow.modelData.tray.iconName ? "image://sysicon/" + bgRow.modelData.tray.iconName : "") }
+                                Rectangle {   // it wants you (Discord: a message)
+                                    visible: !!bgRow.modelData.tray && bgRow.modelData.tray.status === "NeedsAttention"
+                                    anchors { right: parent.right; top: parent.top; margins: -2 } width: 10; height: 10; radius: 5; color: Theme.t.accent
+                                    border.width: 2; border.color: Theme.t.dark ? "#1E2228" : "#FFFFFF" } }
                             Column { x: 44; width: parent.width - 44 - 40; anchors.verticalCenter: parent.verticalCenter
                                 Label { width: parent.width; text: bgRow.modelData.name; font.pixelSize: 13; font.weight: Font.DemiBold; elide: Text.ElideRight }
-                                Label { width: parent.width; secondary: true; font.pixelSize: 11
-                                    text: ({ Mail: "Checking for new mail", Messages: "Waiting for messages", Steam: "In the tray, no window open",
-                                             Discord: "In the tray, no window open" })[bgRow.modelData.name] || "No window open" } }
+                                Label { width: parent.width; secondary: true; font.pixelSize: 11; elide: Text.ElideRight
+                                    text: bgRow.modelData.tray && bgRow.modelData.tray.tooltip ? bgRow.modelData.tray.tooltip
+                                        : ({ Mail: "Checking for new mail", Messages: "Waiting for messages" })[bgRow.modelData.name]
+                                          || (bgRow.modelData.tray ? (bgRow.modelData.windowed ? "Open, and in the tray" : "In the tray") : "No window open") } }
                             MouseArea { id: bgHit; anchors.fill: parent; hoverEnabled: true; acceptedButtons: Qt.LeftButton | Qt.RightButton; cursorShape: Qt.PointingHandCursor
                                 onClicked: function (m) {
-                                    if (m.button === Qt.RightButton) {
+                                    var r = bgRow.modelData
+                                    if (m.button === Qt.RightButton || (r.tray && r.tray.isMenu && m.button === Qt.LeftButton)) {
                                         var p = mapToItem(cc, m.x, m.y)
-                                        cc.bgMenu = { app: bgRow.modelData, x: p.x, y: p.y }
-                                    } else { cc.done(); Apps.launch(bgRow.modelData.exec) }       // its window again
+                                        cc.bgMenu = { row: r, x: p.x, y: p.y, items: r.tray ? Tray.menu(r.tray.key) : [] }
+                                    } else cc.openRow(r)
                                 } }
                             Rectangle {   // quit, without the menu
-                                visible: bgHit.containsMouse || quitHit.containsMouse
+                                visible: !!bgRow.modelData.app && (bgHit.containsMouse || quitHit.containsMouse)
                                 anchors { right: parent.right; rightMargin: 8; verticalCenter: parent.verticalCenter } width: 26; height: 26; radius: 13
                                 color: quitHit.containsMouse ? Theme.t.danger : Theme.t.hover
                                 Glyph { anchors.centerIn: parent; name: "x"; size: 12; ink: quitHit.containsMouse ? "#FFFFFF" : Theme.t.text }

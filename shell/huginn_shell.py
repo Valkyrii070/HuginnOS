@@ -1314,6 +1314,9 @@ def main() -> int:
     ctx.setContextProperty("Apps", apps)
     ctx.setContextProperty("Tabs", tabs)
     ctx.setContextProperty("Live", live)
+    from huginn_tray import Tray                          # apps' tray icons (Steam, Discord…), in the control centre
+    tray = Tray(apps, demo=args.preview)
+    ctx.setContextProperty("Tray", tray)
     glance = Glance(demo=args.preview)
     glance.settings = settings
     if not args.preview:                                  # a photo for the Photo widget as soon as it's put on the desktop
