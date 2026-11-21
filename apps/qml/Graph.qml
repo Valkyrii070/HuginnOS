@@ -9,13 +9,14 @@ Canvas {
     property color secondInk: Theme.t.glowB
     property bool unit: false
     property bool filled: true
+    property bool grid: true                   // the faint lines across (off for the small ones on a card)
     height: 56
-    onFirstChanged: requestPaint(); onSecondChanged: requestPaint(); onInkChanged: requestPaint()
+    onFirstChanged: requestPaint(); onSecondChanged: requestPaint(); onInkChanged: requestPaint(); onWidthChanged: requestPaint()
     onPaint: {
         var c = getContext("2d"), w = width, h = height
         c.reset()
         c.strokeStyle = Theme.t.dark ? "#14FFFFFF" : "#14141E28"; c.lineWidth = 1
-        for (var k = 0; k <= 2; k++) { c.beginPath(); c.moveTo(0, Math.round(k * (h - 1) / 2) + 0.5); c.lineTo(w, Math.round(k * (h - 1) / 2) + 0.5); c.stroke() }
+        for (var k = 0; k <= 2 && grid; k++) { c.beginPath(); c.moveTo(0, Math.round(k * (h - 1) / 2) + 0.5); c.lineTo(w, Math.round(k * (h - 1) / 2) + 0.5); c.stroke() }
         var peak = unit ? 1 : 1
         if (!unit) { for (var i = 0; i < first.length; i++) peak = Math.max(peak, first[i]); for (var j = 0; j < second.length; j++) peak = Math.max(peak, second[j]) }
         function draw(data, colour, fill) {

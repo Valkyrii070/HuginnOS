@@ -2262,6 +2262,35 @@ From the testing on the PC and its problem report:
   screen. Looking for them turned up one real fault nearby, fixed: the HDR pass turned a line beside each damaged part
   a second time every frame. (`HUGINN_SOFT_POINTER=1` makes the nested session draw the pointer itself, for testing.)
 
+## System Monitor, redesigned (2026-11-20)
+
+Not a copy of another desktop's any more: Huginn's own, and easier to read. `apps/huginn_monitor.py` (new; the old
+backend in `huginn_app.py` went) and `apps/qml/Monitor.qml`.
+
+- **Five live cards** across the top: Processor, Memory, Graphics, Disk and Network, each with its number, a line
+  under it (speed and heat, how much of how much, read and write, down and up) and its last two minutes. A card opens
+  it in Performance.
+- **Apps** (the start): what's running put together the way you think of it. An app and its helpers are one row with
+  its icon (the browser's 17 processes are Huginn; a Huginn app by its name; a Flatpak by its sandbox; a Steam game
+  by its own name, from Steam's records), unfolding to its processes. Then the session's helpers (Background), named
+  and said what they do (the compositor, the shell, PipeWire…), then other users' and the system's (System, folded).
+  Columns: processor (a share of the whole processor, so the rows add up to the card), memory (what each has to
+  itself plus its share of what's shared, PSS), **graphics** (the share of the card's time, from the driver's
+  per-process counters) and disk. Bigger numbers are tinted so they stand out.
+- **Processes**: every process with its number, owner, processor, memory, graphics, disk and threads, sorted by any of
+  them, yours or everyone's, each with the app it belongs to beside its name.
+- **Performance**: the last two minutes large, with a key, then: the processor's model, speed now and top speed,
+  temperature and each thread's use; what memory holds (in use, cache, free, available, compressed swap) and why the
+  cache isn't lost; the graphics card's busy, video memory, temperature, power against its limit, clocks and fan; each
+  drive (model, kind, size, how busy, reading and writing, how full each place on it is); each connection (kind,
+  address, down and up, since it started). Under each, what's using it the most.
+- **Doing something about it**: select a row for End App or End Process and More…; right-click for Pause or Resume,
+  Run in the background (lower priority) or Normal priority, Show program location, Details and Force stop. Ending an
+  app ends its helpers too. Search finds an app or a process by name or number.
+- Read every two seconds on a thread of its own, so the window never waits; checked against this machine's /proc,
+  in the nested session (real icons and grouping) and in a preview of a gaming afternoon, dark and light. The start
+  menu finds it as task manager, processes or activity too.
+
 ## Huginn, the browser
 
 Inside the Huginn repository (this kit is its `os/` folder) the image ships the repository's own browser. A kit used

@@ -1,134 +1,562 @@
 import QtQuick
 
-// System Monitor, "gauges": the gauges are a rail at the left, where the light is; programs are the list.
+// System Monitor: what the computer is doing, and what you can do about it.
+// Across the top, five live cards: Processor, Memory, Graphics, Disk and Network, each with its last two minutes; a
+// card opens its detail in Performance. Under them, one of three views:
+//   Apps        the processes put together as you think of them (an app and its helpers are one row, with its icon),
+//               then the session's helpers (Background), then everyone else's (System, folded away);
+//   Processes   every process with every column, sorted by any of them, yours or everyone's;
+//   Performance the card chosen above, in full: the processor's cores, what the memory holds, the graphics card's
+//               readings, each drive and each network connection.
+// Select a row for End and More…; right-click for everything (pause, priority, location, details, force stop).
 GlassWindow {
     id: win
-    title: "System Monitor"; heading: mine ? "Your Programs" : "All Processes"
-    width: 1160; sidebarWidth: 300; glow: "left"; padTop: 58; padRight: 6
-    property bool mine: true
-    function setMine(v) { mine = String(v) === "true" }
+    title: "System Monitor"; heading: view === "apps" ? "Apps" : view === "procs" ? "Processes" : "Performance"
+    width: 1200; height: 780; minimumWidth: 900; glow: "top"; padTop: 58
+    property string view: "apps"                 // apps | procs | perf
+    property string perf: "cpu"                  // cpu | mem | gpu | disk | net
     property string filter: ""
     property string sortKey: "cpu"
-    property int picked: -1
-    property var menuFor: null
-    property var asking: null      // { row, force }
-    property var props: null       // { row, list }
+    property bool sortUp: false
+    property bool everyone: false                // Processes: everyone's, not only yours
+    property bool showSystem: false              // Apps: the System section unfolded
+    property var open: ({})                      // Apps: unfolded apps, by key
+    property var picked: null                    // {kind: "app", key} or {kind: "proc", pid}
+    property var menuFor: null                   // {item, x, y}
+    property var asking: null                    // {item, force}
+    property var props: null                     // {title, list}
     property string notice: ""
-    property var shown: {
-        var k = sortKey, rows = Backend.rows.filter(function (r) { return (!mine || r.mine) && r.name.toLowerCase().indexOf(filter.toLowerCase()) >= 0 })
-        rows.sort(function (a, b) { return k === "name" ? a.name.toLowerCase().localeCompare(b.name.toLowerCase()) : (b[k] - a[k]) || (b.memory - a.memory) })
-        return rows
-    }
+    readonly property var cpu: Backend.cpuInfo || ({})
+    readonly property var mem: Backend.memInfo || ({})
+    readonly property var gpu: Backend.gpuInfo || ({})
+    readonly property var hist: Backend.history || ({})
+    readonly property var tot: Backend.totals || ({})
+    readonly property bool hasGpu: gpu.load !== undefined
+    readonly property color ink: Theme.t.accent
+    readonly property color ink2: Theme.t.glowB
     Connections { target: Backend; function onFailed(msg) { win.notice = msg; hide.restart() } }
-    Timer { id: hide; interval: 5000; onTriggered: win.notice = "" }
+    Timer { id: hide; interval: 6000; onTriggered: win.notice = "" }
 
-    component Dot: Rectangle { width: 8; height: 8; radius: 4; anchors.verticalCenter: parent.verticalCenter }
-    component Key: Row { property color ink; property string name; property string value; spacing: 7
-        Dot { color: parent.ink } Label { text: parent.name; secondary: true; font.pixelSize: 12 } Label { text: parent.value; font.pixelSize: 12; font.family: Theme.t.fontMono } }
-    component Title: Row { property string icon; property string text; spacing: 8; topPadding: 6
-        Glyph { name: parent.icon; size: 15; anchors.verticalCenter: parent.verticalCenter } Label { text: parent.text; font.weight: Font.DemiBold } }
+    // ---------------------------------------------------------------------------------------------------- helpers
+    function pct(v) { return (v < 10 && v > 0 ? v.toFixed(1) : Math.round(v)) + "%" }
+    function gb(b) { return (b / 1073741824).toFixed(b >= 107374182400 ? 0 : 1) + " GB" }
+    function size(b) { return Backend.size(b) }
+    function rate(b) { return b < 0 ? "–" : Backend.rate(b) }
+    function heat(v) { var a = Math.max(0, Math.min(1, v)); return Qt.rgba(ink.r, ink.g, ink.b, a < 0.08 ? 0 : 0.05 + a * 0.3) }   // only what stands out
+    function matches(name) { return win.filter === "" || String(name).toLowerCase().indexOf(win.filter.toLowerCase()) >= 0 }
+    function order(list) {
+        var k = sortKey, up = sortUp
+        return list.slice().sort(function (a, b) {
+            var d = k === "name" || k === "user" ? String(a[k]).toLowerCase().localeCompare(String(b[k]).toLowerCase()) : (a[k] - b[k])
+            if (d === 0) d = a.memory - b.memory
+            return up ? d : -d
+        })
+    }
+    function sortBy(k) { if (sortKey === k) sortUp = !sortUp; else { sortKey = k; sortUp = (k === "name" || k === "user" || k === "pid") } }
+    function letterColor(s) { var h = 0; for (var i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) % 360; return Qt.hsla(h / 360, 0.45, Theme.t.dark ? 0.42 : 0.55, 1) }
+    function duration(s) { var h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60); return h >= 24 ? Math.floor(h / 24) + " d " + (h % 24) + " h" : h > 0 ? h + " h " + m + " min" : m + " min" }
+    readonly property var appsAll: Backend.apps || []
+    readonly property var appNames: { var m = {}; for (var i = 0; i < appsAll.length; i++) if (appsAll[i].kind === "app") m[appsAll[i].key] = appsAll[i].name; return m }
+    readonly property var sections: {
+        var by = { app: [], background: [], system: [] }
+        for (var i = 0; i < appsAll.length; i++) if (matches(appsAll[i].name)) by[appsAll[i].kind].push(appsAll[i])
+        return [{ id: "app", title: "Apps", rows: order(by.app) }, { id: "background", title: "Background", rows: order(by.background) },
+                { id: "system", title: "System", rows: order(by.system) }]
+    }
+    function rowsOf(key) { return order((Backend.rows || []).filter(function (r) { return r.app === key })) }
+    readonly property var procRows: order((Backend.rows || []).filter(function (r) { return (everyone || r.mine) && (matches(r.name) || String(r.pid) === win.filter) }))
+    function itemOf(sel) {
+        if (!sel) return null
+        if (sel.kind === "app") { var a = appsAll.filter(function (x) { return x.key === sel.key })[0]; return a ? { kind: "app", name: a.name, pids: a.pids, paused: a.paused, mine: a.kind !== "system", app: a } : null }
+        var r = (Backend.rows || []).filter(function (x) { return x.pid === sel.pid })[0]
+        return r ? { kind: "proc", name: r.name, pids: [r.pid], paused: r.paused, mine: r.mine, row: r } : null
+    }
+    readonly property var current: itemOf(picked)
+    function act(what, it) {
+        if (!it) return
+        if (what === "end") asking = { item: it, force: false }
+        else if (what === "force") asking = { item: it, force: true }
+        else if (what === "pause") it.paused ? Backend.resume(it.pids) : Backend.pause(it.pids)
+        else if (what === "where") Backend.showLocation(it.pids[0])
+        else if (what === "slow") { for (var i = 0; i < it.pids.length; i++) Backend.setNice(it.pids[i], 10) }
+        else if (what === "normal") { for (var j = 0; j < it.pids.length; j++) Backend.setNice(it.pids[j], 0) }
+        else if (what === "props") {
+            var list = Backend.details(it.pids[0])
+            if (it.kind === "app" && it.pids.length > 1) list = [{ name: "Processes", value: it.pids.length + " (" + it.pids.slice(0, 12).join(", ") + (it.pids.length > 12 ? "…" : "") + ")" }].concat(list)
+            props = { title: it.name, list: list }
+        }
+    }
 
-    sidebar: [
-        // ---- Processor: a ring for now, a line for the last two minutes
-        Item { width: parent.width; height: 168
-            Ring { id: cpuRing; width: 150; height: 150; thickness: 10; anchors.horizontalCenter: parent.horizontalCenter; value: Backend.cpu
-                Graph { x: 34; y: 34; width: 82; height: 34; first: Backend.cpuHistory; unit: true; filled: false }
-                Label { anchors.horizontalCenter: parent.horizontalCenter; y: 74; text: Math.round(Backend.cpu * 100) + "%"; font.pixelSize: 26; font.weight: Font.Light }
-                Row { anchors.horizontalCenter: parent.horizontalCenter; y: 108; spacing: 5; Glyph { name: "cpu"; size: 13; ink: Theme.t.text_secondary } Label { text: "Processor"; secondary: true; font.pixelSize: 11 } } }
-            Label { anchors { horizontalCenter: parent.horizontalCenter; bottom: parent.bottom } text: Backend.cores + " cores"; secondary: true; font.pixelSize: 11 } },
-        // ---- Memory and swap: two rings in one
-        Title { icon: "memory"; text: "Memory" },
-        Item { width: parent.width; height: 96
-            Column { x: 8; anchors.verticalCenter: parent.verticalCenter; spacing: 6
-                Key { ink: Theme.t.accent; name: "Memory"; value: Math.round(Backend.memory * 100) + "%" } Label { leftPadding: 15; text: Backend.memoryLabel; secondary: true; font.pixelSize: 11 }
-                Key { ink: Theme.t.glowB; name: "Swap"; value: Math.round(Backend.swap * 100) + "%" } Label { leftPadding: 15; text: Backend.swapLabel; secondary: true; font.pixelSize: 11 } }
-            Ring { width: 92; height: 92; thickness: 8; anchors { right: parent.right; rightMargin: 6; verticalCenter: parent.verticalCenter } value: Backend.memory; inner: Backend.swap
-                ink: Backend.memory > 0.9 ? Theme.t.danger : Theme.t.accent
-                Label { anchors.centerIn: parent; text: Math.round(Backend.memory * 100) + "%"; font.pixelSize: 15; font.weight: Font.DemiBold } } },
-        // ---- Network
-        Title { icon: "wifi"; text: "Network" },
-        Item { width: parent.width; height: 44
-            Column { x: 8; spacing: 5; Key { ink: Theme.t.accent; name: "Download"; value: Backend.downLabel } Key { ink: Theme.t.glowB; name: "Upload"; value: Backend.upLabel } }
-            Column { anchors.right: parent.right; anchors.rightMargin: 8; spacing: 5
-                Label { text: "Total " + Backend.receivedLabel; secondary: true; font.pixelSize: 11; anchors.right: parent.right } Label { text: "Total " + Backend.sentLabel; secondary: true; font.pixelSize: 11; anchors.right: parent.right } } },
-        Graph { x: 8; width: parent.width - 16; first: Backend.downHistory; second: Backend.upHistory },
-        // ---- Disk
-        Title { icon: "disc"; text: "Disk" },
-        Row { x: 8; spacing: 18; height: 24; Key { ink: Theme.t.accent; name: "Read"; value: Backend.readLabel } Key { ink: Theme.t.glowB; name: "Write"; value: Backend.writeLabel } },
-        Graph { x: 8; width: parent.width - 16; first: Backend.readHistory; second: Backend.writeHistory }
-    ]
+    // ---------------------------------------------------------------------------------------------------- pieces
+    component Cell: Item {   // a number in a column, tinted by how much it is
+        property string text; property real amount: 0; property bool dim: false
+        width: 104; height: parent ? parent.height : 40
+        Rectangle { anchors.fill: parent; anchors.margins: 3; radius: 7; color: win.heat(parent.amount) }
+        Label { anchors { right: parent.right; rightMargin: 12; verticalCenter: parent.verticalCenter } text: parent.text
+            font.family: Theme.t.fontMono; font.pixelSize: 12; color: parent.dim ? Theme.t.text_secondary : Theme.t.text }
+    }
+    component Head: Pressable {   // a column's name: click to sort by it
+        id: hd
+        property string text; property string key; property bool alignLeft: false
+        width: 104; height: 32; radius: 8
+        onClicked: if (key) win.sortBy(key)
+        readonly property bool on: win.sortKey === key
+        Label { x: hd.alignLeft ? 10 : 6; width: parent.width - 18; anchors.verticalCenter: parent.verticalCenter; horizontalAlignment: hd.alignLeft ? Text.AlignLeft : Text.AlignRight
+            text: hd.text + (hd.on ? (win.sortUp ? "  ↑" : "  ↓") : ""); font.pixelSize: 11; font.weight: hd.on ? Font.DemiBold : Font.Medium
+            color: hd.on ? Theme.t.text : Theme.t.text_secondary }
+    }
+    component Icon: Item {   // an app's icon, or its first letter on a colour of its own; a helper's, a plain tile with a sign
+        id: ic
+        property string icon; property string name; property int s: 28; property string glyph: ""
+        width: s; height: s
+        Image { id: im; anchors.fill: parent; visible: status === Image.Ready && ic.glyph === ""; source: ic.icon !== "" && ic.glyph === "" ? "image://sysicon/" + ic.icon : ""
+            sourceSize: Qt.size(ic.s * 2, ic.s * 2); asynchronous: true }
+        Rectangle { anchors.fill: parent; visible: im.status !== Image.Ready || ic.glyph !== ""; radius: ic.s * 0.28
+            color: ic.glyph !== "" ? Theme.t.hover : win.letterColor(ic.name)
+            Label { visible: ic.glyph === ""; anchors.centerIn: parent; text: String(ic.name).charAt(0).toUpperCase(); color: "#FFFFFF"; font.pixelSize: ic.s * 0.46; font.weight: Font.DemiBold }
+            Glyph { visible: ic.glyph !== ""; anchors.centerIn: parent; name: ic.glyph; size: ic.s * 0.55; ink: Theme.t.text_secondary } }
+    }
+    component Top: Column {   // what's using the most of one thing, apps and helpers together; a click shows it in Apps
+        id: tp
+        property string by: "cpu"
+        property string title: ""
+        width: parent ? parent.width : 400; spacing: 4
+        readonly property var list: (win.appsAll || []).filter(function (a) { return a[tp.by] > 0 }).sort(function (a, b) { return b[tp.by] - a[tp.by] }).slice(0, 5)
+        readonly property real most: list.length ? list[0][tp.by] : 1
+        function shown(v) { return tp.by === "memory" ? win.size(v) : tp.by === "disk" ? win.rate(v) : win.pct(v) }
+        Label { text: tp.title; secondary: true; font.pixelSize: 11; font.weight: Font.DemiBold; bottomPadding: 4 }
+        Repeater { model: tp.list
+            Pressable { required property var modelData; width: tp.width; height: 32; radius: 8; color: hovered ? Theme.t.hover : "transparent"
+                onClicked: { win.picked = { kind: "app", key: modelData.key }; win.view = "apps" }
+                Icon { x: 6; s: 20; anchors.verticalCenter: parent.verticalCenter; icon: modelData.icon; name: modelData.name
+                    glyph: modelData.kind === "app" ? "" : modelData.kind === "system" ? "shield" : "gear" }
+                Label { x: 36; width: 240; anchors.verticalCenter: parent.verticalCenter; text: modelData.name; elide: Text.ElideRight; font.pixelSize: 12 }
+                Meter { x: 290; width: parent.width - 290 - 120; anchors.verticalCenter: parent.verticalCenter; value: modelData[tp.by] / Math.max(0.0001, tp.most) }
+                Label { anchors { right: parent.right; rightMargin: 10; verticalCenter: parent.verticalCenter } text: tp.shown(modelData[tp.by]); font.family: Theme.t.fontMono; font.pixelSize: 12 } } }
+    }
+    component Card: Rectangle { radius: 16; color: Theme.t.group; border.width: 1; border.color: Theme.t.separator }
+    component Stat: Column {   // a reading in the Performance view: its name over its value
+        property string name; property string value; property color dot: "transparent"
+        width: 170; spacing: 3
+        Row { spacing: 6
+            Rectangle { visible: parent.parent.dot.a > 0; width: 8; height: 8; radius: 4; color: parent.parent.dot; anchors.verticalCenter: parent.verticalCenter }
+            Label { text: parent.parent.name; secondary: true; font.pixelSize: 11 } }
+        Label { text: parent.value; font.pixelSize: 17; font.weight: Font.Medium }
+    }
+
+    // ---------------------------------------------------------------------------------------------------- toolbar
     toolbar: [
-        IslandField { text: win.filter; onTextChanged: win.filter = text; placeholder: "Find a program" },
-        Seg { icon: "cpu"; text: "All"; on: !win.mine; onClicked: win.mine = false },
-        Seg { icon: "user"; text: "Yours"; on: win.mine; onClicked: win.mine = true }
+        IslandField { visible: win.view !== "perf"; text: win.filter; onTextChanged: win.filter = text; placeholder: win.view === "apps" ? "Find an app" : "Find a process" },
+        Seg { icon: "sliders"; text: "Performance"; on: win.view === "perf"; onClicked: win.view = "perf" },
+        Seg { icon: "list"; text: "Processes"; on: win.view === "procs"; onClicked: win.view = "procs" },
+        Seg { icon: "apps"; text: "Apps"; on: win.view === "apps"; onClicked: win.view = "apps" }
     ]
 
     Label { visible: !Backend.supported; anchors.centerIn: parent; secondary: true; text: "System Monitor reads Linux's process list, which this system doesn't have." }
-    Item { visible: Backend.supported; anchors.fill: parent
-        Label { x: 16; y: 12; text: "Programs running: " + Backend.summary; secondary: true; font.pixelSize: 12 }
-        Row { id: header; x: 12; y: 36; height: 30
-            component Head: Pressable { property string text; property string key; property bool alignRight: true; height: 30; radius: 6; onClicked: if (key) win.sortKey = key
-                Label { x: 10; width: parent.width - 20; anchors.verticalCenter: parent.verticalCenter; horizontalAlignment: parent.alignRight ? Text.AlignRight : Text.AlignLeft
-                    text: parent.text + (win.sortKey === parent.key ? "  ↓" : ""); font.pixelSize: 11; font.weight: win.sortKey === parent.key ? Font.DemiBold : Font.Normal; color: win.sortKey === parent.key ? Theme.t.text : Theme.t.text_secondary } }
-            Head { width: table.width - 440; text: "Name"; key: "name"; alignRight: false } Head { width: 100; text: "Processor"; key: "cpu" } Head { width: 110; text: "Memory"; key: "memory" }
-            Head { width: 120; text: "Disk"; key: "disk" } Head { width: 110; text: "Number"; key: "" } }
-        Rectangle { x: 0; y: 66; width: parent.width; height: 1; color: Theme.t.separator }
-        Flickable { id: table; x: 12; y: 70; width: parent.width - 24; height: parent.height - 70 - 34; contentHeight: procs.height; clip: true
-            Column { id: procs; width: parent.width
-                Repeater { model: win.shown.slice(0, 250)
-                    Pressable { id: line; required property var modelData; required property int index; width: procs.width; height: 36; radius: 9
-                        readonly property bool sel: win.picked === modelData.pid
-                        color: sel ? Theme.t.accent : (hovered ? Theme.t.hover : (index % 2 ? (Theme.t.dark ? "#08FFFFFF" : "#07141E28") : "transparent"))
-                        readonly property color fg: sel ? Theme.t.onAccent : Theme.t.text
-                        readonly property color fg2: sel ? Theme.t.onAccent : Theme.t.text_secondary
-                        Rectangle { x: 10; anchors.verticalCenter: parent.verticalCenter; width: 22; height: 22; radius: 6; color: line.sel ? "#33FFFFFF" : Theme.t.hover
-                            Label { anchors.centerIn: parent; text: modelData.name.charAt(0).toUpperCase(); font.pixelSize: 11; font.weight: Font.Bold; color: line.fg } }
-                        Label { x: 42; width: parent.width - 500; anchors.verticalCenter: parent.verticalCenter; text: modelData.name + (modelData.paused ? "   (paused)" : ""); elide: Text.ElideRight; color: line.fg }
-                        // Processor use as a number and a bar, so the heavy ones stand out at a glance.
-                        Rectangle { visible: !line.sel && modelData.cpu > 0.5; x: parent.width - 440 + 8; anchors.verticalCenter: parent.verticalCenter; height: 20; radius: 5; width: Math.min(84, modelData.cpu * 0.84)
-                            color: Qt.rgba(Qt.color(Theme.t.accent).r, Qt.color(Theme.t.accent).g, Qt.color(Theme.t.accent).b, 0.22) }
-                        Label { x: parent.width - 440; width: 90; anchors.verticalCenter: parent.verticalCenter; text: modelData.cpu.toFixed(1) + "%"; horizontalAlignment: Text.AlignRight; font.family: Theme.t.fontMono; font.pixelSize: 12; color: line.fg }
-                        Label { x: parent.width - 340; width: 100; anchors.verticalCenter: parent.verticalCenter; text: modelData.memoryLabel; horizontalAlignment: Text.AlignRight; font.family: Theme.t.fontMono; font.pixelSize: 12; color: line.fg }
-                        Label { x: parent.width - 230; width: 110; anchors.verticalCenter: parent.verticalCenter; text: modelData.diskLabel || "–"; horizontalAlignment: Text.AlignRight; font.family: Theme.t.fontMono; font.pixelSize: 12; color: line.fg2 }
-                        Label { x: parent.width - 110; width: 100; anchors.verticalCenter: parent.verticalCenter; text: modelData.pid; horizontalAlignment: Text.AlignRight; font.family: Theme.t.fontMono; font.pixelSize: 12; color: line.fg2 }
-                        MouseArea { anchors.fill: parent; acceptedButtons: Qt.LeftButton | Qt.RightButton
-                            onClicked: function (m) { win.picked = modelData.pid; win.menuFor = m.button === Qt.RightButton ? { row: modelData, x: m.x + 12, y: parent.y - table.contentY + m.y + 74 } : null } } } } } }
-        Rectangle { anchors.bottom: parent.bottom; width: parent.width; height: 34; color: "transparent"
-            Rectangle { width: parent.width; height: 1; color: Theme.t.separator }
-            Label { x: 16; anchors.verticalCenter: parent.verticalCenter; font.pixelSize: 12; color: win.notice ? Theme.t.danger : Theme.t.text_secondary
-                text: win.notice || (win.picked < 0 ? "Click a program to select it. Right-click for more." : "Right-click the selected program for more.") }
-            Btn { visible: win.picked >= 0; anchors { right: parent.right; rightMargin: 8; verticalCenter: parent.verticalCenter } height: 24; text: "End Program"
-                onClicked: { var r = win.shown.filter(function (x) { return x.pid === win.picked })[0]; if (r) win.asking = { row: r, force: false } } } }
+
+    Item {
+        visible: Backend.supported
+        anchors { fill: parent; leftMargin: 14; rightMargin: 14; bottomMargin: 14 }
+
+        // ------------------------------------------------------------------------------------------- the five cards
+        Row {
+            id: vitals
+            width: parent.width; height: 110; spacing: 10
+            Repeater {
+                model: [
+                    { id: "cpu", title: "Processor", glyph: "cpu", value: win.pct((win.cpu.load || 0) * 100),
+                      sub: [win.cpu.ghz ? win.cpu.ghz + " GHz" : "", win.cpu.temp ? win.cpu.temp + " °C" : ""].filter(Boolean).join("  ·  ") || ((win.cpu.count || 0) + " threads"),
+                      a: win.hist.cpu || [], b: [], unit: true },
+                    { id: "mem", title: "Memory", glyph: "memory", value: win.gb(win.mem.used || 0),
+                      sub: "of " + win.gb(win.mem.total || 0) + "  ·  " + Math.round(100 * (win.mem.used || 0) / Math.max(1, win.mem.total || 1)) + "%", a: win.hist.mem || [], b: [], unit: true },
+                    { id: "gpu", title: "Graphics", glyph: "display", value: win.hasGpu ? win.gpu.load + "%" : "–",
+                      sub: win.hasGpu ? [win.gpu.memTotal ? win.gpu.memUsed + " of " + win.gpu.memTotal + " GB" : "", win.gpu.temp ? win.gpu.temp + " °C" : ""].filter(Boolean).join("  ·  ") : "No readings from this card",
+                      a: win.hist.gpu || [], b: [], unit: true },
+                    { id: "disk", title: "Disk", glyph: "drive", value: win.rate((win.tot.read || 0) + (win.tot.write || 0)),
+                      sub: "Read " + win.rate(win.tot.read || 0) + "  ·  Write " + win.rate(win.tot.write || 0), a: win.hist.read || [], b: win.hist.write || [], unit: false },
+                    { id: "net", title: "Network", glyph: "globe", value: win.rate(win.tot.down || 0),
+                      sub: "↓ " + win.rate(win.tot.down || 0) + "  ·  ↑ " + win.rate(win.tot.up || 0), a: win.hist.down || [], b: win.hist.up || [], unit: false }]
+                Pressable {
+                    id: vc
+                    required property var modelData
+                    objectName: "vital_" + modelData.id
+                    readonly property bool chosen: win.view === "perf" && win.perf === modelData.id
+                    width: (vitals.width - 40) / 5; height: vitals.height; radius: 16
+                    color: chosen ? Qt.rgba(win.ink.r, win.ink.g, win.ink.b, Theme.t.dark ? 0.16 : 0.12) : (hovered ? Theme.t.hover : Theme.t.group)
+                    border.width: chosen ? 2 : 1; border.color: chosen ? Theme.t.accent : Theme.t.separator
+                    onClicked: { win.perf = modelData.id; win.view = "perf" }
+                    Graph { x: 1; y: parent.height - height - 2; width: parent.width - 2; height: 34; first: vc.modelData.a; second: vc.modelData.b; unit: vc.modelData.unit
+                        grid: false; opacity: 0.8 }
+                    Row { x: 14; y: 11; spacing: 6
+                        Glyph { name: vc.modelData.glyph; size: 13; ink: Theme.t.text_secondary; anchors.verticalCenter: parent.verticalCenter }
+                        Label { text: vc.modelData.title; secondary: true; font.pixelSize: 11; font.weight: Font.DemiBold } }
+                    Label { x: 14; y: 26; text: vc.modelData.value; font.pixelSize: 21; font.weight: Font.Light }
+                    Label { x: 14; y: 53; width: parent.width - 28; text: vc.modelData.sub; secondary: true; font.pixelSize: 11; elide: Text.ElideRight }
+                }
+            }
+        }
+
+        // ------------------------------------------------------------------------------------------- Apps
+        Card {
+            id: appsCard
+            visible: win.view === "apps"
+            y: vitals.height + 12; width: parent.width; height: parent.height - y
+            Row { id: appsHead; x: 8; y: 6; height: 32
+                Head { width: appsCard.width - 16 - 4 * 104; text: "Name"; key: "name"; alignLeft: true }
+                Head { text: "Processor"; key: "cpu" } Head { text: "Memory"; key: "memory" } Head { text: "Graphics"; key: "gpu" } Head { text: "Disk"; key: "disk" } }
+            Rectangle { y: 40; width: parent.width; height: 1; color: Theme.t.separator }
+            Flickable {
+                id: appsList
+                x: 8; y: 44; width: parent.width - 16; height: parent.height - y - 44; contentHeight: appsCol.height; clip: true; boundsBehavior: Flickable.StopAtBounds
+                Column {
+                    id: appsCol
+                    width: parent.width
+                    Repeater {
+                        model: win.sections
+                        Column {
+                            id: sec
+                            required property var modelData
+                            readonly property bool folded: modelData.id === "system" && !win.showSystem
+                            width: appsCol.width
+                            visible: modelData.rows.length > 0
+                            Item { width: parent.width; height: 34
+                                Label { x: 8; anchors.verticalCenter: parent.verticalCenter; text: sec.modelData.title + "  ·  " + sec.modelData.rows.length
+                                    font.pixelSize: 12; font.weight: Font.DemiBold; secondary: true }
+                                Label { visible: sec.modelData.id === "system"; anchors { right: parent.right; rightMargin: 10; verticalCenter: parent.verticalCenter }
+                                    text: win.showSystem ? "Hide" : "Show"; color: Theme.t.accent; font.pixelSize: 12
+                                    MouseArea { anchors.fill: parent; anchors.margins: -6; cursorShape: Qt.PointingHandCursor; onClicked: win.showSystem = !win.showSystem } }
+                                Label { visible: sec.modelData.id === "system" && !win.showSystem; x: 140; anchors.verticalCenter: parent.verticalCenter
+                                    text: "Other users' and the system's own: services, drivers' helpers"; secondary: true; font.pixelSize: 11 } }
+                            Repeater {
+                                model: sec.folded ? [] : sec.modelData.rows
+                                Column {
+                                    id: ar
+                                    required property var modelData
+                                    readonly property bool unfolded: !!win.open[modelData.key]
+                                    width: sec.width
+                                    Pressable {
+                                        id: line
+                                        objectName: "app_" + ar.modelData.key
+                                        readonly property bool sel: win.picked !== null && win.picked.kind === "app" && win.picked.key === ar.modelData.key
+                                        width: parent.width; height: 46; radius: 10
+                                        color: sel ? Qt.rgba(win.ink.r, win.ink.g, win.ink.b, 0.22) : (hovered ? Theme.t.hover : "transparent")
+                                        border.width: sel ? 1 : 0; border.color: Theme.t.accent
+                                        // unfold its processes
+                                        Item { x: 4; width: 22; height: parent.height; visible: ar.modelData.count > 1
+                                            Glyph { anchors.centerIn: parent; name: ar.unfolded ? "down" : "forward"; size: 11; ink: Theme.t.text_secondary }
+                                            MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor
+                                                onClicked: { var o = Object.assign({}, win.open); o[ar.modelData.key] = !ar.unfolded; win.open = o } } }
+                                        Icon { x: 30 + (ar.modelData.kind === "app" ? 0 : 2); anchors.verticalCenter: parent.verticalCenter; icon: ar.modelData.icon; name: ar.modelData.name
+                                            s: ar.modelData.kind === "app" ? 28 : 24; glyph: ar.modelData.kind === "app" ? "" : ar.modelData.kind === "system" ? "shield" : "gear" }
+                                        Column { x: 68; width: parent.width - 68 - 4 * 104 - 8; anchors.verticalCenter: parent.verticalCenter; spacing: 1
+                                            Label { width: parent.width; text: ar.modelData.name + (ar.modelData.paused ? "  ·  paused" : ""); elide: Text.ElideRight
+                                                font.pixelSize: 13; font.weight: ar.modelData.kind === "app" ? Font.DemiBold : Font.Normal }
+                                            Label { visible: ar.modelData.sub !== "" || ar.modelData.kind === "system"; width: parent.width; elide: Text.ElideRight; secondary: true; font.pixelSize: 11
+                                                text: [ar.modelData.sub, ar.modelData.kind === "system" ? ar.modelData.user : ""].filter(Boolean).join("  ·  ") } }
+                                        Row { anchors.right: parent.right; height: parent.height
+                                            Cell { text: win.pct(ar.modelData.cpu); amount: ar.modelData.cpu / 50 }
+                                            Cell { text: win.size(ar.modelData.memory); amount: ar.modelData.memory / Math.max(1, win.mem.total || 1) * 6 }
+                                            Cell { text: ar.modelData.gpu > 0 ? win.pct(ar.modelData.gpu) : "–"; amount: ar.modelData.gpu / 60; dim: ar.modelData.gpu <= 0 }
+                                            Cell { text: ar.modelData.disk > 0 ? win.rate(ar.modelData.disk) : "–"; amount: ar.modelData.disk / 50e6; dim: ar.modelData.disk <= 0 } }
+                                        MouseArea { anchors.fill: parent; anchors.leftMargin: ar.modelData.count > 1 ? 26 : 0; acceptedButtons: Qt.LeftButton | Qt.RightButton
+                                            onClicked: function (m) {
+                                                win.picked = { kind: "app", key: ar.modelData.key }
+                                                if (m.button === Qt.RightButton) { var p = mapToItem(win.contentItem, m.x, m.y); win.menuFor = { item: win.itemOf(win.picked), x: p.x, y: p.y } }
+                                            }
+                                            onDoubleClicked: { var o = Object.assign({}, win.open); o[ar.modelData.key] = !ar.unfolded; win.open = o } }
+                                    }
+                                    // its processes, unfolded
+                                    Repeater {
+                                        model: ar.unfolded ? win.rowsOf(ar.modelData.key) : []
+                                        Pressable {
+                                            required property var modelData
+                                            readonly property bool sel: win.picked !== null && win.picked.kind === "proc" && win.picked.pid === modelData.pid
+                                            width: ar.width; height: 34; radius: 8
+                                            color: sel ? Qt.rgba(win.ink.r, win.ink.g, win.ink.b, 0.18) : (hovered ? Theme.t.hover : "transparent")
+                                            Rectangle { x: 44; width: 1; height: parent.height; color: Theme.t.separator }
+                                            Label { x: 68; width: parent.width - 68 - 4 * 104 - 8; anchors.verticalCenter: parent.verticalCenter; elide: Text.ElideRight; font.pixelSize: 12
+                                                text: modelData.name + "   " + modelData.pid + (modelData.paused ? "  ·  paused" : ""); color: Theme.t.text_secondary }
+                                            Row { anchors.right: parent.right; height: parent.height
+                                                Cell { text: win.pct(modelData.cpu); amount: modelData.cpu / 50 }
+                                                Cell { text: win.size(modelData.memory); amount: 0 }
+                                                Cell { text: modelData.gpu > 0 ? win.pct(modelData.gpu) : "–"; amount: 0; dim: true }
+                                                Cell { text: modelData.disk > 0 ? win.rate(modelData.disk) : "–"; amount: 0; dim: true } }
+                                            MouseArea { anchors.fill: parent; acceptedButtons: Qt.LeftButton | Qt.RightButton
+                                                onClicked: function (m) {
+                                                    win.picked = { kind: "proc", pid: modelData.pid }
+                                                    if (m.button === Qt.RightButton) { var p = mapToItem(win.contentItem, m.x, m.y); win.menuFor = { item: win.itemOf(win.picked), x: p.x, y: p.y } }
+                                                } }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    Label { visible: win.filter !== "" && win.sections.every(function (s) { return s.rows.length === 0 }); x: 12; topPadding: 20
+                        text: "Nothing running is called “" + win.filter + "”."; secondary: true }
+                }
+            }
+            Footer { anchors.bottom: parent.bottom
+                summary: (Backend.counts.apps || 0) + " apps  ·  " + (Backend.counts.background || 0) + " in the background  ·  " + (Backend.counts.processes || 0) + " processes  ·  up " + win.duration(Backend.uptime) }
+        }
+
+        // ------------------------------------------------------------------------------------------- Processes
+        Card {
+            id: procCard
+            visible: win.view === "procs"
+            y: vitals.height + 12; width: parent.width; height: parent.height - y
+            readonly property int cols: 7
+            Row { id: procHead; x: 8; y: 6; height: 32
+                Head { width: procCard.width - 16 - 2 * 80 - 90 - 4 * 104; text: "Name"; key: "name"; alignLeft: true }
+                Head { width: 80; text: "Number"; key: "pid" } Head { width: 90; text: "User"; key: "user" }
+                Head { text: "Processor"; key: "cpu" } Head { text: "Memory"; key: "memory" } Head { text: "Graphics"; key: "gpu" } Head { text: "Disk"; key: "disk" }
+                Head { width: 80; text: "Threads"; key: "threads" } }
+            Rectangle { y: 40; width: parent.width; height: 1; color: Theme.t.separator }
+            ListView {
+                id: procList
+                x: 8; y: 44; width: parent.width - 16; height: parent.height - y - 44; clip: true; boundsBehavior: Flickable.StopAtBounds
+                model: win.procRows
+                reuseItems: true
+                delegate: Pressable {
+                    required property var modelData
+                    required property int index
+                    readonly property bool sel: win.picked !== null && win.picked.kind === "proc" && win.picked.pid === modelData.pid
+                    width: procList.width; height: 34; radius: 8
+                    color: sel ? Qt.rgba(win.ink.r, win.ink.g, win.ink.b, 0.22) : (hovered ? Theme.t.hover : (index % 2 ? (Theme.t.dark ? "#06FFFFFF" : "#06141E28") : "transparent"))
+                    Row { x: 12; width: procCard.width - 16 - 2 * 80 - 90 - 4 * 104 - 20; anchors.verticalCenter: parent.verticalCenter; spacing: 8; clip: true
+                        Label { text: modelData.name + (modelData.paused ? "  ·  paused" : ""); font.pixelSize: 12 }
+                        Label { readonly property string app: win.appNames[modelData.app] || ""
+                            visible: app !== "" && app !== modelData.name; text: app; secondary: true; font.pixelSize: 11; anchors.verticalCenter: parent.verticalCenter } }
+                    Row { anchors.right: parent.right; height: parent.height
+                        Cell { width: 80; text: modelData.pid; dim: true }
+                        Item { width: 90; height: parent.height
+                            Label { anchors { right: parent.right; rightMargin: 12; verticalCenter: parent.verticalCenter } width: parent.width - 16; horizontalAlignment: Text.AlignRight
+                                elide: Text.ElideRight; text: modelData.user; font.pixelSize: 12; color: modelData.mine ? Theme.t.text : Theme.t.text_secondary } }
+                        Cell { text: win.pct(modelData.cpu); amount: modelData.cpu / 50 }
+                        Cell { text: win.size(modelData.memory); amount: modelData.memory / Math.max(1, win.mem.total || 1) * 6 }
+                        Cell { text: modelData.gpu > 0 ? win.pct(modelData.gpu) : "–"; amount: modelData.gpu / 60; dim: modelData.gpu <= 0 }
+                        Cell { text: modelData.disk > 0 ? win.rate(modelData.disk) : (modelData.disk < 0 ? "" : "–"); amount: modelData.disk / 50e6; dim: modelData.disk <= 0 }
+                        Cell { width: 80; text: modelData.threads; dim: true } }
+                    MouseArea { anchors.fill: parent; acceptedButtons: Qt.LeftButton | Qt.RightButton
+                        onClicked: function (m) {
+                            win.picked = { kind: "proc", pid: modelData.pid }
+                            if (m.button === Qt.RightButton) { var p = mapToItem(win.contentItem, m.x, m.y); win.menuFor = { item: win.itemOf(win.picked), x: p.x, y: p.y } }
+                        } }
+                }
+            }
+            Footer { anchors.bottom: parent.bottom
+                summary: win.procRows.length + (win.everyone ? " processes" : " of yours") + "  ·  " + (Backend.counts.threads || 0) + " threads in all"
+                Row { spacing: 2; anchors.verticalCenter: parent.verticalCenter
+                    Seg { text: "Yours"; on: !win.everyone; onClicked: win.everyone = false }
+                    Seg { text: "Everyone's"; on: win.everyone; onClicked: win.everyone = true } } }
+        }
+
+        // ------------------------------------------------------------------------------------------- Performance
+        Card {
+            id: perfCard
+            visible: win.view === "perf"
+            y: vitals.height + 12; width: parent.width; height: parent.height - y
+            Flickable {
+                anchors { fill: parent; margins: 20 }
+                contentHeight: perfCol.height; clip: true; boundsBehavior: Flickable.StopAtBounds
+                Column {
+                    id: perfCol
+                    width: parent.width; spacing: 18
+                    // the heading: what, and its make
+                    Item { width: parent.width; height: 34
+                        Label { text: ({ cpu: "Processor", mem: "Memory", gpu: "Graphics card", disk: "Disks", net: "Network" })[win.perf] || ""; font.pixelSize: 24; font.weight: Font.Light }
+                        Label { anchors { right: parent.right; verticalCenter: parent.verticalCenter } secondary: true; font.pixelSize: 13
+                            text: win.perf === "cpu" ? (win.cpu.model || "") : win.perf === "gpu" ? (win.gpu.name || "") : win.perf === "mem" ? win.gb(win.mem.total || 0) + " in all" : "" } }
+                    // the last two minutes: what's drawn named above it
+                    Column {
+                        width: parent.width; spacing: 6
+                        readonly property bool two: win.perf === "disk" || win.perf === "net"
+                        readonly property var first: win.perf === "cpu" ? (win.hist.cpu || []) : win.perf === "mem" ? (win.hist.mem || []) : win.perf === "gpu" ? (win.hist.gpu || []) : win.perf === "disk" ? (win.hist.read || []) : (win.hist.down || [])
+                        readonly property var second: win.perf === "disk" ? (win.hist.write || []) : win.perf === "net" ? (win.hist.up || []) : []
+                        readonly property real peak: Math.max.apply(null, [1].concat(first).concat(second))
+                        Item { width: parent.width; height: 16
+                            Label { text: "The last two minutes"; secondary: true; font.pixelSize: 11 }
+                            Row { anchors.right: parent.right; spacing: 14
+                                Row { spacing: 6
+                                    Rectangle { width: 8; height: 8; radius: 4; color: win.ink; anchors.verticalCenter: parent.verticalCenter }
+                                    Label { text: ({ cpu: "In use", mem: "In use", gpu: "Busy", disk: "Read", net: "Down" })[win.perf] || ""; secondary: true; font.pixelSize: 11 } }
+                                Row { visible: parent.parent.parent.two; spacing: 6
+                                    Rectangle { width: 8; height: 8; radius: 4; color: win.ink2; anchors.verticalCenter: parent.verticalCenter }
+                                    Label { text: win.perf === "disk" ? "Write" : "Up"; secondary: true; font.pixelSize: 11 } }
+                                Label { text: parent.parent.parent.two ? "top of the graph " + win.rate(parent.parent.parent.peak) : "top of the graph 100%"; secondary: true; font.pixelSize: 11 } } }
+                        Rectangle { width: parent.width; height: 170; radius: 12; color: Theme.t.dark ? "#14000000" : "#0A141E28"
+                            Graph { anchors { fill: parent; margins: 8 } first: parent.parent.first; second: parent.parent.second; unit: !parent.parent.two } } }
+
+                    // ---- processor
+                    Flow { visible: win.perf === "cpu"; width: parent.width; spacing: 18
+                        Stat { name: "In use"; value: win.pct((win.cpu.load || 0) * 100); dot: win.ink }
+                        Stat { name: "Speed now"; value: win.cpu.ghz ? win.cpu.ghz + " GHz" : "–" }
+                        Stat { name: "Top speed"; value: win.cpu.maxGhz ? win.cpu.maxGhz + " GHz" : "–" }
+                        Stat { name: "Temperature"; value: win.cpu.temp ? win.cpu.temp + " °C" : "–" }
+                        Stat { name: "Threads"; value: String(win.cpu.count || 0) }
+                        Stat { name: "Processes"; value: (Backend.counts.processes || 0) + "  ·  " + (Backend.counts.threads || 0) + " threads" }
+                        Stat { name: "Up for"; value: win.duration(Backend.uptime) } }
+                    Column { visible: win.perf === "cpu"; width: parent.width; spacing: 8
+                        Label { text: "Each thread of the processor"; secondary: true; font.pixelSize: 11; font.weight: Font.DemiBold }
+                        Grid {
+                            id: coreGrid
+                            readonly property int n: (win.cpu.cores || []).length
+                            columns: n <= 16 ? Math.max(1, n) : Math.min(16, Math.ceil(n / Math.ceil(n / 16))); spacing: 8
+                            Repeater { model: win.cpu.cores || []
+                                Item { required property var modelData; required property int index
+                                    width: (perfCol.width - (coreGrid.columns - 1) * 8) / coreGrid.columns; height: 58
+                                    Rectangle { anchors.fill: parent; radius: 9; color: Theme.t.hover }
+                                    Rectangle { anchors.bottom: parent.bottom; width: parent.width; height: Math.max(3, parent.height * modelData); radius: Math.min(9, height / 2)
+                                        color: Qt.rgba(win.ink.r, win.ink.g, win.ink.b, 0.35 + 0.4 * modelData) }
+                                    Label { x: 8; y: 6; text: index; secondary: true; font.pixelSize: 10 }
+                                    Label { anchors { right: parent.right; rightMargin: 8; bottom: parent.bottom; bottomMargin: 6 } text: Math.round(modelData * 100) + "%"; font.pixelSize: 12
+                                        font.family: Theme.t.fontMono } } } } }
+
+                    Top { visible: win.perf === "cpu" && list.length > 0; by: "cpu"; title: "Using the most" }
+
+                    // ---- memory
+                    Column { visible: win.perf === "mem"; width: parent.width; spacing: 10
+                        readonly property real t: Math.max(1, win.mem.total || 1)
+                        Label { text: "What it holds"; secondary: true; font.pixelSize: 11; font.weight: Font.DemiBold }
+                        Row { width: parent.width; height: 26
+                            Rectangle { width: parent.width * (win.mem.used || 0) / parent.parent.t; height: parent.height; radius: 6; color: win.ink }
+                            Rectangle { width: parent.width * Math.min(win.mem.cached || 0, (win.mem.available || 0)) / parent.parent.t; height: parent.height; color: Qt.rgba(win.ink.r, win.ink.g, win.ink.b, 0.38) }
+                            Rectangle { width: Math.max(0, parent.width - parent.children[0].width - parent.children[1].width); height: parent.height; radius: 6; color: Theme.t.hover } }
+                        Flow { width: parent.width; spacing: 18
+                            Stat { name: "In use by programs"; value: win.gb(win.mem.used || 0); dot: win.ink }
+                            Stat { name: "Kept as a cache (given back when needed)"; width: 250; value: win.gb(win.mem.cached || 0); dot: Qt.rgba(win.ink.r, win.ink.g, win.ink.b, 0.38) }
+                            Stat { name: "Free"; value: win.gb(win.mem.free || 0); dot: Theme.t.hover }
+                            Stat { name: "Available"; value: win.gb(win.mem.available || 0) }
+                            Stat { name: win.mem.zram ? "Compressed swap (zram)" : "Swap"; width: 210; value: win.mem.swapTotal ? win.gb(win.mem.swapUsed || 0) + " of " + win.gb(win.mem.swapTotal) : "None" } }
+                        Label { width: parent.width; wrapMode: Text.WordWrap; secondary: true; font.pixelSize: 12
+                            text: "Memory kept as a cache holds files read recently so they open fast again; programs get it the moment they need it. " +
+                                  (win.mem.zram ? "When memory runs short, what's been unused longest is compressed in memory first, before anything is stopped." : "") } }
+
+                    Top { visible: win.perf === "mem" && list.length > 0; by: "memory"; title: "Using the most" }
+
+                    // ---- graphics card
+                    Column { visible: win.perf === "gpu"; width: parent.width; spacing: 14
+                        Label { visible: !win.hasGpu; width: parent.width; wrapMode: Text.WordWrap; secondary: true
+                            text: "This graphics card doesn't give readings here (AMD cards do, and NVIDIA's with its driver). Which app uses it is in the Graphics column of Apps." }
+                        Flow { visible: win.hasGpu; width: parent.width; spacing: 18
+                            Stat { name: "Busy"; value: (win.gpu.load || 0) + "%"; dot: win.ink }
+                            Stat { name: "Video memory"; value: win.gpu.memTotal ? win.gpu.memUsed + " of " + win.gpu.memTotal + " GB" : "–" }
+                            Stat { name: "Temperature"; value: win.gpu.temp !== undefined ? win.gpu.temp + " °C" + (win.gpu.hot ? "  (hottest " + win.gpu.hot + ")" : "") : "–"; width: 210 }
+                            Stat { name: "Power"; value: win.gpu.watts !== undefined ? win.gpu.watts + " W" + (win.gpu.capWatts ? " of " + win.gpu.capWatts : "") : "–" }
+                            Stat { name: "Clock"; value: win.gpu.coreMhz ? win.gpu.coreMhz + " MHz" : (win.gpu.ghz ? win.gpu.ghz + " GHz" : "–") }
+                            Stat { name: "Memory clock"; value: win.gpu.memMhz ? win.gpu.memMhz + " MHz" : "–" }
+                            Stat { name: "Fan"; value: win.gpu.fan !== undefined ? win.gpu.fan + " RPM" + (win.gpu.fanPercent !== undefined ? "  ·  " + win.gpu.fanPercent + "%" : "") : "–" } }
+                        Column { visible: win.hasGpu && !!win.gpu.memTotal; width: parent.width; spacing: 6
+                            Label { text: "Video memory"; secondary: true; font.pixelSize: 11; font.weight: Font.DemiBold }
+                            Meter { width: parent.width; height: 10; radius: 5; value: (win.gpu.memUsed || 0) / Math.max(0.1, win.gpu.memTotal || 1) } }
+                        Label { width: parent.width; wrapMode: Text.WordWrap; secondary: true; font.pixelSize: 12
+                            text: "Settings › Graphics has the card's performance level and its power limit." } }
+
+                    Top { visible: win.perf === "gpu" && list.length > 0; by: "gpu"; title: "Using it the most (your apps)" }
+
+                    // ---- disks
+                    Column { visible: win.perf === "disk"; width: parent.width; spacing: 12
+                        Repeater { model: Backend.disks
+                            Rectangle { required property var modelData; width: perfCol.width; height: dk.height + 28; radius: 12; color: Theme.t.hover
+                                Column { id: dk; x: 16; y: 14; width: parent.width - 32; spacing: 10
+                                    Item { width: parent.width; height: 22
+                                        Row { spacing: 8
+                                            Glyph { name: "drive"; size: 16; anchors.verticalCenter: parent.verticalCenter }
+                                            Label { text: modelData.model || modelData.name; font.pixelSize: 14; font.weight: Font.DemiBold; anchors.verticalCenter: parent.verticalCenter }
+                                            Label { text: modelData.kind + "  ·  " + win.size(modelData.size).replace(".0 ", " ") + "  ·  " + modelData.name; secondary: true; font.pixelSize: 12; anchors.verticalCenter: parent.verticalCenter } }
+                                        Label { anchors.right: parent.right; text: "Busy " + Math.round(modelData.busy * 100) + "%"; font.pixelSize: 12; anchors.verticalCenter: parent.verticalCenter } }
+                                    Row { spacing: 28
+                                        Stat { name: "Reading"; value: win.rate(modelData.read); dot: win.ink }
+                                        Stat { name: "Writing"; value: win.rate(modelData.write); dot: win.ink2 } }
+                                    Repeater { model: modelData.parts
+                                        Column { required property var modelData; width: dk.width; spacing: 4
+                                            Item { width: parent.width; height: 16
+                                                Label { text: modelData.where === "/" ? "The system ( / )" : modelData.where; font.pixelSize: 12 }
+                                                Label { anchors.right: parent.right; text: win.gb(modelData.total - modelData.used) + " free of " + win.gb(modelData.total); secondary: true; font.pixelSize: 12 } }
+                                            Meter { width: parent.width; value: modelData.used / Math.max(1, modelData.total); fill: modelData.used / modelData.total > 0.9 ? Theme.t.danger : Theme.t.accent } } } } } }
+                        Label { width: parent.width; wrapMode: Text.WordWrap; secondary: true; font.pixelSize: 12
+                            text: "Settings › Storage shows what each app and game takes, and takes them off." } }
+
+                    Top { visible: win.perf === "disk" && list.length > 0; by: "disk"; title: "Reading and writing the most (your apps)" }
+
+                    // ---- network
+                    Column { visible: win.perf === "net"; width: parent.width; spacing: 12
+                        Repeater { model: Backend.nets
+                            Rectangle { required property var modelData; width: perfCol.width; height: 92; radius: 12; color: Theme.t.hover; opacity: modelData.up_ ? 1 : 0.6
+                                Row { x: 16; y: 14; spacing: 8
+                                    Glyph { name: modelData.kind === "Wi‑Fi" ? "wifi" : modelData.kind === "VPN" ? "lock" : "ethernet"; size: 16; anchors.verticalCenter: parent.verticalCenter }
+                                    Label { text: modelData.kind; font.pixelSize: 14; font.weight: Font.DemiBold; anchors.verticalCenter: parent.verticalCenter }
+                                    Label { text: modelData.name + (modelData.address ? "  ·  " + modelData.address : "") + (modelData.up_ ? "" : "  ·  not connected"); secondary: true; font.pixelSize: 12
+                                        anchors.verticalCenter: parent.verticalCenter } }
+                                Row { x: 16; y: 44; spacing: 28
+                                    Stat { name: "Down"; value: win.rate(modelData.down); dot: win.ink }
+                                    Stat { name: "Up"; value: win.rate(modelData.up); dot: win.ink2 }
+                                    Stat { name: "Since it started"; width: 240; value: "↓ " + win.size(modelData.rx) + "   ↑ " + win.size(modelData.tx) } } } }
+                        Label { visible: (Backend.nets || []).length === 0; text: "No network connections."; secondary: true } }
+                }
+            }
+        }
     }
+
+    // ---------------------------------------------------------------------------------------------------- the footer
+    component Footer: Rectangle {
+        property string summary
+        default property alias extra: extraRow.data
+        width: parent ? parent.width : 400; height: 44; color: "transparent"
+        Rectangle { width: parent.width; height: 1; color: Theme.t.separator }
+        Label { x: 16; anchors.verticalCenter: parent.verticalCenter; width: parent.width - 420; elide: Text.ElideRight; font.pixelSize: 12
+            color: win.notice ? Theme.t.danger : Theme.t.text_secondary; text: win.notice || parent.summary }
+        Row { id: extraRow; anchors { right: actions.left; rightMargin: 12; verticalCenter: parent.verticalCenter } height: 30 }
+        Row { id: actions; anchors { right: parent.right; rightMargin: 10; verticalCenter: parent.verticalCenter } spacing: 6
+            Btn { visible: win.current !== null; height: 28; text: "More…"
+                onClicked: { var p = mapToItem(win.contentItem, 0, -8); win.menuFor = { item: win.current, x: p.x - 120, y: p.y - 230 } } }
+            Btn { visible: win.current !== null; height: 28; danger: true; objectName: "endButton"
+                text: win.current && win.current.kind === "app" ? "End App" : "End Process"
+                onClicked: win.act("end", win.current) } }
+    }
+
+    // ---------------------------------------------------------------------------------------------------- menu, sheets
     MouseArea { visible: win.menuFor !== null; anchors.fill: parent; z: 19; acceptedButtons: Qt.LeftButton | Qt.RightButton; onClicked: win.menuFor = null }
-    Rectangle {   // right-click menu
-        visible: win.menuFor !== null; z: 20; width: 220; height: menu.height + 10; radius: Theme.t.radiusCard; color: Theme.t.menu_bg; border.width: 1; border.color: Theme.t.menu_border
-        x: win.menuFor ? Math.min(win.menuFor.x, parent.width - width - 8) : 0; y: win.menuFor ? Math.min(win.menuFor.y, parent.height - height - 8) : 0
+    Rectangle {
+        objectName: "rowMenu"
+        visible: win.menuFor !== null; z: 20; width: 240; height: menu.height + 10; radius: Theme.t.radiusCard; color: Theme.t.menu_bg; border.width: 1; border.color: Theme.t.menu_border
+        x: win.menuFor ? Math.max(8, Math.min(win.menuFor.x, parent.width - width - 8)) : 0; y: win.menuFor ? Math.max(8, Math.min(win.menuFor.y, parent.height - height - 8)) : 0
+        readonly property var it: win.menuFor ? win.menuFor.item : null
         Column { id: menu; x: 5; y: 5; width: parent.width - 10
-            Repeater { model: win.menuFor ? [["End program", "x", "end"], [win.menuFor.row.paused ? "Resume" : "Pause", win.menuFor.row.paused ? "play" : "pause", "pause"], ["Show program location", "folder", "where"], ["Properties", "info", "props"], ["", "", ""], ["Force stop", "trash", "force"]] : []
+            Repeater {
+                model: parent.parent.it ? [[parent.parent.it.kind === "app" ? "End app" : "End process", "x", "end"], [parent.parent.it.paused ? "Resume" : "Pause", parent.parent.it.paused ? "play" : "pause", "pause"],
+                                           ["Run in the background (lower priority)", "down", "slow"], ["Normal priority", "up", "normal"],
+                                           ["Show program location", "folder", "where"], ["Details", "info", "props"], ["", "", ""], ["Force stop", "trash", "force"]] : []
                 Item { required property var modelData; width: menu.width; height: modelData[0] ? 30 : 9
                     Rectangle { visible: !modelData[0]; y: 4; width: parent.width; height: 1; color: Theme.t.separator }
                     Pressable { visible: modelData[0] !== ""; anchors.fill: parent; radius: Theme.t.radiusControl
-                        onClicked: { var r = win.menuFor.row, a = modelData[2]; win.menuFor = null
-                            if (a === "end") win.asking = { row: r, force: false }; else if (a === "force") win.asking = { row: r, force: true }
-                            else if (a === "pause") r.paused ? Backend.resume(r.pid) : Backend.pause(r.pid); else if (a === "where") Backend.showLocation(r.pid)
-                            else win.props = { row: r, list: Backend.details(r.pid) } }
+                        onClicked: { var it = win.menuFor.item, a = modelData[2]; win.menuFor = null; win.act(a, it) }
                         Glyph { x: 8; anchors.verticalCenter: parent.verticalCenter; name: modelData[1]; size: 14; ink: modelData[2] === "force" ? Theme.t.danger : Theme.t.icon }
-                        Label { x: 32; anchors.verticalCenter: parent.verticalCenter; text: modelData[0]; color: modelData[2] === "force" ? Theme.t.danger : Theme.t.text } } } } }
+                        Label { x: 32; width: parent.width - 40; anchors.verticalCenter: parent.verticalCenter; text: modelData[0]; elide: Text.ElideRight; color: modelData[2] === "force" ? Theme.t.danger : Theme.t.text } } } } }
     }
-    Rectangle { visible: win.asking !== null || win.props !== null; anchors.fill: parent; color: "#66000000"; z: 30; MouseArea { anchors.fill: parent; onClicked: win.props = null } }
-    Rectangle { visible: win.asking !== null; z: 31; anchors.centerIn: parent; width: 400; height: 178; radius: Theme.t.radiusTile; color: Theme.t.menu_bg; border.width: 1; border.color: Theme.t.menu_border
-        Label { x: 22; y: 20; text: (win.asking && win.asking.force ? "Force “" : "End “") + (win.asking ? win.asking.row.name : "") + (win.asking && win.asking.force ? "” to stop?" : "”?"); font.pixelSize: 16; font.weight: Font.DemiBold }
-        Label { x: 22; y: 50; width: parent.width - 44; wrapMode: Text.WordWrap; secondary: true; lineHeight: 1.3
-            text: win.asking && win.asking.force ? "It stops at once with no chance to save. Use this only when End Program didn't work." : "The program is asked to close. Anything in it that you haven't saved may be lost." }
+    Rectangle { visible: win.asking !== null || win.props !== null; anchors.fill: parent; color: "#66000000"; z: 30; MouseArea { anchors.fill: parent; onClicked: { win.props = null; win.asking = null } } }
+    Rectangle {
+        objectName: "endSheet"
+        visible: win.asking !== null; z: 31; anchors.centerIn: parent; width: 420; height: 184; radius: Theme.t.radiusTile; color: Theme.t.menu_bg; border.width: 1; border.color: Theme.t.menu_border
+        readonly property var it: win.asking ? win.asking.item : null
+        readonly property bool force: !!(win.asking && win.asking.force)
+        Label { x: 22; y: 20; width: parent.width - 44; elide: Text.ElideRight; font.pixelSize: 16; font.weight: Font.DemiBold
+            text: parent.it ? (parent.force ? "Force “" + parent.it.name + "” to stop?" : "End “" + parent.it.name + "”?") : "" }
+        Label { x: 22; y: 52; width: parent.width - 44; wrapMode: Text.WordWrap; secondary: true; lineHeight: 1.3
+            text: parent.force ? "It stops at once, with no chance to save. Use this only when End didn't work."
+                               : (parent.it && parent.it.kind === "app" && parent.it.pids.length > 1 ? "The app and its " + (parent.it.pids.length - 1) + " helpers are asked to close. " : "It's asked to close. ") + "Anything not saved in it may be lost." }
         Row { anchors { right: parent.right; rightMargin: 22; bottom: parent.bottom; bottomMargin: 20 } spacing: 8
             Btn { text: "Cancel"; onClicked: win.asking = null }
-            Btn { text: win.asking && win.asking.force ? "Force Stop" : "End Program"; danger: true; onClicked: { win.asking.force ? Backend.force(win.asking.row.pid) : Backend.end(win.asking.row.pid); win.asking = null; win.picked = -1 } } } }
-    Rectangle { visible: win.props !== null; z: 31; anchors.centerIn: parent; width: 480; height: plist.height + 110; radius: Theme.t.radiusTile; color: Theme.t.menu_bg; border.width: 1; border.color: Theme.t.menu_border
-        Label { x: 22; y: 20; text: win.props ? win.props.row.name : ""; font.pixelSize: 16; font.weight: Font.DemiBold }
+            Btn { text: parent.parent.force ? "Force Stop" : "End"; danger: true
+                onClicked: { var a = win.asking; a.force ? Backend.force(a.item.pids) : Backend.end(a.item.pids); win.asking = null; win.picked = null } } }
+    }
+    Rectangle {
+        visible: win.props !== null; z: 31; anchors.centerIn: parent; width: 520; height: plist.height + 110; radius: Theme.t.radiusTile; color: Theme.t.menu_bg; border.width: 1; border.color: Theme.t.menu_border
+        Label { x: 22; y: 20; width: parent.width - 44; elide: Text.ElideRight; text: win.props ? win.props.title : ""; font.pixelSize: 16; font.weight: Font.DemiBold }
         Column { id: plist; x: 22; y: 54; width: parent.width - 44
             Repeater { model: win.props ? win.props.list : []
                 Item { required property var modelData; width: plist.width; height: Math.max(30, v.height + 12)
                     Label { y: 6; text: modelData.name; secondary: true } Label { id: v; x: 150; y: 6; width: parent.width - 150; text: modelData.value; wrapMode: Text.WrapAnywhere; font.pixelSize: 12 } } } }
-        Btn { anchors { right: parent.right; rightMargin: 22; bottom: parent.bottom; bottomMargin: 18 } text: "Done"; primary: true; onClicked: win.props = null } }
+        Btn { anchors { right: parent.right; rightMargin: 22; bottom: parent.bottom; bottomMargin: 18 } text: "Done"; primary: true; onClicked: win.props = null }
+    }
 }

@@ -4292,202 +4292,7 @@ class Archives(QObject):
 
 
 # --------------------------------------------------------------------------------------------- Monitor
-class Monitor(QObject):
-    """System Monitor: processor, memory, swap, network and disk activity plus the process list, all read
-    from /proc. Refreshes every two seconds; each graph keeps the last two minutes."""
-    changed = Signal()
-    failed = Signal(str)
-    POINTS = 60
-
-    def __init__(self):
-        super().__init__()
-        zero = [0.0] * self.POINTS
-        self._rows, self._prev, self._prev_io = [], {}, {}
-        self._prev_total = self._prev_idle = 0
-        self._cpu, self._cpu_hist = 0.0, list(zero)
-        self._mem = {"used": 0, "total": 0, "swap_used": 0, "swap_total": 0}
-        self._net = {"down": 0.0, "up": 0.0, "rx": 0, "tx": 0}
-        self._disk = {"read": 0.0, "write": 0.0, "rd": 0, "wr": 0}
-        self._hist = {"down": list(zero), "up": list(zero), "read": list(zero), "write": list(zero)}
-        self._stamp = 0.0
-        self._page = os.sysconf("SC_PAGE_SIZE") if hasattr(os, "sysconf") else 4096
-        self._ticks = os.sysconf("SC_CLK_TCK") if hasattr(os, "sysconf") else 100
-        self._supported = Path("/proc/stat").is_file()
-        self.refresh()
-        self._timer = QTimer(self)
-        self._timer.timeout.connect(self.refresh)
-        self._timer.start(2000)
-
-    supported = Property(bool, lambda self: self._supported, constant=True)
-    rows = Property("QVariantList", lambda self: self._rows, notify=changed)
-    cores = Property(int, lambda self: os.cpu_count() or 1, constant=True)
-    cpu = Property(float, lambda self: self._cpu, notify=changed)
-    cpuHistory = Property("QVariantList", lambda self: self._cpu_hist, notify=changed)
-    memory = Property(float, lambda self: self._mem["used"] / self._mem["total"] if self._mem["total"] else 0.0, notify=changed)
-    memoryLabel = Property(str, lambda self: f"{human_size(self._mem['used'])} of {human_size(self._mem['total'])}", notify=changed)
-    swap = Property(float, lambda self: self._mem["swap_used"] / self._mem["swap_total"] if self._mem["swap_total"] else 0.0, notify=changed)
-    swapLabel = Property(str, lambda self: (f"{human_size(self._mem['swap_used'])} of {human_size(self._mem['swap_total'])}"
-                                            if self._mem["swap_total"] else "Not set up"), notify=changed)
-    downLabel = Property(str, lambda self: human_size(self._net["down"]) + "/s", notify=changed)
-    upLabel = Property(str, lambda self: human_size(self._net["up"]) + "/s", notify=changed)
-    receivedLabel = Property(str, lambda self: human_size(self._net["rx"]), notify=changed)
-    sentLabel = Property(str, lambda self: human_size(self._net["tx"]), notify=changed)
-    readLabel = Property(str, lambda self: human_size(self._disk["read"]) + "/s", notify=changed)
-    writeLabel = Property(str, lambda self: human_size(self._disk["write"]) + "/s", notify=changed)
-    downHistory = Property("QVariantList", lambda self: self._hist["down"], notify=changed)
-    upHistory = Property("QVariantList", lambda self: self._hist["up"], notify=changed)
-    readHistory = Property("QVariantList", lambda self: self._hist["read"], notify=changed)
-    writeHistory = Property("QVariantList", lambda self: self._hist["write"], notify=changed)
-    summary = Property(str, lambda self: f"{sum(1 for r in self._rows if r['mine'])} of yours, {len(self._rows)} in all", notify=changed)
-
-    @staticmethod
-    def _network() -> tuple:
-        rx = tx = 0
-        for line in Path("/proc/net/dev").read_text().splitlines()[2:]:
-            name, _, data = line.partition(":")
-            cols = data.split()
-            if name.strip() != "lo" and len(cols) >= 9:
-                rx, tx = rx + int(cols[0]), tx + int(cols[8])
-        return rx, tx
-
-    @staticmethod
-    def _disks() -> tuple:
-        try:
-            whole = {d.name for d in os.scandir("/sys/block") if not d.name.startswith(("loop", "ram", "zram"))}
-        except OSError:
-            whole = set()
-        rd = wr = 0
-        for line in Path("/proc/diskstats").read_text().splitlines():
-            cols = line.split()
-            if len(cols) >= 10 and cols[2] in whole:
-                rd, wr = rd + int(cols[5]) * 512, wr + int(cols[9]) * 512
-        return rd, wr
-
-    def _push(self, key: str, value: float) -> None:
-        self._hist[key] = self._hist[key][1:] + [value]
-
-    @Slot()
-    def refresh(self) -> None:
-        if not self._supported:
-            return
-        now = time.monotonic()
-        span = now - self._stamp if self._stamp else 0.0
-        try:
-            fields = [int(x) for x in Path("/proc/stat").read_text().splitlines()[0].split()[1:]]
-            total, idle = sum(fields), fields[3] + (fields[4] if len(fields) > 4 else 0)
-            mem = {line.split(":")[0]: int(line.split()[1]) * 1024 for line in Path("/proc/meminfo").read_text().splitlines() if ":" in line}
-        except (OSError, ValueError, IndexError):
-            return
-        d_total = total - self._prev_total
-        if self._prev_total and d_total > 0:
-            self._cpu = max(0.0, min(1.0, 1 - (idle - self._prev_idle) / d_total))
-        self._cpu_hist = self._cpu_hist[1:] + [self._cpu]
-        self._mem = {"total": mem.get("MemTotal", 0), "used": mem.get("MemTotal", 0) - mem.get("MemAvailable", 0),
-                     "swap_total": mem.get("SwapTotal", 0), "swap_used": mem.get("SwapTotal", 0) - mem.get("SwapFree", 0)}
-        for store, reader, keys in ((self._net, self._network, ("rx", "tx", "down", "up")), (self._disk, self._disks, ("rd", "wr", "read", "write"))):
-            try:
-                a, b = reader()
-            except (OSError, ValueError):
-                continue
-            if span > 0 and store[keys[0]]:
-                store[keys[2]], store[keys[3]] = max(0.0, (a - store[keys[0]]) / span), max(0.0, (b - store[keys[1]]) / span)
-            store[keys[0]], store[keys[1]] = a, b
-            self._push(keys[2], store[keys[2]])
-            self._push(keys[3], store[keys[3]])
-
-        rows, seen, seen_io = [], {}, {}
-        me = os.getuid()
-        for entry in os.scandir("/proc"):
-            if not entry.name.isdigit():
-                continue
-            try:
-                stat = Path(entry.path, "stat").read_text()
-                name = stat[stat.index("(") + 1:stat.rindex(")")]
-                rest = stat[stat.rindex(")") + 2:].split()
-                used, rss, uid = int(rest[11]) + int(rest[12]), int(rest[21]) * self._page, entry.stat().st_uid
-            except (OSError, ValueError, IndexError):
-                continue
-            pid = int(entry.name)
-            seen[pid] = used
-            if rss == 0:
-                continue                                                  # kernel threads
-            share = (used - self._prev.get(pid, used)) / d_total * (os.cpu_count() or 1) if d_total > 0 else 0.0
-            disk = -1.0                                                   # -1: not readable (someone else's program)
-            try:
-                io = dict(line.split(": ") for line in Path(entry.path, "io").read_text().splitlines())
-                moved = int(io["read_bytes"]) + int(io["write_bytes"])
-                seen_io[pid] = moved
-                disk = max(0.0, (moved - self._prev_io.get(pid, moved)) / span) if span > 0 else 0.0
-            except (OSError, ValueError, KeyError):
-                pass
-            rows.append({"pid": pid, "name": name, "cpu": round(max(0.0, share) * 100, 1), "memory": rss,
-                         "memoryLabel": human_size(rss), "disk": disk, "diskLabel": "" if disk < 0 else human_size(disk) + "/s",
-                         "mine": uid == me, "paused": rest[0] == "T"})
-        self._prev, self._prev_io, self._prev_total, self._prev_idle, self._stamp = seen, seen_io, total, idle, now
-        self._rows = rows
-        self.changed.emit()
-
-    def _signal(self, pid: int, sig: int) -> None:
-        try:
-            os.kill(pid, sig)
-        except ProcessLookupError:
-            pass
-        except PermissionError:
-            self.failed.emit("That program belongs to the system, so it can't be changed from here.")
-        QTimer.singleShot(400, self.refresh)
-
-    @Slot(int)
-    def end(self, pid: int) -> None:
-        """Ask the program to close (it may save first)."""
-        self._signal(pid, signal.SIGTERM)
-
-    @Slot(int)
-    def force(self, pid: int) -> None:
-        """Stop it at once, for a program that ignores End."""
-        self._signal(pid, signal.SIGKILL)
-
-    @Slot(int)
-    def pause(self, pid: int) -> None:
-        self._signal(pid, signal.SIGSTOP)
-
-    @Slot(int)
-    def resume(self, pid: int) -> None:
-        self._signal(pid, signal.SIGCONT)
-
-    @Slot(int, result="QVariantList")
-    def details(self, pid: int) -> list:
-        base, out = Path("/proc", str(pid)), []
-        try:
-            stat = (base / "stat").read_text()
-            rest = stat[stat.rindex(")") + 2:].split()
-            boot = time.time() - float(Path("/proc/uptime").read_text().split()[0])
-            started = dt.datetime.fromtimestamp(boot + int(rest[19]) / self._ticks).strftime("%b %d, %H:%M")
-            out += [("Process number", str(pid)), ("Started", started), ("Threads", rest[17]),
-                    ("State", "Paused" if rest[0] == "T" else "Running")]
-            try:
-                import pwd
-                out.append(("Owner", pwd.getpwuid(base.stat().st_uid).pw_name))
-            except (ImportError, KeyError):
-                pass
-            try:
-                out.append(("Program file", os.readlink(base / "exe")))
-            except OSError:
-                pass
-            command = (base / "cmdline").read_bytes().replace(b"\0", b" ").decode(errors="replace").strip()
-            if command:
-                out.append(("Started as", command[:300]))
-        except (OSError, ValueError, IndexError):
-            return [{"name": "Status", "value": "This program has already closed."}]
-        return [{"name": k, "value": v} for k, v in out]
-
-    @Slot(int)
-    def showLocation(self, pid: int) -> None:
-        try:
-            folder = str(Path(os.readlink(f"/proc/{pid}/exe")).parent)
-        except OSError:
-            self.failed.emit("The location of that program can't be read.")
-            return
-        QDesktopServices.openUrl(QUrl.fromLocalFile(folder))
+# System Monitor: huginn_monitor.py (apps grouped as you think of them, each resource in full, sampled off the window's thread)
 
 
 # --------------------------------------------------------------------------------------- Music + Video
@@ -5358,7 +5163,8 @@ def main() -> int:
         app.setQuitOnLastWindowClosed(False)                       # closing the window can leave Mail watching the inbox
         app.aboutToQuit.connect(backend.stop)
     elif args.app == "monitor":
-        backend = Monitor()
+        from huginn_monitor import Monitor
+        backend = Monitor(args.demo)
     elif args.app == "store":
         backend = Store(args.demo)
     elif args.app == "music":
@@ -5531,6 +5337,9 @@ def main() -> int:
         engine.addImageProvider("minimap", huginn_code.MinimapProvider(backend))
     if args.app == "scan":
         engine.addImageProvider("scan", huginn_scan.ScanImages(backend))
+    if args.app == "monitor":                                     # apps' icons in System Monitor
+        from huginn_shell import SysIcon
+        engine.addImageProvider("sysicon", SysIcon())
     if args.app in ("settings", "store"):
         from huginn_shell import SysIcon
         engine.addImageProvider("sysicon", SysIcon())
