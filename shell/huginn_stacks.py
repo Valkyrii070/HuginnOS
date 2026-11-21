@@ -22,6 +22,19 @@ from PySide6.QtGui import QGuiApplication
 
 PARTS = (".part", ".crdownload", ".download", ".partial")
 CONFIG = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "huginn-shell" / "stacks.json"
+DESK_PLACES = CONFIG.with_name("desktop-icons.json")      # where each file on the desktop was put: name -> [column, row]
+
+
+def desktop_folder() -> Path:
+    """The Desktop folder (as the system names it in your language)."""
+    try:
+        from gi.repository import GLib
+        found = GLib.get_user_special_dir(GLib.UserDirectory.DIRECTORY_DESKTOP)
+        if found and Path(found) != Path.home():
+            return Path(found)
+    except (ImportError, ValueError, TypeError):
+        pass
+    return Path.home() / "Desktop"
 KINDS = {
     "image": {"png", "jpg", "jpeg", "gif", "webp", "heic", "bmp", "svg", "tif", "tiff", "avif"},
     "document": {"odt", "docx", "doc", "rtf", "txt", "md", "pdf", "epub"},
@@ -99,13 +112,27 @@ class Stacks(QObject):
         self._cfg = {"folders": [str(Path.home() / "Downloads")], "sort": "date", "view": "list", "clear30": False}
         self._stacks: list = []
         self._known: dict = {}               # folder -> names already seen (a new one is a landing)
+        self._desk_folder = desktop_folder()
+        self._desk: list = []                # the Desktop folder's files, for the desktop itself (DesktopIcons.qml)
+        self._desk_places: dict = {}
         if demo:
             self._stacks = [self._demo_stack()]
+            self._desk = [{"name": n, "path": "/demo/" + n, "url": "", "kind": k, "thumb": "", "badge": "files", "badgeUrl": "", "partial": False}
+                          for n, k in (("Projects", "folder"), ("Iceland trip plan.odt", "doc"), ("Budget 2027.ods", "sheet"), ("Raven study.png", "image"))]
             return
+        try:
+            kept = json.loads(DESK_PLACES.read_text(encoding="utf-8"))
+            self._desk_places = {str(k): [int(v[0]), int(v[1])] for k, v in kept.items() if isinstance(v, list) and len(v) == 2}
+        except (OSError, ValueError, TypeError, AttributeError):
+            pass
         try:
             saved = json.loads(CONFIG.read_text(encoding="utf-8"))
             self._cfg.update({k: v for k, v in saved.items() if k in self._cfg})
         except (OSError, ValueError):
+            pass
+        try:
+            self._desk_folder.mkdir(parents=True, exist_ok=True)
+        except OSError:
             pass
         self._watch = QFileSystemWatcher(self)
         self._watch.directoryChanged.connect(lambda _: self._soon.start())
@@ -202,7 +229,32 @@ class Stacks(QObject):
             self._known[folder] = names
             stacks.append(st)
         self._stacks = stacks
+        self._read_desktop()
         self.changed.emit()
+
+    def _read_desktop(self) -> None:
+        folder = str(self._desk_folder)
+        if not self._desk_folder.is_dir():
+            self._desk = []
+            return
+        if folder not in self._watch.directories():
+            self._watch.addPath(folder)
+        rows = [i for i in self._read(folder)["items"] if not i["partial"]]
+        rows.sort(key=lambda i: (i["kind"] != "folder", i["name"].lower()))
+        self._desk = rows
+        gone = set(self._desk_places) - {i["name"] for i in rows}
+        if gone and len(rows) < 60:                    # (files that left the desktop: their places are free again)
+            for name in gone:
+                del self._desk_places[name]
+            self._save_places()
+
+    def _save_places(self) -> None:
+        try:
+            tmp = DESK_PLACES.with_suffix(".tmp")
+            tmp.write_text(json.dumps(self._desk_places), encoding="utf-8")
+            os.replace(tmp, DESK_PLACES)
+        except OSError:
+            pass
 
     def _tick_downloads(self) -> None:
         if any(s["busy"] for s in self._stacks):
@@ -350,4 +402,56 @@ class Stacks(QObject):
                 self._clear_old()
 
     stacks = Property("QVariantList", lambda self: self._stacks, notify=changed)
+    # the desktop's own files (Settings › Desktop & Dock › Files on the desktop)
+    desktop = Property("QVariantList", lambda self: self._desk, notify=changed)
+    desktopFolder = Property(str, lambda self: str(self._desk_folder), constant=True)
+    desktopPlaces = Property("QVariantMap", lambda self: self._desk_places, notify=changed)
+
+    @Slot(str, int, int)
+    def placeOnDesktop(self, name: str, column: int, row: int) -> None:
+        """A file's icon was dragged to another cell of the desktop's grid. One already there swaps with it."""
+        if not name or not (0 <= column < 200 and 0 <= row < 200):
+            return
+        was = self._desk_places.get(name)
+        for other, at in list(self._desk_places.items()):
+            if other != name and at == [column, row]:
+                if was:
+                    self._desk_places[other] = was
+                else:
+                    del self._desk_places[other]
+        self._desk_places[name] = [column, row]
+        if not self._demo:
+            self._save_places()
+        self.changed.emit()
+
+    @Slot("QVariantList", int, int)
+    def dropOnDesktop(self, urls: list, column: int, row: int) -> None:
+        """Files dropped on the desktop from somewhere else move into the Desktop folder, the first at that cell."""
+        if self._demo:
+            return
+        first = ""
+        for u in urls:
+            src = QUrl(u).toLocalFile() if not isinstance(u, QUrl) else u.toLocalFile()
+            if src and os.path.exists(src) and Path(src).parent != self._desk_folder:
+                first = first or Path(src).name
+        self.dropInto(str(self._desk_folder), urls)
+        if first and (self._desk_folder / first).exists():
+            self.placeOnDesktop(first, column, row)
+
+    @Slot(result=str)
+    def newDesktopFolder(self) -> str:
+        """A new folder on the desktop ("New Folder", "New Folder 2", …). Returns its name."""
+        if self._demo:
+            return ""
+        try:
+            self._desk_folder.mkdir(parents=True, exist_ok=True)
+            for n in range(1, 200):
+                name = "New Folder" if n == 1 else f"New Folder {n}"
+                if not (self._desk_folder / name).exists():
+                    (self._desk_folder / name).mkdir()
+                    self.refresh()
+                    return name
+        except OSError:
+            pass
+        return ""
     options = Property("QVariantMap", lambda self: {k: self._cfg[k] for k in ("sort", "view", "clear30")}, notify=changed)

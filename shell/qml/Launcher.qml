@@ -57,6 +57,27 @@ Item {
         })
         return first.concat(inName, other)
     }
+    // Typing here finds more than apps: an answer (a sum, a conversion), Settings' pages and your files, under the
+    // apps (Search's own data, asked a moment after the typing stops). Tab still opens Search with everything.
+    readonly property bool haveSearch: typeof SearchData !== "undefined" && SearchData !== null
+    readonly property var more: {
+        if (!searching || !haveSearch || SearchData.text.trim() !== query.trim()) return []
+        var out = [], a = SearchData.answer
+        if (a && a.value) out.push({ kind: "answer", name: a.value, sub: (a.detail ? a.detail + "  ·  " : "") + "Enter copies it", copy: a.copy || a.value, glyph: "numbers" })
+        SearchData.settings.slice(0, 3).forEach(function (p) { out.push({ kind: "setting", name: p.label, sub: "Settings" + (p.sub ? "  ·  " + p.sub : ""), page: p.id, glyph: "gear" }) })
+        SearchData.files.slice(0, 5).forEach(function (f) { out.push({ kind: "file", name: f.name, sub: f.where + (f.when ? "  ·  " + f.when : ""), path: f.path, glyph: f.kind === "folder" ? "folder" : "doc" }) })
+        return out
+    }
+    property int moreAt: -1                    // the row of `more` the arrows are on (-1: in the apps)
+    onMoreChanged: if (moreAt >= more.length) moreAt = more.length - 1
+    property Timer asker: Timer { interval: 140; onTriggered: SearchData.find(root.query) }
+    function goMore(r) {
+        if (!r) return
+        if (r.kind === "answer") SearchData.copy(r.copy)
+        else if (r.kind === "setting") SearchData.openSetting(r.page)
+        else SearchData.openFile(r.path)
+        root.done()
+    }
     function colourOf(a) { return a && a.colours && a.colours.length ? (Theme.t.dark ? a.colours[0] : a.colours[1]) : Theme.t.accent }
     function go(app) { if (!app) return; Apps.launch(app.exec); root.done() }
     function move(by) {
@@ -100,7 +121,7 @@ Item {
         return first ? hello + ", " + first : hello
     }
 
-    onQueryChanged: { current = searching ? 0 : -1; grid.positionViewAtBeginning() }
+    onQueryChanged: { current = searching ? 0 : -1; grid.positionViewAtBeginning(); moreAt = -1; if (haveSearch) asker.restart() }
     onGroupChanged: { current = -1; grid.positionViewAtBeginning() }
     onShownChanged: {
         if (shown) {
@@ -188,18 +209,30 @@ Item {
                 color: Theme.t.text; font.family: Theme.t.font; font.pixelSize: 13; focus: true; selectByMouse: true; clip: true
                 selectionColor: Theme.t.accent; selectedTextColor: Theme.t.onAccent
                 onTextChanged: root.query = text
-                Label { visible: !input.text; text: "Search apps"; color: Theme.t.text_tertiary; font.pixelSize: 13; anchors.verticalCenter: parent.verticalCenter }
+                Label { visible: !input.text; text: "Search apps, files and settings"; color: Theme.t.text_tertiary; font.pixelSize: 13; anchors.verticalCenter: parent.verticalCenter }
                 Keys.onPressed: function (e) {
                     var editing = root.searching
                     if (e.key === Qt.Key_Tab) { root.searchEverything(input.text); e.accepted = true }
                     else if (e.key === Qt.Key_Return || e.key === Qt.Key_Enter) {
-                        if (root.current >= 0) root.go(root.results[root.current])
+                        if (root.moreAt >= 0) root.goMore(root.more[root.moreAt])
+                        else if (root.current >= 0) root.go(root.results[root.current])
+                        else if (root.searching && !root.results.length && root.more.length) root.goMore(root.more[0])
                         else if (root.searching && root.results.length) root.go(root.results[0])
                         else if (root.searching) { root.searchEverything(input.text) }
                         e.accepted = true
                     }
-                    else if (e.key === Qt.Key_Down) { root.move(root.current < 0 ? 0 : 6); e.accepted = true }
-                    else if (e.key === Qt.Key_Up) { if (root.current >= 0 && root.current < 6) root.current = -1; else root.move(-6); e.accepted = true }
+                    else if (e.key === Qt.Key_Down) {
+                        // past the last row of apps: into the settings and files under them
+                        var lastRow = root.results.length === 0 || (root.current >= 0 && root.current + 6 >= root.results.length)
+                        if (root.moreAt >= 0) root.moreAt = Math.min(root.more.length - 1, root.moreAt + 1)
+                        else if (root.searching && root.more.length && lastRow) { root.moreAt = 0; root.current = -1 }
+                        else root.move(root.current < 0 ? 0 : 6)
+                        e.accepted = true }
+                    else if (e.key === Qt.Key_Up) {
+                        if (root.moreAt > 0) root.moreAt--
+                        else if (root.moreAt === 0) { root.moreAt = -1; if (root.results.length) root.move(0) }
+                        else if (root.current >= 0 && root.current < 6) root.current = -1; else root.move(-6)
+                        e.accepted = true }
                     else if (e.key === Qt.Key_Right && (!editing || root.current >= 0)) { root.move(1); e.accepted = true }
                     else if (e.key === Qt.Key_Left && root.current >= 0) { root.move(-1); e.accepted = true }
                     else if (e.key === Qt.Key_PageDown) { root.move(18); e.accepted = true }
@@ -352,7 +385,9 @@ Item {
         GridView {
             id: grid
             x: 18; y: chips.y + chips.height + 10
-            width: parent.width - 36; height: parent.height - y - (everything.visible ? everything.height + 24 : 8)
+            width: parent.width - 36
+            height: root.searching && root.more.length ? Math.min(parent.height - y - everything.height - 24 - moreList.height - 8, root.results.length ? 30 + Math.min(2, Math.ceil(root.results.length / 6)) * cellHeight : 64)
+                                                       : parent.height - y - (everything.visible ? everything.height + 24 : 8)
             cellWidth: width / 6; cellHeight: 98
             clip: true; boundsBehavior: Flickable.StopAtBounds; flickDeceleration: 4000
             model: root.results
@@ -372,7 +407,7 @@ Item {
             delegate: Tile { required property var modelData; required property int index; app: modelData; width: grid.cellWidth }
             Label {
                 visible: root.searching && root.results.length === 0
-                y: 30; width: parent.width; horizontalAlignment: Text.AlignHCenter
+                y: root.more.length ? 12 : 30; width: parent.width; horizontalAlignment: Text.AlignHCenter
                 text: "No app is called “" + root.query.trim() + "”."; color: Theme.t.text_secondary; font.pixelSize: 13
             }
         }
@@ -382,6 +417,29 @@ Item {
             height: Math.max(36, grid.height * grid.height / Math.max(1, grid.contentHeight))
             y: grid.y + (grid.height - height) * Math.max(0, Math.min(1, (grid.contentY - grid.originY) / Math.max(1, grid.contentHeight - grid.height)))
             Behavior on opacity { NumberAnimation { duration: 200 } }
+        }
+
+        Column {   // settings, files and an answer for what you typed
+            id: moreList
+            visible: root.searching && root.more.length > 0
+            x: 18; y: grid.y + grid.height + 6; width: parent.width - 36
+            Label { leftPadding: 8; bottomPadding: 4; text: "ALSO"; color: Theme.t.text_tertiary; font.pixelSize: 11; font.weight: Font.DemiBold; font.letterSpacing: 0.7 }
+            Repeater {
+                model: root.more.slice(0, Math.max(1, Math.floor((main.height - grid.y - (root.results.length ? 130 : 64) - everything.height - 60) / 44)))
+                Pressable {
+                    required property var modelData
+                    required property int index
+                    width: moreList.width; height: 44; radius: 12
+                    color: root.moreAt === index ? Qt.rgba(Theme.t.accent.r, Theme.t.accent.g, Theme.t.accent.b, 0.22) : hovered ? Qt.rgba(0.5, 0.5, 0.5, 0.10) : "transparent"
+                    border.width: root.moreAt === index ? 1 : 0; border.color: Theme.t.accent
+                    onClicked: root.goMore(modelData)
+                    Rectangle { x: 8; anchors.verticalCenter: parent.verticalCenter; width: 30; height: 30; radius: 9; color: Theme.t.hover
+                        Glyph { anchors.centerIn: parent; name: modelData.glyph; size: 15; ink: Theme.t.icon } }
+                    Column { x: 48; width: parent.width - 60; anchors.verticalCenter: parent.verticalCenter
+                        Label { width: parent.width; text: modelData.name; elide: Text.ElideMiddle; font.pixelSize: 13; font.weight: Font.DemiBold }
+                        Label { width: parent.width; text: modelData.sub; elide: Text.ElideRight; font.pixelSize: 11; color: Theme.t.text_secondary } }
+                }
+            }
         }
 
         Pressable {   // Search everything for what you typed (Tab)

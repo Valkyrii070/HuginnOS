@@ -12,21 +12,51 @@ Column {
     width: 270; spacing: 14
     property bool editing: false
     signal doneEditing()
-    readonly property var shown: Settings.widgets || []
+    // Where each widget is: in the column (this item, on the main screen) until it's dragged somewhere, then wherever
+    // it was left on whichever screen (Settings.widgetPlaces: kind -> { s: screen, x, y } as parts of that screen).
+    // The shell makes one of these per placed widget (`only`: just that one) on its screen. Dragging happens while
+    // editing; `area` is the wallpaper it's on, which positions are measured against.
+    property var only: null
+    property Item area: null
+    property string screenName: ""
+    readonly property var places: Settings.widgetPlaces || ({})
+    readonly property var shown: only !== null ? only : (Settings.widgets || []).filter(function (k) { return !wg.places[k] })
+    readonly property var all: Settings.widgets || []
+    function place(kind, screen, fx, fy) {
+        var p = JSON.parse(JSON.stringify(places))
+        p[kind] = { s: screen, x: Math.round(Math.max(0, Math.min(1, fx)) * 10000) / 10000, y: Math.round(Math.max(0, Math.min(1, fy)) * 10000) / 10000 }
+        Settings.set("widgetPlaces", JSON.stringify(p))
+    }
+    function unplaceAll() { Settings.set("widgetPlaces", "") }
+    function dropped(kind, item, dx, dy) {              // let go after a drag: it stays where it is now
+        if (!area) return
+        var at = item.mapToItem(area, 0, 0)
+        place(kind, screenName, (at.x + dx) / Math.max(1, area.width), (at.y + dy) / Math.max(1, area.height))
+    }
+    function toNextScreen(kind, item) {
+        var list = Status.screenList || [], names = list.map(function (sc) { return sc.name }), i = names.indexOf(screenName)
+        if (names.length < 2 || !area) return
+        var at = item.mapToItem(area, 0, 0)
+        place(kind, names[(i + 1) % names.length], at.x / Math.max(1, area.width), at.y / Math.max(1, area.height))
+    }
     readonly property var names: ({ weather: "Weather", privacy: "Privacy Report", next: "Up Next", clock: "Clock", month: "Calendar",
                                     system: "System", music: "Now Playing", photo: "Photo" })
     readonly property var blurbs: ({ weather: "The forecast for your first place in Weather", privacy: "Which apps used the camera, microphone or screen",
                                      next: "What's next in Calendar and Reminders", clock: "The time and the date, big", month: "This month, today marked",
                                      system: "Processor, memory and the drive", music: "What's playing, with its controls", photo: "A picture from Pictures, a new one each hour" })
     readonly property var glyphs: ({ weather: "cloudsun", privacy: "shield", next: "calendar", clock: "clock", month: "calendar", system: "cpu", music: "music", photo: "image" })
-    readonly property var addable: (Settings.widgetKinds || []).filter(function (k) { return wg.shown.indexOf(k) < 0 })
+    readonly property var addable: (Settings.widgetKinds || []).filter(function (k) { return wg.all.indexOf(k) < 0 })
     function save(list) { Settings.set("widgets", list.join(",")) }
-    function remove(k) { save(shown.filter(function (x) { return x !== k })) }
-    function add(k) { if (shown.length < 8) save(shown.concat([k])) }
-    function move(k, step) {
-        var l = shown.slice(), i = l.indexOf(k), j = i + step
-        if (i < 0 || j < 0 || j >= l.length) return
-        l.splice(i, 1); l.splice(j, 0, k); save(l)
+    function remove(k) {
+        if (places[k]) { var p = JSON.parse(JSON.stringify(places)); delete p[k]; Settings.set("widgetPlaces", JSON.stringify(p)) }
+        save(all.filter(function (x) { return x !== k }))
+    }
+    function add(k) { if (all.length < 8) save(all.concat([k])) }
+    function move(k, step) {            // (in the column: among the ones still in it)
+        var col = shown, i = col.indexOf(k), j = i + step
+        if (i < 0 || j < 0 || j >= col.length) return
+        var l = all.slice(), a = l.indexOf(k), b = l.indexOf(col[j])
+        l[a] = col[j]; l[b] = k; save(l)
     }
 
     component Card: Glass { width: parent ? parent.width : 270; radius: 16; wallpaperOnly: true }   // never frosts a window
@@ -44,15 +74,30 @@ Column {
             required property string modelData
             required property int index
             width: wg.width; height: body.height
+            z: mover.pressed ? 10 : 0
+            transform: Translate { x: mover.dx; y: mover.dy }
+            // editing: drag it anywhere on this screen (it stays where it's let go)
+            MouseArea { id: mover; visible: wg.editing; z: 1; anchors.fill: parent; cursorShape: pressed ? Qt.ClosedHandCursor : Qt.OpenHandCursor
+                property real dx: 0
+                property real dy: 0
+                property point from
+                onPressed: function (m) { from = mapToItem(wg.area || wg, m.x, m.y); dx = 0; dy = 0 }
+                onPositionChanged: function (m) { if (!pressed) return; var p = mapToItem(wg.area || wg, m.x, m.y); dx = p.x - from.x; dy = p.y - from.y }
+                onReleased: { var moved = Math.abs(dx) + Math.abs(dy) > 6, x = dx, y = dy; dx = 0; dy = 0; if (moved) wg.dropped(slot.modelData, slot, x, y) } }
             Loader { id: body; width: parent.width
                 sourceComponent: ({ weather: weatherCard, privacy: privacyCard, next: nextCard, clock: clockCard, month: monthCard,
                                     system: systemCard, music: musicCard, photo: photoCard })[slot.modelData] || null }
             // editing: take it off (top left), move it (right)
-            Rectangle { visible: wg.editing; x: -8; y: -8; width: 24; height: 24; radius: 12; color: "#E5484D"; border.width: 2; border.color: "#FFFFFF"
+            Rectangle { visible: wg.editing; z: 2; x: -8; y: -8; width: 24; height: 24; radius: 12; color: "#E5484D"; border.width: 2; border.color: "#FFFFFF"
                 objectName: "removeWidget_" + slot.modelData
                 Rectangle { anchors.centerIn: parent; width: 10; height: 2; radius: 1; color: "#FFFFFF" }
                 MouseArea { anchors.fill: parent; anchors.margins: -4; cursorShape: Qt.PointingHandCursor; onClicked: wg.remove(slot.modelData) } }
-            Column { visible: wg.editing; anchors { right: parent.right; rightMargin: 8; verticalCenter: parent.verticalCenter } spacing: 6
+            // editing, more than one screen: send it to the next one
+            Rectangle { visible: wg.editing && (Status.screenList || []).length > 1; z: 2; x: 22; y: -8; width: 24; height: 24; radius: 12
+                color: Theme.t.dark ? "#CC1A1E23" : "#E6FFFFFF"; border.width: 1; border.color: Theme.t.line
+                Glyph { anchors.centerIn: parent; name: "display"; size: 12 }
+                MouseArea { anchors.fill: parent; anchors.margins: -4; cursorShape: Qt.PointingHandCursor; onClicked: wg.toNextScreen(slot.modelData, slot) } }
+            Column { visible: wg.editing && wg.only === null; z: 2; anchors { right: parent.right; rightMargin: 8; verticalCenter: parent.verticalCenter } spacing: 6
                 Repeater { model: [[-1, "up"], [1, "down"]]
                     Rectangle { required property var modelData; width: 26; height: 26; radius: 13; color: Theme.t.dark ? "#CC1A1E23" : "#E6FFFFFF"
                         opacity: (modelData[0] < 0 ? slot.index > 0 : slot.index < wg.shown.length - 1) ? 1 : 0.35
@@ -63,7 +108,7 @@ Column {
 
     // editing: what can be added, and Done
     Card {
-        visible: wg.editing; objectName: "widgetGallery"
+        visible: wg.editing && wg.only === null; objectName: "widgetGallery"
         height: gallery.height + 24
         Column { id: gallery; x: 12; y: 12; width: parent.width - 24; spacing: 6
             Item { width: parent.width; height: 26
@@ -83,8 +128,13 @@ Column {
                         Label { width: parent.width; text: wg.blurbs[modelData] || ""; secondary: true; font.pixelSize: 11; elide: Text.ElideRight } }
                     Glyph { anchors { right: parent.right; rightMargin: 10; verticalCenter: parent.verticalCenter } name: "plus"; size: 15; ink: Theme.t.accent }
                     MouseArea { id: addHit; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor; onClicked: wg.add(modelData) } } }
-            Label { visible: wg.shown.length >= 8; width: parent.width; wrapMode: Text.WordWrap; secondary: true; font.pixelSize: 11
-                text: "Eight is the most: take one off to add another." } }
+            Label { visible: wg.all.length >= 8; width: parent.width; wrapMode: Text.WordWrap; secondary: true; font.pixelSize: 11
+                text: "Eight is the most: take one off to add another." }
+            Label { width: parent.width; wrapMode: Text.WordWrap; secondary: true; font.pixelSize: 11
+                text: "Drag a widget anywhere on the screen" + ((Status.screenList || []).length > 1 ? "; the screen button sends it to the next one." : ".") }
+            Rectangle { visible: Object.keys(wg.places).length > 0; width: backLabel.width + 24; height: 26; radius: 13; color: Theme.t.hover
+                Label { id: backLabel; anchors.centerIn: parent; text: "Back Into a Column"; font.pixelSize: 12; font.weight: Font.DemiBold }
+                MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: wg.unplaceAll() } } }
     }
 
     // ------------------------------------------------------------------------------------------------- the widgets

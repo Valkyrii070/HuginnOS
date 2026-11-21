@@ -2479,6 +2479,23 @@ Added where an app was missing what such an app has:
   **Photos:** a slideshow. **Podcasts:** a sleep timer. **Writer, Sheets, Slides:** Send by Mail as PDF.
 - Scan and Clips open about half a second sooner: OpenCV is brought in when first needed (`huginn_lazy.py`).
 
+## The desktop, loosened (2026-11-21, night)
+
+- **Widgets anywhere.** While editing, a widget drags to any spot; it's kept as parts of its screen
+  (`Settings.widgetPlaces`: kind → screen, x, y), so it survives a change of resolution, and the shell draws one
+  `Widgets { only: [kind] }` per placed widget on its screen (a widget whose screen is gone waits on the main one).
+  With several screens a button sends it to the next. The column on the main screen holds the rest.
+- **The start menu searches everything.** Typing asks Search's own data (`SearchData.find`, 140 ms after the last
+  key) and lists an answer, Settings pages and files under the apps; arrows and Enter work through both.
+- **Files on the desktop.** `Stacks` (huginn_stacks.py) reads and watches the Desktop folder; `DesktopIcons.qml` lays
+  the files on a grid from the top right, keeps where each was dragged (`desktop-icons.json`), drags them out as
+  files and takes files dropped in. The desktop's menu gained New Folder, and a file's own Open / Show in Files /
+  Move to Trash.
+- **Quick tiles you arrange** (`Settings.quickTiles`, eight kinds) in the Control Centre.
+- **A dock on every screen** (`Settings.dockEverywhere`): the other screens show stand-in docks, and the one real
+  dock (whose islands, live island and stacks open over it) trades places with a stand-in the moment the pointer
+  reaches it. Not yet tried on real second and third screens: the nested test session has one.
+
 ## Huginn, the browser
 
 Inside the Huginn repository (this kit is its `os/` folder) the image ships the repository's own browser. A kit used

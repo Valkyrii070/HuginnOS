@@ -67,7 +67,7 @@ GlassWindow {
         ["network", "DNS", "dns servers quad9 cloudflare 1.1.1.1 privacy lookup"],
         ["printers", "Printers", "print printer add cups queue default airprint ipp"], ["printers", "Scanners", "scan scanner sane"],
         ["keys", "Switch keyboard layout", "language input source layout super ctrl space"],
-        ["desktop", "App menus", "top bar menu one menu row"], ["desktop", "Clock", "24-hour time seconds top bar"], ["desktop", "Battery percentage", "top bar"], ["desktop", "Top bar on every screen", "monitors screens displays second menu bar clock"],
+        ["desktop", "App menus", "top bar menu one menu row"], ["desktop", "Files on the desktop", "desktop icons files folder shortcuts"], ["desktop", "Dock on every screen", "monitors displays dock all screens"], ["desktop", "Clock", "24-hour time seconds top bar"], ["desktop", "Battery percentage", "top bar"], ["desktop", "Top bar on every screen", "monitors screens displays second menu bar clock"],
         ["desktop", "Dock size", "dock bigger smaller icons"], ["desktop", "Hiding a window", "minimise minimize hide dock drop line comet"],
         ["desktop", "Stacks", "downloads folder dock stack"], ["desktop", "Today", "date calendar weather clocks world time agenda"], ["desktop", "Widgets", "desktop widgets cards clock calendar weather system music photo add remove"],
         ["desktop", "Snapping windows", "snap layout halves thirds quarters tile fill button gaps"], ["desktop", "Games", "game mode gamemode performance freesync g-sync adaptive sync vrr tearing v-sync vsync stats overlay fps frame rate temperature mangohud"],

@@ -14,6 +14,8 @@ Glass {
     readonly property color accent: Theme.t.accent
     readonly property color tileOn: Qt.rgba(accent.r, accent.g, accent.b, Theme.t.dark ? 0.26 : 0.18)
     signal done()                          // something in it was chosen that takes you elsewhere: the shell closes it
+    signal saverWanted()                   // the Screen saver tile
+    property bool editTiles: false         // the quick tiles are being arranged
 
     component Block: Rectangle { color: Theme.t.hover; radius: 16; border.width: 1; border.color: Theme.t.line }
     component Dot: Rectangle { property bool on: true; property string glyph: ""; width: 30; height: 30; radius: 15
@@ -52,10 +54,11 @@ Glass {
         width: 153; height: square ? 76 : 52
         color: on ? cc.tileOn : (th.containsMouse ? Qt.lighter(Theme.t.hover, 1.25) : Theme.t.hover)
         Behavior on color { ColorAnimation { duration: 160 } }
-        Dot { on: tg.on; glyph: tg.glyph; x: tg.square ? (tg.width - width) / 2 : 12; y: tg.square ? 12 : (tg.height - height) / 2 }
-        Label { text: tg.label; font.weight: Font.DemiBold; font.pixelSize: tg.square ? 11 : 12; elide: Text.ElideRight
-            x: tg.square ? 4 : 52; width: tg.square ? tg.width - 8 : tg.width - 60; horizontalAlignment: tg.square ? Text.AlignHCenter : Text.AlignLeft
-            y: tg.square ? 50 : (tg.height - height) / 2 }
+        Dot { on: tg.on; glyph: tg.glyph; x: tg.square ? (tg.width - width) / 2 : 12; y: tg.square ? 9 : (tg.height - height) / 2 }
+        Label { text: tg.label; font.weight: Font.DemiBold; font.pixelSize: tg.square ? 10 : 12; elide: Text.ElideRight
+            wrapMode: tg.square ? Text.WordWrap : Text.NoWrap; maximumLineCount: tg.square ? 2 : 1; lineHeight: tg.square ? 0.92 : 1
+            x: tg.square ? 3 : 52; width: tg.square ? tg.width - 6 : tg.width - 60; horizontalAlignment: tg.square ? Text.AlignHCenter : Text.AlignLeft
+            y: tg.square ? (lineCount > 1 ? 43 : 50) : (tg.height - height) / 2 }
         MouseArea { id: th; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor; onClicked: tg.clicked() }
     }
     component Slider: Item {
@@ -224,19 +227,49 @@ Glass {
                 }
                 Column {
                     id: quick
-                    spacing: 10
-                    QuickTile { label: "Do Not Disturb"; glyph: "moon"; on: Status.dnd; onClicked: Status.setDnd(!Status.dnd) }
-                    Row {
-                        visible: Status.nightLight.available
-                        spacing: 9
-                        QuickTile { square: true; width: 72; label: "Night light"; glyph: "sun"; on: Status.nightLight.on; onClicked: Status.setNightLight(!on) }
-                        QuickTile { square: true; width: 72; label: "Dark"; glyph: "contrast"; on: Theme.t.dark; onClicked: Theme.setDark(!Theme.t.dark) }
+                    spacing: 8
+                    // The quick tiles you chose, in your order (Settings.quickTiles). Edit: − takes one off, a click
+                    // moves it one place earlier, and the ones not shown can be added.
+                    readonly property var all: ({
+                        dnd: { label: "Do Not Disturb", glyph: "moon" }, night: { label: "Night light", glyph: "sun" }, dark: { label: "Dark", glyph: "contrast" },
+                        captions: { label: "Live captions", glyph: "captions" }, mute: { label: "Mute", glyph: "mute" }, shot: { label: "Screenshot", glyph: "camera" },
+                        lookup: { label: "Look Up", glyph: "search" }, saver: { label: "Screen saver", glyph: "image" } })
+                    readonly property var shown: (Settings.quickTiles || []).filter(function (k) { return !!quick.all[k] && (k !== "night" || Status.nightLight.available) })
+                    readonly property var addable: (Settings.quickTileKinds || []).filter(function (k) { return (Settings.quickTiles || []).indexOf(k) < 0 && (k !== "night" || Status.nightLight.available) })
+                    function isOn(k) { return k === "dnd" ? Status.dnd : k === "night" ? Status.nightLight.on : k === "dark" ? Theme.t.dark : k === "captions" ? Settings.captions
+                                              : k === "mute" ? !!cc.levels.muted : false }
+                    function run(k) {
+                        if (k === "dnd") Status.setDnd(!Status.dnd)
+                        else if (k === "night") Status.setNightLight(!Status.nightLight.on)
+                        else if (k === "dark") Theme.setDark(!Theme.t.dark)
+                        else if (k === "captions") Settings.set("captions", Settings.captions ? "false" : "true")
+                        else if (k === "mute") Status.setMuted(!cc.levels.muted)
+                        else if (k === "shot") { cc.done(); Status.screenshot("choose") }
+                        else if (k === "lookup") { cc.done(); Apps.launch("python3 /usr/share/huginn-apps/huginn_app.py lens") }
+                        else if (k === "saver") { cc.done(); cc.saverWanted() }
                     }
-                    // no night light on this computer: Dark on its own, as wide as Do Not Disturb above it
-                    QuickTile { visible: !Status.nightLight.available; label: "Dark"; glyph: "contrast"; on: Theme.t.dark; onClicked: Theme.setDark(!Theme.t.dark) }
-                    // live captions (Super+Ctrl+L): what's playing, written out in a bar on the screen
-                    QuickTile { visible: typeof Captions !== "undefined" && Captions !== null; label: "Live captions"; glyph: "captions"
-                        on: Settings.captions; onClicked: Settings.set("captions", Settings.captions ? "false" : "true") }
+                    function save(list) { Settings.set("quickTiles", list.join(",")) }
+                    function earlier(k) { var l = (Settings.quickTiles || []).slice(), i = l.indexOf(k); if (i > 0) { l.splice(i, 1); l.splice(i - 1, 0, k); save(l) } }
+                    Flow { width: 153; spacing: 9
+                        Repeater { model: quick.shown
+                            Item { id: qt; required property string modelData; width: 72; height: 76
+                                QuickTile { square: true; width: 72; label: quick.all[qt.modelData].label; glyph: quick.all[qt.modelData].glyph; on: quick.isOn(qt.modelData)
+                                    onClicked: cc.editTiles ? quick.earlier(qt.modelData) : quick.run(qt.modelData) }
+                                Rectangle { visible: cc.editTiles; x: -5; y: -5; width: 20; height: 20; radius: 10; color: "#E5484D"; border.width: 2; border.color: "#FFFFFF"
+                                    Rectangle { anchors.centerIn: parent; width: 8; height: 2; radius: 1; color: "#FFFFFF" }
+                                    MouseArea { anchors.fill: parent; anchors.margins: -3; cursorShape: Qt.PointingHandCursor
+                                        onClicked: quick.save((Settings.quickTiles || []).filter(function (x) { return x !== qt.modelData })) } } } } }
+                    Flow { visible: cc.editTiles; width: 153; spacing: 5
+                        Repeater { model: quick.addable
+                            Rectangle { required property string modelData; width: addLabel.width + 26; height: 24; radius: 12; color: Theme.t.hover
+                                Label { id: addLabel; x: 18; anchors.verticalCenter: parent.verticalCenter; text: quick.all[modelData].label; font.pixelSize: 11 }
+                                Label { x: 7; anchors.verticalCenter: parent.verticalCenter; text: "+"; font.pixelSize: 12; font.weight: Font.Bold; color: Theme.t.accent }
+                                MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor
+                                    onClicked: if ((Settings.quickTiles || []).length < 8) quick.save((Settings.quickTiles || []).concat([modelData])) } } } }
+                    Label { visible: cc.editTiles; width: 153; wrapMode: Text.WordWrap; secondary: true; font.pixelSize: 10; text: "Click a tile to move it earlier; − takes it off." }
+                    Rectangle { width: tilesEdit.width + 20; height: 22; radius: 11; color: tilesHit.containsMouse ? Theme.t.hover : "transparent"; border.width: 1; border.color: Theme.t.line
+                        Label { id: tilesEdit; anchors.centerIn: parent; text: cc.editTiles ? "Done" : "Edit tiles"; font.pixelSize: 11; secondary: !cc.editTiles }
+                        MouseArea { id: tilesHit; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor; onClicked: cc.editTiles = !cc.editTiles } }
                 }
             }
 

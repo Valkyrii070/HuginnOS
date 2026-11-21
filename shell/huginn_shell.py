@@ -353,6 +353,11 @@ class Settings(QObject):
                 "iconTheme": "",
                 # the desktop's widgets, in order (Widgets.qml; edited on the desktop or in Settings › Desktop & Dock)
                 "widgets": "weather,privacy,next",
+                # where the ones dragged out of the column were left: JSON, kind -> {"s": screen, "x", "y"} (parts of the screen)
+                "widgetPlaces": "",
+                # Settings › Desktop & Dock: the Desktop folder's files as icons on the desktop (DesktopIcons.qml), a dock
+                # on every screen (not just the one you're using), and the Control Centre's quick tiles, in order
+                "desktopFiles": "true", "dockEverywhere": "false", "quickTiles": "dnd,night,dark,captions",
                 # Settings › Desktop & Dock › Screen corners: what pushing the pointer into each does ("" nothing; the
                 # top right one also follows the older hotCorner switch)
                 "cornerTL": "", "cornerTR": "", "cornerBL": "", "cornerBR": "",
@@ -374,7 +379,8 @@ class Settings(QObject):
     PICTURES = (".jpg", ".jpeg", ".png", ".webp", ".bmp", ".gif", ".avif", ".heic", ".jxl")
     SWITCHES = ("clock24", "barDate", "batteryPercent", "barEverywhere", "dockMakeRoom", "dockDots", "dockFollows", "frameTimes", "gameStats", "autoUpdate", "liveWallpaper", "contrast", "reduceTransparency", "reduceMotion",
                 "dockClickHides", "hotCorner", "spacesAllScreens", "fillButtonLayouts", "snapGaps", "keepSnapped", "reopenApps", "rememberPlaces", "sharpX11", "allowTearing", "gameMode",
-                "notifHistory", "keySheet", "captions")
+                "notifHistory", "keySheet", "captions", "desktopFiles", "dockEverywhere")
+    QUICK_TILES = ("dnd", "night", "dark", "captions", "mute", "shot", "lookup", "saver")
     SCALES = ("1", "1.25", "1.5", "1.75", "2")
 
     def __init__(self, path: Path, realms: list, persist: bool = True):
@@ -421,6 +427,11 @@ class Settings(QObject):
         if key == "widgets":                           # known kinds, each once, at most eight ("" none)
             got = value.split(",") if isinstance(value, str) and value else []
             return isinstance(value, str) and len(got) <= 8 and len(set(got)) == len(got) and all(w in self.WIDGETS for w in got)
+        if key == "quickTiles":                        # known tiles, each once, at most eight ("" none)
+            got = value.split(",") if isinstance(value, str) and value else []
+            return isinstance(value, str) and len(got) <= 8 and len(set(got)) == len(got) and all(t in self.QUICK_TILES for t in got)
+        if key == "widgetPlaces":
+            return value == "" or self._places(value) is not None
         if key == "captionsPos":                       # the caption bar's middle, as parts of its screen
             return value == "" or (isinstance(value, str) and re.fullmatch(r"(0(\.\d{1,4})?|1(\.0{1,4})?),(0(\.\d{1,4})?|1(\.0{1,4})?)", value) is not None)
         if key == "iconTheme":                         # a theme's folder name (Settings checks it's installed)
@@ -503,6 +514,26 @@ class Settings(QObject):
     wallpaperSpec = Property("QVariantMap", lambda self: self._wallpaper_spec(), notify=changed)
     iconTheme = Property(str, lambda self: self._values["iconTheme"], notify=changed)
     widgets = Property("QVariantList", lambda self: [w for w in self._values["widgets"].split(",") if w], notify=changed)
+    desktopFiles = Property(bool, lambda self: self._values["desktopFiles"] == "true", notify=changed)
+    dockEverywhere = Property(bool, lambda self: self._values["dockEverywhere"] == "true", notify=changed)
+    quickTiles = Property("QVariantList", lambda self: [t for t in self._values["quickTiles"].split(",") if t], notify=changed)
+    quickTileKinds = Property("QVariantList", lambda self: list(self.QUICK_TILES), constant=True)
+    widgetPlaces = Property("QVariantMap", lambda self: self._places(self._values.get("widgetPlaces", "")) or {}, notify=changed)
+
+    def _places(self, text: str):
+        """The widgets' places as a map, or None when the text isn't one: known kinds, a screen's name, two parts of 1."""
+        try:
+            data = json.loads(text) if text else {}
+        except ValueError:
+            return None
+        if not isinstance(data, dict) or len(text) > 2000:
+            return None
+        for kind, p in data.items():
+            if kind not in self.WIDGETS or not isinstance(p, dict) or not isinstance(p.get("s"), str) or len(p["s"]) > 60:
+                return None
+            if not all(isinstance(p.get(k), (int, float)) and not isinstance(p.get(k), bool) and 0 <= p[k] <= 1 for k in ("x", "y")):
+                return None
+        return data
     widgetKinds = Property("QVariantList", lambda self: list(self.WIDGETS), constant=True)
 
     def override(self, key: str, value: str) -> None:

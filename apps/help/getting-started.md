@@ -4,12 +4,20 @@ The desktop, windows and where things are.
 ## Open an app
 Press Super (the Windows key), or click the round orb at the left end of the dock, for the start menu: your recent apps, every app (it scrolls; the pills along the top show one group), and Lock, Sleep, Restart, Shut Down and Sign Out at the bottom. Type a few letters to find an app; press Tab to search everything instead. Right-click an app (here, in the dock or in Search) for its own island: its recent files, things it can do, and Keep in the dock.
 
+## The desktop
+Files in your Desktop folder show as icons on the main screen, filling from the top right: double-click one to open it, drag it to another spot (it stays there), or out to an app or a folder; files you drop on the desktop move into the Desktop folder. Right-click an icon for Open, Show in Files and Move to Trash, and the desktop itself for New Folder. Settings › Desktop & Dock › Files on the desktop turns them off.
+
+Widgets can go anywhere: right-click the desktop › Edit Widgets, then drag one to where you want it, on any screen (with more than one screen, the small screen button sends it to the next). Back Into a Column lines them up on the left again.
+
 ## The dock
 An open app has a bar under its tile for each of its windows (up to three; a dim one when they're all hidden). Click an app that isn't open and a light in its colour runs round its tile until its window is there. Click the app in front to hide it (it folds into its tile), and click again to bring it back. Point at an app with several windows, or click it, for its windows as an island; middle-click opens a new window, scrolling goes through them, and dropping a file on an app opens it there.
 
 At the right end of the apps, **Downloads** is a stack: the newest files piled up, a mark on it while something's still arriving. Click it for the list, drag a file out, or right-click a file to open it, show it in Files, copy, rename or move it to the Bin. Drag any folder onto the end of the dock to keep it there as another stack. How it looks, how big the dock is and what clicking does are in Settings › Desktop & Dock.
 
 With more than one screen, rest the pointer at the bottom of another screen for a moment and the dock comes there (Settings › Desktop & Dock › Moves to the screen you're using). The Overview spreads out every screen's windows on that screen.
+
+## The start menu finds things too
+Type in the start menu and, under the apps that match, it shows Settings' pages, your files and the answer to a sum or a conversion. The arrow keys go down into them and Enter opens the one chosen. Tab still opens Search with everything.
 
 ## Search everything
 Press Super+Space, or click the magnifier in the top bar. Type, and apps, files, Settings pages, sums ("84.60 × 15%", "5 km in mi") and Huginn's open tabs come up; Enter opens the top one, Tab narrows it to one kind. Everything is searched on this computer; only "Search the web" sends what you typed anywhere. Before you type, it offers what you were doing last: the file you had open, the song you paused.
@@ -43,7 +51,7 @@ The three dots in the top-left island close the window (red), hide it (yellow) a
 Settings changes between light and dark and picks the realm, the colour the whole desktop leans towards. Settings › Appearance › Accent colour can take it from your wallpaper instead. Every app keeps its own colour on top of that, so you can tell them apart at a glance. Apps that aren't Huginn's follow along too: their colours, dark or light and the font change with yours.
 
 ## Quick settings and notifications
-The control centre slides out from the top bar on the right: Wi‑Fi and Bluetooth (tap the round switch to turn them on or off, the name to open Settings), Do Not Disturb, night light, dark, brightness and sound (tap the speaker to mute), and the notifications that came, with Clear. Under the sound slider, Apps shows everything playing sound with its own slider and mute, so a game can be quieter than the call beside it. History shows every notification of the last week, missed or dismissed, grouped by day; Clear all empties the list and leaves the history (Settings › Notifications › Keep a history).
+The control centre slides out from the top bar on the right (Edit tiles under its quick tiles chooses which of Do Not Disturb, Night light, Dark, Live captions, Mute, Screenshot, Look Up and Screen saver are there, and in what order): Wi‑Fi and Bluetooth (tap the round switch to turn them on or off, the name to open Settings), Do Not Disturb, night light, dark, brightness and sound (tap the speaker to mute), and the notifications that came, with Clear. Under the sound slider, Apps shows everything playing sound with its own slider and mute, so a game can be quieter than the call beside it. History shows every notification of the last week, missed or dismissed, grouped by day; Clear all empties the list and leaves the history (Settings › Notifications › Keep a history).
 
 A notification blooms out of the top right with its app's colour running round its edge. Several from one app pile up; click the pile to spread it. Messages and mail can be answered right there. While something fills the screen, or you're sharing it, they wait quietly (calls and alarms still come through).
 

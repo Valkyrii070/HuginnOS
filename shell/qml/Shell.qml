@@ -89,7 +89,31 @@ QtObject {
     // Settings › Desktop & Dock › "Moves to the screen you're using": resting the pointer at the bottom of another
     // screen brings the dock there (the compositor says when the pointer reaches a screen's bottom edge).
     property string dockScreenName: ""
-    readonly property var dockScreen: (Settings.dockFollows && screenNamed(dockScreenName)) || mainScreen
+    readonly property var dockScreen: ((Settings.dockFollows || Settings.dockEverywhere) && screenNamed(dockScreenName)) || mainScreen
+    // Settings › Desktop & Dock › "On every screen": the other screens show the dock too. There is still one real dock
+    // (its islands, the live island and the stacks open over it); the others are stand-ins, and the real one changes
+    // places with a stand-in the moment the pointer reaches it. `dockShownOn` trails the real dock's screen by a
+    // moment, so the stand-in stays until the real one has been drawn there.
+    property string dockShownOn: dockScreen ? dockScreen.name : ""
+    property Timer dockTrail: Timer { interval: 320; onTriggered: shell.dockShownOn = shell.dockScreen ? shell.dockScreen.name : "" }
+    property Instantiator moreDocks: Instantiator {
+        model: Settings.dockEverywhere && shell.settled ? Status.screenList.filter(function (sc) { return sc.name !== shell.dockShownOn }) : []
+        delegate: Window {
+            id: standIn
+            required property var modelData
+            visible: true; width: standDock.width + 40; height: dockWin.full; color: "transparent"
+            LayerShell.Window.screen: modelData
+            LayerShell.Window.wantsToBeOnActiveScreen: false
+            LayerShell.Window.scope: "huginn-dock-more"
+            LayerShell.Window.keyboardInteractivity: LayerShell.Window.KeyboardInteractivityNone
+            LayerShell.Window.layer: LayerShell.Window.LayerTop
+            LayerShell.Window.anchors: LayerShell.Window.AnchorBottom
+            LayerShell.Window.exclusionZone: Settings.dockMakeRoom ? 0 : dockWin.full
+            Dock { id: standDock; inlineTips: false; anchors { horizontalCenter: parent.horizontalCenter; top: parent.top }
+                activate: function (app) { return Status.activateApp(app) } }
+            HoverHandler { onHoveredChanged: if (hovered) shell.dockScreenName = standIn.modelData.name }
+        }
+    }
     property string edgeAt: ""
     property Timer edgeRest: Timer { interval: 450; onTriggered: if (Settings.dockFollows && shell.edgeAt !== "") shell.dockScreenName = shell.edgeAt }
     function pointerAtEdge(name) {
@@ -105,7 +129,7 @@ QtObject {
         if (win.visible) { win.visible = false; Qt.callLater(function () { win.visible = true }) }
     }
     onMainScreenChanged: moveTo(topBarWin, mainScreen)
-    onDockScreenChanged: moveTo(dockWin, dockScreen)
+    onDockScreenChanged: { moveTo(dockWin, dockScreen); dockTrail.restart() }
     // the frame-time display (Super+Alt+F, Settings › Displays): each screen's frames over the last second
     property var frameStats: ({})
     property Timer frameTick: Timer {
@@ -318,8 +342,24 @@ QtObject {
             // right-click the desktop: a small menu (Edit Widgets, the wallpaper, the desktop's settings), over everything
             MouseArea { anchors.fill: parent; acceptedButtons: Qt.RightButton
                 onClicked: function (m) { shell.deskMenuAt = { x: m.x, y: m.y, screen: wall.modelData } } }
+            // the Desktop folder's files, on the main screen (Settings › Desktop & Dock)
+            Loader { anchors.fill: parent; active: wall.main && Settings.desktopFiles
+                opacity: shell.settled ? 1 : 0; Behavior on opacity { NumberAnimation { duration: 600; easing.type: Easing.OutCubic } }
+                sourceComponent: DesktopIcons { onMenuWanted: function (file, x, y) { shell.deskMenuAt = { x: x, y: y, screen: wall.modelData, file: file } } } }
             Widgets { visible: wall.main; x: 22; y: 52; opacity: shell.settled ? 1 : 0; Behavior on opacity { NumberAnimation { duration: 600; easing.type: Easing.OutCubic } }
+                area: wall.contentItem; screenName: wall.modelData.name
                 editing: shell.editWidgets; onDoneEditing: shell.editWidgets = false }
+            // the widgets dragged out of the column, each where it was left on this screen (one whose screen is gone
+            // waits on the main one)
+            Repeater {
+                model: (Settings.widgets || []).filter(function (k) { var p = (Settings.widgetPlaces || {})[k]
+                    return !!p && (p.s === wall.modelData.name || (wall.main && !shell.screenNamed(p.s))) })
+                Widgets { required property string modelData
+                    readonly property var at: (Settings.widgetPlaces || {})[modelData] || ({ x: 0.5, y: 0.5 })
+                    only: [modelData]; area: wall.contentItem; screenName: wall.modelData.name
+                    x: Math.max(8, Math.min(wall.width - width - 8, at.x * wall.width)); y: Math.max(38, Math.min(wall.height - height - 8, at.y * wall.height))
+                    opacity: shell.settled ? 1 : 0; Behavior on opacity { NumberAnimation { duration: 600; easing.type: Easing.OutCubic } }
+                    editing: shell.editWidgets; onDoneEditing: shell.editWidgets = false } }
         }
     }
     // Settings › Desktop & Dock › Top bar › "On every screen": the others get a bar of their own. Its buttons open the
@@ -632,7 +672,8 @@ QtObject {
         Item { focus: shell.open === "cc"; Keys.onEscapePressed: shell.open = "" }
         ControlCentre {
             id: ccPanel
-            onDone: shell.open = ""
+            onDone: { shell.open = ""; editTiles = false }
+            onSaverWanted: shell.saverOn = true
             y: 10; width: 344; height: Math.min(parent.height - 20, implicitHeight)
             x: shell.open === "cc" ? parent.width - width - 10 : parent.width
             opacity: shell.open === "cc" ? 1 : 0
@@ -660,15 +701,23 @@ QtObject {
             y: shell.deskMenuAt ? Math.max(8, Math.min(shell.deskMenuAt.y, deskMenuWin.height - height - 8)) : 0
             MouseArea { anchors.fill: parent; acceptedButtons: Qt.AllButtons }
             Column { id: deskCol; x: 6; y: 6; width: parent.width - 12
-                Repeater { model: [[shell.editWidgets ? "Done Editing Widgets" : "Edit Widgets…", "widgets", "grid"], ["Change Wallpaper…", "wallpaper", "image"],
-                                   ["Desktop & Dock Settings…", "desktop", "desktop"]]
+                Repeater { model: shell.deskMenuAt && shell.deskMenuAt.file
+                                  ? [["Open", "open", "expand"], ["Show in Files", "show", "folder"], ["Move to Trash", "trash", "trash"]]
+                                  : (Settings.desktopFiles ? [["New Folder", "folder", "folder"]] : []).concat(
+                                    [[shell.editWidgets ? "Done Editing Widgets" : "Edit Widgets…", "widgets", "grid"], ["Change Wallpaper…", "wallpaper", "image"],
+                                     ["Desktop & Dock Settings…", "desktop", "desktop"]])
                     Rectangle { required property var modelData; width: deskCol.width; height: 32; radius: 8; color: dh.containsMouse ? Theme.t.hover : "transparent"
                         Glyph { x: 10; anchors.verticalCenter: parent.verticalCenter; name: modelData[2]; size: 14 }
                         Label { x: 34; anchors.verticalCenter: parent.verticalCenter; text: modelData[0]; font.pixelSize: 13 }
                         MouseArea { id: dh; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
                             onClicked: {
+                                var file = shell.deskMenuAt ? shell.deskMenuAt.file : null, what = modelData[1]
                                 shell.deskMenuAt = null
-                                if (modelData[1] === "widgets") shell.editWidgets = !shell.editWidgets
+                                if (what === "open") Stacks.open(file.path)
+                                else if (what === "show") Stacks.showInFiles(file.path)
+                                else if (what === "trash") Stacks.trash(file.path)
+                                else if (what === "folder") Stacks.newDesktopFolder()
+                                else if (what === "widgets") shell.editWidgets = !shell.editWidgets
                                 else Status.openSettings(modelData[1] === "wallpaper" ? "appearance" : "desktop")
                             } } } } }
         }

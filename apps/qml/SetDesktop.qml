@@ -115,6 +115,8 @@ Column {
         SetRow { title: "Bars under open apps"; sub: "One bar for each window, up to three."; Toggle { on: Settings.dockDots; onToggled: function (v) { pg.sw("dockDots")(v) } } }
         SetRow { title: "Make room for windows"; sub: "The dock slides away while a window covers it, and comes back when you point at the bottom edge."; Toggle { on: Settings.dockMakeRoom; onToggled: function (v) { pg.sw("dockMakeRoom")(v) } } }
         SetRow { title: "Moves to the screen you're using"; sub: "With more than one screen, rest the pointer at the bottom of another and the dock comes there. Off: it stays on the main screen."; Toggle { on: Settings.dockFollows; onToggled: function (v) { pg.sw("dockFollows")(v) } } }
+        SetRow { title: "On every screen"; sub: "With more than one screen, each shows the dock, so there's no waiting for it to come over."
+            Toggle { on: Settings.dockEverywhere; onToggled: function (v) { Settings.set("dockEverywhere", v ? "true" : "false") } } }
     }
     // ---------------------------------------------------------------- stacks
     SetCard { title: "Stacks"
@@ -161,8 +163,13 @@ Column {
             }
         }
     }
-    SetCard { title: "Widgets"; note: "Right-click the desktop › Edit Widgets to move them, take them off or add more."
+    SetCard { title: "Desktop"
+        SetRow { title: "Files on the desktop"; sub: "The Desktop folder's files show as icons on the main screen: double-click to open, drag to arrange, drop files there to keep them at hand."
+            Toggle { on: Settings.desktopFiles; onToggled: function (v) { Settings.set("desktopFiles", v ? "true" : "false") } } } }
+    SetCard { title: "Widgets"; note: "Right-click the desktop › Edit Widgets to drag them anywhere on any screen, take them off or add more."
         objectName: "widgetsCard"
+        SetRow { visible: Object.keys(Settings.widgetPlaces || {}).length > 0; title: "Back into a column"; sub: "Widgets you've dragged somewhere go back to the left of the main screen"
+            Btn { text: "Put Back"; onClicked: Settings.set("widgetPlaces", "") } }
         Repeater {
             model: [["weather", "Weather", "The forecast for your first place in Weather"], ["privacy", "Privacy Report", "Which apps used the camera, microphone or screen this week"],
                     ["next", "Up Next", "What's next in Calendar and Reminders"], ["clock", "Clock", "The time and the date, big"],
