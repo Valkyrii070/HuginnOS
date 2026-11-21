@@ -1,0 +1,10 @@
+[Unit]
+Description=Huginn OS: a snapshot of your files, for Files' Earlier Versions
+ConditionPathIsMountPoint=/home
+After=local-fs.target
+
+[Service]
+Type=oneshot
+Nice=10
+IOSchedulingClass=idle
+ExecStart=/usr/libexec/huginn-snapshot home

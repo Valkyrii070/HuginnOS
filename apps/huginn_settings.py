@@ -704,6 +704,7 @@ SHORTCUTS = [  # id, what it does, group, default keys ("|" between more than on
     ("terminal", "Open Terminal", "Finding and opening", "Ctrl+Alt+T"),
     ("emoji", "Emoji and symbols", "Finding and opening", "Super+period"),
     ("clipboard", "Clipboard history", "Finding and opening", "Super+V"),
+    ("dictate", "Dictation: talk, and it types (again: done)", "Finding and opening", "Super+H"),
     ("today", "Today", "Finding and opening", "Super+T"),
     ("snap-left", "Snap to the left (again: a third, two-thirds)", "Windows", "Super+Left"),
     ("snap-right", "Snap to the right (again: a third, two-thirds)", "Windows", "Super+Right"),

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Huginn sync: your Notes, Reminders and Huginn OS's settings kept in step across your computers, beside what Huginn
+"""Huginn sync: your Notes, Reminders, Calendar, Contacts and Huginn OS's settings kept in step across your computers, beside what Huginn
 (the browser) already syncs with Bifröst: Favorites, the Reading List, passwords and open tabs.
 
     one group   the browser's Bifröst group: the same 256-bit key (in the desktop's keyring, or a file only you can
@@ -52,7 +52,7 @@ BIFROST_TOMBSTONE_DAYS = 180
 BIFROST_MAX_BLOB = 64 * 1024 * 1024
 BIFROST_KEY_PREFIX = "HB1"
 BROWSER_COLLECTIONS = ("bookmarks", "reading", "passwords", "tabs")
-COLLECTIONS = ("notes", "reminders", "settings")                  # what the system syncs
+COLLECTIONS = ("notes", "reminders", "calendar", "contacts", "settings")   # what the system syncs
 OWN_SUFFIX = ".huginnos"
 BROWSER_SUFFIX = ".huginnsync"
 
@@ -275,6 +275,14 @@ def reminders_file() -> Path:
     return _data_home() / "huginn" / "reminders.json"
 
 
+def calendar_file() -> Path:
+    return _data_home() / "huginn" / "calendar.json"
+
+
+def contacts_file() -> Path:
+    return _data_home() / "huginn" / "contacts.vcf"
+
+
 def settings_file() -> Path:
     return _config_home() / "huginn-shell" / "settings.json"
 
@@ -390,10 +398,13 @@ def _to_trash(path: Path) -> None:
 class Local:
     """This computer's Notes, Reminders and settings, as items: scan() reads them, apply() writes another computer's."""
 
-    def __init__(self, notes: Path = None, reminders: Path = None, settings: Path = None, name: str = ""):
+    def __init__(self, notes: Path = None, reminders: Path = None, settings: Path = None, name: str = "", calendar: Path = None,
+                 contacts: Path = None):
         self.notes = Path(notes) if notes else notes_dir()
         self.reminders = Path(reminders) if reminders else reminders_file()
         self.settings = Path(settings) if settings else settings_file()
+        self.calendar = Path(calendar) if calendar else (self.reminders.parent / "calendar.json" if reminders else calendar_file())
+        self.contacts = Path(contacts) if contacts else (self.reminders.parent / "contacts.vcf" if reminders else contacts_file())
         self.name = name or device_name()
         self.kept_copies = []                                     # notes kept beside another computer's version
 
@@ -504,6 +515,69 @@ class Local:
             part.write_text(json.dumps(data, indent=1), encoding="utf-8")
             os.replace(part, self.reminders)
 
+    # Calendar: each event by its id (the Calendar app keeps them in one JSON list)
+    def _read_calendar(self) -> list:
+        try:
+            data = json.loads(self.calendar.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return []
+        return [e for e in data if isinstance(e, dict) and isinstance(e.get("id"), str) and {"id", "date", "title"} <= e.keys()] \
+            if isinstance(data, list) else []
+
+    def scan_calendar(self) -> dict:
+        return {bifrost_item_id("event", e["id"]): {"event": e} for e in self._read_calendar()}
+
+    def apply_calendar(self, changes: dict) -> None:
+        events = self._read_calendar()
+        at = {bifrost_item_id("event", e["id"]): n for n, e in enumerate(events)}
+        drop = set()
+        for item_id, change in changes.items():
+            if change is None:
+                if item_id in at:
+                    drop.add(at[item_id])
+            elif isinstance(change.get("event"), dict) and isinstance(change["event"].get("id"), str) \
+                    and {"id", "date", "title"} <= change["event"].keys():
+                if item_id in at:
+                    events[at[item_id]] = change["event"]
+                else:
+                    at[item_id] = len(events)
+                    events.append(change["event"])
+        events = [e for n, e in enumerate(events) if n not in drop]
+        self.calendar.parent.mkdir(parents=True, exist_ok=True)
+        part = self.calendar.with_name(".calendar.json.saving")
+        part.write_text(json.dumps(events, indent=1), encoding="utf-8")
+        os.replace(part, self.calendar)                           # (an open Calendar takes it in within seconds)
+
+    # Contacts: each card by its UID (the Contacts app keeps one ordinary .vcf)
+    def _read_contacts(self) -> list:
+        try:
+            from huginn_more import read_vcards
+            return [c for c in read_vcards(self.contacts.read_text(encoding="utf-8", errors="replace")) if c.get("id")]
+        except (OSError, ImportError):
+            return []
+
+    def scan_contacts(self) -> dict:
+        return {bifrost_item_id("card", c["id"]): {"card": c} for c in self._read_contacts()}
+
+    def apply_contacts(self, changes: dict) -> None:
+        from huginn_more import write_vcards, write_whole
+        cards = self._read_contacts()
+        at = {bifrost_item_id("card", c["id"]): n for n, c in enumerate(cards)}
+        drop = set()
+        for item_id, change in changes.items():
+            if change is None:
+                if item_id in at:
+                    drop.add(at[item_id])
+            elif isinstance(change.get("card"), dict) and isinstance(change["card"].get("id"), str) and change["card"]["id"]:
+                card = change["card"]
+                if item_id in at:
+                    cards[at[item_id]] = card
+                else:
+                    at[item_id] = len(cards)
+                    cards.append(card)
+        cards = [c for n, c in enumerate(cards) if n not in drop]
+        write_whole(self.contacts, write_vcards(cards).encode("utf-8"))
+
     # Huginn OS's settings: each setting by its name, but not this computer's own (its screens, its hardware)
     def _read_settings(self) -> dict:
         try:
@@ -543,6 +617,10 @@ class Local:
             out["notes"] = self.scan_notes()
         if "reminders" in collections and (self.reminders.exists() or not self.reminders.parent.exists()):
             out["reminders"] = self.scan_reminders()
+        if "calendar" in collections:
+            out["calendar"] = self.scan_calendar()
+        if "contacts" in collections:
+            out["contacts"] = self.scan_contacts()
         if "settings" in collections:
             out["settings"] = self.scan_settings()
         return out
@@ -553,6 +631,10 @@ class Local:
             self.apply_notes(changes["notes"], conflicts.get("notes", set()))
         if changes.get("reminders"):
             self.apply_reminders(changes["reminders"])
+        if changes.get("calendar"):
+            self.apply_calendar(changes["calendar"])
+        if changes.get("contacts"):
+            self.apply_contacts(changes["contacts"])
         if changes.get("settings"):
             self.apply_settings(changes["settings"])
 
@@ -899,7 +981,8 @@ def signature(s: "Sync") -> tuple:
             return (x.st_mtime_ns, x.st_size)
         except OSError:
             return None
-    parts = [st(s.own / "config.json"), st(s.browser / "config.json"), st(s.local.reminders), st(s.local.settings), st(s.local.notes)]
+    parts = [st(s.own / "config.json"), st(s.browser / "config.json"), st(s.local.reminders), st(s.local.settings), st(s.local.notes),
+             st(s.local.calendar), st(s.local.contacts)]
     if s.local.notes.is_dir():
         parts += sorted((p.name, st(p)) for p in s.local.notes.iterdir() if p.suffix.lower() in (".md", ".txt"))
     folder = s.group_folder()

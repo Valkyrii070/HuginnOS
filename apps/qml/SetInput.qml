@@ -25,6 +25,38 @@ Column {
             SetSlider { width: 240; lowText: "Short"; highText: "Long"; value: ((pg.k.delay || 600) - 150) / 850; onMoved: function (v) { Backend.setKeyboard("delay", Math.round(150 + v * 850)) } } }
         SetRow { visible: pg.k.repeat !== false; title: "Repeat speed"
             SetSlider { width: 240; lowText: "Slow"; highText: "Fast"; value: ((pg.k.rate || 25) - 5) / 55; onMoved: function (v) { Backend.setKeyboard("rate", Math.round(5 + v * 55)) } } } }
+    // Dictation (Super+H): huginn_dictate.py, as "Dictation"
+    readonly property bool hasDictation: typeof Dictation !== "undefined"
+    readonly property var d: hasDictation ? Dictation.st : ({})
+    readonly property var langs: [["auto", "Automatic"], ["en", "English"], ["es", "Español"], ["fr", "Français"], ["de", "Deutsch"], ["it", "Italiano"],
+        ["pt", "Português"], ["nl", "Nederlands"], ["sv", "Svenska"], ["da", "Dansk"], ["no", "Norsk"], ["fi", "Suomi"], ["pl", "Polski"],
+        ["uk", "Українська"], ["ru", "Русский"], ["tr", "Türkçe"], ["ar", "العربية"], ["hi", "हिन्दी"], ["ja", "日本語"], ["ko", "한국어"], ["zh", "中文"]]
+    SetCard { visible: pg.hasDictation; title: "Dictation"
+        note: "Press Super+H wherever you type and talk. Pause, or press Super+H again, and what you said is typed in. It all happens on this computer: the sound never leaves it. The speech model you choose is downloaded once."
+        SetRow { visible: pg.hasDictation && (!pg.d.engine || !pg.d.cpuOk); title: "Dictation can't run on this computer"
+            sub: !pg.d.engine ? "Its speech engine isn't installed" : "Its speech engine needs a processor with AVX2 (most from 2013 on)"; glyph: "warning"; tile: "#C46A00" }
+        Repeater { model: pg.d.models || []
+            SetRow { id: mrow; required property var modelData
+                readonly property bool inUse: pg.d.model === modelData.name
+                title: modelData.label + (inUse ? " · chosen" : "")
+                sub: ({ "base": "Fastest; good for short notes and messages", "small": "Fast and accurate, in many languages",
+                        "large-v3-turbo-q5_0": "Best with names and long sentences; slower on older computers" })[modelData.name]
+                     + " · " + modelData.size + (modelData.here ? " · downloaded" : "")
+                glyph: "mic"; tile: inUse ? "#0A8071" : "#475569"
+                Row { spacing: 8
+                    Meter { visible: Dictation.getting === modelData.name; width: 120; value: Dictation.fraction; anchors.verticalCenter: parent.verticalCenter }
+                    Btn { visible: Dictation.getting === modelData.name; text: "Stop"; onClicked: Dictation.stopGetting() }
+                    Btn { visible: Dictation.getting !== modelData.name && (!mrow.inUse || !modelData.here)
+                        primary: mrow.inUse; text: modelData.here ? "Use" : "Download"; enabled: Dictation.getting === ""
+                        onClicked: Dictation.choose(modelData.name) }
+                    Seg { visible: modelData.here && !mrow.inUse; icon: "trash"; tip: "Remove"; anchors.verticalCenter: parent.verticalCenter
+                        onClicked: Dictation.remove(modelData.name) } } } }
+        SetRow { title: "Stop when I pause"; sub: "Off: it listens until you press Super+H again (two minutes at most)"
+            Toggle { on: pg.d.autoStop !== false; onToggled: function (v) { Dictation.set("autoStop", v) } } }
+        SetRow { title: "Language"; sub: "What you'll speak. Automatic works it out each time."
+            SetPick { text: (pg.langs.filter(function (l) { return l[0] === (pg.d.language || "auto") })[0] || ["", "Automatic"])[1]
+                onClicked: win.pick("Dictation language", pg.langs.map(function (l) { return { id: l[0], label: l[1], sub: "" } }), pg.d.language || "auto",
+                                    function (v) { Dictation.set("language", v) }) } } }
     Repeater { model: pg.k.pointers || []
         SetCard { required property var modelData; title: modelData.touchpad ? "Touchpad · " + modelData.name : "Mouse · " + modelData.name
             SetRow { title: "Pointer speed"

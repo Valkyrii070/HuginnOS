@@ -42,7 +42,7 @@ Column {
             Label { font.pixelSize: 21; font.weight: Font.Light
                 text: !pg.on ? "Sync between your computers" : pg.st.error ? "Sync needs a look" : pg.others.length ? "In step with " + pg.others.length + (pg.others.length === 1 ? " other device" : " other devices") : "Waiting for your other devices" }
             Label { width: parent.width; wrapMode: Text.WordWrap; secondary: true
-                text: !pg.on ? "Notes, Reminders and Huginn OS's settings, with Huginn's Favorites, Reading List, passwords and open tabs. Through a folder you choose, sealed so only your devices can read it. No account."
+                text: !pg.on ? "Notes, Reminders, Calendar, Contacts and Huginn OS's settings, with Huginn's Favorites, Reading List, passwords and open tabs. Through a folder you choose, sealed so only your devices can read it. No account."
                       : pg.st.error ? pg.st.error : "Last synced " + pg.ago(pg.st.lastSync) + ". It syncs by itself every few minutes." } }
         Btn { visible: pg.on; anchors { right: parent.right; rightMargin: 22; verticalCenter: parent.verticalCenter }
             text: pg.busy === "syncing" ? "Syncing…" : "Sync Now"; enabled: !pg.busy; onClicked: Sync.syncNow() } }
@@ -71,6 +71,8 @@ Column {
         Repeater { model: [
                 { id: "notes", title: "Notes", sub: "Everything in Documents › Notes. A note changed on two computers at once keeps both versions.", glyph: "doc", tile: "#C98A00" },
                 { id: "reminders", title: "Reminders", sub: "Your reminders and lists", glyph: "check", tile: "#E5484D" },
+                { id: "calendar", title: "Calendar", sub: "Your events, with their repeats and reminders", glyph: "calendar", tile: "#E8590C" },
+                { id: "contacts", title: "Contacts", sub: "Everyone in your address book", glyph: "user", tile: "#6D28D9" },
                 { id: "settings", title: "Huginn OS's settings", sub: "Look, the Dock, the bar, the clock and more. Not this computer's screens or hardware.", glyph: "gear", tile: "#475569" },
                 { id: "bookmarks", title: "Favorites", sub: "From Huginn, the browser", glyph: "star", tile: "#1E40AF" },
                 { id: "reading", title: "Reading List", sub: "From Huginn, the browser", glyph: "book", tile: "#5A3FE0" },

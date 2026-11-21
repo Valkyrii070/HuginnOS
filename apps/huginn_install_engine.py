@@ -83,6 +83,7 @@ def sfdisk_script(parts: list, start: int = 0) -> str:
 
 
 SUBVOLUMES = ("@", "@home", "@snapshots", "@swap")
+KEPT_OUT_OF_VERSIONS = (".cache", ".local/share/Steam", ".var/app")       # in the person's home: see settings()
 BTRFS_OPTS = "compress=zstd:1,noatime"
 
 
@@ -176,7 +177,7 @@ class Engine:
         if chroot:
             cmd = ["chroot", str(self.t)] + cmd
         self.log("$ " + " ".join(cmd))
-        env = dict(os.environ, LC_ALL="C", DEBIAN_FRONTEND="noninteractive")
+        env = dict(os.environ, LC_ALL="C", DEBIAN_FRONTEND="noninteractive", HUGINN_INSTALLING="1")   # (no restore points from apt's hook)
         r = subprocess.run(cmd, input=stdin, capture_output=True, text=True, timeout=timeout, env=env)
         out = (r.stdout + r.stderr).strip()
         if out:
@@ -458,6 +459,16 @@ class Engine:
         (home / ".config").mkdir(parents=True, exist_ok=True)
         (home / ".config" / "kxkbrc").write_text(f"[Layout]\nLayoutList={lay}\nVariantList={var}\nUse=true\n")
         self.run(["chown", "-R", f"{u['name']}:{u['name']}", f"/home/{u['name']}/.config"], chroot=True)
+        # Earlier versions of your files are hourly snapshots of /home: caches and game libraries get subvolumes of
+        # their own, which snapshots don't take in, so they never hold on to a deleted game or a cache's churn.
+        for sub in KEPT_OUT_OF_VERSIONS:
+            where = home / sub
+            if not where.exists():
+                where.parent.mkdir(parents=True, exist_ok=True)
+                self.run(["btrfs", "subvolume", "create", str(where)], check=False)
+                where.mkdir(parents=True, exist_ok=True)
+        self.run(["chown", "-R", f"{u['name']}:{u['name']}", f"/home/{u['name']}/.cache", f"/home/{u['name']}/.local", f"/home/{u['name']}/.var"],
+                 chroot=True, check=False)
         sddm = t / "etc/sddm.conf.d"
         sddm.mkdir(parents=True, exist_ok=True)
         auto = sddm / "20-autologin.conf"

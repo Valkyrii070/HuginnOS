@@ -61,6 +61,9 @@ Super+E opens Files, Super+I Settings and Ctrl+Alt+T Terminal. Super+D puts ever
 ## Emoji and symbols
 Press Super+. (full stop) wherever you're typing: type a word to find one (heart, party, arrow, euro), use the arrows or the pointer, and Enter types it in. The ones you used are first next time; the hands at the bottom set the skin tone. Whatever you'd copied stays on the clipboard.
 
+## Talk, and it types
+Press Super+H wherever you're typing and speak. Pause for a moment, or press Super+H again, and what you said is typed in; the live island shows that it's listening, with Done and Cancel. It all happens on this computer: the sound never leaves it. The first time, choose a speech model in Settings › Keyboard & Mouse › Dictation (Quick, Balanced or Accurate); it's downloaded once. Automatic language works out what you're speaking each time, or choose one there.
+
 ## Clipboard history
 Super+V shows what you copied lately, text and pictures; pick one and it's pasted where you were typing. Type to find something, pin what you use often, Delete removes one. It's off until you turn it on (the first Super+V asks, or Settings › Privacy). Passwords copied from Passwords and Authenticator are never kept.
 

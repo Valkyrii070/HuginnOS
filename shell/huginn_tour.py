@@ -31,6 +31,16 @@ WHAT_IS_NEW = {
         {"target": "dock", "title": "Your downloads, in a pile", "words": "Downloads sit at the end of the dock. Drag any folder there to keep it handy too.",
          "try": "", "done": "", "check": ""},
     ],
+    "0.4": [
+        {"target": "window", "title": "Layouts on every screen", "words": "Press Super+Z for the window in front: put it in a part of any screen. "
+         "Keep where every window is as a set, and put them all back later.", "try": "", "done": "", "check": ""},
+        {"target": "orb", "title": "Talk, and it types", "words": "Press Super+H wherever you type and speak. It all happens on this computer. "
+         "Choose its speech model in Settings › Keyboard & Mouse.", "try": "", "done": "", "check": ""},
+        {"target": "dock", "title": "Go back in time", "words": "In Files, right-click a file for Earlier Versions: your files are kept every hour. "
+         "If an update gives you trouble, Settings › Software Update takes the system back.", "try": "", "done": "", "check": ""},
+        {"target": "date", "title": "Everything, on every computer", "words": "Settings › Sync keeps Notes, Reminders, Calendar, Contacts and "
+         "settings the same on your computers, with Huginn's Favorites and passwords. No account.", "try": "", "done": "", "check": ""},
+    ],
 }
 
 

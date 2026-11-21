@@ -234,6 +234,34 @@ build_rounded_corners() {
     rm -rf "$CHROOT/tmp/rc" "$CHROOT"/tmp/rc-*.txt
 }
 
+# Dictation's speech engine (Super+H, apps/huginn_dictate.py): whisper.cpp's whisper-cli (MIT, vendor/whisper.cpp at a
+# tagged release), built here for any processor with AVX2, with its own ggml linked in: one 3 MB program that needs
+# only the C++ runtime. Its build tools come and go again. The speech models are downloaded when they're chosen.
+build_whisper() {
+    local src="$ROOT/vendor/whisper.cpp" tag="v1.9.5"
+    if [ ! -f "$src/CMakeLists.txt" ] && command -v git >/dev/null 2>&1; then
+        git clone -q --depth 1 --branch "$tag" https://github.com/ggml-org/whisper.cpp "$src" || rm -rf "$src"
+    fi
+    [ -f "$src/CMakeLists.txt" ] || { warn "no vendor/whisper.cpp: no dictation"; return 0; }
+    rm -rf "$CHROOT/tmp/wh"; mkdir -p "$CHROOT/tmp/wh"
+    cp -r "$src/." "$CHROOT/tmp/wh/"; rm -rf "$CHROOT/tmp/wh/.git" "$CHROOT/tmp/wh/models/"*.bin "$CHROOT/tmp/wh/samples"
+    in_chroot sh -c "dpkg-query -W -f='\${Package}\n' | sort > /tmp/wh-before.txt"
+    if in_chroot env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends cmake g++ make > "$WORK/wh-deps.log" 2>&1 \
+       && in_chroot sh -c "cd /tmp/wh && cmake -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF -DWHISPER_BUILD_TESTS=OFF \
+              -DWHISPER_BUILD_SERVER=OFF -DWHISPER_SDL2=OFF -DGGML_NATIVE=OFF -DGGML_AVX=ON -DGGML_AVX2=ON -DGGML_FMA=ON -DGGML_F16C=ON \
+              -DGGML_OPENMP=OFF && cmake --build build -j$(nproc) --target whisper-cli" > "$WORK/wh-build.log" 2>&1; then
+        install -D -m 755 "$CHROOT/tmp/wh/build/bin/whisper-cli" "$CHROOT/usr/libexec/huginn/whisper-cli"
+        install -D -m 644 "$src/LICENSE" "$CHROOT/usr/share/doc/huginn-whisper/LICENSE"
+    else
+        warn "whisper.cpp didn't build (see $WORK/wh-build.log): no dictation"
+        tail -15 "$WORK/wh-build.log" "$WORK/wh-deps.log" 2>/dev/null || true
+    fi
+    in_chroot sh -c "dpkg-query -W -f='\${Package}\n' | sort > /tmp/wh-after.txt; comm -13 /tmp/wh-before.txt /tmp/wh-after.txt > /tmp/wh-new.txt"
+    in_chroot sh -c 'grep -E -- "-dev\$|^(cmake|cmake-data|g\+\+|g\+\+-[0-9]+|make|cpp|cpp-[0-9]+|gcc|gcc-[0-9]+)\$" /tmp/wh-new.txt | xargs -r env DEBIAN_FRONTEND=noninteractive apt-get purge -y' > "$WORK/wh-purge.log" 2>&1 || true
+    in_chroot env DEBIAN_FRONTEND=noninteractive apt-get autoremove -y --purge >> "$WORK/wh-purge.log" 2>&1 || true
+    rm -rf "$CHROOT/tmp/wh" "$CHROOT"/tmp/wh-*.txt
+}
+
 build_compositor() {
     # Huginn's own compositor (compositor/, Rust, built on Smithay): the "own compositor" session at the sign-in screen.
     # Rust and the headers are put in the image only while it builds, then taken out again, as for rounded corners.
@@ -353,6 +381,7 @@ stage_customise() {
     in_chroot python3 -m compileall -q /usr/share/huginn-apps /usr/share/huginn-shell
 
     build_compositor
+    build_whisper
     # KWin is gone (config/not-wanted.list): its rounded-corners effect and the screenshot helper it authorised
     # (huginn-grab) go with it; Huginn's compositor rounds corners and takes the pictures itself.
     rm -rf "$CHROOT/usr/libexec/huginn/huginn-grab" "$CHROOT/usr/share/applications/huginn-grab.desktop" \

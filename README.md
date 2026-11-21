@@ -2369,6 +2369,31 @@ backend in `huginn_app.py` went) and `apps/qml/Monitor.qml`.
   game and applied however it's started (a small `huginn-game` wrapper in Steam's launch options, written into Steam's
   own settings only while Steam is closed).
 
+## A full install tested, dictation, earlier versions of files (2026-11-21, later)
+
+- **A whole install, tested start to finish.** The new ISO's system was installed by the installer engine onto a
+  virtual disk, started in a virtual PC (btrfs root in `@`, GRUB finding it, the desktop and the Welcome tour), then
+  sent back to its "Just installed" restore point through the start-up menu's entry: the system came back as it was,
+  what had been there was kept as `@before-undo-…`, and the finishing service recorded it. Two fixes came out of it:
+  apt's restore-point hook ran inside the installer (an extra, half-installed restore point, with the live session's
+  kernel named), so it now stays quiet while Huginn OS is being installed (`HUGINN_INSTALLING`); and a restore point
+  names a kernel that's actually in its /boot.
+- **Dictation (Super+H).** Talk, and what you say is typed where you're typing (`apps/huginn_dictate.py`). It listens
+  through PipeWire and ends by itself after a pause (or Super+H again, or Done in the live island), then whisper.cpp
+  turns it into text on this computer and it's typed in as the emoji picker types. whisper.cpp's `whisper-cli` (MIT,
+  v1.9.5) is built into the image for any processor with AVX2: one 3 MB program. Its speech models are downloaded
+  when chosen in Settings › Keyboard & Mouse › Dictation (Quick 142 MB, Balanced 466 MB, Accurate 547 MB), checked
+  against whisper.cpp's published SHA-1, into the folder Clips also uses for captions.
+- **Earlier versions of your files.** Every hour (a system timer) `huginn-snapshot home` takes a read-only snapshot of
+  `@home` into `/home/.versions` — inside it, so each person reads their own files with their own permissions — and
+  thins them: every one from the last day, then one a day for a week, fewer when the disk is short. The installer
+  makes `~/.cache`, Steam's folder and Flatpak apps' data subvolumes of their own, so snapshots never hold on to a
+  deleted game. Files: right-click › Earlier Versions…, with Open and Put Back a Copy (nothing is replaced).
+- **Calendar and Contacts in Sync**, by event and by card; Calendar and Contacts now take in changes from outside
+  (another computer, another window) whole, not only additions, so nothing removed elsewhere comes back.
+- **What's new for 0.4**, after updating: layouts, dictation, earlier versions and sync. The first tour mentions
+  Super+Z and Super+H.
+
 ## Huginn, the browser
 
 Inside the Huginn repository (this kit is its `os/` folder) the image ships the repository's own browser. A kit used

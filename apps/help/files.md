@@ -12,6 +12,9 @@ Pictures, videos, PDFs, documents, sheets and presentations show a small picture
 ## Copy, move and undo
 Drag files onto a folder, a place on the left or a drive. Ctrl+C, Ctrl+X and Ctrl+V work as usual, and Ctrl+Z undoes the last rename, move, copy or move to Trash.
 
+## Earlier versions of a file
+Every hour, Huginn OS keeps a copy of your home folder as it was: each one from the last day, then one a day for a week (fewer when the disk is nearly full). Right-click a file and choose Earlier Versions… to see the times it was different. Open shows that version as it was; Put Back a Copy puts it beside the file, named with its time, so nothing is replaced. Caches and Steam's games aren't kept, so deleting a game frees its space at once. This needs Huginn OS installed by its own installer.
+
 ## Rename several at once
 Select them all and choose Rename: they get a shared name and numbers.
 

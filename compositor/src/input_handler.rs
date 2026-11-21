@@ -1391,6 +1391,7 @@ fn process_keyboard_shortcut(modifiers: ModifiersState, keysym: Keysym, raw: Opt
             "snap-up" => KeyAction::Snap("up"),
             "snap-down" => KeyAction::Snap("down"),
             "layouts" => KeyAction::Shell("layouts"),
+            "dictate" => KeyAction::Run("/usr/libexec/huginn-dictate toggle".into()),
             "close" => KeyAction::CloseWindow,
             "screenshot" => KeyAction::Screenshot("screen"),
             "screenshot-choose" => KeyAction::Screenshot("choose"),

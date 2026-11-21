@@ -9,8 +9,13 @@ each restore point keeps a copy of its kernel there too.
 
 Restore points are taken by themselves before apt changes anything (an apt hook: DPkg::Pre-Invoke, which Software
 Update's PackageKit runs too), at most one every ten minutes; Settings can make one too. The start-up menu lists them
-("Huginn OS as it was…"): starting one goes back first (the initramfs does it: huginn.undo=N), for a system that won't
+("Huginn OS restore points"): starting one goes back first (the initramfs does it: huginn.undo=N), for a system that won't
 start after an update.
+
+Earlier versions of your files: every hour, a read-only snapshot of @home goes into /home/.versions (inside @home, so
+it's yours to read with your own permissions and nobody else's; snapshots don't take in each other, nor caches and
+game libraries, which the installer makes subvolumes of their own). Kept: every one from the last day, then one a day
+for a week; fewer when the disk runs short. Files' Earlier Versions… reads them.
 
     huginn-snapshot list                    the restore points, as JSON (also kept in /var/lib/huginn/snapshots.json)
     huginn-snapshot create [reason]         a restore point now
@@ -20,6 +25,7 @@ start after an update.
     huginn-snapshot tidy                    remove what going back left behind (@before-undo-…)
     huginn-snapshot menu                    write the start-up menu's list again
     huginn-snapshot finish                  at start-up: after going back from the start-up menu, put /boot in order
+    huginn-snapshot home                    the hourly snapshot of your files, and thinning out the older ones
 """
 import contextlib
 import json
@@ -151,7 +157,7 @@ def create(reason: str = "", dev: str = "", mine: bool = False, boot: Path = Non
         raise Problem("Restore points need Huginn OS installed on btrfs (as the installer does). This system isn't.")
     if boot is None and separate_boot():
         boot = Path("/boot")
-    kernel = kernel or os.uname().release
+    kernel = kernel or boot_kernel(boot or Path("/boot"))
     with top_level(dev) as top:
         (top / "@snapshots").mkdir(exist_ok=True)
         if not (top / "@").is_dir():
@@ -180,8 +186,22 @@ def create(reason: str = "", dev: str = "", mine: bool = False, boot: Path = Non
     return info
 
 
+def boot_kernel(boot: Path) -> str:
+    """The kernel a restore point starts: the one running, if its files are in /boot (they are, normally), else the
+    newest there. (Inside the installer, or a chroot, the running kernel can be another system's.)"""
+    running = os.uname().release
+    if (boot / f"vmlinuz-{running}").exists():
+        return running
+    found = sorted((p.name[len("vmlinuz-"):] for p in boot.glob("vmlinuz-*")),
+                   key=lambda v: [int(x) if x.isdigit() else x for x in re.split(r"[.-]", v)])
+    return found[-1] if found else running
+
+
 def auto(reason: str = "Before software was installed or updated") -> dict:
-    """The apt hook: never stops apt; skips when the last restore point is under ten minutes old."""
+    """The apt hook: never stops apt; skips when the last restore point is under ten minutes old, and while Huginn OS
+    is being installed (the installer makes the first one itself, at the end)."""
+    if os.environ.get("HUGINN_INSTALLING"):
+        return {}
     dev = system_device()
     if not dev:
         return {}
@@ -392,6 +412,81 @@ def finish() -> None:
     flag.unlink(missing_ok=True)
 
 
+# ------------------------------------------------------------------------------- earlier versions of your files
+VERSIONS = Path("/home/.versions")
+VERSION_STAMP = "%Y-%m-%d_%H%M"
+KEEP_DAYS = 7
+MIN_FREE = 0.10                                                   # fewer versions when the disk has less than this free
+
+
+def home_ready(home: Path = Path("/home")) -> bool:
+    m = mount_of(str(home))
+    return m.get("fstype") == "btrfs" and m.get("subvol", "").strip("/") == "@home"
+
+
+def version_dirs(versions: Path = VERSIONS) -> list:
+    """(time, path) of each snapshot of your files, newest first."""
+    out = []
+    try:
+        for d in versions.iterdir():
+            try:
+                out.append((time.mktime(time.strptime(d.name, VERSION_STAMP)), d))
+            except ValueError:
+                continue
+    except OSError:
+        return []
+    return sorted(out, reverse=True)
+
+
+def thin(stamps: list, now: float) -> set:
+    """Which to keep, of [(time, key)]: all from the last day, then the newest of each day for a week."""
+    keep, days = set(), set()
+    for t, key in sorted(stamps, reverse=True):
+        if now - t <= 86400:
+            keep.add(key)
+        elif now - t <= KEEP_DAYS * 86400:
+            day = time.strftime("%Y-%m-%d", time.localtime(t))
+            if day not in days:
+                days.add(day)
+                keep.add(key)
+    return keep
+
+
+def free_share(path: Path) -> float:
+    try:
+        st = os.statvfs(path)
+        return st.f_bavail / st.f_blocks if st.f_blocks else 1.0
+    except OSError:
+        return 1.0
+
+
+def home_version(home: Path = Path("/home"), now: float = None, check_mount: bool = True) -> dict:
+    """The hourly snapshot of @home, then the older ones thinned out (and more of them while the disk is short)."""
+    if check_mount and not home_ready(home):
+        return {"skipped": "your files aren't on btrfs subvolume @home"}
+    now = now or time.time()
+    versions = home / ".versions"
+    versions.mkdir(mode=0o755, exist_ok=True)
+    name = time.strftime(VERSION_STAMP, time.localtime(now))
+    made = ""
+    if not (versions / name).exists():
+        run(["btrfs", "subvolume", "snapshot", "-r", str(home), str(versions / name)])
+        made = name
+    have = version_dirs(versions)
+    keep = thin([(t, str(d)) for t, d in have], now)
+    removed = []
+    for t, d in have:
+        if str(d) not in keep:
+            run(["btrfs", "subvolume", "delete", str(d)])
+            removed.append(d.name)
+    have = version_dirs(versions)
+    while len(have) > 1 and free_share(home) < MIN_FREE:              # short of room: the oldest go first, the newest stays
+        t, d = have.pop()
+        run(["btrfs", "subvolume", "delete", str(d)])
+        removed.append(d.name)
+    return {"made": made, "removed": removed, "kept": len(version_dirs(versions))}
+
+
 def main(argv: list) -> int:
     if not argv or argv[0] in ("-h", "--help"):
         print(__doc__)
@@ -421,6 +516,8 @@ def main(argv: list) -> int:
             write_menu()
         elif cmd == "finish":
             finish()
+        elif cmd == "home":
+            print(json.dumps(home_version()))
         else:
             print(__doc__)
             return 2

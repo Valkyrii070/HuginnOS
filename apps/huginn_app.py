@@ -1984,6 +1984,79 @@ class Files(QObject):
         self._scanner = threading.Thread(target=look, daemon=True)
         self._scanner.start()
 
+    # ------------------------------------------------------------------ earlier versions (huginn-snapshot home)
+    VERSIONS = Path("/home/.versions")
+
+    @staticmethod
+    def _when(stamp: float) -> str:
+        t, now = time.localtime(stamp), time.localtime()
+        hm = time.strftime("%H:%M", t)
+        if t.tm_yday == now.tm_yday and t.tm_year == now.tm_year:
+            return f"Today {hm}"
+        y = time.localtime(stamp + 86400)
+        if y.tm_yday == now.tm_yday and y.tm_year == now.tm_year:
+            return f"Yesterday {hm}"
+        return time.strftime("%a %d %b", t) + f" {hm}"
+
+    @Slot(str, result="QVariantList")
+    def versions(self, path: str):
+        """The earlier versions of a file in your home folder, newest first, one for each time it was different:
+        [{path, when (when it was saved), size}]. From the hourly snapshots in /home/.versions."""
+        try:
+            p = Path(path).resolve()
+            rel = p.relative_to(self.VERSIONS.parent)
+        except (ValueError, OSError):
+            return []
+        if rel.parts[:1] == (".versions",):
+            return []
+        try:
+            now = p.stat()
+            current = (now.st_size, int(now.st_mtime))
+        except OSError:
+            current = None
+        out, seen = [], {current} if current else set()
+        try:
+            snaps = sorted((d for d in self.VERSIONS.iterdir() if d.is_dir()), key=lambda d: d.name, reverse=True)
+        except OSError:
+            return []
+        for d in snaps:
+            old = d / rel
+            try:
+                st = old.stat()
+            except OSError:
+                continue
+            if not old.is_file():
+                continue
+            key = (st.st_size, int(st.st_mtime))
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append({"path": str(old), "when": self._when(st.st_mtime), "size": human_size(st.st_size)})
+        return out[:60]
+
+    @Slot(str, str, result=str)
+    def restoreVersion(self, old: str, path: str) -> str:
+        """Put an earlier version back beside the file, as "<name> (<when>)": nothing is overwritten. Returns "" or why
+        not."""
+        src, dest = Path(old), Path(path)
+        try:
+            src.resolve().relative_to(self.VERSIONS)
+        except (ValueError, OSError):
+            return "That isn't an earlier version."
+        when = time.strftime("%d %b %H.%M", time.localtime(src.stat().st_mtime))
+        target = dest.with_name(f"{dest.stem} ({when}){dest.suffix}")
+        n = 2
+        while target.exists():
+            target = dest.with_name(f"{dest.stem} ({when}) {n}{dest.suffix}")
+            n += 1
+        try:
+            shutil.copy2(src, target)
+            os.chmod(target, (os.stat(target).st_mode | 0o200) & 0o7777)   # (copied from a read-only snapshot)
+        except OSError as err:
+            return f"Couldn't put it back: {err.strerror or err}"
+        self.refresh()
+        return ""
+
     # ------------------------------------------------------------------ details
     @Slot("QVariantList", result="QVariantMap")
     def details(self, paths):
@@ -2192,9 +2265,9 @@ class Calendar(QObject):
         self._events = self._sample(today) if demo else self._load()
         self._gone, self._notice, self._seen = set(), "", self._stamp()
         if not demo:
-            self._watch = QTimer(self)                             # another window (or Mail handing over an invitation) may add events
+            self._watch = QTimer(self)                             # another window, Mail handing over an invitation, Huginn sync
             self._watch.setInterval(4000)
-            self._watch.timeout.connect(self._absorb)
+            self._watch.timeout.connect(self._follow)
             self._watch.start()
             if target is not None and target.suffix.lower() in (".ics", ".ical", ".ifb", ".vcs"):
                 self.importFile(str(target))
@@ -2223,6 +2296,21 @@ class Calendar(QObject):
                 self._rem = (stamp, [])
             QTimer.singleShot(0, self.changed.emit)
         return self._rem[1]
+
+    def _follow(self) -> None:
+        """Every few seconds: what changed on disk since (another window, Mail, another computer through Huginn sync)
+        is taken in whole: added, changed and removed events. This window saves each change of its own at once, so the
+        file is never behind it."""
+        self._reminders()
+        if self._stamp() == self._seen:
+            return
+        self._seen = self._stamp()
+        if not self._file.exists():
+            return
+        disk = [e for e in self._load() if e["id"] not in self._gone]
+        if disk != self._events:
+            self._events = disk
+            self.changed.emit()
 
     def _absorb(self) -> None:
         """Take in what another window wrote, keeping what this one removed."""
@@ -5388,6 +5476,10 @@ def main() -> int:
             import huginn_sync
             sync = huginn_sync.SyncSettings(args.demo)
             ctx.setContextProperty("Sync", sync)
+            import huginn_dictate
+            dictation = huginn_dictate.DictationSettings(args.demo)
+            ctx.setContextProperty("Dictation", dictation)
+            dictation.said.connect(lambda msg, bad: backend.said.emit(msg, bad) if hasattr(backend, "said") else None)
             import huginn_deskprefs
             deskprefs = huginn_deskprefs.DeskPrefs()
             ctx.setContextProperty("DeskPrefs", deskprefs)

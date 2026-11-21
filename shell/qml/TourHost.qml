@@ -48,9 +48,9 @@ Item {
           "try": "click the date", done: "That's Today", check: "today" },
         { target: "name", title: "The app's own menu", words: "Click the name of the app in front for its own menu: its settings at the top, then every command, which you can search. Every app's works the same way.",
           "try": "click " + tour.appName, done: "That's " + tour.appName + "'s menu", check: "menu" },
-        { target: "window", title: "Windows and spaces", words: "Drag a window to an edge to snap it. Super+Tab, or three fingers up, shows every window and your spaces.",
+        { target: "window", title: "Windows and spaces", words: "Drag a window to an edge to snap it, or press Super+Z to lay it out on any screen. Super+Tab, or three fingers up, shows every window and your spaces.",
           "try": "drag a window to the left", done: "Snapped", check: "snap" },
-        { target: "orb", title: "You're ready", words: "Super opens the start menu; Super+Space searches everything. More apps are in the Store, and the tour again in Help.",
+        { target: "orb", title: "You're ready", words: "Super opens the start menu; Super+Space searches everything; Super+H types what you say. More apps are in the Store, and the tour again in Help.",
           "try": "", done: "", check: "", last: true }
     ]
     readonly property var cur: steps.length ? steps[Math.min(step, steps.length - 1)] : ({})

@@ -171,6 +171,7 @@ GlassWindow {
         else if (act === "undo") Backend.undo()
         else if (act === "redo") Backend.redo()
         else if (act === "look") look(place(sel[0]))
+        else if (act === "versions") sheet = { kind: "versions", path: sel[0], list: Backend.versions(sel[0]) }
         else if (act === "pin") Backend.togglePin(sel.length === 1 && entryOf(sel[0]) && entryOf(sel[0]).dir ? sel[0] : "")
         else if (act === "tab") Backend.newTab(sel.length === 1 ? sel[0] : "")
         else if (act === "server") { Backend.scanNetwork(); sheet = { kind: "server", name: "", why: "" } }
@@ -192,6 +193,7 @@ GlassWindow {
         if (one && e && !e.dir && /\.(pdf|png|jpe?g|gif|txt|tiff?|bmp)$/i.test(sel[0])) m.push({ text: "Print…", icon: "printer", act: "print" })
         if (one && e && !e.dir && /\.(txt|md|text)$/i.test(sel[0])) m.push({ text: "Translate…", icon: "translate", act: "translate" })
         if (one) m.push({ text: "Quick Look", icon: "search", act: "look" })
+        if (one && e && !e.dir && Backend.versions(sel[0]).length > 0) m.push({ text: "Earlier Versions…", icon: "history", act: "versions" })
         if (e && e.dir) m.push({ text: "Pin", icon: "star", act: "pin" })
         m.push({ text: "Details", icon: "info", act: "details" }); m.push({ text: "Move to Trash", icon: "trash", act: "trash", danger: true, line: true })
         return m
@@ -342,7 +344,7 @@ GlassWindow {
                 function share(others, locked, run) { var why = Backend.setAccess(win.sheet.path, others, locked, run); if (why !== "") win.say(why, true)
                     var s0 = win.sheet; win.sheet = { kind: "details", data: Backend.details([s0.path]), path: s0.path, acc: Backend.access(s0.path) } }
                 visible: win.sheet !== null && kind !== "peek"
-                height: kind === "details" ? 104 + detailCol.height + accCol.height : kind === "apps" ? 150 + appList.height : kind === "server" ? 176 + recent.height + near.height : kind === "goto" ? 176 + pinCol.height
+                height: kind === "details" ? 104 + detailCol.height + accCol.height : kind === "versions" ? 136 + verList.height : kind === "apps" ? 150 + appList.height : kind === "server" ? 176 + recent.height + near.height : kind === "goto" ? 176 + pinCol.height
                       : kind === "choice" ? 122 + asked.height : both ? 222 : typing ? 176 : 172
                 function close() { var k = kind; win.sheet = null; nameIn.text = ""; passIn.text = ""; keys.forceActiveFocus(); if (k === "login" || k === "choice") Backend.netCancel() }
                 function done() { win.sheet = null; nameIn.text = ""; passIn.text = ""; keys.forceActiveFocus() }
@@ -360,7 +362,7 @@ GlassWindow {
                 Label { x: 22; y: 20; width: parent.width - 44; elide: Text.ElideMiddle; font.pixelSize: 16; font.weight: Font.DemiBold
                     text: card.kind === "rename" ? "Rename" : card.kind === "renames" ? "Rename " + win.sel.length + " items" : card.kind === "goto" ? "Go to a folder" : card.kind === "server" ? "Connect to a server" : card.kind === "login" ? "Sign in to " + win.sheet.address.split("://")[1].split("/")[0]
                         : card.kind === "choice" ? "Before connecting" : card.kind === "unlock" ? "Unlock “" + win.sheet.title + "”" : card.kind === "details" ? win.sheet.data.title
-                        : card.kind === "apps" ? "Open with" : card.kind === "clash" ? (win.sheet.names.length === 1 ? "“" + win.sheet.names[0] + "” is already here" : win.sheet.names.length + " of these are already here")
+                        : card.kind === "apps" ? "Open with" : card.kind === "versions" ? "Earlier versions of “" + win.sheet.path.split("/").pop() + "”" : card.kind === "clash" ? (win.sheet.names.length === 1 ? "“" + win.sheet.names[0] + "” is already here" : win.sheet.names.length + " of these are already here")
                         : card.kind === "sure" ? (win.sheet.what === "empty" ? "Empty the Trash?" : "Delete " + (win.sheet.paths.length === 1 ? "this" : "these " + win.sheet.paths.length) + " for good?") : "" }
                 Label { visible: card.kind === "clash" || card.kind === "sure"; x: 22; y: 50; width: parent.width - 44; wrapMode: Text.WordWrap; secondary: true
                     text: card.kind === "clash" ? "Keep both and the new one gets a number. Replace swaps files for the new ones; folders are joined together."
@@ -423,6 +425,17 @@ GlassWindow {
                             Glyph { x: 8; anchors.verticalCenter: parent.verticalCenter; name: "display"; size: 15 }
                             Label { x: 32; anchors.verticalCenter: parent.verticalCenter; text: modelData.name; font.pixelSize: 12 }
                             Label { anchors { right: parent.right; rightMargin: 10; verticalCenter: parent.verticalCenter } text: modelData.kind; secondary: true; font.pixelSize: 11 } } } }
+                Label { visible: card.kind === "versions"; x: 22; y: 48; width: parent.width - 44; wrapMode: Text.WordWrap; secondary: true; font.pixelSize: 12
+                    text: "Kept every hour for a day, then one a day for a week. Putting one back makes a copy beside the file; nothing is replaced." }
+                ListView { id: verList; visible: card.kind === "versions"; x: 16; y: 84; width: parent.width - 32; height: Math.max(34, Math.min(count, 7) * 38); clip: true; interactive: count > 7
+                    model: card.kind === "versions" ? win.sheet.list : []
+                    delegate: Item { required property var modelData; width: verList.width; height: 38
+                        Glyph { x: 8; anchors.verticalCenter: parent.verticalCenter; name: "history"; size: 15; ink: Theme.t.text_secondary }
+                        Label { x: 34; anchors.verticalCenter: parent.verticalCenter; text: modelData.when; font.pixelSize: 13 }
+                        Label { x: 190; anchors.verticalCenter: parent.verticalCenter; text: modelData.size; secondary: true; font.pixelSize: 12 }
+                        Row { anchors { right: parent.right; rightMargin: 4; verticalCenter: parent.verticalCenter } spacing: 2
+                            Seg { text: "Open"; tip: "Open it as it was (you can't change it there)"; onClicked: Backend.open(modelData.path) }
+                            Seg { text: "Put Back a Copy"; onClicked: { var why = Backend.restoreVersion(modelData.path, win.sheet.path); if (why !== "") win.say(why, true); else { win.say("Put back beside it.", false); card.close() } } } } } }
                 ListView { id: appList; visible: card.kind === "apps"; x: 16; y: 52; width: parent.width - 32; height: Math.max(34, Math.min(count, 7) * 34); clip: true; interactive: count > 7
                     model: card.kind === "apps" ? win.sheet.apps : []
                     delegate: Pressable { required property var modelData; required property int index; width: appList.width; height: 34; radius: 9
@@ -440,12 +453,12 @@ GlassWindow {
                     Btn { visible: card.kind === "clash"; text: "Replace"; danger: true; onClicked: win.finishClash("replace") }
                     Repeater { model: card.kind === "choice" ? win.sheet.choices : []
                         Btn { required property var modelData; required property int index; text: modelData; primary: index === 0; onClicked: { card.done(); Backend.netAnswer({ choice: index }) } } }
-                    Btn { visible: card.kind !== "details" && card.kind !== "choice"; text: "Cancel"; onClicked: card.close() }
+                    Btn { visible: card.kind !== "details" && card.kind !== "choice" && card.kind !== "versions"; text: "Cancel"; onClicked: card.close() }
                     Btn { visible: card.kind === "clash"; primary: true; text: "Keep Both"; onClicked: win.finishClash("keep") }
                     Btn { visible: card.typing; primary: true; text: card.kind === "rename" || card.kind === "renames" ? "Rename" : card.kind === "goto" ? "Go" : card.kind === "server" ? "Connect" : card.kind === "login" ? "Sign In" : "Unlock"; onClicked: card.accept() }
                     Btn { visible: card.kind === "apps" && appList.count > 0; primary: true; text: "Open"
                         onClicked: { var s = win.sheet, a = s.apps[win.appAt]; card.close(); Backend.openWith(s.path, a.id, win.appAlways) } }
-                    Btn { visible: card.kind === "details"; primary: true; text: "Done"; onClicked: card.close() }
+                    Btn { visible: card.kind === "details" || card.kind === "versions"; primary: true; text: "Done"; onClicked: card.close() }
                     Btn { visible: card.kind === "sure"; danger: true; text: card.kind === "sure" && win.sheet.what === "empty" ? "Empty the Trash" : "Delete for Good"
                         onClicked: { var s = win.sheet; card.close(); s.what === "empty" ? Backend.emptyTrash() : Backend.deleteForever(s.paths) } } }
             }
@@ -481,7 +494,7 @@ GlassWindow {
                     else if (k0 === Qt.Key_Left || k0 === Qt.Key_Up) win.look(Math.max(0, win.cursor - 1))
                     else if (enter) { win.sheet = null; win.openSel() }
                 }
-                else if (k0 === Qt.Key_Escape || (enter && kind === "details")) card.close()
+                else if (k0 === Qt.Key_Escape || (enter && (kind === "details" || kind === "versions"))) card.close()
                 else if (kind === "apps" && k0 === Qt.Key_Down) win.appAt = Math.min(win.sheet.apps.length - 1, win.appAt + 1)
                 else if (kind === "apps" && k0 === Qt.Key_Up) win.appAt = Math.max(0, win.appAt - 1)
                 else if (kind === "apps" && enter && win.sheet.apps.length) { var s = win.sheet; win.sheet = null; Backend.openWith(s.path, s.apps[win.appAt].id, win.appAlways) }

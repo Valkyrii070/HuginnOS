@@ -702,9 +702,9 @@ class Contacts(QObject):
             except OSError:
                 self._cards = []
             self._gone, self._seen = set(), self._stamp()
-            self._watch = QTimer(self)                             # another window (or Mail handing over a card) may add people
+            self._watch = QTimer(self)                             # another window, Mail handing over a card, Huginn sync
             self._watch.setInterval(4000)
-            self._watch.timeout.connect(self._absorb)
+            self._watch.timeout.connect(self._follow)
             self._watch.start()
 
     def _stamp(self):
@@ -713,6 +713,22 @@ class Contacts(QObject):
             return st.st_mtime_ns, st.st_size
         except OSError:
             return None
+
+    def _follow(self) -> None:
+        """Every few seconds: the address book as it is on disk now (another window, Mail, another computer through
+        Huginn sync), people added, changed and removed. Each change made here is saved at once, so it's never behind."""
+        if self._stamp() == self._seen:
+            return
+        self._seen = self._stamp()
+        if not self._file.exists():
+            return
+        try:
+            disk = [c for c in read_vcards(self._file.read_text(encoding="utf-8", errors="replace")) if c["id"] not in self._gone]
+        except OSError:
+            return
+        if disk != self._cards:
+            self._cards = disk
+            self.changed.emit()
 
     def _absorb(self) -> None:
         """Take in people another window added, keeping out the ones this window removed."""
