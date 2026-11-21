@@ -11,7 +11,7 @@ Press Add a Game and pick the game's program (a Windows .exe or a Linux game), o
 Pick a game in the carousel and press Play. Stop ends it.
 
 ## A profile per game
-Choose the compatibility layer, launch arguments, environment variables, the performance overlay, GameMode and which copy of a Windows file wins.
+Choose the compatibility layer, launch arguments, environment variables, the performance overlay, GameMode and which copy of a Windows file wins. Every game, Steam's too, also has a frame-rate cap (keeps the card cooler and quieter), FSR upscaling (draws the game smaller and sharpens it up, for more frames) and GameMode, used every time it starts however you start it. For a Steam game you also pick its Proton version here; Huginn writes it into Steam's settings when Steam is closed, so it takes effect the next time Steam starts.
 
 ## Proton-GE
 Proton-GE is a build of Proton with fixes for games that don't start or play badly with Steam's own. Press Proton-GE at the top, then Install. Restart Steam and choose it for a game in its Properties › Compatibility. Update and Remove are in the same place.

@@ -2337,6 +2337,38 @@ backend in `huginn_app.py` went) and `apps/qml/Monitor.qml`.
 - The shell's design preview opens the app menu with `--menus` again (it had stopped doing anything).
 - Tray icons without a picture show their first letter (the shell's smoke test caught the demo's missing icons).
 
+## Restore points, layouts on every screen, sync, and settings per game (2026-11-21)
+
+- **Undo for updates: restore points.** Huginn OS now installs onto btrfs, in subvolumes: `@` the system, `@home` your
+  files, `@snapshots` and `@swap` (the installer engine; zstd compression; the swap file made by btrfs itself). Before
+  apt or Software Update changes anything, `huginn-snapshot` (`apps/huginn_snapshots.py`, run from an apt hook) takes
+  a read-only snapshot of the system, at most one every ten minutes and never stopping apt; the newest six are kept,
+  with the ones you make yourself and the installer's "Just installed". Settings › Software Update lists them: Go Back
+  to This (through polkit, `org.huginn.snapshot`), then a restart. If the computer won't start, the start-up menu has
+  "Huginn OS restore points": an initramfs script (`huginn.undo=N`) moves the system aside and puts a writable copy of
+  the restore point in its place before anything is mounted. Going back never touches `@home`, and keeps what was there
+  as `@before-undo-<time>` until you remove it. Encrypted installs keep a copy of each restore point's kernel in /boot.
+  Tested on loop disks: the tool's 17 checks, the installer's btrfs steps, and the start-up menu's swap.
+- **Snap layouts on every screen, and window sets (Super+Z).** Layouts opens for the window in front: six templates of
+  parts (halves, thirds, the middle third, two thirds and a third, quarters, top and bottom) on any of your screens,
+  and Fill the screen. Window sets remember where every window is on every screen under a name and put them all back
+  later, starting the apps that aren't open. A part narrower than a window can be drawn is widened to its minimum size
+  instead of cutting the window off (Writer in a third of a small screen). The compositor gained the new parts and
+  `snap:<part>@<screen>` / `place:<screen>:x,y,w,h` on D-Bus; the panel is frosted like the other pop-ups.
+- **Huginn sync (Settings › Sync).** Notes, Reminders and Huginn OS's settings, across your computers, in the same
+  group as the browser's Bifröst sync (Favorites, Reading List, passwords, open tabs): the same key (in the keyring),
+  the same folder you choose (Syncthing, Nextcloud, a network share, a USB stick), each device writing only its own
+  sealed file, so nothing there ever conflicts. `apps/huginn_sync.py` carries the browser's sealing and merging
+  unchanged (ci-smoke checks both read each other's files), runs from the session's helpers when something changes,
+  and keeps both versions of a note changed on two computers at once (by the version each was changed from). A
+  computer that joins takes the group's settings; screens and hardware settings stay with their computer. Pairing keys
+  (HB1-/HB2-) work both ways between Settings and the browser.
+- **Volume per app.** Under the control centre's sound slider, Apps lists everything playing sound with its own slider
+  and mute (PipeWire through pactl).
+- **Settings per game.** Frame-rate cap, FSR upscaling, GameMode and, for Steam games, the Proton version, kept for each
+  game and applied however it's started (a small `huginn-game` wrapper in Steam's launch options, written into Steam's
+  own settings only while Steam is closed).
+
 ## Huginn, the browser
 
 Inside the Huginn repository (this kit is its `os/` folder) the image ships the repository's own browser. A kit used

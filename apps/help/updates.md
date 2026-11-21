@@ -16,5 +16,8 @@ When something needs a restart to start being used (the kernel, firmware), a ban
 ## Going back
 If a newer Huginn gives you trouble, Go Back returns to the version before. The version that came with the system is always kept.
 
+## Restore points
+Before every update, Huginn OS keeps a copy of the system as it was (the apps, drivers and settings, not your files), at most one every ten minutes. The newest six are kept, and the ones you make yourself (Make One) stay until you remove them. If an update gives you trouble, press Go Back to This beside one and restart: the system is as it was then, and your files in your home folder are untouched. If the computer won't start at all, pick "Huginn OS restore points" in the start-up menu (hold Shift, or press Escape, as it starts) and choose one. Going back keeps what you had before, in case you want it back; once everything works, remove it under Restore points to free the space. Restore points need Huginn OS installed by its own installer, which puts the system on btrfs.
+
 ## In the App Store
 The App Store's Updates page lists just your apps, with an Update button for each.

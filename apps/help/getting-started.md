@@ -28,7 +28,7 @@ Huginn windows have no title bar. Drag a window by its top strip or by its name 
 Super+Ctrl+T (or the app's menu › Window › Keep on Top) keeps the window in front over every other window, even when you click another; press it again to stop. A video's picture-in-picture window from the browser stays on top and on every space by itself.
 
 ## Snap windows side by side
-Drag a window to the left or right edge (or press Super+← / Super+→) and it fills that half; keep pressing for a third and two thirds. Drag it to the top, or Super+↑, to fill the screen, and to a corner for a quarter. When one half is taken, the other half offers your other windows: pick one to fill it. Hold the pointer on a window's green dot for all the layouts, halves, thirds and quarters, at once.
+Drag a window to the left or right edge (or press Super+← / Super+→) and it fills that half; keep pressing for a third and two thirds. Drag it to the top, or Super+↑, to fill the screen, and to a corner for a quarter. When one half is taken, the other half offers your other windows: pick one to fill it. Hold the pointer on a window's green dot for all the layouts, halves, thirds and quarters, at once. Super+Z opens Layouts for the window in front: pick a part of any screen for it (halves, thirds, the middle third, two thirds, quarters, top and bottom). Below them are window sets: Keep These Windows remembers where every window is on every screen under a name (Gaming, Writing), and Put Back puts them all there again later, starting the apps that aren't open.
 
 ## The Overview and spaces
 Press Super+Tab (or swipe up with three fingers) and your windows glide apart so you can see them all: click one to go to it. Along the top are your spaces, separate desktops: + adds one, and dragging a window onto a space moves it there. Super+Ctrl+← / → switches space (or three fingers left and right), Super+1 to 9 goes straight to one, and Super+Shift+← / → takes the window in front with you.
@@ -40,7 +40,7 @@ The three dots in the top-left island close the window (red), hide it (yellow) a
 Settings changes between light and dark and picks the realm, the colour the whole desktop leans towards. Every app keeps its own colour on top of that, so you can tell them apart at a glance. Apps that aren't Huginn's follow along too: their colours, dark or light and the font change with yours.
 
 ## Quick settings and notifications
-The control centre slides out from the top bar on the right: Wi‑Fi and Bluetooth (tap the round switch to turn them on or off, the name to open Settings), Do Not Disturb, night light, dark, brightness and sound (tap the speaker to mute), and the notifications that came, with Clear.
+The control centre slides out from the top bar on the right: Wi‑Fi and Bluetooth (tap the round switch to turn them on or off, the name to open Settings), Do Not Disturb, night light, dark, brightness and sound (tap the speaker to mute), and the notifications that came, with Clear. Under the sound slider, Apps shows everything playing sound with its own slider and mute, so a game can be quieter than the call beside it.
 
 A notification blooms out of the top right with its app's colour running round its edge. Several from one app pile up; click the pile to spread it. Messages and mail can be answered right there. While something fills the screen, or you're sharing it, they wait quietly (calls and alarms still come through).
 
