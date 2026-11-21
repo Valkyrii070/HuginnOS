@@ -1,0 +1,57 @@
+#!/bin/sh
+# Huginn OS: the few system-wide changes Settings makes that the system has no service for. Runs as root through
+# pkexec (org.huginn.system-settings), which asks for the administrator password; each takes one checked value.
+#   autologin USER | off     Users › Sign in by itself (SDDM's [Autologin], the same file the installer writes)
+#   locale ll_CC             Language & Region: make a language's UTF-8 locale, so the session can use it
+#   gpu-level auto|high|low  Graphics › Performance: AMD cards' power_dpm_force_performance_level, kept in
+#                            /etc/huginn/gpu-level and set again at each start (gpu-apply, from a udev rule)
+#   gpu-apply                (udev) the kept level, onto every AMD card
+set -eu
+conf=/etc/sddm.conf.d/20-autologin.conf
+case "${1:-}" in
+    autologin)
+        who="${2:-}"
+        if [ "$who" = off ]; then
+            rm -f "$conf"
+            exit 0
+        fi
+        printf %s "$who" | grep -Eq '^[a-z_][a-z0-9_-]{0,31}$' || { echo "huginn-system-settings: not a user name: $who" >&2; exit 2; }
+        uid=$(getent passwd "$who" | cut -d: -f3)
+        [ -n "$uid" ] && [ "$uid" -ge 1000 ] && [ "$uid" -lt 60000 ] || { echo "huginn-system-settings: no such person: $who" >&2; exit 2; }
+        mkdir -p /etc/sddm.conf.d
+        tmp=$(mktemp /etc/sddm.conf.d/.autologin.XXXXXX)
+        printf '[Autologin]\n# Set by Settings › Users.\nUser=%s\nSession=huginn\nRelogin=false\n' "$who" > "$tmp"
+        chmod 644 "$tmp"
+        mv -f "$tmp" "$conf"
+        ;;
+    locale)
+        code="${2:-}"
+        printf %s "$code" | grep -Eq '^[a-z]{2,3}_[A-Z]{2}$' || { echo "huginn-system-settings: not a locale: $code" >&2; exit 2; }
+        grep -q "^$code.UTF-8 UTF-8\$" /usr/share/i18n/SUPPORTED || { echo "huginn-system-settings: $code isn't a language this system knows" >&2; exit 2; }
+        if locale -a | grep -qix "$code.utf8"; then
+            exit 0
+        fi
+        locale-gen "$code.UTF-8" >/dev/null
+        ;;
+    gpu-level)
+        level="${2:-}"
+        case "$level" in auto|high|low) ;; *) echo "huginn-system-settings: not a level: $level" >&2; exit 2 ;; esac
+        mkdir -p /etc/huginn
+        if [ "$level" = auto ]; then rm -f /etc/huginn/gpu-level; else printf '%s\n' "$level" > /etc/huginn/gpu-level; fi
+        "$0" gpu-apply "$level"
+        ;;
+    gpu-apply)
+        level="${2:-}"
+        [ -n "$level" ] || level=$(cat /etc/huginn/gpu-level 2>/dev/null || echo auto)
+        case "$level" in auto|high|low) ;; *) level=auto ;; esac
+        for f in /sys/class/drm/card[0-9]*/device/power_dpm_force_performance_level; do
+            [ -w "$f" ] || continue
+            [ "$(basename "$(readlink -f "$(dirname "$f")/driver")")" = amdgpu ] || continue
+            printf '%s' "$level" > "$f" 2>/dev/null || true
+        done
+        ;;
+    *)
+        echo "huginn-system-settings: autologin USER|off, locale ll_CC, gpu-level auto|high|low, or gpu-apply" >&2
+        exit 2
+        ;;
+esac

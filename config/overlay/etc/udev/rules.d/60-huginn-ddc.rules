@@ -1,0 +1,4 @@
+# Settings › Displays › Brightness for monitors: the person at the computer may talk to its monitors over the
+# graphics card's i2c buses (ddcutil), as ddcutil's own rule allows.
+SUBSYSTEM=="i2c-dev", KERNEL=="i2c-[0-9]*", ATTRS{class}=="0x030000", TAG+="uaccess"
+SUBSYSTEM=="i2c-dev", KERNEL=="i2c-[0-9]*", ATTRS{class}=="0x038000", TAG+="uaccess"

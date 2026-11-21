@@ -1,0 +1,10 @@
+[Unit]
+Description=Huginn OS: earlier versions of your files, every hour
+
+[Timer]
+OnCalendar=hourly
+RandomizedDelaySec=4min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,6 @@
+# Settings › About › Make a Problem Report (huginn_report.py): what it asks the hardware.
+usbutils        # lsusb
+mesa-utils      # glxinfo / eglinfo: the graphics driver in use
+vulkan-tools    # vulkaninfo: the Vulkan driver (RADV on AMD)
+rfkill          # whether Wi-Fi or Bluetooth is switched off
+lm-sensors      # temperatures

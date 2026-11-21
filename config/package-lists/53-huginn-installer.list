@@ -1,0 +1,21 @@
+# Huginn OS's own installer (apps/huginn_installer.py and its engine): everything it runs, on the live system, which
+# is also what gets installed. GRUB's two packages for UEFI and BIOS travel on the ISO in pool/ (see build.sh).
+squashfs-tools
+dosfstools
+# Install beside Windows: ntfsresize shrinks Windows' partition to make room
+ntfs-3g
+fdisk
+e2fsprogs
+# btrfs: Huginn OS installs on it, in subvolumes, for restore points (huginn-snapshot); its tool goes in the initramfs
+btrfs-progs
+util-linux
+cryptsetup
+cryptsetup-initramfs
+efibootmgr
+os-prober
+grub-efi-amd64-bin
+grub-efi-amd64-signed
+grub-pc-bin
+grub2-common
+shim-signed
+network-manager

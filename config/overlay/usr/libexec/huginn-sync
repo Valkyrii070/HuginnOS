@@ -1,0 +1,4 @@
+#!/bin/sh
+# Huginn sync (apps/huginn_sync.py): Notes, Reminders and Huginn OS's settings across your computers, in the same
+# group as Huginn's (the browser's) Bifröst sync. Run every few minutes by huginn-sync.timer; set up in Settings › Sync.
+exec /usr/bin/python3 /usr/share/huginn-apps/huginn_sync.py "$@"

@@ -1,0 +1,32 @@
+#!/bin/sh
+# Huginn OS's session, as the sign-in screen starts it: the desktop (huginn-desktop-session), or Game Mode
+# (huginn-game-session: Steam's big-screen interface in gamescope, as on SteamOS) with --game.
+#
+# One can hand over to the other without signing out: Game Mode in the start menu or Games writes "game" to
+# ~/.local/state/huginn/next-session and ends the desktop; Steam's Power › Switch to Desktop writes "desktop"
+# (steamos-session-select, in /usr/libexec/huginn-steamos) and closes Steam. Each takes the screens over from the
+# other through logind, as the same signed-in session.
+#
+# The desktop ending any other way (Sign Out) ends the session. Game Mode ending any other way (Steam closed or
+# failed, gamescope failed, no Steam) comes back to the desktop, so it never leaves a black screen.
+state="${XDG_STATE_HOME:-$HOME/.local/state}/huginn"
+# Steam from Flathub keeps its own ~/.local/state (its steamos-session-select writes there)
+flat_state="$HOME/.var/app/com.valvesoftware.Steam/.local/state/huginn"
+mkdir -p "$state"
+mode=desktop
+[ "$1" = "--game" ] && mode=game
+
+while :; do
+    rm -f "$state/next-session" "$flat_state/next-session"
+    case "$mode" in
+        game) /usr/libexec/huginn-game-session ;;
+        *)    /usr/libexec/huginn-desktop-session ;;
+    esac
+    next=$(cat "$state/next-session" "$flat_state/next-session" 2>/dev/null | head -n 1)
+    case "$mode:$next" in
+        desktop:game)  mode=game ;;
+        desktop:*)     break ;;
+        game:*)        mode=desktop ;;
+    esac
+done
+rm -f "$state/next-session" "$flat_state/next-session"

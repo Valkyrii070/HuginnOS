@@ -1,0 +1,6 @@
+# earlyoom: when the computer is nearly out of memory (under 10% available, and under 10% of the compressed swap
+# free), close the program using the most, before the kernel's last resort (or a frozen screen) does worse.
+# Left alone: Huginn's compositor, shell, session daemon, portal and password prompt (they name themselves so),
+# Xwayland, gamescope, the sign-in screen and sound. Taken first: a browser's page processes.
+# (systemd splits this at spaces and keeps quotes as they are, so the patterns have neither.)
+EARLYOOM_ARGS="-r 3600 --avoid ^(huginn-composit|huginn-shell|huginn-sessiond|huginn-portal|huginn-polkit|Xwayland|gamescope.*|sddm.*|pipewire.*|wireplumber)$ --prefer ^(QtWebEngineProc|Web.Content|Isolated.Web.Co|chrome|electron)$"

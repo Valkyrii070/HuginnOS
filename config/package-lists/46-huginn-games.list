@@ -1,0 +1,8 @@
+# Games: the performance overlay and GameMode switches in a game's profile.
+# Steam and Wine are not in the image (Steam needs Ubuntu's multiverse and 32-bit packages); see "Games" in the README.
+mangohud
+gamemode
+# Game Mode at sign-in: Steam's big-screen interface in Valve's gamescope (multiverse), as on SteamOS
+gamescope
+# Steam's performance overlay levels in Game Mode (its quick menu › Performance), drawn by mangoapp
+mangoapp

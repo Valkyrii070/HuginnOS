@@ -1,0 +1,10 @@
+#!/bin/sh
+# Steam's Power › Switch to Desktop, in Huginn OS's Game Mode (huginn-game-session puts this first on Steam's PATH,
+# inside its sandbox when it's Steam from Flathub). Huginn's session (huginn-session) reads the choice once Steam
+# has closed, and starts the desktop in its place. "gamescope" (back to Game Mode) has nothing to do here.
+case "${1:-gamescope}" in
+    gamescope|gamescope-*) exit 0 ;;
+esac
+state="${HUGINN_SESSION_STATE:-${XDG_STATE_HOME:-$HOME/.local/state}/huginn}"
+mkdir -p "$state" && echo desktop > "$state/next-session"
+exec steam -shutdown

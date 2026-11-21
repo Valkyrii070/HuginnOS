@@ -1,0 +1,34 @@
+#!/bin/sh
+# Huginn OS: going back to a restore point from the start-up menu (huginn.undo=N). Before the system is mounted, the
+# system subvolume @ is moved aside (kept as @before-undo-<when>) and a writable copy of restore point N becomes @.
+# Your files (@home) aren't touched. huginn-undo-finish.service tidies /boot afterwards (huginn-snapshot finish).
+PREREQ=""
+prereqs() { echo "$PREREQ"; }
+case "$1" in prereqs) prereqs; exit 0 ;; esac
+
+N=""
+for arg in $(cat /proc/cmdline); do
+    case "$arg" in huginn.undo=*) N="${arg#huginn.undo=}" ;; esac
+done
+[ -n "$N" ] || exit 0
+case "$N" in *[!0-9]*) exit 0 ;; esac
+
+. /scripts/functions
+DEV=$(resolve_device "$ROOT")
+[ -n "$DEV" ] || exit 0
+TOP=/run/huginn-top
+mkdir -p "$TOP"
+command -v btrfs >/dev/null 2>&1 || { log_warning_msg "huginn-undo: no btrfs tool in the initramfs"; exit 0; }
+btrfs device scan >/dev/null 2>&1 || true
+mount -t btrfs -o subvolid=5 "$DEV" "$TOP" || exit 0
+if [ -d "$TOP/@snapshots/$N/snapshot" ]; then
+    STAMP=$(date +%Y%m%d-%H%M%S)
+    if mv "$TOP/@" "$TOP/@before-undo-$STAMP" && btrfs subvolume snapshot "$TOP/@snapshots/$N/snapshot" "$TOP/@" >/dev/null; then
+        echo "$N" > /run/huginn-undone
+        log_success_msg "Went back to restore point $N"
+    elif [ -d "$TOP/@before-undo-$STAMP" ] && [ ! -d "$TOP/@" ]; then
+        mv "$TOP/@before-undo-$STAMP" "$TOP/@"
+    fi
+fi
+umount "$TOP"
+exit 0

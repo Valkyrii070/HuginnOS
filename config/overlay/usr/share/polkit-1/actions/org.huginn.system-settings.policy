@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE policyconfig PUBLIC "-//freedesktop//DTD PolicyKit Policy Configuration 1.0//EN" "http://www.freedesktop.org/standards/PolicyKit/1/policyconfig.dtd">
+<policyconfig>
+  <vendor>Huginn OS</vendor>
+  <vendor_url>https://github.com/Valkyrii070/Huginn</vendor_url>
+  <action id="org.huginn.system-settings">
+    <description>Change how this computer signs in, or add a language</description>
+    <message>Settings wants to change something for everyone on this computer: signing in by itself, or a language.</message>
+    <icon_name>preferences-system</icon_name>
+    <defaults>
+      <allow_any>auth_admin</allow_any>
+      <allow_inactive>auth_admin</allow_inactive>
+      <allow_active>auth_admin_keep</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/libexec/huginn-system-settings</annotate>
+  </action>
+</policyconfig>

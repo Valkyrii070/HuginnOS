@@ -1,0 +1,9 @@
+#!/bin/sh
+# Huginn OS: the btrfs tool in the initramfs, for going back to a restore point from the start-up menu.
+PREREQ=""
+prereqs() { echo "$PREREQ"; }
+case "$1" in prereqs) prereqs; exit 0 ;; esac
+. /usr/share/initramfs-tools/hook-functions
+for b in /usr/bin/btrfs /bin/btrfs /sbin/btrfs; do
+    if [ -x "$b" ]; then copy_exec "$b" /usr/bin; break; fi
+done
