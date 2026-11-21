@@ -11,6 +11,7 @@ Column {
     readonly property int security: items.filter(function (i) { return i.security }).length
     readonly property bool working: have && Updates.phase === "installing"
     readonly property bool checking: have && Updates.phase === "checking"
+    readonly property bool problem: have && !checking && !working && (Updates.problem || "") !== ""
     property bool allSystem: false
     readonly property var groups: [
         { kind: "system", title: "System", sub: "Ubuntu's packages: the kernel, drivers, the browser engine and every library", glyph: "cpu", tile: "#1E40AF" },
@@ -21,16 +22,16 @@ Column {
         Rectangle { x: parent.width - 220; y: -60; width: 300; height: 300; radius: 150; opacity: 0.22
             gradient: Gradient { GradientStop { position: 0; color: pg.visibleItems.length ? "#4C8DFF" : "#27C281" } GradientStop { position: 1; color: "transparent" } } }
         Rectangle { x: 24; width: 72; height: 72; radius: 36; anchors.verticalCenter: parent.verticalCenter
-            color: pg.visibleItems.length || pg.working || pg.checking ? Qt.rgba(0.3, 0.55, 1, 0.18) : Qt.rgba(0.15, 0.76, 0.5, 0.18)
-            Glyph { anchors.centerIn: parent; name: pg.visibleItems.length || pg.working || pg.checking ? "refresh" : "check"; size: 38; ink: pg.visibleItems.length || pg.working || pg.checking ? "#4C8DFF" : "#27C281"
+            color: pg.visibleItems.length || pg.working || pg.checking ? Qt.rgba(0.3, 0.55, 1, 0.18) : pg.problem ? Qt.rgba(0.96, 0.62, 0.04, 0.18) : Qt.rgba(0.15, 0.76, 0.5, 0.18)
+            Glyph { id: bigMark; anchors.centerIn: parent; name: pg.visibleItems.length || pg.working || pg.checking ? "refresh" : pg.problem ? "warning" : "check"; size: 38; ink: pg.visibleItems.length || pg.working || pg.checking ? "#4C8DFF" : pg.problem ? "#E8A10C" : "#27C281"
                 // turns the way its arrow points (anticlockwise), and comes to rest upright when the work is done
                 RotationAnimation on rotation { id: turning; running: pg.working || pg.checking; loops: Animation.Infinite; from: 360; to: 0; duration: 1400
-                    onRunningChanged: if (!running) parent.rotation = 0 } } }
+                    onRunningChanged: if (!running) bigMark.rotation = 0 } } }      // (an animation has no parent: by its id)
         Column { x: 116; anchors.verticalCenter: parent.verticalCenter; width: parent.width - 116 - 200; spacing: 4
             Label { font.pixelSize: 21; font.weight: Font.Light
-                text: !pg.have ? "Software Update isn't available" : pg.checking ? "Looking for updates…" : pg.working ? "Updating…" : pg.visibleItems.length ? pg.visibleItems.length + (pg.visibleItems.length === 1 ? " update is ready" : " updates are ready") : "Everything is up to date" }
+                text: !pg.have ? "Software Update isn't available" : pg.checking ? "Looking for updates…" : pg.working ? "Updating…" : pg.visibleItems.length ? pg.visibleItems.length + (pg.visibleItems.length === 1 ? " update is ready" : " updates are ready") : pg.problem ? "Couldn't look for every update" : "Everything is up to date" }
             Label { width: parent.width; wrapMode: Text.WordWrap; secondary: true
-                text: !pg.have ? "" : pg.working ? Updates.line : pg.visibleItems.length ? (pg.security ? pg.security + " fix" + (pg.security === 1 ? "es a" : "") + " security problem" + (pg.security === 1 ? "" : "s") + ". " : "") + "Last looked " + Updates.checked.toLowerCase() + "." : "Last looked " + Updates.checked.toLowerCase() + "." }
+                text: !pg.have ? "" : pg.working ? Updates.line : pg.visibleItems.length ? (pg.security ? pg.security + " fix" + (pg.security === 1 ? "es a" : "") + " security problem" + (pg.security === 1 ? "" : "s") + ". " : "") + "Last looked " + Updates.checked.toLowerCase() + "." : pg.problem ? Updates.problem + " Try Check Now again." : "Last looked " + Updates.checked.toLowerCase() + "." }
             Meter { visible: pg.working; width: parent.width; value: pg.have ? Updates.progress : 0; fill: "#4C8DFF" } }
         Column { anchors { right: parent.right; rightMargin: 22; verticalCenter: parent.verticalCenter } spacing: 8
             Btn { visible: pg.have && pg.visibleItems.length > 0 && !pg.working; primary: true; text: "Update All"; onClicked: Updates.install("all") }

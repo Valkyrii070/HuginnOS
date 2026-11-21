@@ -4833,6 +4833,7 @@ class Store(QObject):
                 self._apps[app_id]["installed"] = verb == "install"
                 if verb == "install":
                     self._dress(app_id)
+                    self._warm(app_id)
             else:
                 self.failed.emit(f"Couldn't {'install' if verb == 'install' else 'remove'} {self._apps[app_id]['name']}. {self._progress}")
             self._busy, self._progress, self._process = "", "", None
@@ -4846,6 +4847,14 @@ class Store(QObject):
         proc.finished.connect(done)
         self._process = proc
         proc.start(self._flatpak, args)
+
+    def _warm(self, app_id: str) -> None:
+        """An app's first start does work once: Flatpak sets up its sandbox's library list, and fontconfig reads every
+        font to make its cache in the app's folder (seconds with many fonts). Done now, quietly at low priority, so
+        opening it from the start menu right after is as quick as any other time."""
+        from PySide6.QtCore import QProcess
+        QProcess.startDetached("nice", ["-n", "15", self._flatpak, "run", "--command=sh", app_id, "-c",
+                                        "fc-cache >/dev/null 2>&1; exit 0"])
 
     def _dress(self, app_id: str) -> None:
         """So an app from the App Store wears Huginn's look too: the style its toolkit needs, from Flathub, quietly

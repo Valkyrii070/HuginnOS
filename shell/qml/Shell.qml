@@ -7,6 +7,8 @@ import org.kde.layershell 1.0 as LayerShell
 QtObject {
     id: shell
     property string open: ""
+    property bool editWidgets: false       // the desktop's widgets being added, taken off and moved (Widgets.qml)
+    property var deskMenuAt: null          // the desktop's menu, open: {x, y, screen} where it was right-clicked
     property bool settled: !arriving       // after the arrival from the sign-in screen, the desktop's pieces come in
     property bool tabsOpen: false
     property string searchText: ""
@@ -301,7 +303,11 @@ QtObject {
             LayerShell.Window.anchors: LayerShell.Window.AnchorTop | LayerShell.Window.AnchorBottom | LayerShell.Window.AnchorLeft | LayerShell.Window.AnchorRight
             LayerShell.Window.exclusionZone: -1
             Wallpaper { anchors.fill: parent; covered: shell.filled(wall.modelData) }
-            Widgets { visible: wall.main; x: 22; y: 52; opacity: shell.settled ? 1 : 0; Behavior on opacity { NumberAnimation { duration: 600; easing.type: Easing.OutCubic } } }
+            // right-click the desktop: a small menu (Edit Widgets, the wallpaper, the desktop's settings), over everything
+            MouseArea { anchors.fill: parent; acceptedButtons: Qt.RightButton
+                onClicked: function (m) { shell.deskMenuAt = { x: m.x, y: m.y, screen: wall.modelData } } }
+            Widgets { visible: wall.main; x: 22; y: 52; opacity: shell.settled ? 1 : 0; Behavior on opacity { NumberAnimation { duration: 600; easing.type: Easing.OutCubic } }
+                editing: shell.editWidgets; onDoneEditing: shell.editWidgets = false }
         }
     }
     // Settings › Desktop & Dock › Top bar › "On every screen": the others get a bar of their own. Its buttons open the
@@ -430,8 +436,13 @@ QtObject {
     },
     Window {   // the live island, opened: just above the dock, lined up with the island's right edge
         id: liveWin
-        visible: shell.liveShown || livePanel.visible; width: dockWin.width; height: livePanel.height + 60; color: "transparent"
+        visible: shell.liveShown || livePanel.visible; width: dockWin.width; height: livePanel.height + 60 + shell.dockRoom; color: "transparent"
         LayerShell.Window.scope: "huginn-live"
+        LayerShell.Window.screen: shell.dockScreen
+        // When the dock makes room it keeps no strip of its own, so this reaches down over it: the panel sits above
+        // the dock as it always did, and the strip over the dock leaves the pointer to the dock
+        function fitInput() { Status.setInputRegion(liveWin, 0, 0, width, height - shell.dockRoom) }
+        onHeightChanged: fitInput(); onWidthChanged: fitInput(); onVisibleChanged: if (visible) fitInput()
         LayerShell.Window.keyboardInteractivity: LayerShell.Window.KeyboardInteractivityNone
         LayerShell.Window.layer: LayerShell.Window.LayerTop
         LayerShell.Window.anchors: LayerShell.Window.AnchorBottom
@@ -440,7 +451,7 @@ QtObject {
             shown: shell.liveShown; focusId: shell.liveFocus
             readonly property real dockX: (liveWin.width - dock.width) / 2
             x: Math.max(8, Math.min(liveWin.width - width - 8, dockX + dock.liveRight - width))
-            y: liveWin.height - height - 10
+            y: liveWin.height - shell.dockRoom - height - 10
             originX: dockX + dock.liveCentre - x
             onPointer: function (inside) { shell.livePointer(inside) }
             onOpenWanted: function (app) { dock.openApp(app) }
@@ -448,8 +459,11 @@ QtObject {
     },
     Window {   // an app's windows, above its tile
         id: winsWin
-        visible: shell.winApp !== null; width: dockWin.width; height: appWins.height + 12; color: "transparent"
+        visible: shell.winApp !== null; width: dockWin.width; height: appWins.height + 12 + shell.dockRoom; color: "transparent"
         LayerShell.Window.scope: "huginn-app-windows"
+        LayerShell.Window.screen: shell.dockScreen
+        function fitInput() { Status.setInputRegion(winsWin, 0, 0, width, height - shell.dockRoom) }    // (as the live panel's)
+        onHeightChanged: fitInput(); onWidthChanged: fitInput(); onVisibleChanged: if (visible) fitInput()
         LayerShell.Window.keyboardInteractivity: LayerShell.Window.KeyboardInteractivityNone
         LayerShell.Window.layer: LayerShell.Window.LayerTop
         LayerShell.Window.anchors: LayerShell.Window.AnchorBottom
@@ -523,9 +537,10 @@ QtObject {
         }
     },
     Window {   // the name of the dock item under the pointer; never takes clicks
-        visible: dock.tipText !== "" && shell.winApp === null; width: dock.width; height: 34; color: "transparent"
+        visible: dock.tipText !== "" && shell.winApp === null; width: dock.width; height: 34 + shell.dockRoom; color: "transparent"
         flags: Qt.WindowTransparentForInput
         LayerShell.Window.scope: "huginn-dock-tip"
+        LayerShell.Window.screen: shell.dockScreen
         LayerShell.Window.keyboardInteractivity: LayerShell.Window.KeyboardInteractivityNone
         LayerShell.Window.layer: LayerShell.Window.LayerTop
         LayerShell.Window.anchors: LayerShell.Window.AnchorBottom
@@ -536,15 +551,19 @@ QtObject {
         }
     },
     Window {   // Huginn's tab stack. As wide as the dock and centred like it, so dock x positions line up.
-        visible: shell.tabsOpen; width: dock.width; height: 620; color: "transparent"
+        id: tabsWin
+        visible: shell.tabsOpen; width: dock.width; height: 620 + shell.dockRoom; color: "transparent"
         LayerShell.Window.scope: "huginn-tabs"
+        LayerShell.Window.screen: shell.dockScreen
+        function fitInput() { Status.setInputRegion(tabsWin, 0, 0, width, height - shell.dockRoom) }    // (as the live panel's)
+        onHeightChanged: fitInput(); onWidthChanged: fitInput(); onVisibleChanged: if (visible) fitInput()
         LayerShell.Window.keyboardInteractivity: LayerShell.Window.KeyboardInteractivityNone
         LayerShell.Window.layer: LayerShell.Window.LayerTop
         LayerShell.Window.anchors: LayerShell.Window.AnchorBottom
         MouseArea { anchors.fill: parent; onClicked: shell.tabsOpen = false }
         TabStack {
             x: Math.max(0, Math.min(parent.width - width, dock.tabsX - width / 2))
-            anchors { bottom: parent.bottom; bottomMargin: 6 }
+            anchors { bottom: parent.bottom; bottomMargin: 6 + shell.dockRoom }
             onHoverChanged: function (inside) { if (inside) shell.tabsHide.stop(); else shell.tabsHide.restart() }
             onPicked: shell.tabsOpen = false
         }
@@ -598,11 +617,45 @@ QtObject {
         Item { focus: shell.open === "cc"; Keys.onEscapePressed: shell.open = "" }
         ControlCentre {
             id: ccPanel
-            y: 10; width: 344; height: parent.height - 20
+            onDone: shell.open = ""
+            y: 10; width: 344; height: Math.min(parent.height - 20, implicitHeight)
             x: shell.open === "cc" ? parent.width - width - 10 : parent.width
             opacity: shell.open === "cc" ? 1 : 0
             Behavior on x { NumberAnimation { duration: Theme.t.openMs ? 260 : 0; easing.type: Easing.OutCubic } }
             Behavior on opacity { NumberAnimation { duration: Theme.t.openMs ? 200 : 0 } }
+        }
+    },
+    Window {   // the desktop's menu (right-click the desktop): over everything, so windows don't hide it; a click
+               // anywhere beside it closes it
+        id: deskMenuWin
+        visible: shell.deskMenuAt !== null; color: "transparent"
+        LayerShell.Window.scope: "huginn-desktop-menu"
+        LayerShell.Window.wantsToBeOnActiveScreen: true          // the screen the pointer is on: the one right-clicked
+        LayerShell.Window.layer: LayerShell.Window.LayerOverlay
+        LayerShell.Window.anchors: LayerShell.Window.AnchorTop | LayerShell.Window.AnchorBottom | LayerShell.Window.AnchorLeft | LayerShell.Window.AnchorRight
+        LayerShell.Window.exclusionZone: -1                      // the whole screen, as the wallpaper: the click's place is the same
+        LayerShell.Window.keyboardInteractivity: LayerShell.Window.KeyboardInteractivityOnDemand
+        MouseArea { anchors.fill: parent; acceptedButtons: Qt.AllButtons; onClicked: shell.deskMenuAt = null }
+        Item { focus: shell.deskMenuAt !== null; Keys.onEscapePressed: shell.deskMenuAt = null }
+        Glass {
+            id: deskMenu
+            objectName: "desktopMenu"
+            popup: true; dense: true; radius: 12; width: 230; height: deskCol.height + 12
+            x: shell.deskMenuAt ? Math.max(8, Math.min(shell.deskMenuAt.x, deskMenuWin.width - width - 8)) : 0
+            y: shell.deskMenuAt ? Math.max(8, Math.min(shell.deskMenuAt.y, deskMenuWin.height - height - 8)) : 0
+            MouseArea { anchors.fill: parent; acceptedButtons: Qt.AllButtons }
+            Column { id: deskCol; x: 6; y: 6; width: parent.width - 12
+                Repeater { model: [[shell.editWidgets ? "Done Editing Widgets" : "Edit Widgets…", "widgets", "grid"], ["Change Wallpaper…", "wallpaper", "image"],
+                                   ["Desktop & Dock Settings…", "desktop", "desktop"]]
+                    Rectangle { required property var modelData; width: deskCol.width; height: 32; radius: 8; color: dh.containsMouse ? Theme.t.hover : "transparent"
+                        Glyph { x: 10; anchors.verticalCenter: parent.verticalCenter; name: modelData[2]; size: 14 }
+                        Label { x: 34; anchors.verticalCenter: parent.verticalCenter; text: modelData[0]; font.pixelSize: 13 }
+                        MouseArea { id: dh; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
+                            onClicked: {
+                                shell.deskMenuAt = null
+                                if (modelData[1] === "widgets") shell.editWidgets = !shell.editWidgets
+                                else Status.openSettings(modelData[1] === "wallpaper" ? "appearance" : "desktop")
+                            } } } } }
         }
     },
     Window {   // launcher: the whole work area (between the bar and the dock), so a click beside it closes it

@@ -1342,6 +1342,12 @@ def card_name() -> str:
     return ""
 
 
+def load_storage() -> dict:
+    """Settings › Storage: the drive, and the apps and games on it with what each takes (huginn_storage.py)."""
+    import huginn_storage
+    return huginn_storage.load()
+
+
 def load_controllers() -> dict:
     """Settings › Controllers: the game controllers connected now (huginn_pads.py)."""
     import huginn_pads
@@ -1490,6 +1496,13 @@ def demo_state() -> dict:
                      "scanners": [{"id": "airscan:e0:Canon TS3300", "name": "Canon TS3300 flatbed"}]},
         "graphics": {"available": True, "name": "AMD Radeon RX 9070 XT", "driver": "amdgpu", "amd": True, "memTotal": 15.9, "level": "auto", "mesa": "26.0.8",
                      "capWatts": 304, "capMaxWatts": 334},
+        "storage": {"disk": {"total": 1000204886016, "used": 412316860416, "free": 587888025600}, "flatpak": True, "shared": 3221225472,
+                    "apps": [{"id": "com.valvesoftware.Steam", "name": "Steam", "size": 1288490188, "data": 2147483648, "where": "system", "icon": "image://sysicon/com.valvesoftware.Steam"},
+                             {"id": "org.kde.krita", "name": "Krita", "size": 943718400, "data": 52428800, "where": "system", "icon": "image://sysicon/org.kde.krita"},
+                             {"id": "com.discordapp.Discord", "name": "Discord", "size": 377487360, "data": 419430400, "where": "user", "icon": "image://sysicon/com.discordapp.Discord"},
+                             {"id": "org.videolan.VLC", "name": "VLC", "size": 104857600, "data": 1048576, "where": "system", "icon": "image://sysicon/org.videolan.VLC"}],
+                    "games": [{"appid": "1091500", "name": "Cyberpunk 2077", "size": 70866960384, "library": ""},
+                              {"appid": "1145360", "name": "Hades", "size": 15569256448, "library": ""}]},
         "controllers": {"pads": [{"id": "event21", "name": "DualSense Wireless Controller", "kind": "sony", "conn": "Bluetooth", "battery": 70,
                                   "charging": False, "path": "/dev/input/event21"},
                                  {"id": "event24", "name": "Xbox Wireless Controller", "kind": "xbox", "conn": "USB", "battery": -1, "charging": False,
@@ -1547,7 +1560,7 @@ def current_icon_theme() -> str:
 
 # ---------------------------------------------------------------------------------------------- the backend Settings talks to
 PAGES = ("network", "bluetooth", "displays", "sound", "notifications", "power", "input", "keys", "time", "language", "users", "defaults", "privacy", "about", "a11y", "look",
-         "printers", "graphics", "controllers")
+         "printers", "graphics", "controllers", "storage")
 
 
 class SystemSettings(QObject):
@@ -1573,7 +1586,7 @@ class SystemSettings(QObject):
     notifications, power, input, time = _page("notifications", changed), _page("power", changed), _page("input", changed), _page("time", changed)
     language, users, defaults, privacy, about = _page("language", changed), _page("users", changed), _page("defaults", changed), _page("privacy", changed), _page("about", changed)
     a11y, look, keys, printers = _page("a11y", changed), _page("look", changed), _page("keys", changed), _page("printers", changed)
-    graphics, controllers = _page("graphics", changed), _page("controllers", changed)
+    graphics, controllers, storage = _page("graphics", changed), _page("controllers", changed), _page("storage", changed)
     del _page
     busy = Property("QVariantList", lambda self: sorted(self._busy), notify=changed)
     reportChanged = Signal()
@@ -1592,7 +1605,7 @@ class SystemSettings(QObject):
                 "input": load_input, "time": load_time, "language": load_language, "users": load_users,
                 "defaults": lambda: load_defaults(self._known_apps()), "privacy": lambda: load_privacy(self._known_apps()), "about": load_about,
                 "a11y": load_a11y, "look": load_look, "keys": lambda: load_keys(self._known_apps()), "printers": load_printers,
-                "graphics": load_graphics, "controllers": load_controllers}[page]
+                "graphics": load_graphics, "controllers": load_controllers, "storage": load_storage}[page]
 
     @Slot(str)
     def load(self, page: str) -> None:
@@ -2435,6 +2448,44 @@ class SystemSettings(QObject):
                   demo_change=lambda s: [o.update(admin=admin) for o in s["others"] if o["uid"] == uid])
 
     # -------------------------------------------------------------- default apps and start-up
+    # -------------------------------------------------------------- storage
+    @Slot(str, bool)
+    def uninstallApp(self, app_id: str, drop_data: bool) -> None:
+        """Settings › Storage › Uninstall: take an app off (and what it keeps in your home, if asked)."""
+        app = next((a for a in self._state.get("storage", {}).get("apps", []) if a["id"] == app_id), None)
+        if app is None:
+            return
+        import huginn_storage
+
+        def do():
+            why = huginn_storage.uninstall(dict(app, dropData=drop_data))
+            if why:
+                raise Failed(why)
+            return f"{app['name']} was uninstalled."
+        self._act("storage", do, demo_change=lambda st: st.update(apps=[a for a in st.get("apps", []) if a["id"] != app_id]))
+
+    @Slot()
+    def removeUnused(self) -> None:
+        """Settings › Storage: the shared parts no app uses any more."""
+        import huginn_storage
+
+        def do():
+            why = huginn_storage.remove_unused()
+            if why:
+                raise Failed(f"Some weren't removed ({why}).")
+            return "What no app used is gone."
+        self._act("storage", do)
+
+    @Slot(str)
+    def uninstallGame(self, appid: str) -> None:
+        """Settings › Storage › a Steam game: Steam asks, then takes it off itself."""
+        if self._demo:
+            self.said.emit("Steam would ask about uninstalling it now.", False)
+            return
+        import huginn_storage
+        why = huginn_storage.steam_uninstall(appid)
+        self.said.emit(why or "Steam is asking about it: answer there, then come back here.", bool(why))
+
     # -------------------------------------------------------------- controllers
     def _tester(self):
         if getattr(self, "_pad", None) is None:

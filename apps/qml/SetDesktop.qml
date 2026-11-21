@@ -161,6 +161,22 @@ Column {
             }
         }
     }
+    SetCard { title: "Widgets"; note: "Right-click the desktop › Edit Widgets to move them, take them off or add more."
+        objectName: "widgetsCard"
+        Repeater {
+            model: [["weather", "Weather", "The forecast for your first place in Weather"], ["privacy", "Privacy Report", "Which apps used the camera, microphone or screen this week"],
+                    ["next", "Up Next", "What's next in Calendar and Reminders"], ["clock", "Clock", "The time and the date, big"],
+                    ["month", "Calendar", "This month, with today marked"], ["system", "System", "Processor, memory and the drive"],
+                    ["music", "Now Playing", "What's playing, with its controls"], ["photo", "Photo", "A picture from your Pictures folder, a new one each hour"]]
+            SetRow { id: wr; required property var modelData; title: modelData[1]; sub: modelData[2]
+                readonly property var shown: Settings.widgets || []
+                Toggle { on: wr.shown.indexOf(wr.modelData[0]) >= 0
+                    onToggled: function (v) {
+                        var l = wr.shown.filter(function (k) { return k !== wr.modelData[0] })
+                        if (v) l.push(wr.modelData[0])
+                        Settings.set("widgets", l.slice(0, 8).join(","))
+                    } } } }
+    }
     // ---------------------------------------------------------------- windows
     SetCard { title: "Windows"
         SetRow { title: "Layouts from the fill button"; sub: "Hold the pointer on a window's fill button for halves, thirds and quarters."; Toggle { on: Settings.fillButtonLayouts; onToggled: function (v) { pg.sw("fillButtonLayouts")(v) } } }

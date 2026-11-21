@@ -44,6 +44,9 @@ class Easel(QObject):
     changed = Signal()                      # layers, tools, settings: what the panels show
     painted = Signal()                      # the canvas needs drawing again
     overlaid = Signal()                     # only what's drawn over the picture moved (the brush's outline): no new picture
+    # the pointer's place in the picture (the status line): its own signal, so moving the pointer doesn't make every
+    # panel read Easel again (the Layers panel rebuilt with its thumbnails on each move was what made painting lag)
+    cursorMoved = Signal()
     said = Signal(str, bool)
     editText = Signal(str, float, float)    # the text shape to edit, and where (document pixels)
     _call = Signal(object)
@@ -132,7 +135,7 @@ class Easel(QObject):
     cropping = Property(bool, lambda self: self._crop is not None, notify=changed)
     penActive = Property(bool, lambda self: self._pen is not None, notify=changed)
     maskEditing = Property(bool, lambda self: bool(self._mask_edit), notify=changed)
-    cursorText = Property(str, lambda self: self._cursor, notify=changed)
+    cursorText = Property(str, lambda self: self._cursor, notify=cursorMoved)
     shapeStyle = Property("QVariantMap", lambda self: dict(self.style), notify=changed)
     transforming = Property(bool, lambda self: self._xform is not None, notify=changed)
     healSpot = Property(bool, lambda self: self.heal_spot, notify=changed)
@@ -1334,7 +1337,7 @@ class Easel(QObject):
         text = f"{int(x)}, {int(y)} px" if inside else ""
         if text != self._cursor:
             self._cursor = text
-            self.changed.emit()
+            self.cursorMoved.emit()
         if self.tool in ("brush", "eraser", "dodge", "smudge", "liquify"):
             self.overlaid.emit()                                     # the outline follows; the picture hasn't changed
 
@@ -3559,7 +3562,7 @@ class EaselView(QQuickPaintedItem):
         self._easel = easel
         if easel is not None:
             easel.painted.connect(self._repaint)
-            easel.overlaid.connect(self.update)
+            easel.overlaid.connect(self._outline_moved)
             easel.changed.connect(self._changed)
             easel.rulersToggled.connect(lambda: self.fit() if not getattr(self, "_user_zoom", False) else self.update())
         self._fitted = False
@@ -3604,7 +3607,38 @@ class EaselView(QQuickPaintedItem):
             self._fresh()
             if not self._fitted and not self._img.isNull():
                 self.fit()
+        # a brush stroke: only the patch its new dabs touched is drawn again (with the brush's outline), not the
+        # whole canvas, so painting on a big picture keeps up with the pointer
+        d = self._easel._drag if self._easel else None
+        if d and d.get("kind") == "brush" and d.get("parts") is not None and d.get("new") is not None and self._fitted:
+            self.update(self._on_canvas(d["new"]).united(self._outline_rect()))
+            return
         self.update()
+
+    def _on_canvas(self, r: QRectF) -> QRect:
+        """A rectangle of the picture (its pixels) where it shows on the canvas, with a pixel's slack."""
+        z = self._zoom
+        return QRectF(self._ox + r.x() * z, self._oy + r.y() * z, r.width() * z, r.height() * z).toAlignedRect().adjusted(-2, -2, 2, 2)
+
+    def _outline_rect(self) -> QRect:
+        """Where the brush's outline is now (empty when it isn't showing)."""
+        e = self._easel
+        if not e or not e.doc or e._hover is None or e.tool not in ("brush", "eraser", "clone", "heal", "dodge", "smudge", "liquify"):
+            return QRect()
+        r = max(1.5, e.brush["size"] * self._zoom / 2) + 3
+        x, y = self._ox + e._hover.x() * self._zoom, self._oy + e._hover.y() * self._zoom
+        return QRectF(x - r, y - r, r * 2, r * 2).toAlignedRect()
+
+    def _outline_moved(self):
+        """Only the brush's outline moved: where it was and where it is are drawn again."""
+        now = self._outline_rect()
+        was = getattr(self, "_outline_was", QRect())
+        self._outline_was = now
+        area = now.united(was) if not was.isEmpty() else now
+        if area.isEmpty():
+            self.update()
+        else:
+            self.update(area)
 
     def _fresh(self):
         self._stale = False

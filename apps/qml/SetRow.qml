@@ -20,10 +20,10 @@ Item {
     Rectangle { anchors.fill: parent; anchors.margins: 1; radius: 10; visible: r.chevron && area.containsMouse; color: Theme.t.hover }
     MouseArea { id: area; anchors.fill: parent; enabled: r.chevron; hoverEnabled: true; cursorShape: Qt.PointingHandCursor; onClicked: r.clicked() }
     readonly property int lead: (glyph !== "" || picture !== "") ? 52 : 16
-    Rectangle { visible: r.glyph !== "" && r.picture === ""; x: 14; width: 28; height: 28; radius: 8; anchors.verticalCenter: parent.verticalCenter
+    Rectangle { visible: r.glyph !== "" && (r.picture === "" || pic.status === Image.Error); x: 14; width: 28; height: 28; radius: 8; anchors.verticalCenter: parent.verticalCenter
         color: r.tile; Glyph { anchors.centerIn: parent; name: r.glyph; size: 16; ink: r.tile.a > 0 ? "#FFFFFF" : (r.danger ? Theme.t.danger : Theme.t.icon) } }
-    Rectangle { visible: r.picture !== ""; x: 14; width: 28; height: 28; radius: r.round ? 14 : 7; anchors.verticalCenter: parent.verticalCenter; clip: true; color: "transparent"
-        Image { anchors.fill: parent; source: r.picture; sourceSize: Qt.size(56, 56); fillMode: Image.PreserveAspectCrop; asynchronous: true } }
+    Rectangle { visible: r.picture !== "" && pic.status !== Image.Error; x: 14; width: 28; height: 28; radius: r.round ? 14 : 7; anchors.verticalCenter: parent.verticalCenter; clip: true; color: "transparent"
+        Image { id: pic; anchors.fill: parent; source: r.picture; sourceSize: Qt.size(56, 56); fillMode: Image.PreserveAspectCrop; asynchronous: true } }
     Column { id: texts; x: r.lead; width: parent.width - r.lead - slot.width - (r.chevron ? 40 : 24); anchors.verticalCenter: parent.verticalCenter; spacing: 2
         Label { width: parent.width; text: r.title; elide: Text.ElideRight; color: r.danger ? Theme.t.danger : Theme.t.text }
         Label { visible: r.sub !== ""; width: parent.width; text: r.sub; secondary: true; font.pixelSize: 11; wrapMode: Text.WordWrap; maximumLineCount: 3; elide: Text.ElideRight } }

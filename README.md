@@ -2213,6 +2213,55 @@ daemon (85), the file chooser portal (82), the password prompt (76) and four sma
   starts 7.0.0-44 and reaches the desktop and installer as before. KDE's portal and secret service (about 50 MB each in the virtual PC) start in the live
   session after the installer opens, not in the desktop session here, so they were left as they are.
 
+## Testing on the PC, round three (2026-11-20)
+
+From the testing on the PC and its problem report:
+
+- **Code's languages and the local AI model wouldn't go in**: the drive and a fresh installation carry no package lists,
+  so every package looked unknown ("Could not find package: golang-go"). `apps/huginn_packages.py` (new) fetches them
+  first whenever they're missing or more than two days old, through PackageKit (`pkgcli refresh`, then `install`), or
+  apt-get under one password prompt without it. Checked against Ubuntu's archive in the build root: from no lists,
+  `pkgcli refresh` then finds golang-go and gopls.
+- **Software Update said "Everything is up to date"** with no lists to look in. It now fetches them whenever they're
+  missing or stale, asked or not, and if it can't it says so ("Couldn't look for every update", with why) in place of
+  up to date. Its mark also comes to rest upright after spinning (it stayed tilted).
+- **Huginn AI's model on this computer**: on the USB drive's live session every file is kept in memory, so a model
+  filled it and the download was stopped to save the system; it now says to install Huginn OS first. After a download
+  the model is started once ("Checking it starts…"): if the graphics card can't run it, it tries the processor and
+  switches to it, and anything else shows the engine's own words.
+- **Code**: right-click the files panel (empty space or the heading) for the project folder's menu: New File Here, New
+  Folder Here, Open Terminal Here, Copy Path, Show in Files; folders and files get theirs (Rename…, Move to Trash). The
+  toolbar is two islands, New File · Search · Terminal · Split, then Debug · Run, so a fast double click on Terminal
+  can't land on Run.
+- **Easel lagged while painting**: every pointer move updated the "x, y px" readout through Easel's one big signal,
+  which made the Layers panel rebuild with its thumbnails each time (182 ms a painting step, measured with the whole
+  window offscreen; 3 ms now). The readout has its own signal, and while a brush stroke goes on only the patch its new
+  dabs touched (and the brush's outline) is drawn again on the canvas.
+- **Settings › Storage** (new): the drive (apps, games, what apps share, everything else, free), every app you
+  installed with the space it takes (the app and what it keeps in your home), biggest first, each with Uninstall
+  (keeping or deleting what it saved), Remove Unused for runtimes left behind, and Steam's games from Steam's own
+  records (Uninstall asks Steam). `apps/huginn_storage.py`; 13 checks.
+- **An app just installed was slow to open the first time**: Flatpak sets up its sandbox and fontconfig reads every font
+  on an app's first start. The App Store now does that quietly at low priority right after an install, the image's
+  font cache is brought up to date last (`config/hooks/44-font-cache.sh`), and an app opened from the start menu or
+  Search gets a tile in the dock with its starting ring at once (up to 25 s), not only once its window shows.
+- **The App Store is in the dock** from the start (before Settings; docks set up before get it once).
+- **Widgets**: right-click the desktop › Edit Widgets: each gets a button to take it off and arrows to move it, and the
+  rest can be added from the list under them; Settings › Desktop & Dock › Widgets turns each on or off. New: Clock,
+  Calendar (this month, today marked), System (processor, memory, drive), Now Playing (with its controls) and Photo (a
+  picture from Pictures, a new one each hour), beside Weather, Privacy Report and Up Next. The desktop's menu also has
+  Change Wallpaper… and Desktop & Dock Settings….
+- **The control centre** is as tall as what's in it (it ran to the bottom of the screen), with you and Screenshot,
+  Lock and Settings at the top, switches that light up when on (Dark wide beside Do Not Disturb when there's no night
+  light), bigger sliders with their level, what's playing, the realm and the app menus in one card, and the
+  notifications under them.
+- **The dock's pop-ups** (an app's windows, the live island, names, the browser's tabs) sit above the dock again, not
+  past the bottom of the screen; the part of their surface over the dock lets clicks through to it.
+- **Japanese, Chinese and Korean text** showed as boxes: Noto CJK is in the image.
+- **Pointers left on the screen** (copies beside the control centre on one screen): not seen here, with the pointer
+  drawn by the compositor in a window (`HUGINN_SOFT_POINTER=1`, for testing) over a moving wallpaper. One fault near it
+  was found and fixed: the HDR pass turned a line beside each damaged part a second time every frame.
+
 ## Huginn, the browser
 
 Inside the Huginn repository (this kit is its `os/` folder) the image ships the repository's own browser. A kit used

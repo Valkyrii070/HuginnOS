@@ -103,9 +103,32 @@ def parse_apt_simulation(text: str) -> list:
     return out
 
 
+class NoLists(Exception):
+    """Ubuntu's package lists couldn't be fetched, so what's waiting for the system can't be known."""
+
+
+def lists_stale() -> bool:
+    try:
+        import huginn_packages
+    except ImportError:
+        return False
+    return huginn_packages.lists_stale()
+
+
+STALE = lists_stale
+
+
 def check_system(refresh: bool = True) -> list:
-    if refresh and pk("refresh"):
-        RUN(pk("refresh"), None, 300)
+    # the drive and a fresh installation carry no package lists: with none (or old ones) apt sees nothing to update,
+    # which would read as "up to date", so they're fetched whenever they're missing or stale, asked or not
+    stale = STALE()
+    if (refresh or stale) and pk("refresh"):
+        code, out, err = RUN(pk("refresh"), None, 600)
+        if code != 0 and stale:
+            tail = [ln.strip() for ln in (err or out or "").splitlines() if ln.strip()]
+            raise NoLists("Couldn't fetch the list of Ubuntu's updates" + (f" ({tail[-1][:140]})" if tail else "") + ". Is the computer online?")
+    elif stale:
+        raise NoLists("Couldn't look for system updates: PackageKit isn't installed.")
     code, out, _ = RUN(["apt-get", "-s", "-o", "Debug::NoLocking=1", "dist-upgrade"], None, 180)
     if code == 0:
         return [i for i in parse_apt_simulation(out) if not i.get("new")]      # new packages come with an update; they aren't one
@@ -325,11 +348,15 @@ def auto_wanted() -> bool:
         return True
 
 
-def look_everywhere(refresh: bool = True) -> list:
+def look_everywhere(refresh: bool = True, problems: list = None) -> list:
+    """Everything waiting; `problems` (if given) gets a sentence for each place that couldn't be looked at."""
     items = []
     for check in (lambda: check_system(refresh), check_flatpak, check_firmware, check_huginn):
         try:
             items += check()
+        except NoLists as why:
+            if problems is not None:
+                problems.append(str(why))
         except Exception:                                            # noqa: BLE001  (one source failing mustn't hide the rest)
             pass
     return items
@@ -361,6 +388,7 @@ class Updates(QObject):
         self._phase, self._progress, self._line = "idle", 0.0, ""
         self._restart = bool(saved.get("restart")) if not demo else False
         self._stop = False
+        self._problem = ""
         self._back.connect(self._take)
 
     def _emit(self, what, data=None):
@@ -370,6 +398,8 @@ class Updates(QObject):
     def _take(self, what: str, data) -> None:
         if what == "said":
             self.said.emit(*data)
+        elif what == "problem":
+            self._problem = data
         elif what == "items":
             self._items, self._checked, self._phase = data, time.time(), "idle"
             save_state({"checked": self._checked, "items": self._items, "restart": self._restart})
@@ -392,6 +422,8 @@ class Updates(QObject):
     line = Property(str, lambda self: self._line, notify=changed)
     restart = Property(bool, lambda self: self._restart, notify=changed)
     demo = Property(bool, lambda self: self._demo, constant=True)
+    # why the last look couldn't see everything ("" when it could): Software Update says so instead of "up to date"
+    problem = Property(str, lambda self: self._problem, notify=changed)
 
     @Property(str, notify=changed)
     def checked(self):
@@ -416,7 +448,13 @@ class Updates(QObject):
             return
         self._phase = "checking"
         self.changed.emit()
-        threading.Thread(target=lambda: self._emit("items", look_everywhere(force)), daemon=True).start()
+
+        def looking():
+            problems = []
+            items = look_everywhere(force, problems)
+            self._emit("problem", " ".join(problems))
+            self._emit("items", items)
+        threading.Thread(target=looking, daemon=True).start()
 
     @Slot(str)
     def install(self, which: str) -> None:

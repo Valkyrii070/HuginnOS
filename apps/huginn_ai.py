@@ -498,12 +498,56 @@ def hf_files(repo: str, quant: str) -> list:
     return sorted(files)
 
 
+def in_memory(path: Path) -> bool:
+    """Is this folder kept in memory (the USB drive's live session, where every file written is in RAM), not on a
+    drive? A model there would fill the memory, and the system would stop the download to save itself."""
+    try:
+        cmdline = Path("/proc/cmdline").read_text()
+    except OSError:
+        cmdline = ""
+    if "boot=casper" in cmdline and "persistent" not in cmdline:
+        return True
+    best, kind = "", ""
+    try:
+        for line in Path("/proc/mounts").read_text().splitlines():
+            f = line.split()
+            if len(f) > 2 and str(path).startswith(f[1].rstrip("/") + "/") and len(f[1]) >= len(best):
+                best, kind = f[1], f[2]
+    except OSError:
+        return False
+    return kind in ("tmpfs", "ramfs")
+
+
+def check_model(ident: str, gpu: bool, wait: float = 240) -> str:
+    """Start the model once, as a question would, and stop it: "" when it answers, else why not (the engine's own
+    last words). So a model that can't run here says so when it's installed, not at the first question."""
+    cfg = {"local": {"model": ident, "gpu": gpu}}
+    try:
+        _start_local(cfg, ident)
+        return ""
+    except Failed as err:
+        why = str(err)
+        try:
+            lines = [ln.strip() for ln in (RUNTIME / "ai-server.log").read_text(encoding="utf-8", errors="replace").splitlines() if ln.strip()]
+            errs = [ln for ln in lines if re.search(r"error|failed|unable|cannot|out of memory", ln, re.I)]
+            if errs and errs[-1][:120] not in why:
+                why += f" ({errs[-1][:160]})"
+        except OSError:
+            pass
+        return why
+    finally:
+        stop_local()
+
+
 def download_local(ident: str, progress, stopped=lambda: False) -> str:
     """Fetch a model (it carries on where it left off if stopped). progress(done_bytes, total_bytes)."""
     m = local_entry(ident)
     if not m:
         raise Failed("Unknown model.")
     folder = MODELS_DIR / ident
+    if in_memory(MODELS_DIR.parent if not MODELS_DIR.exists() else MODELS_DIR):
+        raise Failed("Huginn OS is running from the USB drive, where files are kept in memory, so a model can't be kept here. "
+                     "Install Huginn OS on the computer (the Install Huginn OS app), then add the model.")
     folder.mkdir(parents=True, exist_ok=True)
     files = hf_files(m["repo"], m["quant"])
     total = sum(s for _, s in files) or 1
@@ -681,12 +725,12 @@ def serve(ident: str, gpu: bool) -> int:
 
 def install_engine() -> str:
     """llama.cpp from Ubuntu (it's in the image; this is for a system without it), through the system's password prompt."""
-    pkgs = ["llama.cpp-tools", "libggml0-backend-vulkan"]
-    argv = (["pkgcli", "install", "-y"] if shutil.which("pkgcli") else ["pkexec", "apt-get", "install", "-y"]) + pkgs
-    done = subprocess.run(argv, capture_output=True, text=True, timeout=1800)
-    if done.returncode != 0:
-        tail = (done.stderr or done.stdout).strip().splitlines()
-        raise Failed("llama.cpp wasn't installed" + (f" ({tail[-1][:120]})" if tail else "") + ".")
+    import sys as _sys
+    _sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import huginn_packages
+    why = huginn_packages.install(["llama.cpp-tools", "libggml0-backend-vulkan"], timeout=1800)
+    if why:
+        raise Failed("llama.cpp wasn't installed: " + why[0].lower() + why[1:])
     return have_llama()
 
 
@@ -793,6 +837,11 @@ def _qt():
                 self.changed.emit()
             elif what == "download":
                 self._download = data
+                self.changed.emit()
+            elif what == "cpu":                                     # the graphics card couldn't run it; the processor can
+                self._cfg["local"]["gpu"] = False
+                self._save()
+                self.said.emit("The graphics card couldn't run it, so it runs on the processor (slower). Settings › AI can try the card again.", False)
                 self.changed.emit()
             elif what == "said":
                 self.said.emit(*data)
@@ -982,6 +1031,17 @@ def _qt():
                         install_engine()
                     download_local(ident, lambda d, t: self._back.emit("download", {"id": ident, "done": d, "total": t}),
                                    lambda: "download" in self._stop)
+                    # started once now, so a model that can't run here says why while you're looking
+                    self._back.emit("download", {"id": ident, "done": 1, "total": 1, "step": "Checking it starts…"})
+                    gpu = bool((self._cfg.get("local") or {}).get("gpu", True))
+                    why = check_model(ident, gpu)
+                    if why and gpu:                                  # the graphics card couldn't: the processor, then
+                        self._back.emit("download", {"id": ident, "done": 1, "total": 1, "step": "Trying it on the processor…"})
+                        if not check_model(ident, False):
+                            self._back.emit("cpu", ident)
+                            why = ""
+                    if why:
+                        raise Failed(f"It downloaded, but it doesn't start here: {why}")
                     self._back.emit("download", {"id": ident, "done": 1, "total": 1, "finished": True})
                     self._back.emit("said", (f"{local_entry(ident)['name']} is ready. It runs here: nothing you ask leaves the computer.", False))
                 except Failed as err:

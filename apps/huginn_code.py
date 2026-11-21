@@ -1411,14 +1411,11 @@ def advice(sky: Sky) -> str:
             why = ""
             missing = [p for p in pack.get("apt", []) if not self._installed(p)]
             if missing:
-                argv = (["pkgcli", "install", "-y"] if shutil.which("pkgcli") else ["pkexec", "apt-get", "install", "-y"]) + missing
-                try:
-                    done = subprocess.run(argv, capture_output=True, text=True, timeout=3600, env={**os.environ, "LC_ALL": "C.UTF-8"})
-                    if done.returncode != 0:
-                        tail = (done.stderr or done.stdout).strip().splitlines()
-                        why = "The packages weren't put in" + (f" ({tail[-1][:120]})" if tail else "") + "."
-                except (OSError, subprocess.TimeoutExpired) as e:
-                    why = f"The packages weren't put in ({e})."
+                # fetches Ubuntu's package lists first if the computer has none yet (a fresh installation doesn't)
+                import sys as _sys
+                _sys.path.insert(0, str(Path(__file__).resolve().parent))
+                import huginn_packages
+                why = huginn_packages.install(missing)
             if not why and pack.get("npm"):
                 npm = shutil.which("npm")
                 if not npm:
@@ -1925,6 +1922,24 @@ def advice(sky: Sky) -> str:
         if self._root:
             term._send(f"cd {json.dumps(str(self._root))}\r".encode())
         term._send((command + "\r").encode("utf-8"))
+
+    @Slot(str)
+    def terminalAt(self, path: str) -> None:
+        """The files list's "Open Terminal Here": the terminal below goes to that folder (a file's own folder)."""
+        where = Path(path)
+        if where.is_file():
+            where = where.parent
+        term = self._get_term()
+        if term is None:
+            self.said.emit(f"Would open a terminal in {where}", False)
+            return
+        term._send(f"cd {json.dumps(str(where))}\r".encode())
+
+    @Slot(str)
+    def copyPath(self, path: str) -> None:
+        from PySide6.QtGui import QGuiApplication
+        QGuiApplication.clipboard().setText(path)
+        self.said.emit("Path copied.", False)
 
     @Slot(str)
     def setRun(self, command: str) -> None:

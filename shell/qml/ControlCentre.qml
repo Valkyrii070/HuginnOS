@@ -1,142 +1,225 @@
 import QtQuick
 
-// The control centre: slides out on the right. Everything in it is the computer's real state (Status, from
-// huginn_system.py): Wi‑Fi and Bluetooth with their switches, Do Not Disturb, night light, dark, the screen's
-// brightness and the sound, the realm, how the app menus open, and the notifications that came. Anything with more to
-// it opens that page of Settings.
+// The control centre: slides out on the right, as tall as what's in it. Everything in it is the computer's real state
+// (Status, from huginn_system.py). From the top: you, with Screenshot, Lock and Settings; Wi‑Fi, Bluetooth and the
+// wired network with their switches; Do Not Disturb, Dark and night light; the screen's brightness and the sound;
+// what's playing (Live); the realm; how the app menus open; and the notifications that came. Anything with more to it
+// opens its page of Settings.
 Glass {
     id: cc
-    popup: true; radius: 18; width: 344
-    component Block: Rectangle { color: Theme.t.hover; radius: Theme.t.radiusTile }
-    component Dot: Rectangle { property bool on: true; property string glyph: ""; width: 28; height: 28; radius: 14
-        color: on ? Theme.t.accent : (Theme.t.dark ? "#55FFFFFF" : "#40141E28")
+    popup: true; radius: 22; width: 344
+    // as tall as what's in it (the shell caps it at the screen and it scrolls beyond)
+    implicitHeight: col.height + 28
+    readonly property color accent: Theme.t.accent
+    readonly property color tileOn: Qt.rgba(accent.r, accent.g, accent.b, Theme.t.dark ? 0.26 : 0.18)
+    signal done()                          // something in it was chosen that takes you elsewhere: the shell closes it
+
+    component Block: Rectangle { color: Theme.t.hover; radius: 16; border.width: 1; border.color: Theme.t.line }
+    component Dot: Rectangle { property bool on: true; property string glyph: ""; width: 30; height: 30; radius: 15
+        color: on ? Theme.t.accent : (Theme.t.dark ? "#33FFFFFF" : "#26141E28")
+        Behavior on color { ColorAnimation { duration: 160 } }
         Glyph { anchors.centerIn: parent; visible: parent.glyph !== ""; name: parent.glyph; size: 15; ink: parent.on ? Theme.t.onAccent : Theme.t.text } }
+    component Round: Rectangle {   // a small round button in the header
+        id: rb
+        property string glyph: ""; property string tip: ""
+        signal clicked()
+        width: 34; height: 34; radius: 17; color: rh.containsMouse ? Theme.t.hover : "transparent"; border.width: 1; border.color: rh.containsMouse ? Theme.t.line : "transparent"
+        Glyph { anchors.centerIn: parent; name: rb.glyph; size: 15 }
+        MouseArea { id: rh; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor; onClicked: rb.clicked() }
+        Rectangle { visible: rh.containsMouse && rb.tip !== ""; anchors { top: parent.bottom; topMargin: 4; horizontalCenter: parent.horizontalCenter }
+            width: tipL.width + 14; height: 22; radius: 7; color: Theme.t.dark ? "#E61A1E23" : "#F2FFFFFF"; z: 5
+            Label { id: tipL; anchors.centerIn: parent; text: rb.tip; font.pixelSize: 11 } }
+    }
     // A connection: its switch (the dot) and what it's connected to; the words open its page of Settings.
     component Conn: Item {
         id: conn
         property string title; property string sub; property bool on: true; property string glyph: ""; property string page: ""
         signal toggled(bool on)
-        width: parent ? parent.width : 140; height: 30
+        width: parent ? parent.width : 140; height: 32
         Dot { id: dot; on: conn.on; glyph: conn.glyph; anchors.verticalCenter: parent.verticalCenter
             MouseArea { anchors.fill: parent; anchors.margins: -4; cursorShape: Qt.PointingHandCursor; onClicked: conn.toggled(!conn.on) } }
-        Column { x: 38; width: parent.width - 38; anchors.verticalCenter: parent.verticalCenter
+        Column { x: 40; width: parent.width - 40; anchors.verticalCenter: parent.verticalCenter
             Label { text: conn.title; font.weight: Font.DemiBold; font.pixelSize: 13 }
             Label { text: conn.sub; secondary: true; font.pixelSize: 11; width: parent.width; elide: Text.ElideRight } }
-        MouseArea { x: 38; width: parent.width - 38; height: parent.height; cursorShape: Qt.PointingHandCursor; onClicked: Status.openSettings(conn.page) }
+        MouseArea { x: 40; width: parent.width - 40; height: parent.height; cursorShape: Qt.PointingHandCursor; onClicked: Status.openSettings(conn.page) }
     }
-    component Tile: Block {
-        id: tile
-        property string label; property bool on: false; property string glyph: ""
+    // A switch of its own: a wide one (a dot and its name) or, two to a row, a square one (the dot over its name)
+    component QuickTile: Block {
+        id: tg
+        property string label; property bool on: false; property string glyph: ""; property bool square: false
         signal clicked()
-        width: 71.5; height: 76
-        Dot { on: tile.on; glyph: tile.glyph; anchors.horizontalCenter: parent.horizontalCenter; y: 12 }
-        Label { text: tile.label; secondary: true; font.pixelSize: 11; anchors.horizontalCenter: parent.horizontalCenter; y: 50; width: parent.width - 8
-            horizontalAlignment: Text.AlignHCenter; elide: Text.ElideRight }
-        MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: tile.clicked() }
+        width: 153; height: square ? 76 : 52
+        color: on ? cc.tileOn : (th.containsMouse ? Qt.lighter(Theme.t.hover, 1.25) : Theme.t.hover)
+        Behavior on color { ColorAnimation { duration: 160 } }
+        Dot { on: tg.on; glyph: tg.glyph; x: tg.square ? (tg.width - width) / 2 : 12; y: tg.square ? 12 : (tg.height - height) / 2 }
+        Label { text: tg.label; font.weight: Font.DemiBold; font.pixelSize: tg.square ? 11 : 12; elide: Text.ElideRight
+            x: tg.square ? 4 : 52; width: tg.square ? tg.width - 8 : tg.width - 60; horizontalAlignment: tg.square ? Text.AlignHCenter : Text.AlignLeft
+            y: tg.square ? 50 : (tg.height - height) / 2 }
+        MouseArea { id: th; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor; onClicked: tg.clicked() }
     }
-    component Slider: Block {
+    component Slider: Item {
         id: sl
-        property string title; property real value; property string glyph: ""
+        property string title; property real value; property string glyph: ""; property string page: ""
         signal moved(real v)
         signal glyphClicked()
-        height: 68
-        Label { x: 12; y: 10; text: sl.title }
+        width: parent ? parent.width : 300; height: 54
+        Label { x: 2; text: sl.title; font.pixelSize: 12; font.weight: Font.DemiBold }
+        Label { anchors.right: parent.right; text: Math.round(sl.value * 100) + "%"; secondary: true; font.pixelSize: 11 }
         Rectangle {
-            id: track; x: 12; y: 34; width: parent.width - 24; height: 22; radius: 11; color: Theme.t.dark ? "#40FFFFFF" : "#30141E28"
-            Rectangle { width: Math.max(22, parent.width * sl.value); height: 22; radius: 11; color: Theme.t.text; opacity: 0.88 }
-            Glyph { x: 5; anchors.verticalCenter: parent.verticalCenter; visible: sl.glyph !== ""; name: sl.glyph; size: 13; ink: Theme.t.dark ? "#1A1E23" : "#FFFFFF"
-                MouseArea { anchors.fill: parent; anchors.margins: -4; onClicked: sl.glyphClicked() } }
-            MouseArea { anchors.fill: parent; anchors.leftMargin: 22
-                function to(m) { sl.moved(Math.max(0, Math.min(1, (m.x + 22) / track.width))) }
+            id: track; y: 22; width: parent.width; height: 30; radius: 15; color: Theme.t.dark ? "#2EFFFFFF" : "#24141E28"
+            Rectangle { width: Math.max(30, parent.width * sl.value); height: parent.height; radius: 15; color: Theme.t.dark ? "#F2FFFFFF" : "#FFFFFF"
+                border.width: Theme.t.dark ? 0 : 1; border.color: Theme.t.line
+                Behavior on width { enabled: !drag.pressed; NumberAnimation { duration: 120 } } }
+            Glyph { x: 8; anchors.verticalCenter: parent.verticalCenter; visible: sl.glyph !== ""; name: sl.glyph; size: 14; ink: "#1A1E23"
+                MouseArea { anchors.fill: parent; anchors.margins: -6; cursorShape: Qt.PointingHandCursor; onClicked: sl.glyphClicked() } }
+            MouseArea { id: drag; anchors.fill: parent; anchors.leftMargin: 30
+                function to(m) { sl.moved(Math.max(0, Math.min(1, (m.x + 30) / track.width))) }
                 onPositionChanged: function (m) { if (pressed) to(m) } onPressed: function (m) { to(m) } }
         }
     }
     readonly property var net: Status.network
     readonly property var levels: Status.levels
+    readonly property var playing: {
+        var all = [Live.main].concat(Live.bubbles || [])
+        for (var i = 0; i < all.length; i++) if (all[i] && String(all[i].id || "").indexOf("mpris:") === 0) return all[i]
+        return null
+    }
+    function hello() {
+        var h = new Date().getHours(), first = (Me.name || "").trim().split(/\s+/)[0]
+        var hi = h >= 5 && h < 12 ? "Good morning" : h >= 12 && h < 17 ? "Good afternoon" : h >= 17 && h < 23 ? "Good evening" : "Hello"
+        return first ? hi + ", " + first : hi
+    }
+
     Flickable {
         anchors { fill: parent; margins: 14 }
         contentHeight: col.height; clip: true; boundsBehavior: Flickable.StopAtBounds
         Column {
             id: col
-            width: parent.width; spacing: 10
+            width: parent.width; spacing: 12
+
+            // you, and three quick things
+            Item { width: parent.width; height: 40
+                Rectangle { id: face; width: 36; height: 36; radius: 18; anchors.verticalCenter: parent.verticalCenter; color: Theme.t.accent; clip: true
+                    Label { anchors.centerIn: parent; visible: !Me.face; text: (Me.name || "?").charAt(0).toUpperCase(); color: Theme.t.onAccent; font.pixelSize: 16; font.weight: Font.DemiBold }
+                    Image { anchors.fill: parent; visible: !!Me.face; source: Me.face || ""; fillMode: Image.PreserveAspectCrop; sourceSize: Qt.size(72, 72); asynchronous: true } }
+                Column { x: 46; width: parent.width - 46 - tools.width - 8; anchors.verticalCenter: parent.verticalCenter
+                    Label { width: parent.width; text: cc.hello(); font.pixelSize: 13; font.weight: Font.DemiBold; elide: Text.ElideRight }
+                    Label { width: parent.width; secondary: true; font.pixelSize: 11; elide: Text.ElideRight
+                        text: Status.battery.present ? "Battery " + Status.battery.percent + "%" + (Status.battery.charging ? ", charging" : "")
+                                                     : Qt.formatDate(new Date(), "dddd d MMMM") } }
+                Row { id: tools; anchors { right: parent.right; verticalCenter: parent.verticalCenter } spacing: 2
+                    Round { glyph: "camera"; tip: "Screenshot"; onClicked: { cc.done(); Status.screenshot("choose") } }
+                    Round { glyph: "lock"; tip: "Lock"; onClicked: { cc.done(); Status.power("lock") } }
+                    Round { glyph: "gear"; tip: "Settings"; onClicked: { cc.done(); Status.openSettings("") } } } }
+
             Row {
                 spacing: 10
                 Block {
-                    width: 153; height: conns.height + 24
-                    Column { id: conns; x: 12; y: 12; width: parent.width - 24; spacing: 11
+                    width: 153; height: Math.max(conns.height + 24, quick.height)
+                    Column { id: conns; x: 12; anchors.verticalCenter: parent.verticalCenter; width: parent.width - 24; spacing: 12
                         Conn { visible: cc.net.wifiDevice; title: "Wi‑Fi"; glyph: "wifi"; page: "network"; on: cc.net.wifiOn
-                            sub: !cc.net.wifiOn ? "Off" : cc.net.wifiName ? cc.net.wifiName + (cc.net.kind === "wired" ? " \u00b7 connected (wired is used)" : "") : "Not connected"
+                            sub: !cc.net.wifiOn ? "Off" : cc.net.wifiName ? cc.net.wifiName + (cc.net.kind === "wired" ? " · connected (wired is used)" : "") : "Not connected"
                             onToggled: function (on) { Status.setWifi(on) } }
-                        Conn { visible: !cc.net.wifiDevice || cc.net.wired; title: cc.net.wired ? "Wired" : "Network"; glyph: "globe"; page: "network"
+                        Conn { visible: !cc.net.wifiDevice || cc.net.wired; title: cc.net.wired ? "Wired" : "Network"; glyph: cc.net.wired ? "ethernet" : "globe"; page: "network"
                             on: cc.net.wired || cc.net.kind !== "none"; sub: cc.net.wired ? (cc.net.wiredName || "Connected") : cc.net.kind === "none" ? "Not connected" : cc.net.name }
                         Conn { visible: Status.bluetooth.present; title: "Bluetooth"; glyph: "bluetooth"; page: "bluetooth"; on: Status.bluetooth.on
                             sub: Status.bluetooth.on ? "On" : "Off"; onToggled: function (on) { Status.setBluetooth(on) } } }
                 }
                 Column {
+                    id: quick
                     spacing: 10
-                    Block { width: 153; height: 52
-                        Row { x: 12; anchors.verticalCenter: parent.verticalCenter; spacing: 10
-                            Dot { on: Status.dnd; glyph: "moon" }
-                            Label { text: "Do Not Disturb"; font.weight: Font.DemiBold; anchors.verticalCenter: parent.verticalCenter; font.pixelSize: 12 } }
-                        MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: Status.setDnd(!Status.dnd) } }
+                    QuickTile { label: "Do Not Disturb"; glyph: "moon"; on: Status.dnd; onClicked: Status.setDnd(!Status.dnd) }
                     Row {
-                        spacing: 10
-                        Tile { visible: Status.nightLight.available; label: "Night light"; glyph: "sun"; on: Status.nightLight.on; onClicked: Status.setNightLight(!on) }
-                        Tile { label: "Dark"; glyph: "moon"; on: Theme.t.dark; onClicked: Theme.setDark(!Theme.t.dark) }
+                        visible: Status.nightLight.available
+                        spacing: 9
+                        QuickTile { square: true; width: 72; label: "Night light"; glyph: "sun"; on: Status.nightLight.on; onClicked: Status.setNightLight(!on) }
+                        QuickTile { square: true; width: 72; label: "Dark"; glyph: "contrast"; on: Theme.t.dark; onClicked: Theme.setDark(!Theme.t.dark) }
                     }
+                    // no night light on this computer: Dark on its own, as wide as Do Not Disturb above it
+                    QuickTile { visible: !Status.nightLight.available; label: "Dark"; glyph: "contrast"; on: Theme.t.dark; onClicked: Theme.setDark(!Theme.t.dark) }
                 }
             }
-            Slider { visible: cc.levels.brightness >= 0; width: parent.width; title: "Display"; glyph: "sun"; value: Math.max(0, cc.levels.brightness)
-                onMoved: function (v) { Status.setBrightness(Math.max(0.02, v)) } }
-            Slider { width: parent.width; title: cc.levels.muted ? "Sound (muted)" : "Sound"; glyph: cc.levels.muted ? "x" : "volume"
-                value: cc.levels.muted ? 0 : cc.levels.volume
-                onMoved: function (v) { Status.setVolume(v) } onGlyphClicked: Status.setMuted(!cc.levels.muted) }
-            Label { text: "REALM"; secondary: true; font.pixelSize: 11; font.weight: Font.DemiBold }
-            Row {
-                spacing: 10
-                Repeater {
-                    model: Theme.t.realms
-                    Rectangle {
-                        required property var modelData
-                        width: 71.5; height: 40; radius: Theme.t.radiusCard
-                        border.width: Theme.t.realm === modelData.id ? 2 : 0; border.color: Theme.t.text
-                        gradient: Gradient { orientation: Gradient.Horizontal; GradientStop { position: 0; color: modelData.a } GradientStop { position: 1; color: modelData.b } }
-                        MouseArea { anchors.fill: parent; onClicked: Theme.setRealm(modelData.id) }
-                    }
-                }
-            }
-            Label { text: "CUSTOMIZE"; secondary: true; font.pixelSize: 11; font.weight: Font.DemiBold }
-            Block {
-                width: parent.width; height: 74
-                Label { x: 12; y: 10; text: "App menus open" }
-                Rectangle {   // segmented choice
-                    x: 12; y: 34; width: parent.width - 24; height: 28; radius: Theme.t.radiusControl + 2; color: Theme.t.dark ? "#30000000" : "#1F141E28"
+
+            Block { width: parent.width; height: levelsCol.height + 24
+                Column { id: levelsCol; x: 12; y: 12; width: parent.width - 24; spacing: 8
+                    Slider { visible: cc.levels.brightness >= 0; title: "Display"; glyph: "sun"; value: Math.max(0, cc.levels.brightness)
+                        onMoved: function (v) { Status.setBrightness(Math.max(0.02, v)) } }
+                    Slider { title: cc.levels.muted ? "Sound · muted" : "Sound"; glyph: cc.levels.muted ? "volumeoff" : cc.levels.volume < 0.4 ? "volumelow" : "volumehigh"
+                        value: cc.levels.muted ? 0 : cc.levels.volume
+                        onMoved: function (v) { Status.setVolume(v) } onGlyphClicked: Status.setMuted(!cc.levels.muted) } } }
+
+            // what's playing
+            Block { visible: cc.playing !== null; width: parent.width; height: 68
+                Rectangle { x: 12; width: 44; height: 44; radius: 10; anchors.verticalCenter: parent.verticalCenter; color: Theme.t.hover; clip: true
+                    Glyph { anchors.centerIn: parent; visible: art.status !== Image.Ready; name: "music"; size: 18 }
+                    Image { id: art; anchors.fill: parent; source: cc.playing && cc.playing.art ? cc.playing.art : ""; fillMode: Image.PreserveAspectCrop; asynchronous: true; sourceSize: Qt.size(88, 88) } }
+                Column { x: 66; width: parent.width - 66 - 112; anchors.verticalCenter: parent.verticalCenter
+                    Label { width: parent.width; text: cc.playing ? cc.playing.title : ""; font.pixelSize: 13; font.weight: Font.DemiBold; elide: Text.ElideRight }
+                    Label { width: parent.width; text: cc.playing ? cc.playing.sub : ""; secondary: true; font.pixelSize: 11; elide: Text.ElideRight } }
+                Row { anchors { right: parent.right; rightMargin: 8; verticalCenter: parent.verticalCenter } spacing: 2
+                    Repeater { model: [["prev", "previous"], [cc.playing && cc.playing.kind === "playing" ? "pause" : "play", "playpause"], ["next", "next"]]
+                        Rectangle { required property var modelData; width: 32; height: 32; radius: 16; color: ph.containsMouse ? Theme.t.hover : "transparent"
+                            Glyph { anchors.centerIn: parent; name: modelData[0]; size: 15 }
+                            MouseArea { id: ph; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
+                                onClicked: if (cc.playing) Live.act(cc.playing.id, modelData[1]) } } } } }
+
+            // the realm and the app menus
+            Block { width: parent.width; height: looks.height + 24
+                Column { id: looks; x: 12; y: 12; width: parent.width - 24; spacing: 10
+                    Item { width: parent.width; height: 16
+                        Label { text: "Realm"; font.pixelSize: 12; font.weight: Font.DemiBold }
+                        Label { anchors.right: parent.right; secondary: true; font.pixelSize: 11
+                            text: { var r = (Theme.t.realms || []).filter(function (x) { return x.id === Theme.t.realm })[0]; return r ? r.label : "" } } }
                     Row {
-                        anchors { fill: parent; margins: 2 }
+                        spacing: 8
                         Repeater {
-                            model: [["one", "One menu"], ["row", "A row of menus"]]
+                            model: Theme.t.realms
                             Rectangle {
                                 required property var modelData
-                                readonly property bool on: Settings.menuStyle === modelData[0] || (modelData[0] === "one" && Settings.menuStyle === "dropdown") || (modelData[0] === "row" && Settings.menuStyle === "inline")
-                                width: parent.width / 2; height: parent.height; radius: Theme.t.radiusControl
-                                color: on ? (Theme.t.dark ? "#38FFFFFF" : "#FFFFFF") : "transparent"
-                                Label { anchors.centerIn: parent; text: modelData[1]; font.pixelSize: 12; font.weight: parent.on ? Font.DemiBold : Font.Normal }
-                                MouseArea { anchors.fill: parent; onClicked: Settings.set("menuStyle", modelData[0]) }
+                                readonly property bool chosen: Theme.t.realm === modelData.id
+                                width: (looks.width - 8 * ((Theme.t.realms || []).length - 1)) / Math.max(1, (Theme.t.realms || []).length); height: 34; radius: 12
+                                gradient: Gradient { orientation: Gradient.Horizontal; GradientStop { position: 0; color: modelData.a } GradientStop { position: 1; color: modelData.b } }
+                                border.width: chosen ? 2 : 0; border.color: Theme.t.text
+                                Rectangle { visible: parent.chosen; anchors.centerIn: parent; width: 20; height: 20; radius: 10; color: "#E6FFFFFF"
+                                    Glyph { anchors.centerIn: parent; name: "check"; size: 12; ink: "#1A1E23" } }
+                                MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: Theme.setRealm(modelData.id) }
                             }
                         }
                     }
-                }
-            }
-            Item { width: parent.width; height: 18
-                Label { text: "NOTIFICATIONS"; secondary: true; font.pixelSize: 11; font.weight: Font.DemiBold; anchors.verticalCenter: parent.verticalCenter }
-                Label { visible: Status.notifications.length > 0; text: "Clear"; font.pixelSize: 11; color: Theme.t.accent; anchors { right: parent.right; verticalCenter: parent.verticalCenter }
-                    MouseArea { anchors.fill: parent; anchors.margins: -6; cursorShape: Qt.PointingHandCursor; onClicked: Status.clearNotifications() } } }
-            Label { visible: Status.notifications.length === 0; text: Status.dnd ? "Do Not Disturb is on: they wait here quietly." : "Nothing new."
-                secondary: true; font.pixelSize: 12 }
+                    Label { text: "App menus open"; font.pixelSize: 12; font.weight: Font.DemiBold }
+                    Rectangle {   // segmented choice
+                        width: parent.width; height: 30; radius: 10; color: Theme.t.dark ? "#30000000" : "#1F141E28"
+                        Row {
+                            anchors { fill: parent; margins: 2 }
+                            Repeater {
+                                model: [["one", "One menu"], ["row", "A row of menus"]]
+                                Rectangle {
+                                    required property var modelData
+                                    readonly property bool on: Settings.menuStyle === modelData[0] || (modelData[0] === "one" && Settings.menuStyle === "dropdown") || (modelData[0] === "row" && Settings.menuStyle === "inline")
+                                    width: parent.width / 2; height: parent.height; radius: 8
+                                    color: on ? (Theme.t.dark ? "#38FFFFFF" : "#FFFFFF") : "transparent"
+                                    Label { anchors.centerIn: parent; text: modelData[1]; font.pixelSize: 12; font.weight: parent.on ? Font.DemiBold : Font.Normal }
+                                    MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: Settings.set("menuStyle", modelData[0]) }
+                                }
+                            }
+                        }
+                    } } }
+
+            // what came
+            Item { width: parent.width; height: 20
+                Label { x: 2; text: "Notifications"; font.pixelSize: 12; font.weight: Font.DemiBold; anchors.verticalCenter: parent.verticalCenter }
+                Rectangle { visible: Status.notifications.length > 0; anchors { right: parent.right; verticalCenter: parent.verticalCenter }
+                    width: clearL.width + 18; height: 22; radius: 11; color: clr.containsMouse ? Theme.t.hover : "transparent"; border.width: 1; border.color: Theme.t.line
+                    Label { id: clearL; anchors.centerIn: parent; text: "Clear all"; font.pixelSize: 11 }
+                    MouseArea { id: clr; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor; onClicked: Status.clearNotifications() } } }
+            Block { visible: Status.notifications.length === 0; width: parent.width; height: 52
+                Glyph { x: 14; anchors.verticalCenter: parent.verticalCenter; name: Status.dnd ? "moon" : "bell"; size: 16; ink: Theme.t.text_secondary }
+                Label { x: 40; width: parent.width - 54; anchors.verticalCenter: parent.verticalCenter; wrapMode: Text.WordWrap; secondary: true; font.pixelSize: 12
+                    text: Status.dnd ? "Do Not Disturb is on: they wait here quietly." : "Nothing new." } }
             Repeater {
                 model: Status.notifications
-                Block { required property var modelData; width: col.width; height: nc.height + 20
-                    Column { id: nc; x: 12; y: 10; width: parent.width - 24; spacing: 2
+                Block { required property var modelData; width: col.width; height: nc.height + 22
+                    Column { id: nc; x: 14; y: 11; width: parent.width - 28; spacing: 2
                         Row { width: parent.width; spacing: 6
                             Label { text: modelData.app; secondary: true; font.pixelSize: 11; font.weight: Font.DemiBold }
                             Label { visible: modelData.more > 0; text: "+" + modelData.more; secondary: true; font.pixelSize: 11 }
@@ -144,11 +227,6 @@ Glass {
                         Label { text: modelData.summary; font.weight: Font.DemiBold; font.pixelSize: 12; width: parent.width; elide: Text.ElideRight }
                         Label { visible: modelData.body !== ""; text: modelData.body; secondary: true; font.pixelSize: 12; width: parent.width; wrapMode: Text.WordWrap; maximumLineCount: 2; elide: Text.ElideRight } } }
             }
-            Rectangle { width: parent.width; height: 34; radius: Theme.t.radiusControl; color: Theme.t.hover
-                Row { anchors.centerIn: parent; spacing: 8
-                    Glyph { name: "gear"; size: 14; anchors.verticalCenter: parent.verticalCenter }
-                    Label { text: "All Settings"; font.pixelSize: 12; font.weight: Font.DemiBold; anchors.verticalCenter: parent.verticalCenter } }
-                MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: Status.openSettings("") } }
         }
     }
 }

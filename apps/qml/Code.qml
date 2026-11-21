@@ -367,12 +367,17 @@ GlassWindow {
                             Pressable { id: closeX; anchors.fill: parent; radius: 8; color: hovered ? Theme.t.hover : "transparent"; visible: !tabPill.modelData.dirty || hovered || tabPill.hovered
                                 onClicked: win.closeTab(tabPill.index)
                                 Glyph { anchors.centerIn: parent; name: "x"; size: 10; visible: !tabPill.modelData.dirty || closeX.hovered } } } } } } },
-        Island { id: toolBox; anchors { right: parent.right; rightMargin: 12 } y: 12
-            Seg { icon: "search"; tip: "Go to a file or command (Ctrl+P)"; onClicked: win.openPalette("") }
-            Seg { icon: "play"; text: "Run"; tip: "Run (Ctrl+F5): " + (Backend.runCommand() || "nothing yet"); onClicked: win.runIt() }
-            Seg { icon: "bug"; text: win.dbg.active ? "Debugging" : "Debug"; on: win.dbg.active; tip: "Debug (F5)"; onClicked: win.debugIt() }
-            Seg { icon: "split"; tip: "Two editors side by side (Ctrl+\\)"; on: win.split; onClicked: win.toggleSplit() }
-            Seg { icon: "apps"; tip: "Terminal (Ctrl+`)"; on: win.term; onClicked: win.toggleTerm() } },
+        // The tools on the left, Run and Debug on their own at the right edge: a quick second click on the terminal
+        // (or anything else) never lands on Run
+        Item { id: toolBox; anchors { right: parent.right; rightMargin: 12 } y: 12; height: runBox.height; width: toolsIsland.width + 12 + runBox.width
+            Island { id: toolsIsland; objectName: "toolsIsland"
+                Seg { objectName: "newFileButton"; icon: "newfile"; tip: "New file (Ctrl+N)"; onClicked: win.newFile() }
+                Seg { icon: "search"; tip: "Go to a file or command (Ctrl+P)"; onClicked: win.openPalette("") }
+                Seg { objectName: "termButton"; icon: "terminal"; tip: "Terminal (Ctrl+`)"; on: win.term; onClicked: win.toggleTerm() }
+                Seg { icon: "split"; tip: "Two editors side by side (Ctrl+\\)"; on: win.split; onClicked: win.toggleSplit() } }
+            Island { id: runBox; objectName: "runIsland"; x: toolsIsland.width + 12
+                Seg { icon: "bug"; text: win.dbg.active ? "Debugging" : "Debug"; on: win.dbg.active; tip: "Debug (F5)"; onClicked: win.debugIt() }
+                Seg { objectName: "runButton"; icon: "play"; text: "Run"; tip: "Run (Ctrl+F5): " + (Backend.runCommand() || "nothing yet"); onClicked: win.runIt() } } },
         Toast { id: toast; anchors { horizontalCenter: parent.horizontalCenter; bottom: parent.bottom; bottomMargin: 56 } },
         AiPanel { id: aiPanel; z: 27; width: Math.min(680, win.width - 80); x: (win.width - width) / 2; anchors { bottom: parent.bottom; bottomMargin: 48 } maxHeight: win.height * 0.6 },
 
@@ -404,7 +409,9 @@ GlassWindow {
             Rectangle { x: win.menuFor ? Math.min(win.menuFor.x, win.width - width - 8) : 0; y: win.menuFor ? Math.min(win.menuFor.y, win.height - height - 8) : 0; width: 210; height: menuCol.height + 12; radius: 12
                 color: Theme.t.menu_bg; border.width: 1; border.color: Theme.t.menu_border
                 Column { id: menuCol; x: 6; y: 6; width: parent.width - 12
-                    Repeater { model: win.menuFor ? (win.menuFor.dir ? ["New File Here", "New Folder Here", "Rename…", "Show in Files", "Move to Trash"] : ["Open", "Rename…", "Show in Files", "Move to Trash"]) : []
+                    Repeater { model: !win.menuFor ? [] : win.menuFor.root ? ["New File Here", "New Folder Here", "Open Terminal Here", "Copy Path", "Show in Files"]
+                                   : win.menuFor.dir ? ["New File Here", "New Folder Here", "Open Terminal Here", "Copy Path", "Rename…", "Show in Files", "Move to Trash"]
+                                   : ["Open", "Open Terminal Here", "Copy Path", "Rename…", "Show in Files", "Move to Trash"]
                         Pressable { required property string modelData; width: menuCol.width; height: 32; radius: 8; color: hovered ? Theme.t.hover : "transparent"
                             // what was picked is read first: clearing menuFor empties this Repeater, which ends this row (and
                             // with it modelData, win and Backend here), so every item used to do nothing
@@ -414,6 +421,8 @@ GlassWindow {
                                 else if (what === "New Folder Here") win.ask("new", { folder: f.path, dir: true })
                                 else if (what === "Rename…") win.ask("rename", { path: f.path, name: f.name })
                                 else if (what === "Show in Files") Backend.reveal(f.path)
+                                else if (what === "Open Terminal Here") { win.bottom = "terminal"; win.term = true; Backend.terminalAt(f.path); Qt.callLater(function () { termKeys.forceActiveFocus() }) }
+                                else if (what === "Copy Path") Backend.copyPath(f.path)
                                 else win.ask("trash", { path: f.path, name: f.name })
                                 win.menuFor = null }
                             Label { x: 10; anchors.verticalCenter: parent.verticalCenter; text: modelData; font.pixelSize: 12; color: modelData === "Move to Trash" ? Theme.t.danger : Theme.t.text } } } } } },
@@ -547,6 +556,10 @@ GlassWindow {
                 Label { width: parent.width - 96; elide: Text.ElideRight; anchors.verticalCenter: parent.verticalCenter; text: (Backend.rootName || "No folder").toUpperCase(); font.pixelSize: 11; font.weight: Font.Bold; font.letterSpacing: 1; secondary: true }
                 Seg { visible: !!Backend.root; icon: "plus"; tip: "New file"; onClicked: win.ask("new", { folder: Backend.root, dir: false }) }
                 Seg { visible: !!Backend.root; icon: "folder"; tip: "New folder"; onClicked: win.ask("new", { folder: Backend.root, dir: true }) } }
+            // a right-click on the list's empty space, or on its heading, is the project folder's own menu
+            function rootMenu(item, m) { if (!Backend.root) return; var p = item.mapToItem(win.contentItem, m.x, m.y)
+                win.menuFor = { path: Backend.root, name: Backend.rootName, dir: true, root: true, x: p.x, y: p.y } }
+            MouseArea { objectName: "explorerBack"; y: 0; width: parent.width; height: parent.height; acceptedButtons: Qt.RightButton; onClicked: function (m) { parent.rootMenu(this, m) } }
             ListView { id: explorer; objectName: "explorer"; y: 32; width: parent.width; height: parent.height - 32; clip: true; model: Backend.tree; boundsBehavior: Flickable.StopAtBounds; reuseItems: true
                 delegate: Pressable { id: row; required property var modelData; width: explorer.width - 12; x: 6; height: 26; radius: 7
                     readonly property bool on: !!win.tab && win.tab.path === modelData.path

@@ -44,18 +44,28 @@ Row {
     }
     readonly property bool knowsWindows: Status.windows.length > 0
     function windowsOf(name) { return winsByApp[name] || [] }
-    // Apps just started (their Ring runs until a window is there, or 12 s at most): name -> when
+    // Apps just started (their Ring runs until a window is there, or 25 s at most: an app's first start after it's
+    // installed can take a while): name -> when. From the start menu and Search too, so an app that isn't in the dock
+    // gets a tile with its Ring straight away, not only once its window shows.
     property var starting: ({})
     function start(app) {
         var s = Object.assign({}, starting); s[app.name] = Date.now(); starting = s
         Apps.launch(app.exec); ringClock.start()
+    }
+    property Connections launches: Connections {
+        target: Apps
+        function onLaunched(name) {
+            if (dock.starting[name] !== undefined || dock.windowsOf(name).length > 0) return
+            var s = Object.assign({}, dock.starting); s[name] = Date.now(); dock.starting = s
+            ringClock.start()
+        }
     }
     property Timer ringClock: Timer {
         interval: 500; repeat: true
         onTriggered: {
             var s = {}, any = false
             for (var n in dock.starting)
-                if (Date.now() - dock.starting[n] < 12000 && dock.windowsOf(n).length === 0 && !(Apps.running.indexOf(n) >= 0 && !dock.knowsWindows && Date.now() - dock.starting[n] > 1500)) { s[n] = dock.starting[n]; any = true }
+                if (Date.now() - dock.starting[n] < 25000 && dock.windowsOf(n).length === 0 && !(Apps.running.indexOf(n) >= 0 && !dock.knowsWindows && Date.now() - dock.starting[n] > 1500)) { s[n] = dock.starting[n]; any = true }
             dock.starting = s
             if (!any) stop()
         }
@@ -121,7 +131,7 @@ Row {
             for (var j = 0; j < all.length; j++)
                 if (!all[j].web && all[j].name === pinnedNames[i]) { add(all[j]); break }
         for (i = 0; i < all.length; i++)
-            if (!all[i].web && (run.indexOf(all[i].name) >= 0 || winsByApp[all[i].name])) add(all[i])
+            if (!all[i].web && (run.indexOf(all[i].name) >= 0 || winsByApp[all[i].name] || starting[all[i].name] !== undefined)) add(all[i])
         var others = Status.otherApps || []
         for (i = 0; i < others.length; i++) add(others[i])
         return out

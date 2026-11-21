@@ -24,6 +24,7 @@ GlassWindow {
         { id: "power", label: "Battery & Power", glyph: "battery", a: "#4BDB97", b: "#109F5E", group: "THIS COMPUTER", sub: "Battery health, power mode and when to sleep." },
         { id: "input", label: "Keyboard & Mouse", glyph: "keyboard", a: "#A7B0BD", b: "#5A6474", group: "THIS COMPUTER", sub: "Layouts, typing, the touchpad and the mouse." },
         { id: "keys", label: "Keyboard Shortcuts", glyph: "command", a: "#8E9BB0", b: "#465266", group: "THIS COMPUTER", sub: "Change Huginn's shortcuts, and make your own to open apps." },
+        { id: "storage", label: "Storage", glyph: "drive", a: "#5EC8B0", b: "#0F766E", group: "THIS COMPUTER", sub: "What's on the drive: every app and game with the space it takes, and Uninstall." },
         { id: "printers", label: "Printers & Scanners", glyph: "printer", a: "#38BDF8", b: "#0369A1", group: "THIS COMPUTER", sub: "The printers and scanners this computer can use." },
         { id: "time", label: "Date & Time", glyph: "clock", a: "#FFAA55", b: "#E8590C", group: "SYSTEM", sub: "Time zone and how the clock is set." },
         { id: "language", label: "Language & Region", glyph: "globe", a: "#3DD1C3", b: "#118C7E", group: "SYSTEM", sub: "The language of the system and how dates and numbers look." },
@@ -41,7 +42,7 @@ GlassWindow {
     readonly property var files: ({ appearance: "SetAppearance", desktop: "SetDesktop", notifications: "SetNotifications", network: "SetNetwork", bluetooth: "SetBluetooth",
                                     accounts: "SetAccounts", ai: "SetAI", displays: "SetDisplays", sound: "SetSound", power: "SetPower", input: "SetInput", keys: "SetKeys", time: "SetTime",
                                     language: "SetLanguage", users: "SetUsers", defaults: "SetDefaults", privacy: "SetPrivacy", updates: "SetUpdates", about: "SetAbout",
-                                    a11y: "SetAccessibility", printers: "SetPrinters", livemaker: "SetLiveMaker", graphics: "SetGraphics", controllers: "SetControllers" })
+                                    a11y: "SetAccessibility", printers: "SetPrinters", livemaker: "SetLiveMaker", graphics: "SetGraphics", controllers: "SetControllers", storage: "SetStorage" })
     readonly property var index: [
         ["a11y", "Screen reader", "orca blind read aloud speech voice spoken accessibility"], ["a11y", "Zoom", "magnifier magnify enlarge screen accessibility"],
         ["a11y", "Make everything bigger", "large text size font scale accessibility"], ["a11y", "High contrast", "contrast low vision accessibility"],
@@ -66,7 +67,7 @@ GlassWindow {
         ["keys", "Switch keyboard layout", "language input source layout super ctrl space"],
         ["desktop", "App menus", "top bar menu one menu row"], ["desktop", "Clock", "24-hour time seconds top bar"], ["desktop", "Battery percentage", "top bar"], ["desktop", "Top bar on every screen", "monitors screens displays second menu bar clock"],
         ["desktop", "Dock size", "dock bigger smaller icons"], ["desktop", "Hiding a window", "minimise minimize hide dock drop line comet"],
-        ["desktop", "Stacks", "downloads folder dock stack"], ["desktop", "Today", "date calendar weather clocks world time agenda"],
+        ["desktop", "Stacks", "downloads folder dock stack"], ["desktop", "Today", "date calendar weather clocks world time agenda"], ["desktop", "Widgets", "desktop widgets cards clock calendar weather system music photo add remove"],
         ["desktop", "Snapping windows", "snap layout halves thirds quarters tile fill button gaps"], ["desktop", "Games", "game mode gamemode performance freesync g-sync adaptive sync vrr tearing v-sync vsync stats overlay fps frame rate temperature mangohud"],
         ["graphics", "Graphics card", "gpu amd radeon nvidia temperature clocks fan power vram video memory performance overclock game bar"], ["controllers", "Game controllers", "controller gamepad joystick xbox playstation dualsense dualshock switch pro 8bitdo steam controller battery test buttons stick drift"], ["desktop", "Overview", "spaces workspaces virtual desktops hot corner mission control"],
         ["desktop", "Opening things in apps", "motion animation grow slide"],
@@ -93,6 +94,8 @@ GlassWindow {
         ["privacy", "Firewall", "ufw block incoming"], ["privacy", "App permissions", "camera microphone location flatpak"], ["privacy", "Screen lock", "lock password idle"],
         ["privacy", "Recent files", "history forget"], ["privacy", "Clipboard history", "copy paste super v history clear"], ["privacy", "Empty the Trash", "days automatically"],
         ["updates", "Software Update", "upgrade security patches flatpak automatic huginn browser"],
+        ["storage", "Storage", "disk drive space full free uninstall remove delete apps games steam size big flatpak"],
+        ["storage", "Uninstall an app", "remove delete app program flatpak space"],
         ["about", "About this computer", "model processor memory storage version graphics problem report logs crash bug"]
     ]
     readonly property var results: {
@@ -127,7 +130,7 @@ GlassWindow {
     onPageChanged: { refresh(); flick.contentY = 0 }
     Component.onCompleted: refresh()
     function refresh() {
-        if (["network", "bluetooth", "displays", "sound", "notifications", "power", "input", "keys", "time", "language", "users", "defaults", "privacy", "about", "a11y", "printers", "graphics", "controllers"].indexOf(page) >= 0) Backend.load(page)
+        if (["network", "bluetooth", "displays", "sound", "notifications", "power", "input", "keys", "time", "language", "users", "defaults", "privacy", "about", "a11y", "printers", "graphics", "controllers", "storage"].indexOf(page) >= 0) Backend.load(page)
         if (page === "desktop") Backend.load("displays")            // (Where apps open names the screens)
         if (page === "livemaker") Backend.load("look")
         if (page === "accounts" && typeof Accounts !== "undefined") Accounts.refresh()

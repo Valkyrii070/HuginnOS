@@ -111,6 +111,7 @@ Canvas {
         case "type": line(4, 20, 9, 5, 14, 20); line(6, 15, 12, 15); line(15.5, 13, 20.5, 13); c.beginPath(); c.arc(18, 17, 2.8, 0, Math.PI * 2); c.stroke(); line(20.8, 13, 20.8, 20); break
         case "help": ring(12, 12, 8.5); c.beginPath(); c.arc(12, 9.5, 2.8, Math.PI * 1.05, Math.PI * 0.45); c.stroke(); line(12, 12.8, 12, 14); dot(12, 16.8, 1.1); break
         case "code": line(8, 7, 3, 12, 8, 17); line(16, 7, 21, 12, 16, 17); line(13.5, 4.5, 10.5, 19.5); break
+        case "terminal": box(3, 4.5, 18, 15, 2.5); line(7, 9.5, 10, 12, 7, 14.5); line(12, 15, 17, 15); break   // a prompt in a window
         case "bluetooth": line(7, 7.5, 16.5, 16, 12, 20.5, 12, 3.5, 16.5, 8, 7, 16.5); break
         case "battery": box(3, 7.5, 16, 9, 2.5); line(21, 10.5, 21, 13.5); c.fillRect(5.5, 10, 7, 4); break
         case "command":   // ⌘-like loops: keyboard shortcuts

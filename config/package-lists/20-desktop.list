@@ -29,6 +29,8 @@ fonts-inter-variable
 fonts-jetbrains-mono
 fonts-noto-core
 fonts-noto-color-emoji
+# Japanese, Chinese and Korean text (without it web pages and file names in them show as boxes)
+fonts-noto-cjk
 # Native apps (deliberately few)
 udisks2
 ffmpeg

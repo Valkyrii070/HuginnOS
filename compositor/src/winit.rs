@@ -241,6 +241,20 @@ pub fn run_winit() {
     info!("Initialization completed, starting the main loop.");
 
     let mut pointer_element = PointerElement::default();
+    // HUGINN_SOFT_POINTER=1: the compositor draws the arrow itself, as on a real screen when the pointer can't go on
+    // its own plane (HDR, zoom), instead of the host's pointer showing
+    if std::env::var_os("HUGINN_SOFT_POINTER").is_some() {
+        let f = crate::cursor::Cursor::load().get_image(smithay::input::pointer::CursorIcon::Default, 1, Duration::ZERO);
+        pointer_element.set_buffer(smithay::backend::renderer::element::memory::MemoryRenderBuffer::from_slice(
+            &f.pixels_rgba,
+            smithay::backend::allocator::Fourcc::Argb8888,
+            (f.width as i32, f.height as i32),
+            1,
+            Transform::Normal,
+            None,
+        ));
+    }
+    let soft_pointer = std::env::var_os("HUGINN_SOFT_POINTER").is_some();
 
     while state.running.load(Ordering::SeqCst) {
         let status = winit.dispatch_new_events(|event| match event {
@@ -446,7 +460,7 @@ pub fn run_winit() {
                         );
                     }
 
-                    backend.window().set_cursor_visible(cursor_visible);
+                    backend.window().set_cursor_visible(cursor_visible && !soft_pointer);
                     if let CursorImageStatus::Named(icon) = &state.cursor_status {
                         backend.window().set_cursor((*icon).into());   // (in a window: the host's own pointer, in that shape)
                     }

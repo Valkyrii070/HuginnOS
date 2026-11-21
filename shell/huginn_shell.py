@@ -15,7 +15,9 @@ import json
 import os
 import re
 import shlex
+import shutil
 import sys
+import time
 from pathlib import Path
 
 from PySide6.QtCore import Property, QFileSystemWatcher, QObject, QProcess, QSettings, QTimer, QUrl, Signal, Slot
@@ -191,7 +193,10 @@ class Settings(QObject):
                 # (its wallpaper.json), instead of the realm's scene; the stamp changes when that one is edited
                 "wallpaper": "", "wallpaperStamp": "0",
                 # Settings › Appearance › Icons: the icon theme ("" as the system says: Huginn's)
-                "iconTheme": ""}
+                "iconTheme": "",
+                # the desktop's widgets, in order (Widgets.qml; edited on the desktop or in Settings › Desktop & Dock)
+                "widgets": "weather,privacy,next"}
+    WIDGETS = ("weather", "privacy", "next", "clock", "month", "system", "music", "photo")
     PICTURES = (".jpg", ".jpeg", ".png", ".webp", ".bmp", ".gif", ".avif", ".heic", ".jxl")
     SWITCHES = ("clock24", "barDate", "batteryPercent", "barEverywhere", "dockMakeRoom", "dockDots", "dockFollows", "frameTimes", "gameStats", "autoUpdate", "liveWallpaper", "contrast", "reduceTransparency", "reduceMotion",
                 "dockClickHides", "hotCorner", "spacesAllScreens", "fillButtonLayouts", "snapGaps", "keepSnapped", "reopenApps", "rememberPlaces", "sharpX11", "allowTearing", "gameMode")
@@ -235,6 +240,9 @@ class Settings(QObject):
                                    and os.path.isfile(value))
         if key == "wallpaperStamp":
             return isinstance(value, str) and value.isdigit() and len(value) < 20
+        if key == "widgets":                           # known kinds, each once, at most eight ("" none)
+            got = value.split(",") if isinstance(value, str) and value else []
+            return isinstance(value, str) and len(got) <= 8 and len(set(got)) == len(got) and all(w in self.WIDGETS for w in got)
         if key == "iconTheme":                         # a theme's folder name (Settings checks it's installed)
             return value == "" or (isinstance(value, str) and re.fullmatch(r"[\w.+ -]{1,80}", value) is not None and ".." not in value)
         return value in self._choices.get(key, ())
@@ -301,6 +309,8 @@ class Settings(QObject):
     wallpaper = Property(str, lambda self: self._values["wallpaper"], notify=changed)
     wallpaperSpec = Property("QVariantMap", lambda self: self._wallpaper_spec(), notify=changed)
     iconTheme = Property(str, lambda self: self._values["iconTheme"], notify=changed)
+    widgets = Property("QVariantList", lambda self: [w for w in self._values["widgets"].split(",") if w], notify=changed)
+    widgetKinds = Property("QVariantList", lambda self: list(self.WIDGETS), constant=True)
 
     def override(self, key: str, value: str) -> None:
         """Set a value for this run only (command-line flags)."""
@@ -466,7 +476,7 @@ def app_colours() -> dict:
 
 RECENT = Path(os.environ.get("XDG_STATE_HOME") or Path.home() / ".local/state") / "huginn" / "recent-apps.json"
 DOCK = Path(os.environ.get("XDG_STATE_HOME") or Path.home() / ".local/state") / "huginn" / "dock.json"
-DEFAULT_PINNED = ["Huginn", "Files", "Mail", "Calendar", "Notes", "Writer", "Music", "Terminal", "Settings"]
+DEFAULT_PINNED = ["Huginn", "Files", "Mail", "Calendar", "Notes", "Writer", "Music", "Terminal", "App Store", "Settings"]
 DEMO_RECENT = ["Huginn", "Files", "Writer", "Mail", "Music", "Notes"]
 
 
@@ -545,6 +555,7 @@ class Apps(QObject):
     seconds, so it follows processes, not windows: an app that keeps running with no window still counts.
     """
     changed = Signal()
+    launched = Signal(str)          # an app was started from the shell (start menu, search, dock): the dock shows it starting
     runningChanged = Signal()
 
     def __init__(self, demo: bool):
@@ -817,6 +828,7 @@ class Apps(QObject):
         app = next((a for a in self._apps if a["exec"] and a["exec"] == command), None)
         if app:
             self.used(app["name"])
+            self.launched.emit(app["name"])
 
     @Slot(str)
     def used(self, name: str) -> None:
@@ -844,8 +856,21 @@ class Apps(QObject):
         if self._demo:
             return list(DEFAULT_PINNED)
         try:
-            got = json.loads(DOCK.read_text(encoding="utf-8")).get("pinned")
-            return [n for n in got if isinstance(n, str)] if isinstance(got, list) else list(DEFAULT_PINNED)
+            data = json.loads(DOCK.read_text(encoding="utf-8"))
+            got = data.get("pinned")
+            if not isinstance(got, list):
+                return list(DEFAULT_PINNED)
+            pins = [n for n in got if isinstance(n, str)]
+            # The App Store joined the dock's first pins (2026-11-20): put in once for docks set up before, before
+            # Settings; taken out again, it stays out
+            if "App Store" not in pins and not data.get("storeOffered"):
+                at = pins.index("Settings") if "Settings" in pins else len(pins)
+                pins.insert(at, "App Store")
+                try:
+                    DOCK.write_text(json.dumps({"pinned": pins, "storeOffered": True}), encoding="utf-8")
+                except OSError:
+                    pass
+            return pins
         except (OSError, ValueError, AttributeError):
             return list(DEFAULT_PINNED)
 
@@ -863,7 +888,7 @@ class Apps(QObject):
         if not self._demo:
             try:
                 DOCK.parent.mkdir(parents=True, exist_ok=True)
-                DOCK.write_text(json.dumps({"pinned": pins}), encoding="utf-8")
+                DOCK.write_text(json.dumps({"pinned": pins, "storeOffered": True}), encoding="utf-8")
             except OSError:
                 pass
 
@@ -1013,11 +1038,14 @@ class Glance(QObject):
         self._demo = demo
         self._weather, self._privacy, self._next = {}, {}, []
         self._calendar = None
+        self._system, self._photo, self._photo_at, self._cpu_last = {}, "", 0.0, None
+        self.settings = None                               # (main sets it) which widgets are on the desktop
         if demo:
             self._weather = {"place": "Reykjavík", "temp": "−1°", "words": "Clear", "high": "4°", "low": "−1°",
                              "days": [{"day": "Thu", "temp": "1°"}, {"day": "Fri", "temp": "3°"}, {"day": "Sat", "temp": "2°"}], "stale": ""}
             self._privacy = {"line": "No app used your camera, microphone, screen or location this week.", "count": 0}
             self._next = [{"title": "Design review", "when": "Tomorrow 09:30 · Calendar"}, {"title": "Build ISO 0.1", "when": "Reminders"}]
+            self._system = {"cpu": 12, "memUsed": 6.4, "memTotal": 31.2, "diskFree": 588.0, "diskTotal": 1000.0}
         else:
             for d in self.APPS:
                 if (d / "huginn_app.py").exists() and str(d) not in sys.path:
@@ -1025,6 +1053,9 @@ class Glance(QObject):
             self._timer = QTimer(self, interval=60000, timeout=self.refresh)
             self._timer.start()
             QTimer.singleShot(1500, self.refresh)
+            # the System widget: read every few seconds, only while it's on the desktop
+            self._sys_timer = QTimer(self, interval=4000, timeout=self._read_system)
+            self._sys_timer.start()
 
     @Slot()
     def refresh(self) -> None:
@@ -1032,7 +1063,56 @@ class Glance(QObject):
         self._weather = self._read_weather(data / "weather.json")
         self._privacy = self._read_privacy()
         self._next = self._read_next()
+        if self._shown("photo") and (not self._photo or time.time() - self._photo_at > 3600):
+            self._photo, self._photo_at = self._pick_photo(), time.time()
         self.changed.emit()
+
+    def _shown(self, kind: str) -> bool:
+        return self.settings is None or kind in (self.settings.widgets or [])
+
+    def _read_system(self) -> None:
+        if not self._shown("system"):
+            return
+        out = {}
+        try:
+            first = Path("/proc/stat").read_text().splitlines()[0].split()
+            v = [int(x) for x in first[1:9]]
+            idle, total = v[3] + v[4], sum(v)
+            if self._cpu_last and total > self._cpu_last[1]:
+                out["cpu"] = round(100 * (1 - (idle - self._cpu_last[0]) / (total - self._cpu_last[1])))
+            self._cpu_last = (idle, total)
+            mem = {}
+            for line in Path("/proc/meminfo").read_text().splitlines():
+                k, _, rest = line.partition(":")
+                if k in ("MemTotal", "MemAvailable") and rest.split():
+                    mem[k] = int(rest.split()[0])
+            if mem.get("MemTotal"):
+                out["memUsed"] = round((mem["MemTotal"] - mem.get("MemAvailable", 0)) / 2**20, 1)
+                out["memTotal"] = round(mem["MemTotal"] / 2**20, 1)
+            du = shutil.disk_usage(Path.home())
+            out["diskFree"], out["diskTotal"] = round(du.free / 1e9, 1), round(du.total / 1e9, 1)
+        except (OSError, ValueError, IndexError):
+            pass
+        if out != self._system:
+            self._system = out
+            self.changed.emit()
+
+    @staticmethod
+    def _pick_photo() -> str:
+        """A picture from Pictures (and the folders in it), a different one every hour."""
+        import random
+        found = []
+        pics = Path(os.environ.get("XDG_PICTURES_DIR") or Path.home() / "Pictures")
+        for folder in [pics] + [d for d in sorted(pics.glob("*")) if d.is_dir() and not d.name.startswith(".")][:40]:
+            try:
+                for f in folder.iterdir():
+                    if f.suffix.lower() in (".jpg", ".jpeg", ".png", ".webp") and f.is_file():
+                        found.append(f)
+                        if len(found) >= 400:
+                            break
+            except OSError:
+                continue
+        return QUrl.fromLocalFile(str(random.choice(found))).toString() if found else ""
 
     @staticmethod
     def _read_weather(path: Path) -> dict:
@@ -1107,6 +1187,8 @@ class Glance(QObject):
     weather = Property("QVariantMap", lambda self: self._weather, notify=changed)
     privacy = Property("QVariantMap", lambda self: self._privacy, notify=changed)
     upNext = Property("QVariantList", lambda self: self._next, notify=changed)
+    system = Property("QVariantMap", lambda self: self._system, notify=changed)
+    photo = Property(str, lambda self: self._photo, notify=changed)
 
 
 def name_process(name: str) -> None:
@@ -1178,6 +1260,9 @@ def main() -> int:
     ctx.setContextProperty("Tabs", tabs)
     ctx.setContextProperty("Live", live)
     glance = Glance(demo=args.preview)
+    glance.settings = settings
+    if not args.preview:                                  # a photo for the Photo widget as soon as it's put on the desktop
+        settings.changed.connect(lambda: QTimer.singleShot(0, glance.refresh) if "photo" in settings.widgets and not glance.photo else None)
     ctx.setContextProperty("Glance", glance)
     from huginn_system import System
     status = System(demo=args.preview, apps=apps)              # battery, network, Bluetooth, levels, the app in front

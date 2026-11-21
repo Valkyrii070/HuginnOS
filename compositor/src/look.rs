@@ -1506,7 +1506,11 @@ impl<R: Look> RenderElement<R> for HdrElement {
                     gl.Uniform4f(p.2, u[0], u[1], u[2], u[3]);
                 }
                 for r in rects {
-                    gl.Scissor(r[0].floor() as i32, r[1].floor() as i32, r[2].ceil() as i32 + 1, r[3].ceil() as i32 + 1);
+                    // exactly the damaged pixels: one more (as before) turned a line beside each damaged part a second
+                    // time on every frame, which shows as a trail where the pointer went
+                    let (x0, y0) = (r[0].floor() as i32, r[1].floor() as i32);
+                    let (x1, y1) = ((r[0] + r[2]).ceil() as i32, (r[1] + r[3]).ceil() as i32);
+                    gl.Scissor(x0, y0, x1 - x0, y1 - y0);
                     gl.DrawArrays(ffi::TRIANGLE_STRIP, 0, 4);
                 }
             }

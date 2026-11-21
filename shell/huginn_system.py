@@ -922,6 +922,17 @@ for (var i = 0; i < all.length; i++) {{ var win = all[i]; if (String(win.interna
             self._shooting = False
         threading.Thread(target=run, daemon=True).start()
 
+    # ------------------------------------------------------------------ input regions
+    @Slot(QObject, int, int, int, int)
+    def setInputRegion(self, window, x: int, y: int, w: int, h: int) -> None:
+        """Only this part of a shell window takes the pointer (w or h <= 0: all of it). The popups over the dock reach
+        down over it when it makes room (no exclusive zone): the dock keeps the pointer there."""
+        from PySide6.QtGui import QRegion
+        from PySide6.QtCore import QRect
+        if window is None or not hasattr(window, "setMask"):
+            return
+        window.setMask(QRegion() if w <= 0 or h <= 0 else QRegion(QRect(x, y, w, h)))
+
     # ------------------------------------------------------------------ making room for a game
     gamePlayingChanged = Signal()
     GAME_MARK = Path(os.environ.get("XDG_RUNTIME_DIR") or f"/run/user/{os.getuid()}") / "huginn" / "game-playing"
