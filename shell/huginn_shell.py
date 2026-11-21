@@ -816,6 +816,61 @@ class Apps(QObject):
             pass
         return out
 
+    def _pids_of(self, name: str) -> list:
+        """The processes of a running app (by the same match the dock uses), and everything they started."""
+        match = next((m for n, m in getattr(self, "_matchers", []) if n == name), None)
+        if not match:
+            return []
+        procs = {}
+        for entry in os.scandir("/proc"):
+            if not entry.name.isdigit():
+                continue
+            try:
+                with open(os.path.join(entry.path, "cmdline"), "rb") as fh:
+                    argv = [os.path.basename(a.decode("utf-8", "replace")) for a in fh.read(4096).split(b"\0") if a]
+                with open(os.path.join(entry.path, "stat")) as fh:
+                    stat = fh.read()
+                ppid = int(stat[stat.rindex(")") + 2:].split()[1])
+                if os.stat(entry.path).st_uid != os.getuid():
+                    continue
+            except (OSError, ValueError, IndexError):
+                continue
+            procs[int(entry.name)] = (argv, ppid)
+        roots = {pid for pid, (argv, _) in procs.items() if argv and self._argv_matches(match, argv)}
+        out, grew = set(roots), True
+        while grew:                                          # and what they started (helpers, a game Steam opened)
+            grew = False
+            for pid, (_, ppid) in procs.items():
+                if ppid in out and pid not in out:
+                    out.add(pid)
+                    grew = True
+        return sorted(out)
+
+    @Slot(str, bool)
+    def quit(self, name: str, force: bool) -> None:
+        """The control centre's Running in the background › Quit: the app is asked to close (Steam the way it asks
+        itself to, so it shuts down cleanly); Force Quit stops it at once."""
+        if self._demo:
+            self._running = [n for n in self._running if n != name]
+            self.runningChanged.emit()
+            return
+        import signal
+        app = next((a for a in self._apps if a["name"] == name), None)
+        if not force and app and ("steam" in app.get("exec", "").lower() or "valvesoftware.Steam" in app.get("exec", "")):
+            try:
+                parts = [p for p in shlex.split(app["exec"]) if not p.startswith("%")]
+                QProcess.startDetached(parts[0], parts[1:] + ["-shutdown"])
+                QTimer.singleShot(1500, self._poll)
+                return
+            except (ValueError, IndexError):
+                pass
+        for pid in self._pids_of(name):
+            try:
+                os.kill(pid, signal.SIGKILL if force else signal.SIGTERM)
+            except OSError:
+                pass
+        QTimer.singleShot(800, self._poll)
+
     all = Property("QVariantList", lambda self: self._apps, notify=changed)
     running = Property("QVariantList", lambda self: self._running, notify=runningChanged)
     badges = Property("QVariantMap", lambda self: self._badges, notify=runningChanged)

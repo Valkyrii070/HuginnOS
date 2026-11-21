@@ -26,6 +26,10 @@ fi
 # and Online Accounts (calendars and contacts kept in step with Google, Microsoft, iCloud and Nextcloud). Each looks
 # now and then and sleeps in between, and leaves it to another copy that's already running.
 (sleep 10; python3 /usr/share/huginn-apps/huginn_helpers.py) &
+# What you (or an app: Steam, Discord) set to start when you sign in (~/.config/autostart, Settings › Default Apps), and
+# the system's own entries that are for this desktop and that Huginn doesn't do another way; each one's first minute is
+# measured for System Monitor › Startup (huginn_autostart.py).
+(sleep 4; python3 /usr/share/huginn-apps/huginn_autostart.py run) &
 # Clipboard history's watcher (Super+V): while history is off (it starts off) a change costs a tiny shell and nothing
 # is kept; turned on, the newest 50 things you copy are kept, never a password.
 command -v wl-paste >/dev/null && python3 /usr/share/huginn-apps/huginn_clipboard.py watch &

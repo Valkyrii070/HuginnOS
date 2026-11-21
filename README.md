@@ -2291,6 +2291,26 @@ backend in `huginn_app.py` went) and `apps/qml/Monitor.qml`.
   in the nested session (real icons and grouping) and in a preview of a gaming afternoon, dark and light. The start
   menu finds it as task manager, processes or activity too.
 
+## Startup programs, and apps running in the background (2026-11-20)
+
+- **Programs set to start when you sign in now start.** Huginn's session never ran `~/.config/autostart`, so Steam's
+  and Discord's "start with the computer" and Settings › Default Apps › Start-up apps did nothing.
+  `apps/huginn_autostart.py` (new) runs from `huginn-session-apps` four seconds into the session: yours, and the
+  system's own entries that are for this desktop and that Huginn doesn't do another way (its own password prompt,
+  network, sound, the accessibility bus, KDE Connect on demand…). It follows the XDG rules (Hidden, GNOME's off switch,
+  OnlyShowIn/NotShowIn, TryExec, the file conditions, delays) and starts each in a session of its own.
+- **How heavy each is**, as Windows' Task Manager has it: a minute after sign-in, each program's processor time and
+  disk reading (everything it started, found by its session) are added up: High over a second of the processor or 3 MB
+  read, Medium over 0.3 s or 300 KB, else Low. Kept in `~/.local/state/huginn/startup.json`.
+- **System Monitor › Startup**: each sign-in program with its switch, its impact badge, what it cost at sign-in and
+  what it uses now, why one won't start (not installed, another desktop's, a terminal). More…: Details, Show where it's
+  set up, Remove from sign-in (yours; the system's own can only be turned off, for you, the XDG way). Add an App… opens
+  Settings › Default Apps. 22 checks, including a real run that measures a busy program High and an idle one Low.
+- **Control centre › Running in the background**: apps still running with no window (closed to the tray: Discord,
+  Steam; or watching: Mail). Click one for its window again; right-click for Open, Quit and Force Quit, or the × that
+  shows on hover. Quit asks the app to close (Steam with its own `-shutdown`, so it closes cleanly); Force Quit stops
+  it and what it started at once.
+
 ## Huginn, the browser
 
 Inside the Huginn repository (this kit is its `os/` folder) the image ships the repository's own browser. A kit used

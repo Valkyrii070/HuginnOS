@@ -3,7 +3,8 @@ import QtQuick
 // The control centre: slides out on the right, as tall as what's in it. Everything in it is the computer's real state
 // (Status, from huginn_system.py). From the top: you, with Screenshot, Lock and Settings; Wi‑Fi, Bluetooth and the
 // wired network with their switches; Do Not Disturb, Dark and night light; the screen's brightness and the sound;
-// what's playing (Live); the realm; how the app menus open; and the notifications that came. Anything with more to it
+// what's playing (Live); apps running in the background with no window (Discord, Steam: click for its window,
+// right-click or × to quit); the realm; how the app menus open; and the notifications that came. Anything with more to it
 // opens its page of Settings.
 Glass {
     id: cc
@@ -79,6 +80,19 @@ Glass {
     }
     readonly property var net: Status.network
     readonly property var levels: Status.levels
+    // apps with no window that are still running: closed to the tray (Discord, Steam), or watching for something (Mail)
+    readonly property var background: {
+        var wins = {}, all = Status.windows || []
+        for (var i = 0; i < all.length; i++) if (all[i].name) wins[all[i].name] = true
+        var out = [], run = Apps.running || [], apps = Apps.all || []
+        for (var j = 0; j < run.length; j++) {
+            if (wins[run[j]]) continue
+            var a = apps.filter(function (x) { return x.name === run[j] })[0]
+            if (a && !a.web) out.push(a)
+        }
+        return out
+    }
+    property var bgMenu: null              // {app, x, y}: the menu of one of them
     readonly property var playing: {
         var all = [Live.main].concat(Live.bubbles || [])
         for (var i = 0; i < all.length; i++) if (all[i] && String(all[i].id || "").indexOf("mpris:") === 0) return all[i]
@@ -90,6 +104,27 @@ Glass {
         return first ? hi + ", " + first : hi
     }
 
+    MouseArea { visible: cc.bgMenu !== null; anchors.fill: parent; z: 9; acceptedButtons: Qt.AllButtons; onClicked: cc.bgMenu = null }
+    Rectangle {
+        objectName: "backgroundMenu"
+        visible: cc.bgMenu !== null; z: 10; width: 200; height: bgMenuCol.height + 10; radius: 12
+        color: Theme.t.dark ? "#F21E2228" : "#FAFFFFFF"; border.width: 1; border.color: Theme.t.line
+        x: cc.bgMenu ? Math.min(cc.bgMenu.x, cc.width - width - 8) : 0; y: cc.bgMenu ? Math.min(cc.bgMenu.y, cc.height - height - 8) : 0
+        Column { id: bgMenuCol; x: 5; y: 5; width: parent.width - 10
+            Repeater {
+                model: cc.bgMenu ? [["Open " + cc.bgMenu.app.name, "open", "window"], ["Quit " + cc.bgMenu.app.name, "quit", "x"], ["Force Quit", "force", "trash"]] : []
+                Rectangle { required property var modelData; width: bgMenuCol.width; height: 32; radius: 8; color: mh.containsMouse ? Theme.t.hover : "transparent"
+                    Glyph { x: 8; anchors.verticalCenter: parent.verticalCenter; name: modelData[2]; size: 14; ink: modelData[1] === "force" ? Theme.t.danger : Theme.t.text }
+                    Label { x: 32; width: parent.width - 40; anchors.verticalCenter: parent.verticalCenter; text: modelData[0]; font.pixelSize: 13; elide: Text.ElideRight
+                        color: modelData[1] === "force" ? Theme.t.danger : Theme.t.text }
+                    MouseArea { id: mh; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
+                        onClicked: {
+                            var app = cc.bgMenu.app, what = modelData[1]
+                            cc.bgMenu = null
+                            if (what === "open") { cc.done(); Apps.launch(app.exec) }
+                            else Apps.quit(app.name, what === "force")
+                        } } } } }
+    }
     Flickable {
         anchors { fill: parent; margins: 14 }
         contentHeight: col.height; clip: true; boundsBehavior: Flickable.StopAtBounds
@@ -162,6 +197,40 @@ Glass {
                             Glyph { anchors.centerIn: parent; name: modelData[0]; size: 15 }
                             MouseArea { id: ph; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
                                 onClicked: if (cc.playing) Live.act(cc.playing.id, modelData[1]) } } } } }
+
+            // what's still running with no window, and quitting it
+            Item { visible: cc.background.length > 0; width: parent.width; height: 20
+                Label { x: 2; text: "Running in the background"; font.pixelSize: 12; font.weight: Font.DemiBold; anchors.verticalCenter: parent.verticalCenter }
+                Label { anchors { right: parent.right; verticalCenter: parent.verticalCenter } text: "Right-click to quit"; secondary: true; font.pixelSize: 11 } }
+            Block { visible: cc.background.length > 0; width: parent.width; height: bgCol.height + 12
+                objectName: "backgroundApps"
+                Column { id: bgCol; x: 6; y: 6; width: parent.width - 12
+                    Repeater { model: cc.background
+                        Rectangle {
+                            id: bgRow
+                            required property var modelData
+                            width: bgCol.width; height: 42; radius: 11; color: bgHit.containsMouse ? Theme.t.hover : "transparent"
+                            AppIcon { x: 6; size: 28; anchors.verticalCenter: parent.verticalCenter
+                                name: bgRow.modelData.name; glyph: bgRow.modelData.glyph || ""; image: bgRow.modelData.image || ""; own: bgRow.modelData.own || "" }
+                            Column { x: 44; width: parent.width - 44 - 40; anchors.verticalCenter: parent.verticalCenter
+                                Label { width: parent.width; text: bgRow.modelData.name; font.pixelSize: 13; font.weight: Font.DemiBold; elide: Text.ElideRight }
+                                Label { width: parent.width; secondary: true; font.pixelSize: 11
+                                    text: ({ Mail: "Checking for new mail", Messages: "Waiting for messages", Steam: "In the tray, no window open",
+                                             Discord: "In the tray, no window open" })[bgRow.modelData.name] || "No window open" } }
+                            MouseArea { id: bgHit; anchors.fill: parent; hoverEnabled: true; acceptedButtons: Qt.LeftButton | Qt.RightButton; cursorShape: Qt.PointingHandCursor
+                                onClicked: function (m) {
+                                    if (m.button === Qt.RightButton) {
+                                        var p = mapToItem(cc, m.x, m.y)
+                                        cc.bgMenu = { app: bgRow.modelData, x: p.x, y: p.y }
+                                    } else { cc.done(); Apps.launch(bgRow.modelData.exec) }       // its window again
+                                } }
+                            Rectangle {   // quit, without the menu
+                                visible: bgHit.containsMouse || quitHit.containsMouse
+                                anchors { right: parent.right; rightMargin: 8; verticalCenter: parent.verticalCenter } width: 26; height: 26; radius: 13
+                                color: quitHit.containsMouse ? Theme.t.danger : Theme.t.hover
+                                Glyph { anchors.centerIn: parent; name: "x"; size: 12; ink: quitHit.containsMouse ? "#FFFFFF" : Theme.t.text }
+                                MouseArea { id: quitHit; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor; onClicked: Apps.quit(bgRow.modelData.name, false) } }
+                        } } } }
 
             // the realm and the app menus
             Block { width: parent.width; height: looks.height + 24

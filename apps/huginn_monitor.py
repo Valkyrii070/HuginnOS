@@ -642,6 +642,75 @@ class Monitor(QObject):
     uptime = Property(float, _get("uptime", 0.0), notify=changed)
     del _get
 
+    # ------------------------------------------------------------------------------------------- sign-in programs
+    startupChanged = Signal()
+    _startup_got = Signal(object)
+
+    def _startup_take(self, data):
+        self._startup = data
+        self.startupChanged.emit()
+
+    startup = Property("QVariantMap", lambda self: getattr(self, "_startup", {}), notify=startupChanged)
+
+    @Slot()
+    def loadStartup(self) -> None:
+        """The Startup view: what starts when you sign in, how heavy each was then, what it uses now
+        (huginn_autostart.py)."""
+        if not getattr(self, "_startup_wired", False):
+            self._startup_got.connect(self._startup_take)
+            self._startup_wired = True
+        if self._demo:
+            if not getattr(self, "_startup", None):
+                self._startup_take(demo_startup())
+            return
+
+        def work():
+            try:
+                import huginn_autostart
+                self._startup_got.emit(huginn_autostart.report())
+            except Exception as err:                                 # noqa: BLE001
+                self._startup_got.emit({"entries": [], "error": str(err)})
+        threading.Thread(target=work, daemon=True).start()
+
+    @Slot(str, bool)
+    def setStartup(self, ident: str, on: bool) -> None:
+        if self._demo:
+            st = dict(self._startup)
+            st["entries"] = [dict(e, enabled=on, runs=on and not e["why"]) if e["id"] == ident else e for e in st["entries"]]
+            self._startup_take(st)
+            return
+        import huginn_autostart
+        why = huginn_autostart.set_enabled(ident, on)
+        if why:
+            self.failed.emit(why)
+        self.loadStartup()
+
+    @Slot(str)
+    def removeStartup(self, ident: str) -> None:
+        if self._demo:
+            st = dict(self._startup)
+            st["entries"] = [e for e in st["entries"] if e["id"] != ident]
+            self._startup_take(st)
+            return
+        import huginn_autostart
+        why = huginn_autostart.remove(ident)
+        if why:
+            self.failed.emit(why)
+        self.loadStartup()
+
+    @Slot()
+    def addStartup(self) -> None:
+        """Settings › Default Apps, where Start-up apps has Add an app…."""
+        if not self._demo:
+            import subprocess
+            subprocess.Popen([sys.executable, str(HERE / "huginn_app.py"), "settings", "--page", "defaults"], start_new_session=True,
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+    @Slot(str)
+    def showFile(self, path: str) -> None:
+        if not self._demo and path:
+            QDesktopServices.openUrl(QUrl.fromLocalFile(str(Path(path).parent)))
+
     @Slot(float, result=str)
     def size(self, n: float) -> str:
         return human(n)
@@ -815,3 +884,19 @@ def demo_data() -> dict:
             "totals": {"read": 1.4e6, "write": 0.3e6, "down": 3.4e6, "up": 2.2e5},
             "counts": {"processes": len(rows) + 212, "threads": 1840, "apps": len(apps), "background": len(bg), "system": len(sysrows)},
             "uptime": 3 * 3600 + 12 * 60}
+
+
+def demo_startup() -> dict:
+    """The preview's sign-in programs."""
+    M = 1024 ** 2
+    rows = [("steam.desktop", "Steam", "com.valvesoftware.Steam", "/usr/bin/flatpak run com.valvesoftware.Steam -silent", True, True, "high", 4.8, 412 * M, True, 690 * M),
+            ("discord.desktop", "Discord", "com.discordapp.Discord", "/usr/bin/flatpak run com.discordapp.Discord --start-minimized", True, True, "high", 2.6, 188 * M, True, 540 * M),
+            ("org.signal.Signal.desktop", "Signal", "org.signal.Signal", "/usr/bin/flatpak run org.signal.Signal --start-in-tray", False, True, "", -1, -1, False, 0),
+            ("huginn-notes.desktop", "Notes", "huginn-notes", "python3 /usr/share/huginn-apps/huginn_app.py notes", True, True, "low", 0.21, 90 * 1024, False, 0),
+            ("vendor-rgb.desktop", "RGB Lighting", "", "/opt/rgb/rgb-tray --minimized", True, False, "medium", 0.6, 1.2 * M, True, 38 * M)]
+    entries = []
+    for ident, name, icon, ex, on, mine, imp, cpu, disk, running, mem in rows:
+        entries.append({"id": ident, "name": name, "comment": "", "icon": icon, "exec": ex, "enabled": on, "mine": mine, "system": not mine,
+                        "path": ("/home/astrid/.config/autostart/" if mine else "/etc/xdg/autostart/") + ident, "runs": on, "why": "",
+                        "impact": imp if on else "", "cpu": cpu, "disk": disk, "failed": "", "running": running, "memoryNow": mem, "delay": 0})
+    return {"entries": entries, "signin": time.time() - 3 * 3600 - 12 * 60, "measured": True}

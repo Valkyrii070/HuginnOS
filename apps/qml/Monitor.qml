@@ -2,18 +2,26 @@ import QtQuick
 
 // System Monitor: what the computer is doing, and what you can do about it.
 // Across the top, five live cards: Processor, Memory, Graphics, Disk and Network, each with its last two minutes; a
-// card opens its detail in Performance. Under them, one of three views:
+// card opens its detail in Performance. Under them, one of four views:
 //   Apps        the processes put together as you think of them (an app and its helpers are one row, with its icon),
 //               then the session's helpers (Background), then everyone else's (System, folded away);
 //   Processes   every process with every column, sorted by any of them, yours or everyone's;
 //   Performance the card chosen above, in full: the processor's cores, what the memory holds, the graphics card's
-//               readings, each drive and each network connection.
+//               readings, each drive and each network connection;
+//   Startup     what starts when you sign in, each switched on or off, with how heavy it was then (huginn_autostart.py).
 // Select a row for End and More…; right-click for everything (pause, priority, location, details, force stop).
 GlassWindow {
     id: win
-    title: "System Monitor"; heading: view === "apps" ? "Apps" : view === "procs" ? "Processes" : "Performance"
+    title: "System Monitor"; heading: ({ apps: "Apps", procs: "Processes", perf: "Performance", startup: "Startup" })[view] || ""
     width: 1200; height: 780; minimumWidth: 900; glow: "top"; padTop: 58
-    property string view: "apps"                 // apps | procs | perf
+    property string view: "apps"                 // apps | procs | perf | startup
+    onViewChanged: if (view === "startup") Backend.loadStartup()
+    property string startPicked: ""              // Startup: the chosen sign-in program's id
+    readonly property var st: Backend.startup || ({})
+    readonly property var stRows: st.entries || []
+    readonly property var stPicked: stRows.filter(function (e) { return e.id === win.startPicked })[0] || null
+    Timer { interval: 10000; repeat: true; running: win.view === "startup" && win.visible; onTriggered: Backend.loadStartup() }
+    property var startMenu: null                 // {e, x, y}
     property string perf: "cpu"                  // cpu | mem | gpu | disk | net
     property string filter: ""
     property string sortKey: "cpu"
@@ -146,7 +154,8 @@ GlassWindow {
 
     // ---------------------------------------------------------------------------------------------------- toolbar
     toolbar: [
-        IslandField { visible: win.view !== "perf"; text: win.filter; onTextChanged: win.filter = text; placeholder: win.view === "apps" ? "Find an app" : "Find a process" },
+        IslandField { visible: win.view === "apps" || win.view === "procs"; text: win.filter; onTextChanged: win.filter = text; placeholder: win.view === "apps" ? "Find an app" : "Find a process" },
+        Seg { icon: "bolt"; text: "Startup"; on: win.view === "startup"; onClicked: win.view = "startup" },
         Seg { icon: "sliders"; text: "Performance"; on: win.view === "perf"; onClicked: win.view = "perf" },
         Seg { icon: "list"; text: "Processes"; on: win.view === "procs"; onClicked: win.view = "procs" },
         Seg { icon: "apps"; text: "Apps"; on: win.view === "apps"; onClicked: win.view = "apps" }
@@ -351,6 +360,80 @@ GlassWindow {
                     Seg { text: "Everyone's"; on: win.everyone; onClicked: win.everyone = true } } }
         }
 
+        // ------------------------------------------------------------------------------------------- Startup
+        Card {
+            id: stCard
+            objectName: "startupCard"
+            visible: win.view === "startup"
+            y: vitals.height + 12; width: parent.width; height: parent.height - y
+            function impactName(i) { return i === "high" ? "High" : i === "medium" ? "Medium" : i === "low" ? "Low" : "" }
+            function impactInk(i) { return i === "high" ? "#E5484D" : i === "medium" ? "#E8A10C" : "#30A46C" }
+            Item { x: 20; y: 14; width: parent.width - 40; height: 46
+                Column { width: parent.width - addBtn.width - 20
+                    Label { text: "Starts when you sign in"; font.pixelSize: 16; font.weight: Font.DemiBold }
+                    Label { width: parent.width; elide: Text.ElideRight; secondary: true; font.pixelSize: 12
+                        text: win.st.signin ? "How heavy each was: measured over the first minute after you signed in, " + Qt.formatDateTime(new Date(win.st.signin * 1000), "ddd h:mm") + ". High: over a second of the processor or 3 MB read."
+                                             : "How heavy each is shows after the next sign-in (it's measured over the first minute)." } }
+                Btn { id: addBtn; anchors { right: parent.right; verticalCenter: parent.verticalCenter } text: "Add an App…"; onClicked: Backend.addStartup() } }
+            Row { id: stHead; x: 8; y: 66; height: 32
+                Head { width: stCard.width - 16 - 110 - 120 - 210 - 120; text: "Name"; key: ""; alignLeft: true }
+                Head { width: 110; text: "Status"; key: "" } Head { width: 120; text: "Impact"; key: "" } Head { width: 210; text: "At sign-in"; key: "" } Head { width: 120; text: "Now"; key: "" } }
+            Rectangle { y: 100; width: parent.width; height: 1; color: Theme.t.separator }
+            Flickable {
+                x: 8; y: 104; width: parent.width - 16; height: parent.height - y - 44; contentHeight: stCol.height; clip: true; boundsBehavior: Flickable.StopAtBounds
+                Column {
+                    id: stCol
+                    width: parent.width
+                    Label { visible: win.stRows.length === 0; x: 12; topPadding: 18; width: parent.width - 24; wrapMode: Text.WordWrap; secondary: true
+                        text: win.st.error ? win.st.error : "Nothing starts when you sign in besides Huginn itself. Apps you set to start with the computer (Steam's and Discord's own setting, or Add an App) show here." }
+                    Repeater {
+                        model: win.stRows
+                        Pressable {
+                            id: sr
+                            required property var modelData
+                            objectName: "startup_" + modelData.id
+                            readonly property bool sel: win.startPicked === modelData.id
+                            width: stCol.width; height: 50; radius: 10
+                            color: sel ? Qt.rgba(win.ink.r, win.ink.g, win.ink.b, 0.22) : (hovered ? Theme.t.hover : "transparent")
+                            border.width: sel ? 1 : 0; border.color: Theme.t.accent
+                            Icon { x: 10; anchors.verticalCenter: parent.verticalCenter; icon: sr.modelData.icon; name: sr.modelData.name; s: 30; opacity: sr.modelData.enabled ? 1 : 0.5 }
+                            Column { x: 52; width: stCard.width - 16 - 110 - 120 - 210 - 120 - 60; anchors.verticalCenter: parent.verticalCenter; spacing: 1
+                                Label { width: parent.width; text: sr.modelData.name; font.pixelSize: 13; font.weight: Font.DemiBold; elide: Text.ElideRight
+                                    color: sr.modelData.enabled ? Theme.t.text : Theme.t.text_secondary }
+                                Label { width: parent.width; elide: Text.ElideMiddle; font.pixelSize: 11; secondary: true
+                                    text: sr.modelData.why || sr.modelData.failed || ((sr.modelData.mine ? "" : "Set up by the system  ·  ") + sr.modelData.exec) } }
+                            Row { anchors.right: parent.right; height: parent.height
+                                Item { width: 110; height: parent.height
+                                    Toggle { anchors { right: parent.right; rightMargin: 14; verticalCenter: parent.verticalCenter } on: sr.modelData.enabled
+                                        onToggled: function (v) { Backend.setStartup(sr.modelData.id, v) } } }
+                                Item { width: 120; height: parent.height
+                                    Rectangle { visible: sr.modelData.enabled && stCard.impactName(sr.modelData.impact) !== ""; anchors { right: parent.right; rightMargin: 12; verticalCenter: parent.verticalCenter }
+                                        width: impL.width + 20; height: 22; radius: 11; color: Qt.rgba(Qt.color(stCard.impactInk(sr.modelData.impact)).r, Qt.color(stCard.impactInk(sr.modelData.impact)).g, Qt.color(stCard.impactInk(sr.modelData.impact)).b, 0.18)
+                                        Label { id: impL; anchors.centerIn: parent; text: stCard.impactName(sr.modelData.impact); font.pixelSize: 11; font.weight: Font.DemiBold; color: stCard.impactInk(sr.modelData.impact) } }
+                                    Label { visible: !sr.modelData.enabled || stCard.impactName(sr.modelData.impact) === ""; anchors { right: parent.right; rightMargin: 12; verticalCenter: parent.verticalCenter }
+                                        text: !sr.modelData.enabled ? "Off" : sr.modelData.why ? "Won't start" : "Not measured"; secondary: true; font.pixelSize: 12 } }
+                                Item { width: 210; height: parent.height
+                                    Label { anchors { right: parent.right; rightMargin: 12; verticalCenter: parent.verticalCenter } font.family: Theme.t.fontMono; font.pixelSize: 12
+                                        color: Theme.t.text_secondary
+                                        text: sr.modelData.cpu >= 0 && sr.modelData.enabled ? sr.modelData.cpu.toFixed(1) + " s  ·  " + win.size(Math.max(0, sr.modelData.disk)) + " read" : "–" } }
+                                Item { width: 120; height: parent.height
+                                    Label { anchors { right: parent.right; rightMargin: 12; verticalCenter: parent.verticalCenter } font.family: Theme.t.fontMono; font.pixelSize: 12
+                                        color: sr.modelData.running ? Theme.t.text : Theme.t.text_secondary
+                                        text: sr.modelData.running ? win.size(sr.modelData.memoryNow) : "Not running" } } }
+                            MouseArea { anchors.fill: parent; z: -1; acceptedButtons: Qt.LeftButton | Qt.RightButton
+                                onClicked: function (m) {
+                                    win.startPicked = sr.modelData.id
+                                    if (m.button === Qt.RightButton) { var p = mapToItem(win.contentItem, m.x, m.y); win.startMenu = { e: sr.modelData, x: p.x, y: p.y } }
+                                } }
+                        }
+                    }
+                }
+            }
+            Footer { anchors.bottom: parent.bottom; startup: true
+                summary: win.stRows.filter(function (e) { return e.enabled }).length + " of " + win.stRows.length + " on" +
+                         (win.stRows.some(function (e) { return e.enabled && e.impact === "high" }) ? "  ·  turning off a High one makes signing in quicker" : "") }
+        }
+
         // ------------------------------------------------------------------------------------------- Performance
         Card {
             id: perfCard
@@ -501,6 +584,7 @@ GlassWindow {
     // ---------------------------------------------------------------------------------------------------- the footer
     component Footer: Rectangle {
         property string summary
+        property bool startup: false
         default property alias extra: extraRow.data
         width: parent ? parent.width : 400; height: 44; color: "transparent"
         Rectangle { width: parent.width; height: 1; color: Theme.t.separator }
@@ -508,9 +592,14 @@ GlassWindow {
             color: win.notice ? Theme.t.danger : Theme.t.text_secondary; text: win.notice || parent.summary }
         Row { id: extraRow; anchors { right: actions.left; rightMargin: 12; verticalCenter: parent.verticalCenter } height: 30 }
         Row { id: actions; anchors { right: parent.right; rightMargin: 10; verticalCenter: parent.verticalCenter } spacing: 6
-            Btn { visible: win.current !== null; height: 28; text: "More…"
+            Btn { visible: parent.parent.startup && win.stPicked !== null; height: 28; text: "More…"
+                onClicked: { var p = mapToItem(win.contentItem, 0, -8); win.startMenu = { e: win.stPicked, x: p.x - 120, y: p.y - 120 } } }
+            Btn { visible: parent.parent.startup && win.stPicked !== null; height: 28; primary: win.stPicked !== null && !win.stPicked.enabled
+                text: win.stPicked && win.stPicked.enabled ? "Turn Off" : "Turn On"; objectName: "startupSwitch"
+                onClicked: Backend.setStartup(win.stPicked.id, !win.stPicked.enabled) }
+            Btn { visible: !parent.parent.startup && win.current !== null; height: 28; text: "More…"
                 onClicked: { var p = mapToItem(win.contentItem, 0, -8); win.menuFor = { item: win.current, x: p.x - 120, y: p.y - 230 } } }
-            Btn { visible: win.current !== null; height: 28; danger: true; objectName: "endButton"
+            Btn { visible: !parent.parent.startup && win.current !== null; height: 28; danger: true; objectName: "endButton"
                 text: win.current && win.current.kind === "app" ? "End App" : "End Process"
                 onClicked: win.act("end", win.current) } }
     }
@@ -533,6 +622,33 @@ GlassWindow {
                         onClicked: { var it = win.menuFor.item, a = modelData[2]; win.menuFor = null; win.act(a, it) }
                         Glyph { x: 8; anchors.verticalCenter: parent.verticalCenter; name: modelData[1]; size: 14; ink: modelData[2] === "force" ? Theme.t.danger : Theme.t.icon }
                         Label { x: 32; width: parent.width - 40; anchors.verticalCenter: parent.verticalCenter; text: modelData[0]; elide: Text.ElideRight; color: modelData[2] === "force" ? Theme.t.danger : Theme.t.text } } } } }
+    }
+    MouseArea { visible: win.startMenu !== null; anchors.fill: parent; z: 19; acceptedButtons: Qt.LeftButton | Qt.RightButton; onClicked: win.startMenu = null }
+    Rectangle {
+        objectName: "startupMenu"
+        visible: win.startMenu !== null; z: 20; width: 240; height: smenu.height + 10; radius: Theme.t.radiusCard; color: Theme.t.menu_bg; border.width: 1; border.color: Theme.t.menu_border
+        x: win.startMenu ? Math.max(8, Math.min(win.startMenu.x, parent.width - width - 8)) : 0; y: win.startMenu ? Math.max(8, Math.min(win.startMenu.y, parent.height - height - 8)) : 0
+        readonly property var e: win.startMenu ? win.startMenu.e : null
+        Column { id: smenu; x: 5; y: 5; width: parent.width - 10
+            Repeater {
+                model: parent.parent.e ? [[parent.parent.e.enabled ? "Turn off" : "Turn on", parent.parent.e.enabled ? "x" : "check", "switch"], ["Details", "info", "props"],
+                                          ["Show where it's set up", "folder", "where"]].concat(parent.parent.e.mine && !parent.parent.e.system ? [["", "", ""], ["Remove from sign-in", "trash", "remove"]] : []) : []
+                Item { required property var modelData; width: smenu.width; height: modelData[0] ? 30 : 9
+                    Rectangle { visible: !modelData[0]; y: 4; width: parent.width; height: 1; color: Theme.t.separator }
+                    Pressable { visible: modelData[0] !== ""; anchors.fill: parent; radius: Theme.t.radiusControl
+                        onClicked: {
+                            var e = win.startMenu.e, a = modelData[2]
+                            win.startMenu = null
+                            if (a === "switch") Backend.setStartup(e.id, !e.enabled)
+                            else if (a === "where") Backend.showFile(e.path)
+                            else if (a === "remove") Backend.removeStartup(e.id)
+                            else win.props = { title: e.name, list: [{ name: "Runs", value: e.exec }, { name: "Set up in", value: e.path },
+                                                                     { name: "Status", value: e.why ? e.why : e.enabled ? "On" : "Off" },
+                                                                     { name: "At sign-in", value: e.cpu >= 0 ? e.cpu.toFixed(2) + " s of the processor, " + win.size(Math.max(0, e.disk)) + " read" : "Not measured" },
+                                                                     { name: "Now", value: e.running ? win.size(e.memoryNow) + " of memory" : "Not running" }] }
+                        }
+                        Glyph { x: 8; anchors.verticalCenter: parent.verticalCenter; name: modelData[1]; size: 14; ink: modelData[2] === "remove" ? Theme.t.danger : Theme.t.icon }
+                        Label { x: 32; width: parent.width - 40; anchors.verticalCenter: parent.verticalCenter; text: modelData[0]; elide: Text.ElideRight; color: modelData[2] === "remove" ? Theme.t.danger : Theme.t.text } } } } }
     }
     Rectangle { visible: win.asking !== null || win.props !== null; anchors.fill: parent; color: "#66000000"; z: 30; MouseArea { anchors.fill: parent; onClicked: { win.props = null; win.asking = null } } }
     Rectangle {
