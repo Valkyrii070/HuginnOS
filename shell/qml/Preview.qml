@@ -6,7 +6,9 @@ Window {
     id: win
     width: 1600; height: 1000; visible: true; title: "Huginn Shell preview"
     color: Theme.t.window
-    property string open: startOpen === "tabs" || startOpen === "live" ? "" : startOpen
+    property string open: startMenus ? "menu" : startOpen === "tabs" || startOpen === "live" ? "" : startOpen
+    onOpenChanged: if (open === "menu") Status.loadMenus()
+    Component.onCompleted: if (open === "menu") Status.loadMenus()
     property bool tabsOpen: startOpen === "tabs"
     Timer { id: tabsShow; interval: 350; onTriggered: { Tabs.refresh(); win.tabsOpen = true } }
     Timer { id: tabsHide; interval: 350; onTriggered: win.tabsOpen = false }
@@ -14,7 +16,9 @@ Window {
     MouseArea { anchors.fill: parent; onClicked: win.open = "" }
     Widgets { x: 22; y: 52 }
     property string searchText: ""
-    TopBar { width: parent.width; onControlCentre: win.open = win.open === "cc" ? "" : "cc"; onLauncher: win.open = win.open === "launcher" ? "" : "launcher"; onSearch: win.open = win.open === "search" ? "" : "search" }
+    TopBar { id: bar; width: parent.width; menuOpen: win.open === "menu"; onAppMenu: function (group) { win.open = win.open === "menu" ? "" : "menu" }
+             onControlCentre: win.open = win.open === "cc" ? "" : "cc"; onLauncher: win.open = win.open === "launcher" ? "" : "launcher"; onSearch: win.open = win.open === "search" ? "" : "search" }
+    AppMenuIsland { z: 20; shown: win.open === "menu"; only: ""; x: Math.max(6, bar.nameLeft - 6); y: 3; onDone: win.open = "" }   // (--menus)
     Dock {
         id: dock
         anchors { horizontalCenter: parent.horizontalCenter; bottom: parent.bottom; bottomMargin: 14 }

@@ -53,6 +53,7 @@ Item {
         fragmentShader: cw.base === "scene" ? Qt.resolvedUrl((cw.spec.scene || "aurora") + ".frag.qsb") : ""
         property real time: cw.time
         property real day: 0
+        property Item source: null              // (unused: there for the stand-in shader it has when it isn't a scene)
         property size res: Qt.size(width, height)
         property color tintA: cw.colours.tintA || "#0F2624"
         property color tintB: cw.colours.tintB || "#17192C"

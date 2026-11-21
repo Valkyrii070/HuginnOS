@@ -143,16 +143,16 @@ class Theme(QObject):
         wp = self._settings.wallpaper
         stills = Path(QUrl(live_dir()).toLocalFile()) / "stills" if live_dir() else None
 
-        def still(realm: str) -> float:
+        def still(realm: str, night: bool = False) -> float:
             if not stills:
                 return -1.0
             day = stills / f"{realm}-day.jpg"
-            return wall_top(str(day if not self._dark and day.exists() else stills / f"{realm}.jpg"))
+            return wall_top(str(day if not night and not self._dark and day.exists() else stills / f"{realm}.jpg"))
         if wp.endswith("/wallpaper.json"):
             spec = self._settings._wallpaper_spec()
             base = spec.get("base", "scene")
             v = (wall_top(str(Path(wp).parent / spec["file"])) if base == "picture" and spec.get("file")
-                 else still(spec.get("scene") or "aurora") if base == "scene" else -1.0)
+                 else still(spec.get("scene") or "aurora", night=True) if base == "scene" else -1.0)   # (always its night)
             try:
                 shade = max(0.0, min(0.7, float(spec.get("shade") or 0)))
             except (TypeError, ValueError):

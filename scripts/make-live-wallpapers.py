@@ -37,8 +37,16 @@ def build(realm: str) -> Path:
 
 STILL_QML = """import QtQuick
 Item { width: %d; height: %d
-    LiveWallpaper { id: lw; anchors.fill: parent; realm: "%s"; day: %d; moving: false } }
+    LiveWallpaper { id: lw; anchors.fill: parent; realm: "%s"; day: %d; moving: false%s } }
 """
+
+
+def day_tints(realm: str) -> str:
+    """The light appearance's tints for a realm (tokens.json), as the shell gives the scene in the light appearance."""
+    import json
+    spec = json.loads((KIT / "tokens" / "tokens.json").read_text())["realms"][realm]["light"]
+    return f'; tintA: "{spec["tint_a"]}"; tintB: "{spec["tint_b"]}"'
+
 
 
 def stills(realms: list, size: tuple) -> None:
@@ -53,7 +61,7 @@ def stills(realms: list, size: tuple) -> None:
         for realm, day in ((r, d) for r in realms for d in (0, 1)):
             name = realm + ("-day" if day else "")
             qml = OUT / f".still-{name}.qml"
-            qml.write_text(STILL_QML % (size[0], size[1], realm, day))
+            qml.write_text(STILL_QML % (size[0], size[1], realm, day, day_tints(realm) if day else ""))
             code = ("import sys\nfrom PySide6.QtCore import QUrl, QTimer\nfrom PySide6.QtGui import QGuiApplication\nfrom PySide6.QtQuick import QQuickView\n"
                     "app = QGuiApplication(sys.argv); v = QQuickView(); v.setSource(QUrl.fromLocalFile(sys.argv[1])); v.show()\n"
                     "lw = v.rootObject().childItems()[0]\n"

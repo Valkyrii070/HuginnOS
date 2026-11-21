@@ -2331,7 +2331,10 @@ backend in `huginn_app.py` went) and `apps/qml/Monitor.qml`.
   bar (the realm's still, your picture, a made wallpaper's picture or scene, darkened as it is) and turns the bar to
   glass where the text wouldn't read: dark text on a dusky scene, light text on a bright picture.
 - **Day stills.** Each realm now has a still of its light appearance too (`stills/<realm>-day.jpg`, painted by
-  `scripts/make-live-wallpapers.py`), shown where there's no graphics card (a virtual machine) instead of the night.
+  `scripts/make-live-wallpapers.py` with the light appearance's tints, as the shell gives the scene), shown where
+  there's no graphics card (a virtual machine) instead of the night — which had left the light appearance's dark
+  text on a dark desktop there.
+- The shell's design preview opens the app menu with `--menus` again (it had stopped doing anything).
 - Tray icons without a picture show their first letter (the shell's smoke test caught the demo's missing icons).
 
 ## Huginn, the browser
