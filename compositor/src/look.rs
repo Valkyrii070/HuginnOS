@@ -166,6 +166,29 @@ void main() {
 }
 "#;
 
+/// The blur behind one piece of a shell surface's glass (Backdrop): drawn under the surface, in its rounded box only.
+const BACKDROP: &str = r#"
+precision highp float;
+varying vec2 v_coords;
+uniform vec2 size;
+uniform float alpha;
+uniform sampler2D bg;
+uniform vec4 bg_rect;
+uniform vec4 box;
+uniform float radius;
+uniform float strength;
+float rsdf(vec2 p, vec4 r, float k) {
+    vec2 c = r.xy + r.zw * 0.5;
+    vec2 q = abs(p - c) - r.zw * 0.5 + k;
+    return min(max(q.x, q.y), 0.0) + length(max(q, 0.0)) - k;
+}
+void main() {
+    float cover = clamp(0.5 - rsdf(gl_FragCoord.xy, box, radius), 0.0, 1.0) * strength;
+    vec3 b = texture2D(bg, (gl_FragCoord.xy - bg_rect.xy) / bg_rect.zw).rgb;
+    gl_FragColor = vec4(b * cover, cover) * alpha;
+}
+"#;
+
 /// A soft shadow under a rounded box (the analytic Gaussian of a rounded rectangle), none under the window itself.
 const SHADOW: &str = r#"
 precision highp float;
@@ -317,6 +340,7 @@ void main() {
 #[derive(Debug)]
 pub struct Programs {
     pub shadow: GlesPixelProgram,
+    pub backdrop: GlesPixelProgram,
     pub deco: GlesPixelProgram,
     pub clip: GlesTexProgram,
     pub frost: GlesTexProgram,
@@ -352,6 +376,7 @@ fn compile(r: &mut GlesRenderer) -> Result<Programs, GlesError> {
             SHADOW,
             &[f4("box"), f4("hole"), f("radius"), f("sigma"), f("strength")],
         )?,
+        backdrop: r.compile_custom_pixel_shader(BACKDROP, &[i1("bg"), f4("bg_rect"), f4("box"), f("radius"), f("strength")])?,
         deco: r.compile_custom_pixel_shader(
             DECO,
             &[f4("bg"), f4("line"), f("radius"), f3("dots"), f("dot_y"), f("dot_r"), f("active"), f("hover"), f("px")],
@@ -1146,6 +1171,180 @@ impl<R: Look, E: RenderElement<R>> RenderElement<R> for Frosted<E> {
             })
             .map_err(R::gles_error)?;
         }
+        res
+    }
+
+    fn underlying_storage(&self, _renderer: &mut R) -> Option<UnderlyingStorage<'_>> {
+        None
+    }
+}
+
+// ---------------------------------------------------------------------------------------------------- just the glass
+/// Where the glass is in the shell's full-screen pop-ups (the control centre, Today, the menus, the start menu,
+/// Search), by layer namespace: the shell says, every frame it changes (huginn_system.py, Glass.qml). Each piece: its
+/// rectangle in the surface (logical pixels), corner radius, and strength (it fades with the panel). A pop-up whose
+/// namespace is here is drawn plain, over a blur of just those pieces; one that isn't, frosted whole (Frosted).
+#[derive(Debug, Clone)]
+pub struct GlassPiece {
+    pub id: Id,
+    pub rect: [f64; 4],
+    pub radius: f64,
+    pub strength: f32,
+}
+
+static GLASS: Mutex<Option<std::collections::HashMap<String, Vec<GlassPiece>>>> = Mutex::new(None);
+
+/// The shell's word for one namespace: JSON [[x, y, w, h, radius, strength], …] ("[]": no glass showing). The pieces'
+/// ids stay while their number does, so each keeps its blur from frame to frame.
+pub fn set_glass(namespace: &str, json: &str) {
+    let Ok(serde_json::Value::Array(list)) = serde_json::from_str::<serde_json::Value>(json) else {
+        return;
+    };
+    let pieces: Vec<[f64; 6]> = list
+        .iter()
+        .filter_map(|v| {
+            let a = v.as_array()?;
+            let n = |i: usize| a.get(i).and_then(|x| x.as_f64()).unwrap_or(0.0);
+            (a.len() >= 4 && n(2) > 0.0 && n(3) > 0.0).then(|| [n(0), n(1), n(2), n(3), n(4), if a.len() > 5 { n(5) } else { 1.0 }])
+        })
+        .take(16)
+        .collect();
+    let mut map = GLASS.lock().unwrap();
+    let map = map.get_or_insert_with(Default::default);
+    let old = map.remove(namespace).unwrap_or_default();
+    let keep = old.len() == pieces.len();
+    let new = pieces
+        .iter()
+        .enumerate()
+        .map(|(i, p)| GlassPiece {
+            id: if keep { old[i].id.clone() } else { Id::new() },
+            rect: [p[0], p[1], p[2], p[3]],
+            radius: p[4],
+            strength: p[5].clamp(0.0, 1.0) as f32,
+        })
+        .collect();
+    map.insert(namespace.to_string(), new);
+}
+
+/// The glass the shell said a namespace has, if it said.
+pub fn glass_of(namespace: &str) -> Option<Vec<GlassPiece>> {
+    GLASS.lock().unwrap().as_ref().and_then(|m| m.get(namespace).cloned())
+}
+
+/// The blur behind one piece of glass: captures and blurs only what's under that piece (plus the blur's reach), so
+/// a full-screen pop-up doesn't make the whole screen be blurred again whenever anything under it changes.
+#[derive(Debug)]
+pub struct Backdrop {
+    id: Id,
+    geo: Rectangle<i32, Physical>,
+    radius: f64,
+    strength: f32,
+}
+
+impl Backdrop {
+    pub fn new(id: Id, geo: Rectangle<i32, Physical>, radius: f64, strength: f32) -> Self {
+        Self { id, geo, radius, strength }
+    }
+}
+
+impl Element for Backdrop {
+    fn id(&self) -> &Id {
+        &self.id
+    }
+    fn current_commit(&self) -> CommitCounter {
+        CommitCounter::default()
+    }
+    fn src(&self) -> Rectangle<f64, BufferCoords> {
+        Rectangle::from_size((self.geo.size.w as f64, self.geo.size.h as f64).into())
+    }
+    fn geometry(&self, _scale: Scale<f64>) -> Rectangle<i32, Physical> {
+        self.geo
+    }
+    fn kind(&self) -> Kind {
+        Kind::Unspecified
+    }
+    fn is_framebuffer_effect(&self) -> bool {
+        true
+    }
+}
+
+impl<R: Look> RenderElement<R> for Backdrop {
+    fn capture_framebuffer(
+        &self,
+        frame: &mut R::Frame<'_, '_>,
+        _src: Rectangle<f64, BufferCoords>,
+        dst: Rectangle<i32, Physical>,
+        cache: &UserDataMap,
+    ) -> Result<(), R::Error> {
+        let gles = R::gles_frame(frame);
+        cache.insert_if_missing(|| RefCell::new(FrostState::default()));
+        let mut st = cache.get::<RefCell<FrostState>>().unwrap().borrow_mut();
+        st.ok = false;
+        if !gles.capabilities().contains(&Capability::Blit) {
+            return Ok(());
+        }
+        let (Some(rect), Some(k)) = (to_gl(gles, dst.to_f64()), kawase(gles)) else {
+            return Ok(());
+        };
+        let fb = gles.output_size();
+        let instancing = gles.capabilities().contains(&Capability::Instancing);
+        st.ok = gles
+            .with_context(|gl| unsafe { blur_under(gl, &k, fb, rect, &mut st, instancing) })
+            .map_err(R::gles_error)?;
+        Ok(())
+    }
+
+    fn draw(
+        &self,
+        frame: &mut R::Frame<'_, '_>,
+        src: Rectangle<f64, BufferCoords>,
+        dst: Rectangle<i32, Physical>,
+        damage: &[Rectangle<i32, Physical>],
+        _opaque_regions: &[Rectangle<i32, Physical>],
+        cache: Option<&UserDataMap>,
+    ) -> Result<(), R::Error> {
+        if !FROST.load(Ordering::Relaxed) || self.strength <= 0.01 {
+            return Ok(());
+        }
+        let ready = cache
+            .and_then(|c| c.get::<RefCell<FrostState>>())
+            .and_then(|s| {
+                let s = s.borrow();
+                (s.ok && !s.levels.is_empty()).then(|| (s.levels[0].tex, s.rect))
+            });
+        let gles = R::gles_frame(frame);
+        let (Some((tex, rect)), Some(p), Some(b)) = (ready, programs_in(gles), to_gl(gles, dst.to_f64())) else {
+            return Ok(());
+        };
+        gles.with_context(|gl| unsafe {
+            gl.ActiveTexture(ffi::TEXTURE1);
+            gl.BindTexture(ffi::TEXTURE_2D, tex);
+            gl.ActiveTexture(ffi::TEXTURE0);
+        })
+        .map_err(R::gles_error)?;
+        let res = gles
+            .render_pixel_shader_to(
+                &p.backdrop,
+                src,
+                dst,
+                (self.geo.size.w, self.geo.size.h).into(),
+                Some(damage),
+                1.0,
+                &[
+                    Uniform::new("bg", 1i32),
+                    Uniform::new("bg_rect", (rect[0], rect[1], rect[2], rect[3])),
+                    Uniform::new("box", (b[0], b[1], b[2], b[3])),
+                    Uniform::new("radius", self.radius as f32),
+                    Uniform::new("strength", self.strength),
+                ],
+            )
+            .map_err(R::gles_error);
+        gles.with_context(|gl| unsafe {
+            gl.ActiveTexture(ffi::TEXTURE1);
+            gl.BindTexture(ffi::TEXTURE_2D, 0);
+            gl.ActiveTexture(ffi::TEXTURE0);
+        })
+        .map_err(R::gles_error)?;
         res
     }
 

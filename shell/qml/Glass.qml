@@ -29,7 +29,8 @@ Rectangle {
     function chase() { if (behind) { follow(); chaser.restart() } }
     onXChanged: chase(); onYChanged: chase(); onWidthChanged: chase(); onHeightChanged: chase()
     onVisibleChanged: chase(); onBehindChanged: chase()
-    Component.onCompleted: chase()
+    Component.onCompleted: { chase(); if (typeof Status !== "undefined" && Status.glassItem) Status.glassItem(glass, true) }
+    Component.onDestruction: if (typeof Status !== "undefined" && Status.glassItem) Status.glassItem(glass, false)
     FrameAnimation { id: chaser; running: false; property real spent: 0
         onTriggered: { glass.follow(); spent += frameTime; if (spent > 0.9) { stop(); spent = 0 } } }
     Timer { interval: 500; repeat: true; running: glass.behind !== null && glass.visible; onTriggered: glass.follow() }

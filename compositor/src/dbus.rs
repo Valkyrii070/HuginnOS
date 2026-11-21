@@ -320,6 +320,12 @@ impl Compositor {
         let _ = self.to_loop.send(Request::SpaceDo(action.to_string()));
     }
 
+    /// Where a full-screen pop-up's glass is (the control centre's panel, Today's islands…): only that is blurred
+    /// behind it. JSON [[x, y, w, h, radius, strength], …] in the surface's logical pixels; "[]" while none shows.
+    fn set_glass(&self, namespace: &str, json: &str) {
+        crate::look::set_glass(namespace, json);
+    }
+
     /// The dock: where its tiles are and how windows hide into them (JSON).
     fn dock_layout(&self, json: &str) {
         let _ = self.to_loop.send(Request::DockLayout(json.to_string()));

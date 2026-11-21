@@ -35,7 +35,9 @@ Item {
     property real spent: 0
     readonly property bool still: !gpu || slow || shader.status === ShaderEffect.Error
     readonly property bool resting: speed === 0
-    readonly property url stillSource: Qt.resolvedUrl("stills/" + realm + ".jpg")
+    // the still for the appearance: <realm>-day.jpg for the light one (where there is one), <realm>.jpg for the dark
+    property bool noDayStill: false
+    readonly property url stillSource: Qt.resolvedUrl("stills/" + realm + (day > 0.5 && !noDayStill ? "-day" : "") + ".jpg")
 
     FrameAnimation {
         running: lw.visible && !lw.still && (lw.moving || lw.speed > 0)
@@ -58,6 +60,7 @@ Item {
         anchors.fill: parent
         visible: lw.still || shader.status !== ShaderEffect.Compiled
         source: lw.stillSource
+        onStatusChanged: if (status === Image.Error && lw.day > 0.5 && !lw.noDayStill) lw.noDayStill = true
         fillMode: Image.PreserveAspectCrop
         sourceSize.width: 2560
         cache: true

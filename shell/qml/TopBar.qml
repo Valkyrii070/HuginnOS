@@ -31,7 +31,11 @@ Item {
     readonly property var net: Status.network
     height: 30
 
-    Glass { anchors.fill: parent; radius: 0; border.width: 0; opacity: bar.solid ? 1 : 0; Behavior on opacity { NumberAnimation { duration: 150 } } }
+    // …and where its text wouldn't read on the wallpaper: dark text on a dark scene (the light appearance over a
+    // realm's evening), light text on a bright picture (huginn_shell.py: wall_top)
+    readonly property bool wallGlass: Theme.t.wallTop !== undefined && Theme.t.wallTop >= 0
+                                      && (Theme.t.dark ? Theme.t.wallTop > 0.62 : Theme.t.wallTop < 0.55)
+    Glass { anchors.fill: parent; radius: 0; border.width: 0; opacity: bar.solid || bar.wallGlass ? 1 : 0; Behavior on opacity { NumberAnimation { duration: 150 } } }
 
     Row {
         id: leftRow

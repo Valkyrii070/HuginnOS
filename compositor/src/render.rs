@@ -65,6 +65,7 @@ smithay::backend::renderer::element::render_elements! {
     Moved=RescaleRenderElement<WindowRenderElement<R>>,
     Solid=SolidColorRenderElement,
     Frosted=Frosted<WaylandSurfaceRenderElement<R>>,
+    Backdrop=crate::look::Backdrop,
     Zoom=crate::look::ZoomElement,
     Ghost=RescaleRenderElement<MemoryRenderBufferRenderElement<R>>,
     Hdr=crate::look::HdrElement,
@@ -82,6 +83,7 @@ impl<R: Look, E: RenderElement<R> + std::fmt::Debug> std::fmt::Debug
             Self::Moved(arg0) => f.debug_tuple("Moved").field(arg0).finish(),
             Self::Solid(arg0) => f.debug_tuple("Solid").field(arg0).finish(),
             Self::Frosted(arg0) => f.debug_tuple("Frosted").field(arg0).finish(),
+            Self::Backdrop(arg0) => f.debug_tuple("Backdrop").field(arg0).finish(),
             Self::Zoom(arg0) => f.debug_tuple("Zoom").field(arg0).finish(),
             Self::Ghost(arg0) => f.debug_tuple("Ghost").field(arg0).finish(),
             Self::Hdr(arg0) => f.debug_tuple("Hdr").field(arg0).finish(),
@@ -178,6 +180,21 @@ where
             for layer in map.layers_on(*level).rev() {
                 let loc = map.layer_geometry(layer).unwrap_or_default().loc.to_physical_precise_round(scale);
                 let glass = crate::look::frosted(layer.namespace());
+                // a pop-up whose glass the shell has said: drawn plain, over a blur of just its glass
+                if let Some(pieces) = glass.then(|| crate::look::glass_of(layer.namespace())).flatten() {
+                    out.extend(
+                        AsRenderElements::<R>::render_elements::<WaylandSurfaceRenderElement<R>>(layer, renderer, loc, scale.into(), 1.0)
+                            .into_iter()
+                            .map(|e| OutputRenderElements::Custom(CustomRenderElements::Surface(e))),
+                    );
+                    for p in pieces {
+                        let r = Rectangle::<f64, smithay::utils::Logical>::new((p.rect[0], p.rect[1]).into(), (p.rect[2], p.rect[3]).into())
+                            .to_physical_precise_round(scale);
+                        let geo = Rectangle::new(loc + r.loc, r.size);
+                        out.push(OutputRenderElements::Backdrop(crate::look::Backdrop::new(p.id, geo, p.radius * scale, p.strength)));
+                    }
+                    continue;
+                }
                 out.extend(
                     AsRenderElements::<R>::render_elements::<WaylandSurfaceRenderElement<R>>(layer, renderer, loc, scale.into(), 1.0)
                         .into_iter()

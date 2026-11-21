@@ -2,8 +2,9 @@
 """Builds Huginn OS's live wallpapers: each realm's scene (shaders/live/<realm>.frag, with common.glsl before it and
 main.glsl after) compiled by Qt's shader baker (qsb) into config/overlay/usr/share/huginn-os/live/<realm>.frag.qsb, then a
 still of each painted on the graphics card (an X server with OpenGL is needed: Xvfb with Mesa will do) at the moment
-LiveWallpaper.qml starts from, into stills/<realm>.jpg. The stills stand in where there is no graphics card, show in
-Settings, and are the boot screen's backdrop (make-plymouth.py).
+LiveWallpaper.qml starts from, into stills/<realm>.jpg (night: the dark appearance) and stills/<realm>-day.jpg (the
+light one). The stills stand in where there is no graphics card, show in Settings, and are the boot screen's backdrop
+(make-plymouth.py).
 
     scripts/make-live-wallpapers.py [--size 2560x1600] [--only aurora]
 """
@@ -36,7 +37,7 @@ def build(realm: str) -> Path:
 
 STILL_QML = """import QtQuick
 Item { width: %d; height: %d
-    LiveWallpaper { id: lw; anchors.fill: parent; realm: "%s"; moving: false } }
+    LiveWallpaper { id: lw; anchors.fill: parent; realm: "%s"; day: %d; moving: false } }
 """
 
 
@@ -49,9 +50,10 @@ def stills(realms: list, size: tuple) -> None:
         time.sleep(1)
     (OUT / "stills").mkdir(parents=True, exist_ok=True)
     try:
-        for realm in realms:
-            qml = OUT / f".still-{realm}.qml"
-            qml.write_text(STILL_QML % (size[0], size[1], realm))
+        for realm, day in ((r, d) for r in realms for d in (0, 1)):
+            name = realm + ("-day" if day else "")
+            qml = OUT / f".still-{name}.qml"
+            qml.write_text(STILL_QML % (size[0], size[1], realm, day))
             code = ("import sys\nfrom PySide6.QtCore import QUrl, QTimer\nfrom PySide6.QtGui import QGuiApplication\nfrom PySide6.QtQuick import QQuickView\n"
                     "app = QGuiApplication(sys.argv); v = QQuickView(); v.setSource(QUrl.fromLocalFile(sys.argv[1])); v.show()\n"
                     "lw = v.rootObject().childItems()[0]\n"
@@ -59,11 +61,11 @@ def stills(realms: list, size: tuple) -> None:
                     "    v.grabWindow().save(sys.argv[2], quality=90); app.quit()\n"
                     "QTimer.singleShot(2500, go); app.exec()\n")
             env = dict(os.environ, DISPLAY=display, QT_QPA_PLATFORM="xcb")
-            r = subprocess.run([sys.executable, "-c", code, str(qml), str(OUT / "stills" / f"{realm}.jpg")], env=env, capture_output=True, text=True, timeout=180)
+            r = subprocess.run([sys.executable, "-c", code, str(qml), str(OUT / "stills" / f"{name}.jpg")], env=env, capture_output=True, text=True, timeout=180)
             qml.unlink()
             if r.returncode:
-                sys.exit(f"{realm} still: {r.stderr[-800:]}")
-            print(f"  {realm}: stills/{realm}.jpg ({(OUT / 'stills' / f'{realm}.jpg').stat().st_size // 1024} KB)")
+                sys.exit(f"{name} still: {r.stderr[-800:]}")
+            print(f"  {name}: stills/{name}.jpg ({(OUT / 'stills' / f'{name}.jpg').stat().st_size // 1024} KB)")
     finally:
         if xvfb:
             xvfb.terminate()

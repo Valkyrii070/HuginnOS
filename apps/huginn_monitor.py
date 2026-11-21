@@ -72,6 +72,8 @@ ENGINES = re.compile(r"^drm-engine-(\w+):\s+(\d+)\s*ns", re.M)
 
 
 def human(n: float) -> str:
+    if n != n or n in (float("inf"), float("-inf")):              # (not a number: nothing to show)
+        return "–"
     for unit in ("B", "KB", "MB", "GB", "TB"):
         if abs(n) < 1024 or unit == "TB":
             return f"{n:.0f} {unit}" if unit in ("B", "KB") else f"{n:.1f} {unit}"
@@ -843,7 +845,8 @@ def demo_data() -> dict:
                ("earlyoom", "root", 0.0, 0.002 * G), ("polkitd", "polkitd", 0.0, 0.01 * G), ("upowerd", "root", 0.0, 0.01 * G)]
     rows, groups, pid = [], [], 1200
     for key, name, icon, cpu, mem, gpu, disk, n in apps:
-        g = {"key": key, "name": name, "icon": "", "kind": "app",          # (letters: the preview can't count on the icons being there) "sub": f"{n} processes" if n > 1 else "", "cpu": cpu, "memory": mem, "gpu": gpu,
+        # (no icon: letters, since the preview can't count on the icons being there)
+        g = {"key": key, "name": name, "icon": "", "kind": "app", "sub": f"{n} processes" if n > 1 else "", "cpu": cpu, "memory": mem, "gpu": gpu,
              "disk": disk, "pids": [], "paused": False, "count": n, "user": "astrid"}
         for i in range(n):
             pid += random.randint(3, 40)

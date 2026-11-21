@@ -2311,6 +2311,29 @@ backend in `huginn_app.py` went) and `apps/qml/Monitor.qml`.
   shows on hover. Quit asks the app to close (Steam with its own `-shutdown`, so it closes cleanly); Force Quit stops
   it and what it started at once.
 
+## Tray icons, lighter pop-ups, and a pass over the apps (2026-11-21)
+
+- **Tray icons work.** Nothing in the session answered for the StatusNotifier tray, so Steam, Discord and the like
+  had nowhere to put their icon when you closed them. The shell is now the tray (`shell/huginn_tray.py`: the watcher
+  and the host), and those apps show in Control centre › Running in the background with their own icon, their own
+  menu on right-click (with its submenus and checkmarks) and their own action on click. An app whose window you closed
+  is matched to its tray icon by its process, or for a Flatpak by its sandbox, so it shows once.
+- **The control centre, Today, the menus and the start menu are lighter.** Each covers the whole screen (so a click
+  beside it closes it), and the compositor used to blur the whole screen behind it again whenever anything moved
+  there — a video, a live wallpaper, a game. Now the shell tells the compositor where each pop-up's glass actually is
+  (as it's drawn, sliding and fading), and only that is blurred (`look.rs`: `Backdrop`; the D-Bus `SetGlass`). Search
+  still blurs the whole screen, on purpose.
+- **A pass over every app, dark and light.** System Monitor's preview showed "NaN%" for its apps (a comment that ate
+  half a line), and numbers that aren't numbers now show as "–" anywhere in it. Weather's week puts each day's low by
+  the bottom of its bar, not halfway up. Settings' list scrolls to the page that's open (About, Users… were below it).
+- **The top bar reads in the light appearance.** Its text floats on the wallpaper, and every realm's scene stays dusky
+  in the light appearance, so its dark text was hard to see. The shell measures how light the wallpaper is under the
+  bar (the realm's still, your picture, a made wallpaper's picture or scene, darkened as it is) and turns the bar to
+  glass where the text wouldn't read: dark text on a dusky scene, light text on a bright picture.
+- **Day stills.** Each realm now has a still of its light appearance too (`stills/<realm>-day.jpg`, painted by
+  `scripts/make-live-wallpapers.py`), shown where there's no graphics card (a virtual machine) instead of the night.
+- Tray icons without a picture show their first letter (the shell's smoke test caught the demo's missing icons).
+
 ## Huginn, the browser
 
 Inside the Huginn repository (this kit is its `os/` folder) the image ships the repository's own browser. A kit used

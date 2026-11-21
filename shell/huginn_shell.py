@@ -20,8 +20,8 @@ import sys
 import time
 from pathlib import Path
 
-from PySide6.QtCore import Property, QFileSystemWatcher, QObject, QProcess, QSettings, QTimer, QUrl, Signal, Slot
-from PySide6.QtGui import QFont, QGuiApplication, QIcon
+from PySide6.QtCore import Property, QFileSystemWatcher, QObject, QProcess, QSettings, QSize, QTimer, QUrl, Signal, Slot
+from PySide6.QtGui import QFont, QGuiApplication, QIcon, QImage
 from PySide6.QtQml import QQmlApplicationEngine, QQmlPropertyMap
 from PySide6.QtQuick import QQuickImageProvider, QQuickWindow  # noqa: F401  (QQuickWindow: the root window type, for grabWindow)
 
@@ -37,6 +37,36 @@ def live_dir() -> str:
         if (d / "LiveWallpaper.qml").exists():
             return QUrl.fromLocalFile(str(d) + "/").toString()
     return ""
+
+
+_WALL_TOP: dict = {}
+
+
+def wall_top(path: str) -> float:
+    """How light the top of a picture is (0 dark … 1 light): where the top bar's text floats over it. -1: can't tell."""
+    try:
+        key = (path, os.stat(path).st_mtime_ns)
+    except OSError:
+        return -1.0
+    if key not in _WALL_TOP:
+        from PySide6.QtGui import QImageReader                  # (here: the apps' Theme doesn't need it)
+        reader = QImageReader(path)
+        reader.setAutoTransform(True)
+        size = reader.size()
+        if size.isValid() and size.width() > 0:                 # small: only its brightness is wanted
+            reader.setScaledSize(QSize(64, max(8, round(64 * size.height() / size.width()))))
+        img = reader.read()
+        if img.isNull():
+            _WALL_TOP[key] = -1.0
+        else:
+            img = img.convertToFormat(QImage.Format.Format_RGB32)
+            rows, total = max(2, img.height() * 6 // 100), 0.0
+            for y in range(rows):
+                for x in range(img.width()):
+                    c = img.pixel(x, y)
+                    total += 0.2126 * ((c >> 16) & 255) + 0.7152 * ((c >> 8) & 255) + 0.0722 * (c & 255)
+            _WALL_TOP[key] = round(total / (rows * img.width() * 255), 3)
+    return _WALL_TOP[key]
 
 
 def me() -> dict:
@@ -105,6 +135,31 @@ class Theme(QObject):
     _dark = property(lambda self: self._settings.dark)
     _realm = property(lambda self: self._settings.realm)
 
+    def _wall_top(self) -> float:
+        """How light the wallpaper is under the top bar (wall_top), for the bar to turn to glass where its text
+        wouldn't read: dark text on a dark scene, light text on a bright picture. A realm's scene by its still for the
+        appearance (the scene starts from it); a live wallpaper someone made by its picture or scene, darkened as it
+        is; a video: -1."""
+        wp = self._settings.wallpaper
+        stills = Path(QUrl(live_dir()).toLocalFile()) / "stills" if live_dir() else None
+
+        def still(realm: str) -> float:
+            if not stills:
+                return -1.0
+            day = stills / f"{realm}-day.jpg"
+            return wall_top(str(day if not self._dark and day.exists() else stills / f"{realm}.jpg"))
+        if wp.endswith("/wallpaper.json"):
+            spec = self._settings._wallpaper_spec()
+            base = spec.get("base", "scene")
+            v = (wall_top(str(Path(wp).parent / spec["file"])) if base == "picture" and spec.get("file")
+                 else still(spec.get("scene") or "aurora") if base == "scene" else -1.0)
+            try:
+                shade = max(0.0, min(0.7, float(spec.get("shade") or 0)))
+            except (TypeError, ValueError):
+                shade = 0.0
+            return round(v * (1 - shade), 3) if v >= 0 else v
+        return wall_top(wp) if wp else still(self._realm)
+
     def _build(self) -> dict:
         tk = self._tokens
         mode = "dark" if self._dark else "light"
@@ -113,6 +168,7 @@ class Theme(QObject):
         t.update({"tintA": spec[mode]["tint_a"], "tintB": spec[mode]["tint_b"], "accent": spec[mode]["accent"],
                   "glowA": spec["glow"][0], "glowB": spec["glow"][1], "danger": tk["danger"][mode],
                   "onAccent": "#0B1512" if self._dark else "#FFFFFF", "dark": self._dark, "realm": self._realm, "liveDir": live_dir()})
+        t["wallTop"] = self._wall_top()
         t.update({"radius" + k.title(): v for k, v in tk["radius"].items()})
         t.update({"space" + k.title(): v for k, v in tk["space"].items()})
         t.update({"panelOpacity": tk["glass"]["panel_opacity"], "popupOpacity": tk["glass"]["popup_opacity"],

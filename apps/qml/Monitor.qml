@@ -46,7 +46,7 @@ GlassWindow {
     Timer { id: hide; interval: 6000; onTriggered: win.notice = "" }
 
     // ---------------------------------------------------------------------------------------------------- helpers
-    function pct(v) { return (v < 10 && v > 0 ? v.toFixed(1) : Math.round(v)) + "%" }
+    function pct(v) { return typeof v !== "number" || isNaN(v) ? "–" : (v < 10 && v > 0 ? v.toFixed(1) : Math.round(v)) + "%" }
     function gb(b) { return (b / 1073741824).toFixed(b >= 107374182400 ? 0 : 1) + " GB" }
     function size(b) { return Backend.size(b) }
     function rate(b) { return b < 0 ? "–" : Backend.rate(b) }

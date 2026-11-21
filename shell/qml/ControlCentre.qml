@@ -258,8 +258,11 @@ Glass {
                                 AppIcon { visible: !!bgRow.modelData.app; size: 28
                                     name: bgRow.modelData.name; glyph: bgRow.modelData.app ? bgRow.modelData.app.glyph || "" : ""
                                     image: bgRow.modelData.app ? bgRow.modelData.app.image || "" : ""; own: bgRow.modelData.app ? bgRow.modelData.app.own || "" : "" }
-                                Image { visible: !bgRow.modelData.app; anchors.fill: parent; sourceSize: Qt.size(56, 56); asynchronous: true
+                                Image { id: trayPic; visible: !bgRow.modelData.app; anchors.fill: parent; sourceSize: Qt.size(56, 56); asynchronous: true
                                     source: !bgRow.modelData.tray ? "" : bgRow.modelData.tray.icon || (bgRow.modelData.tray.iconName ? "image://sysicon/" + bgRow.modelData.tray.iconName : "") }
+                                Rectangle {   // no picture of its own: its first letter
+                                    visible: !bgRow.modelData.app && trayPic.status !== Image.Ready; anchors.fill: parent; radius: 8; color: Theme.t.group
+                                    Label { anchors.centerIn: parent; text: (bgRow.modelData.name || "?").charAt(0).toUpperCase(); font.pixelSize: 13; font.weight: Font.DemiBold } }
                                 Rectangle {   // it wants you (Discord: a message)
                                     visible: !!bgRow.modelData.tray && bgRow.modelData.tray.status === "NeedsAttention"
                                     anchors { right: parent.right; top: parent.top; margins: -2 } width: 10; height: 10; radius: 5; color: Theme.t.accent

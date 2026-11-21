@@ -149,12 +149,16 @@ GlassWindow {
             IslandField { id: search; placeholder: "Search settings"; width: 240; onTextChanged: win.query = text
                 onAccepted: if (win.results.length) win.go(win.results[0].page) } },
         Rail {
+            id: rail
             x: 12; y: 64; width: 236; maxHeight: win.height - 64 - 14
             Repeater { model: win.railPages
                 Column { required property var modelData; required property int index; width: parent.width
                     SideTitle { visible: index === 0 || win.railPages[index - 1].group !== modelData.group; text: modelData.group; height: visible ? implicitHeight : 0 }
-                    Pressable { width: parent.width; height: 34; radius: 11; active: false
-                        color: (win.page === modelData.id || (win.page === "livemaker" && modelData.id === "appearance")) && win.query === "" ? Qt.alpha(Theme.t.accent, 0.18) : (hovered ? Theme.t.hover : "transparent")
+                    Pressable { id: railRow; width: parent.width; height: 34; radius: 11; active: false
+                        readonly property bool current: win.page === modelData.id || (win.page === "livemaker" && modelData.id === "appearance")
+                        onCurrentChanged: if (current) rail.reveal(railRow)          // the open page shows in the list
+                        Component.onCompleted: if (current) rail.reveal(railRow)
+                        color: current && win.query === "" ? Qt.alpha(Theme.t.accent, 0.18) : (hovered ? Theme.t.hover : "transparent")
                         onClicked: win.go(modelData.id)
                         Rectangle { x: 6; width: 22; height: 22; radius: 7; anchors.verticalCenter: parent.verticalCenter
                             gradient: Gradient { GradientStop { position: 0; color: modelData.a } GradientStop { position: 1; color: modelData.b } }

@@ -570,6 +570,7 @@ QtObject {
     },
     Window {   // Today: under the bar (the work area, so a click beside its islands closes it)
         id: todayWin
+        Component.onCompleted: Status.glassWindow(todayWin, "huginn-today")      // only its glass is blurred behind it
         visible: shell.open === "today" || todayIslands.visible; color: "transparent"
         LayerShell.Window.scope: "huginn-today"
         LayerShell.Window.wantsToBeOnActiveScreen: true          // the screen the pointer is on
@@ -588,6 +589,7 @@ QtObject {
     },
     Window {   // the app's menu, under its name (the work area, so a click beside it closes it)
         id: menuWin
+        Component.onCompleted: Status.glassWindow(menuWin, "huginn-app-menu")      // only its glass is blurred behind it
         visible: shell.open === "menu"; color: "transparent"
         LayerShell.Window.scope: "huginn-app-menu"
         LayerShell.Window.wantsToBeOnActiveScreen: true          // the screen the pointer is on
@@ -605,6 +607,7 @@ QtObject {
     Window {   // control centre: slides in from the right edge, and back out. Over the whole work area, so a click
                // anywhere beside it (on a window, the desktop) closes it, as Today's and the menus' do.
         id: ccWin
+        Component.onCompleted: Status.glassWindow(ccWin, "huginn-control-centre")      // only its glass is blurred behind it
         visible: shell.open === "cc" || ccPanel.x < width - 1; color: "transparent"
         LayerShell.Window.scope: "huginn-control-centre"
         LayerShell.Window.wantsToBeOnActiveScreen: true          // the screen the pointer is on
@@ -660,6 +663,7 @@ QtObject {
     },
     Window {   // launcher: the whole work area (between the bar and the dock), so a click beside it closes it
         id: launcherWin
+        Component.onCompleted: Status.glassWindow(launcherWin, "huginn-launcher")      // only its glass is blurred behind it
         visible: shell.open === "launcher" || launcher.visible; color: "transparent"
         LayerShell.Window.scope: "huginn-launcher"
         LayerShell.Window.layer: LayerShell.Window.LayerOverlay

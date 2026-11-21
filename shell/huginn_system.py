@@ -92,6 +92,17 @@ def _js(text: str) -> str:
     return json.dumps(text)
 
 
+
+def _ptr(obj) -> int:
+    """The C++ object behind a Qt wrapper (two wrappers of one window compare equal by it); 0 for none."""
+    if obj is None:
+        return 0
+    try:
+        import shiboken6
+        return int(shiboken6.getCppPointer(obj)[0])
+    except (ImportError, RuntimeError, TypeError):
+        return id(obj)
+
 class System(QObject):
     changed = Signal()
     activeChanged = Signal()
@@ -1183,6 +1194,68 @@ for (var i = 0; i < all.length; i++) {{ var win = all[i]; if (String(win.interna
             return out.unpack() if reply else ()
         except GLib.Error:
             return None
+
+    # ---------------------------------------------------------------- where the pop-ups' glass is
+    # The control centre, Today, the menus, the start menu and Search are surfaces over the whole screen (a click beside
+    # their panels closes them); Huginn's compositor would blur all of that again whenever anything under them changed.
+    # Each frame one of them draws, its Glass pieces' places (as drawn: moved, grown, faded) go to the compositor, which
+    # then blurs just those (look.rs: Backdrop).
+    @Slot(QObject, str)
+    def glassWindow(self, window, scope: str) -> None:
+        if self._demo or window is None or not hasattr(window, "afterAnimating"):
+            return
+        if not hasattr(self, "_glass_windows"):
+            self._glass_windows, self._glass_items, self._glass_sent = {}, [], {}
+        key = _ptr(window)
+        if key in self._glass_windows:
+            return
+        self._glass_windows[key] = scope
+        window.afterAnimating.connect(lambda w=window: self._glass_frame(w))   # (the GUI thread, each frame)
+        window.visibleChanged.connect(lambda shown: None if shown else self._glass_send(scope, []))
+
+    @Slot(QObject, bool)
+    def glassItem(self, item, on: bool) -> None:
+        if not hasattr(self, "_glass_items"):
+            self._glass_windows, self._glass_items, self._glass_sent = {}, [], {}
+        if on and item not in self._glass_items:
+            self._glass_items.append(item)
+        elif not on and item in self._glass_items:
+            self._glass_items.remove(item)
+
+    def _glass_frame(self, window) -> None:
+        from PySide6.QtCore import QRectF
+        pieces, key = [], _ptr(window)
+        for item in list(self._glass_items):
+            try:
+                if _ptr(item.window()) != key or not item.isVisible() or item.width() < 2 or item.height() < 2:
+                    continue
+                op, it = 1.0, item
+                while it is not None:
+                    op *= it.opacity()
+                    it = it.parentItem()
+                if op < 0.05:
+                    continue
+                r = item.mapRectToScene(QRectF(0, 0, item.width(), item.height()))
+                k = r.width() / max(1.0, item.width())
+                rad = float(item.property("radius") or 0) * k
+                pieces.append([round(r.x(), 1), round(r.y(), 1), round(r.width(), 1), round(r.height(), 1), round(rad, 1),
+                               round(min(1.0, max(0.0, (op - 0.15) / 0.55)), 2)])
+            except RuntimeError:                                  # (an item already gone)
+                self._glass_items.remove(item)
+        self._glass_send(self._glass_windows.get(key, ""), pieces)
+
+    def _glass_send(self, scope: str, pieces: list) -> None:
+        if not scope or not self.sb:
+            return
+        text = json.dumps(pieces)
+        if self._glass_sent.get(scope) == text:
+            return
+        self._glass_sent[scope] = text
+        if not hasattr(self, "_own_comp"):
+            self._own_comp = self._own_compositor()
+        if self._own_comp:
+            self.sb.call("org.huginn.Compositor", "/org/huginn/Compositor", "org.huginn.Compositor", "SetGlass",
+                         GLib.Variant("(ss)", (scope, text)), None, 0, 1000, None, None, None)
 
     # ---------------------------------------------------------------- pictures of windows, for the dock's cards
     picturesChanged = Signal()

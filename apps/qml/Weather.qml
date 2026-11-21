@@ -81,7 +81,9 @@ GlassWindow {
                     Glyph { y: 26; anchors.horizontalCenter: parent.horizontalCenter; name: modelData.icon; size: 22; ink: index === 0 ? Theme.t.accent : Theme.t.icon }
                     Label { y: 52; anchors.horizontalCenter: parent.horizontalCenter; text: modelData.rain >= 15 ? modelData.rain + "%" : " "; font.pixelSize: 10; color: Theme.t.accent }
                     Item { id: bar; x: parent.width / 2 - 26; y: 70; width: 52; height: 62   // where this day's low and high sit within the week's range
-                        Label { x: 0; anchors.verticalCenter: parent.verticalCenter; width: 22; horizontalAlignment: Text.AlignRight; text: modelData.low + "°"; font.pixelSize: 11; secondary: true; y: 0 }
+                        // the low by the bottom of the day's range, the high by its top
+                        Label { x: 0; y: Math.max(0, Math.min(parent.height - 14, parent.height * (1 - modelData.from) - 12)); width: 22
+                                horizontalAlignment: Text.AlignRight; text: modelData.low + "°"; font.pixelSize: 11; secondary: true }
                         Rectangle { x: 26; width: 5; height: parent.height; radius: 3; color: Theme.t.group
                             Rectangle { width: 5; radius: 3; y: parent.height * (1 - modelData.to); height: Math.max(6, parent.height * (modelData.to - modelData.from)); color: Theme.t.accent } }
                         Label { x: 34; y: Math.max(0, Math.min(parent.height - 14, parent.height * (1 - modelData.to) - 2)); text: modelData.high + "°"; font.pixelSize: 11; font.weight: Font.Medium } } } } } }

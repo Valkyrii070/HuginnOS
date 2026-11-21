@@ -113,9 +113,9 @@ class Tray(QObject):
         self._bus = None
         self._demo = demo
         if demo:
-            self._items = {"demo|steam": {"key": "demo|steam", "title": "Steam", "icon": "", "iconName": "steam", "app": "Steam", "status": "Active",
+            self._items = {"demo|steam": {"key": "demo|steam", "title": "Steam", "icon": "", "iconName": "", "app": "Steam", "status": "Active",
                                           "isMenu": True, "tooltip": ""},
-                           "demo|discord": {"key": "demo|discord", "title": "Discord", "icon": "", "iconName": "discord", "app": "Discord", "status": "NeedsAttention",
+                           "demo|discord": {"key": "demo|discord", "title": "Discord", "icon": "", "iconName": "", "app": "Discord", "status": "NeedsAttention",
                                             "isMenu": False, "tooltip": "1 unread message"}}
             return
         try:
