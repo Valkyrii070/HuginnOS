@@ -40,7 +40,7 @@ Press Super+Tab (or swipe up with three fingers) and your windows glide apart so
 The three dots in the top-left island close the window (red), hide it (yellow) and fill the screen (green). The controls for each app float in islands around its edges.
 
 ## Light, dark and colour
-Settings changes between light and dark and picks the realm, the colour the whole desktop leans towards. Every app keeps its own colour on top of that, so you can tell them apart at a glance. Apps that aren't Huginn's follow along too: their colours, dark or light and the font change with yours.
+Settings changes between light and dark and picks the realm, the colour the whole desktop leans towards. Settings › Appearance › Accent colour can take it from your wallpaper instead. Every app keeps its own colour on top of that, so you can tell them apart at a glance. Apps that aren't Huginn's follow along too: their colours, dark or light and the font change with yours.
 
 ## Quick settings and notifications
 The control centre slides out from the top bar on the right: Wi‑Fi and Bluetooth (tap the round switch to turn them on or off, the name to open Settings), Do Not Disturb, night light, dark, brightness and sound (tap the speaker to mute), and the notifications that came, with Clear. Under the sound slider, Apps shows everything playing sound with its own slider and mute, so a game can be quieter than the call beside it. History shows every notification of the last week, missed or dismissed, grouped by day; Clear all empties the list and leaves the history (Settings › Notifications › Keep a history).
@@ -59,13 +59,16 @@ App Store installs apps from Flathub. Web apps you install from the Huginn brows
 ## Switch windows and keys to know
 Hold Alt and press Tab to see your open windows; let go of Alt to go to the one picked (Shift+Tab goes back, Escape stays put). Super on its own opens the start menu, Super+Tab the Overview, Super+T Today, Alt on its own the app's menu, Super+Space searches everything, Super+L locks, Super+Ctrl+Space switches keyboard layout (when you have more than one), Super+Alt+S turns the screen reader on or off, Print saves a screenshot of the whole screen to Pictures › Screenshots, and Shift+Print (or Super+Shift+S) opens Screenshot to choose what to take. Clicking an open app in the dock brings its window forward instead of opening another.
 
-Super+E opens Files, Super+I Settings and Ctrl+Alt+T Terminal. Super+D puts every window out of the way to show the desktop, and brings them back when pressed again. With more than one screen, Super+Alt+← / → moves the window in front to the screen beside it, snapped or full as it was. Settings › Keyboard Shortcuts lists them all: change any of them, turn one off, or make your own to open an app or run a command.
+Super+E opens Files, Super+I Settings and Ctrl+Alt+T Terminal. Super+D puts every window out of the way to show the desktop, and brings them back when pressed again. With more than one screen, Super+Alt+← / → moves the window in front to the screen beside it, snapped or full as it was. Settings › Keyboard Shortcuts lists them all: change any of them, turn one off, or make your own to open an app or run a command. Or hold Super on its own for a moment: every shortcut shows until you let go.
 
 ## Emoji and symbols
 Press Super+. (full stop) wherever you're typing: type a word to find one (heart, party, arrow, euro), use the arrows or the pointer, and Enter types it in. The ones you used are first next time; the hands at the bottom set the skin tone. Whatever you'd copied stays on the clipboard.
 
 ## Look Up anything on the screen
 Press Super+A: the screen holds still. Circle or drag over anything, or click on some words, and they're read on this computer. Copy Text, Translate, Search the Web, Copy or Save the picture, or ask Huginn AI about it (when it's on). Esc starts again, Esc twice closes it.
+
+## Live captions
+Press Super+Ctrl+L, or Live captions in the Control Centre, and what's playing is written out in a bar over everything: a video, a call, a game. Drag the bar anywhere; hover it for its settings or to close it. It uses dictation's speech model (below), on this computer only.
 
 ## Talk, and it types
 Press Super+H wherever you're typing and speak. Pause for a moment, or press Super+H again, and what you said is typed in; the live island shows that it's listening, with Done and Cancel. It all happens on this computer: the sound never leaves it. The first time, choose a speech model in Settings › Keyboard & Mouse › Dictation (Quick, Balanced or Accurate); it's downloaded once. With Tidy it up on there, Huginn AI makes what you said into clean text first: punctuation and paragraphs, without the ums and false starts, and lists where you listed things. Automatic language works out what you're speaking each time, or choose one there.

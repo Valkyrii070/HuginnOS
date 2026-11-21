@@ -149,6 +149,7 @@ impl<BackendData: Backend> HuginnState<BackendData> {
                 })
                 .unwrap_or(KeyAction::None);
             self.huginn.super_alone = false;
+            self.sheet_hide();
             return action;
         }
 
@@ -163,16 +164,25 @@ impl<BackendData: Backend> HuginnState<BackendData> {
             .map(|inhibitor| inhibitor.is_active())
             .unwrap_or(false);
 
+        let presses = self.huginn.super_press;
         let action = keyboard
             .input(self, keycode, state, serial, time, |state_, modifiers, handle| {
                 let keysym = handle.modified_sym();
                 let is_super = matches!(keysym, Keysym::Super_L | Keysym::Super_R);
                 let is_alt = matches!(keysym, Keysym::Alt_L);
-                // Super on its own (pressed and let go with nothing else): the start menu; Alt on its own: the app's menu
+                // Super on its own (pressed and let go with nothing else): the start menu; held a moment on its own:
+                // the shortcut sheet, until it's let go; Alt on its own: the app's menu
                 if let KeyState::Pressed = state {
+                    if is_super && !state_.huginn.super_alone && !modifiers.ctrl && !modifiers.alt && !modifiers.shift {
+                        state_.huginn.super_press += 1;
+                    }
+                    if !is_super {
+                        state_.sheet_hide();    // a shortcut taken with the sheet up: it goes, the shortcut still works
+                    }
                     state_.huginn.super_alone = is_super;
                     state_.huginn.alt_alone = is_alt && !modifiers.ctrl && !modifiers.logo && !modifiers.shift;
                 } else if is_super {
+                    state_.sheet_hide();
                     let alone = std::mem::take(&mut state_.huginn.super_alone);
                     if alone && !inhibited {
                         return FilterResult::Intercept(KeyAction::Launcher);
@@ -230,7 +240,30 @@ impl<BackendData: Backend> HuginnState<BackendData> {
             .unwrap_or(KeyAction::None);
 
         self.suppressed_keys = suppressed_keys;
+        if self.huginn.super_press != presses && !inhibited {
+            self.sheet_later(self.huginn.super_press);
+        }
         action
+    }
+
+    /// Super still held on its own after a moment: the shortcut sheet (the shell's), and no start menu when it's let go.
+    fn sheet_later(&mut self, press: u64) {
+        use smithay::reexports::calloop::timer::{TimeoutAction, Timer};
+        let _ = self.handle.insert_source(Timer::from_duration(std::time::Duration::from_millis(700)), move |_, _, state| {
+            if state.huginn.super_press == press && state.huginn.super_alone && !state.huginn.sheet && !state.is_locked() {
+                state.huginn.super_alone = false;
+                state.huginn.sheet = true;
+                state.say(crate::dbus::Outgoing::ShellKey("keys-show".into()));
+            }
+            TimeoutAction::Drop
+        });
+    }
+
+    /// The shortcut sheet away, if it's up.
+    fn sheet_hide(&mut self) {
+        if std::mem::take(&mut self.huginn.sheet) {
+            self.say(crate::dbus::Outgoing::ShellKey("keys-hide".into()));
+        }
     }
 
     /// The shell's start menu and Search take every key while they're open (keys our shortcuts didn't take).
@@ -292,6 +325,7 @@ impl<BackendData: Backend> HuginnState<BackendData> {
         if wl_pointer::ButtonState::Pressed == state {
             self.huginn.super_alone = false;
             self.huginn.alt_alone = false;
+            self.sheet_hide();
             if self.is_locked() {
                 let focus = self.lock_surface();
                 self.seat.get_keyboard().unwrap().set_focus(self, focus, serial);
@@ -1371,6 +1405,7 @@ fn process_keyboard_shortcut(modifiers: ModifiersState, keysym: Keysym, raw: Opt
             "today" => KeyAction::Shell("today"),
             "clipboard" => KeyAction::Shell("clipboard"),
             "emoji" => KeyAction::Shell("emoji"),
+            "captions" => KeyAction::Shell("captions"),
             "overview" => KeyAction::Overview,
             "desktop" => KeyAction::ShowDesktop,
             "ontop" => KeyAction::KeepOnTop,

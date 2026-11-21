@@ -50,7 +50,7 @@ Item {
           "try": "click " + tour.appName, done: "That's " + tour.appName + "'s menu", check: "menu" },
         { target: "window", title: "Windows and spaces", words: "Drag a window to an edge to snap it, or press Super+Z to lay it out on any screen. Super+Tab, or three fingers up, shows every window and your spaces.",
           "try": "drag a window to the left", done: "Snapped", check: "snap" },
-        { target: "orb", title: "You're ready", words: "Super opens the start menu; Super+Space searches everything; Super+H types what you say. More apps are in the Store, and the tour again in Help.",
+        { target: "orb", title: "You're ready", words: "Super opens the start menu; hold it for a moment to see every shortcut. Super+Space searches everything; Super+H types what you say. More apps are in the Store, and the tour again in Help.",
           "try": "", done: "", check: "", last: true }
     ]
     readonly property var cur: steps.length ? steps[Math.min(step, steps.length - 1)] : ({})

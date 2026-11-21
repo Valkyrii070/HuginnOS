@@ -69,6 +69,82 @@ def wall_top(path: str) -> float:
     return _WALL_TOP[key]
 
 
+_WALL_ACCENT: dict = {}
+
+
+def wall_accent(path: str):
+    """The colour a picture is most about, as (hue, lightness, saturation) 0…1, for an accent that matches it
+    (Settings › Appearance › Accent colour: From the wallpaper). Vivid, middling-bright colours count most; greys,
+    near-blacks and near-whites hardly at all. None when the picture has too little colour to pick from (a grey
+    one) or can't be read."""
+    import colorsys
+    try:
+        key = (path, os.stat(path).st_mtime_ns)
+    except (OSError, TypeError, ValueError):
+        return None
+    if key not in _WALL_ACCENT:
+        from PySide6.QtGui import QImageReader
+        reader = QImageReader(path)
+        reader.setAutoTransform(True)
+        size = reader.size()
+        if size.isValid() and size.width() > 0:               # small (JPEGs are decoded small to begin with): quick
+            reader.setScaledSize(QSize(48, max(8, round(48 * size.height() / size.width()))))
+        img = reader.read()
+        picked = None
+        if not img.isNull():
+            img = img.convertToFormat(QImage.Format.Format_RGB32)
+            weight, sums, n = [0.0] * 36, [[0.0, 0.0, 0.0] for _ in range(36)], img.width() * img.height()
+            for y in range(img.height()):
+                for x in range(img.width()):
+                    c = img.pixel(x, y)
+                    r, g, b = ((c >> 16) & 255) / 255, ((c >> 8) & 255) / 255, (c & 255) / 255
+                    hi, lo = max(r, g, b), min(r, g, b)
+                    sat = (hi - lo) / hi if hi else 0.0
+                    if sat < 0.18 or hi < 0.18:
+                        continue
+                    w = sat * sat * (1.0 - abs(hi - 0.65))
+                    h = colorsys.rgb_to_hls(r, g, b)[0]
+                    k = int(h * 36) % 36
+                    weight[k] += w
+                    sums[k][0] += r * w; sums[k][1] += g * w; sums[k][2] += b * w
+            score = [weight[i - 1] * 0.5 + weight[i] + weight[(i + 1) % 36] * 0.5 for i in range(36)]
+            best = max(range(36), key=lambda i: score[i])
+            if score[best] > 0.015 * n:
+                w = weight[best - 1] + weight[best] + weight[(best + 1) % 36]
+                rgb = [(sums[best - 1][j] + sums[best][j] + sums[(best + 1) % 36][j]) / w for j in range(3)]
+                picked = colorsys.rgb_to_hls(*rgb)
+        _WALL_ACCENT[key] = picked
+    return _WALL_ACCENT[key]
+
+
+def _luminance(rgb) -> float:
+    lin = [c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4 for c in rgb]
+    return 0.2126 * lin[0] + 0.7152 * lin[1] + 0.0722 * lin[2]
+
+
+def contrast(a, b) -> float:
+    la, lb = sorted((_luminance(a), _luminance(b)), reverse=True)
+    return (la + 0.05) / (lb + 0.05)
+
+
+def accent_colour(hls, dark: bool) -> str:
+    """A picked colour made into an accent that works: bright enough for the dark text on it in dark mode, deep enough
+    for white text on it in light mode (the realms' accents follow the same rule), and never washed out."""
+    import colorsys
+    h, _l, s = hls
+    s = max(0.5, min(0.85, s))
+    on = (0x0B / 255, 0x15 / 255, 0x12 / 255) if dark else (1.0, 1.0, 1.0)
+    want = 5.0 if dark else 3.6
+    light = 0.64 if dark else 0.46
+    for _ in range(40):
+        rgb = colorsys.hls_to_rgb(h, light, s)
+        if contrast(rgb, on) >= want:
+            break
+        light += 0.01 if dark else -0.01
+    rgb = colorsys.hls_to_rgb(h, max(0.0, min(1.0, light)), s)
+    return "#%02X%02X%02X" % tuple(round(c * 255) for c in rgb)
+
+
 def me() -> dict:
     """Who's signed in, for the arrival after the sign-in screen: the name the sign-in screen showed and the picture."""
     import pwd
@@ -160,6 +236,25 @@ class Theme(QObject):
             return round(v * (1 - shade), 3) if v >= 0 else v
         return wall_top(wp) if wp else still(self._realm)
 
+    def _wall_picture(self) -> str:
+        """The picture the wallpaper is (or starts from), for its accent: a picture; a live wallpaper's picture, or
+        the still of its scene; a realm's scene by its still. "" for a video."""
+        wp = self._settings.wallpaper
+        stills = Path(QUrl(live_dir()).toLocalFile()) / "stills" if live_dir() else None
+
+        def still(realm: str) -> str:
+            if not stills:
+                return ""
+            day = stills / f"{realm}-day.jpg"
+            return str(day if not self._dark and day.exists() else stills / f"{realm}.jpg")
+        if wp.endswith("/wallpaper.json"):
+            spec = self._settings._wallpaper_spec()
+            base = spec.get("base", "scene")
+            if base == "picture" and spec.get("file"):
+                return str(Path(wp).parent / spec["file"])
+            return still(spec.get("scene") or "aurora") if base == "scene" else ""
+        return wp or still(self._realm)
+
     def _build(self) -> dict:
         tk = self._tokens
         mode = "dark" if self._dark else "light"
@@ -168,6 +263,12 @@ class Theme(QObject):
         t.update({"tintA": spec[mode]["tint_a"], "tintB": spec[mode]["tint_b"], "accent": spec[mode]["accent"],
                   "glowA": spec["glow"][0], "glowB": spec["glow"][1], "danger": tk["danger"][mode],
                   "onAccent": "#0B1512" if self._dark else "#FFFFFF", "dark": self._dark, "realm": self._realm, "liveDir": live_dir()})
+        # Settings › Appearance › Accent colour: the realm's, or one the wallpaper is most about
+        t["accentFromWall"] = False
+        if getattr(self._settings, "accentFrom", "realm") == "wallpaper":
+            picked = wall_accent(self._wall_picture())
+            if picked:
+                t["accent"], t["accentFromWall"] = accent_colour(picked, self._dark), True
         t["wallTop"] = self._wall_top()
         t.update({"radius" + k.title(): v for k, v in tk["radius"].items()})
         t.update({"space" + k.title(): v for k, v in tk["space"].items()})
@@ -257,6 +358,14 @@ class Settings(QObject):
                 "cornerTL": "", "cornerTR": "", "cornerBL": "", "cornerBR": "",
                 # Settings › Notifications: keep a week of them for the Control Centre's History
                 "notifHistory": "true",
+                # Settings › Keyboard: hold Super on its own a moment and every shortcut shows (KeysSheet.qml)
+                "keySheet": "true",
+                # Settings › Accessibility › Live captions (CaptionBar.qml): on, how big, where the bar was left (its
+                # middle, as parts of the screen: "0.5,0.82"; "" low in the middle) and which speech model ("" the
+                # quickest that's downloaded)
+                "captions": "false", "captionsSize": "medium", "captionsPos": "", "captionsModel": "",
+                # Settings › Appearance › Accent colour: the realm's own, or picked from the wallpaper (wall_accent)
+                "accentFrom": "realm",
                 # Settings › Appearance › Screen saver: what shows when the computer is left alone, and after how long
                 "saver": "clock", "saverAfter": "5"}
     CORNERS = ("", "overview", "desktop", "launcher", "control", "today", "search", "lookup", "saver", "lock")
@@ -265,7 +374,7 @@ class Settings(QObject):
     PICTURES = (".jpg", ".jpeg", ".png", ".webp", ".bmp", ".gif", ".avif", ".heic", ".jxl")
     SWITCHES = ("clock24", "barDate", "batteryPercent", "barEverywhere", "dockMakeRoom", "dockDots", "dockFollows", "frameTimes", "gameStats", "autoUpdate", "liveWallpaper", "contrast", "reduceTransparency", "reduceMotion",
                 "dockClickHides", "hotCorner", "spacesAllScreens", "fillButtonLayouts", "snapGaps", "keepSnapped", "reopenApps", "rememberPlaces", "sharpX11", "allowTearing", "gameMode",
-                "notifHistory")
+                "notifHistory", "keySheet", "captions")
     SCALES = ("1", "1.25", "1.5", "1.75", "2")
 
     def __init__(self, path: Path, realms: list, persist: bool = True):
@@ -276,6 +385,7 @@ class Settings(QObject):
                          "inAppMotion": ("grow", "slide"), "adaptiveSync": ("auto", "off"), "glass": ("full", "light", "off"),
                          **{k: self.CORNERS for k in ("cornerTL", "cornerTR", "cornerBL", "cornerBR")},
                          "saver": self.SAVERS, "saverAfter": ("1", "2", "5", "10", "15", "30"),
+                         "accentFrom": ("realm", "wallpaper"), "captionsSize": ("small", "medium", "large"), "captionsModel": ("", "base", "small", "large-v3-turbo-q5_0"),
                          **{k: ("true", "false") for k in self.SWITCHES}}
         self._load()
         self._watcher = QFileSystemWatcher(self)
@@ -311,6 +421,8 @@ class Settings(QObject):
         if key == "widgets":                           # known kinds, each once, at most eight ("" none)
             got = value.split(",") if isinstance(value, str) and value else []
             return isinstance(value, str) and len(got) <= 8 and len(set(got)) == len(got) and all(w in self.WIDGETS for w in got)
+        if key == "captionsPos":                       # the caption bar's middle, as parts of its screen
+            return value == "" or (isinstance(value, str) and re.fullmatch(r"(0(\.\d{1,4})?|1(\.0{1,4})?),(0(\.\d{1,4})?|1(\.0{1,4})?)", value) is not None)
         if key == "iconTheme":                         # a theme's folder name (Settings checks it's installed)
             return value == "" or (isinstance(value, str) and re.fullmatch(r"[\w.+ -]{1,80}", value) is not None and ".." not in value)
         return value in self._choices.get(key, ())
@@ -368,6 +480,12 @@ class Settings(QObject):
     cornerBL = Property(str, lambda self: self._values["cornerBL"], notify=changed)
     cornerBR = Property(str, lambda self: self._values["cornerBR"], notify=changed)
     notifHistory = Property(bool, lambda self: self._values["notifHistory"] == "true", notify=changed)
+    keySheet = Property(bool, lambda self: self._values["keySheet"] == "true", notify=changed)
+    captions = Property(bool, lambda self: self._values["captions"] == "true", notify=changed)
+    accentFrom = Property(str, lambda self: self._values["accentFrom"], notify=changed)
+    captionsSize = Property(str, lambda self: self._values["captionsSize"], notify=changed)
+    captionsPos = Property(str, lambda self: self._values["captionsPos"], notify=changed)
+    captionsModel = Property(str, lambda self: self._values["captionsModel"], notify=changed)
     saver = Property(str, lambda self: self._values["saver"], notify=changed)
     saverAfter = Property(int, lambda self: int(self._values["saverAfter"]), notify=changed)
     spacesAllScreens = Property(bool, lambda self: self._values["spacesAllScreens"] == "true", notify=changed)
@@ -1439,6 +1557,9 @@ def main() -> int:
         print("The emoji picker isn't available:", err, file=sys.stderr)
     ctx.setContextProperty("EmojiPicker", emoji)
     ctx.setContextProperty("Settings", settings)
+    from huginn_livecaptions import CaptionFeed
+    captions = CaptionFeed(settings, demo=bool(args.preview))           # live captions (Super+Ctrl+L): CaptionBar.qml
+    ctx.setContextProperty("Captions", captions)
     ctx.setContextProperty("startOpen", args.open)
     ctx.setContextProperty("startMenus", args.menus)
     ctx.setContextProperty("startQuery", args.query)

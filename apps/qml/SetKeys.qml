@@ -109,5 +109,7 @@ Column {
         Repeater { model: pg.k.fixed || []
             SetRow { required property var modelData; title: modelData.label
                 Keycaps { keys: modelData.keys.split("+").map(pg.cap) } } }
+        SetRow { title: "Hold Super to see them all"; sub: "Hold Super on its own for a moment: every shortcut shows, until you let go."
+            Toggle { on: Settings.keySheet; onToggled: function (v) { Settings.set("keySheet", v ? "true" : "false") } } }
         SetRow { title: "Put Huginn's shortcuts back as they came"; Seg { text: "Reset All"; onClicked: Backend.resetAllShortcuts() } } }
 }

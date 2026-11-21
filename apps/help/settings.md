@@ -20,7 +20,7 @@ Choose where sound plays and which microphone listens, and how loud each is. Ale
 The ring shows the charge; under it, the battery's health (how much it holds compared with new) and its charge cycles. Power mode trades speed for battery. Choose when the screen turns off and the computer sleeps, plugged in and on battery, and what closing the lid and the power button do.
 
 ## Keyboard shortcuts
-Every one of Huginn's shortcuts, grouped: Change, then press the new keys (Escape leaves it as it was, Backspace turns it off). A key already used by another shortcut moves to the new one, and Settings says which lost it. Under "Your own", choose an app or type a command and press its keys. Reset All puts Huginn's back as they came.
+Every one of Huginn's shortcuts, grouped: Change, then press the new keys (Escape leaves it as it was, Backspace turns it off). A key already used by another shortcut moves to the new one, and Settings says which lost it. Under "Your own", choose an app or type a command and press its keys. Reset All puts Huginn's back as they came. **Hold Super to see them all** (on at first): hold Super on its own for a moment and every shortcut shows, grouped, until you let go; press one while it shows and it works as usual.
 
 ## Keyboard and mouse
 Add keyboard layouts and switch between them with Super+Ctrl+Space, or by clicking the letters in the top bar (they show when there's more than one). Make Caps Lock another Control or Escape, choose whether Num Lock is on when you sign in, turn on the Compose key, and set how keys repeat. Each touchpad and mouse has its own speed, acceleration (off for games: the pointer goes exactly as far as you move), scroll speed, natural scrolling, tap to click, how a touchpad right-clicks (two fingers, or its bottom-right corner) and left-handed buttons.
@@ -53,7 +53,10 @@ after you sign in. Turn on **Live wallpaper** to keep it moving on the desktop t
 stays still when Reduce motion is on). **Sign-in screen** shows which realm everyone sees before signing in; **Use …**
 changes it to yours, after the administrator password. **On the desktop** can show **A picture** of your own instead:
 pick one of your newest from Pictures, or Other… for any. It's copied into Huginn's own folder, so moving or deleting
-the original doesn't take it away; Realm's scene brings the realm back.
+the original doesn't take it away; Realm's scene brings the realm back. **Accent colour** under the realms is the
+realm's own, or **From wallpaper**: the colour your wallpaper is most about, made bright enough (or deep enough, in
+light mode) for the words on it to read. It changes when the wallpaper does; a wallpaper with too little colour keeps
+the realm's. Each app still keeps its own colour.
 
 ## Live wallpapers you make
 Appearance › Wallpaper › **Made by you** › **Make one**. Start from a realm's scene in colours of your own (click a
@@ -75,7 +78,7 @@ Appearance › **Pointer**: each pointer style shows its arrow, hand, text, wait
 it, and choose its size. Pointer styles you download are added the same way as icons.
 
 ## Accessibility
-Seeing: the screen reader (Orca) reads out what's on the screen (Super+Alt+S turns it on and off from anywhere); Zoom magnifies around the pointer (follow it, keep it centred, or push at the edges); Make everything bigger; High contrast; Solid surfaces instead of glass; Reduce motion; colour filters for colour blindness, or grey; and the pointer's size. Hearing: flash every screen white for a moment instead of playing the alert sound. Moving and typing: sticky keys (shortcuts one key at a time), slow keys (a key must be held a moment), bounce keys (ignore quick repeats), moving the pointer with the number keys, and the on-screen keyboard.
+Seeing: the screen reader (Orca) reads out what's on the screen (Super+Alt+S turns it on and off from anywhere); Zoom magnifies around the pointer (follow it, keep it centred, or push at the edges); Make everything bigger; High contrast; Solid surfaces instead of glass; Reduce motion; colour filters for colour blindness, or grey; and the pointer's size. Hearing: flash every screen white for a moment instead of playing the alert sound. **Live captions** (Super+Ctrl+L, or Live captions in the Control Centre) writes out what's playing, a video, a call or a game, in a dark bar over everything; drag it anywhere and it stays there, and hover it for its settings or to close it. It all happens on this computer with one of dictation's speech models (Settings › Keyboard & Mouse › Dictation; Quick keeps up best), in dictation's language; the sound never leaves the computer and nothing is kept. Choose the text size, the model when you have more than one, or Put Back the bar. Moving and typing: sticky keys (shortcuts one key at a time), slow keys (a key must be held a moment), bounce keys (ignore quick repeats), moving the pointer with the number keys, and the on-screen keyboard.
 
 ## The computer's name
 About › Name › Rename… sets what other devices see (over Bluetooth, on the network). The network name is made from it: "Astrid's Desk" is astrids-desk.

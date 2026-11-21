@@ -271,6 +271,9 @@ QtObject {
             else if (what === "saver") shell.saverOn = Settings.saver !== "off"
             else if (what === "saver-now") shell.saverOn = true
             else if (what === "saver-off") shell.saverOn = false
+            else if (what === "keys-show") { if (Settings.keySheet && !shell.touring) { shell.keysShown = true; keysLonger.restart() } }
+            else if (what === "keys-hide") shell.keysShown = false
+            else if (what === "captions") Settings.set("captions", Settings.captions ? "false" : "true")
             else if (what.indexOf("run:") === 0) shell.runKey(what.slice(4))
             else if (what.indexOf("edge:") === 0) shell.pointerAtEdge(what.slice(5))
             else if (what === "frames") Settings.set("frameTimes", Settings.frameTimes ? "false" : "true")
@@ -746,6 +749,33 @@ QtObject {
         Rectangle { anchors.fill: parent; color: "black"; opacity: layoutsPanel.presence * 0.25 }
         Layouts { id: layoutsPanel; anchors.fill: parent; shown: shell.open === "layouts"; forId: shell.layoutsFor; onDone: shell.open = "" }
     },
+    Window {   // live captions (Super+Ctrl+L): over everything on the screen the pointer was on; only the bar takes the pointer
+        id: captionsWin
+        visible: typeof Captions !== "undefined" && Captions !== null && Captions.state !== "off"; color: "transparent"
+        LayerShell.Window.scope: "huginn-captions"
+        LayerShell.Window.wantsToBeOnActiveScreen: true
+        LayerShell.Window.layer: LayerShell.Window.LayerOverlay
+        LayerShell.Window.anchors: LayerShell.Window.AnchorTop | LayerShell.Window.AnchorBottom | LayerShell.Window.AnchorLeft | LayerShell.Window.AnchorRight
+        LayerShell.Window.exclusionZone: -1
+        LayerShell.Window.keyboardInteractivity: LayerShell.Window.KeyboardInteractivityNone
+        onVisibleChanged: if (visible) Qt.callLater(function () { if (captionBar.item) captionBar.item.region() })
+        Loader { id: captionBar; anchors.fill: parent; active: captionsWin.visible
+            sourceComponent: CaptionBar { host: captionsWin } }
+    },
+    Window {   // hold Super: every shortcut, over the screen the pointer is on; it takes no clicks and no keys
+        id: keysWin
+        Component.onCompleted: Status.glassWindow(keysWin, "huginn-keys")
+        visible: shell.keysShown || keysSheet.visible; color: "transparent"
+        flags: Qt.WindowTransparentForInput
+        LayerShell.Window.scope: "huginn-keys"
+        LayerShell.Window.wantsToBeOnActiveScreen: true
+        LayerShell.Window.layer: LayerShell.Window.LayerOverlay
+        LayerShell.Window.anchors: LayerShell.Window.AnchorTop | LayerShell.Window.AnchorBottom | LayerShell.Window.AnchorLeft | LayerShell.Window.AnchorRight
+        LayerShell.Window.exclusionZone: -1
+        LayerShell.Window.keyboardInteractivity: LayerShell.Window.KeyboardInteractivityNone
+        Rectangle { anchors.fill: parent; color: "black"; opacity: keysSheet.shown ? 0.18 : 0; Behavior on opacity { NumberAnimation { duration: Theme.t.openMs } } }
+        KeysSheet { id: keysSheet; anchors.fill: parent; shown: shell.keysShown }
+    },
     Window {   // an app's island, from the dock (right-click or a long press on its tile)
         id: islandWin
         visible: shell.dockIsland !== null; color: "transparent"
@@ -921,6 +951,9 @@ QtObject {
     // The screen saver (Saver.qml), on every screen: the session daemon starts it (org.huginn.Shell.Key "saver") after
     // Settings' time left alone; a corner or Settings' Preview can too. Any key or movement ends it.
     property bool saverOn: false
+    // hold Super: every shortcut (KeysSheet.qml), until the compositor says Super was let go (or a minute, if that's lost)
+    property bool keysShown: false
+    property Timer keysLonger: Timer { interval: 60000; onTriggered: shell.keysShown = false }
     property var saverPhotos: []
     onSaverOnChanged: if (saverOn && Settings.saver === "photos") saverPhotos = Status.saverPhotos()
     property Instantiator savers: Instantiator {

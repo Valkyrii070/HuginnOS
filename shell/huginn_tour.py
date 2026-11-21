@@ -41,6 +41,14 @@ WHAT_IS_NEW = {
         {"target": "date", "title": "Everything, on every computer", "words": "Settings › Sync keeps Notes, Reminders, Calendar, Contacts and "
          "settings the same on your computers, with Huginn's Favorites and passwords. No account.", "try": "", "done": "", "check": ""},
     ],
+    "0.5": [
+        {"target": "orb", "title": "Every shortcut, at a glance", "words": "Hold Super on its own for a moment: every shortcut shows until you let go. "
+         "Super+A circles anything on the screen to read, copy or look it up.", "try": "", "done": "", "check": ""},
+        {"target": "centre", "title": "Live captions", "words": "Super+Ctrl+L, or Live captions in the Control Centre, writes out what's playing: "
+         "a video, a call, a game. On this computer only; drag the bar anywhere.", "try": "", "done": "", "check": ""},
+        {"target": "centre", "title": "Your wallpaper's colour", "words": "Settings › Appearance › Accent colour can take its colour from your "
+         "wallpaper, so buttons, switches and highlights match it.", "try": "", "done": "", "check": ""},
+    ],
 }
 
 

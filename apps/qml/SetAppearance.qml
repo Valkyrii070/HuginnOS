@@ -40,7 +40,17 @@ Column {
                             width: signLabel.width + 14; height: 20; radius: 10; color: "#B3101418"
                             Label { id: signLabel; anchors.centerIn: parent; text: "Sign-in screen"; color: "#FFFFFF"; font.pixelSize: 10; font.weight: Font.DemiBold } }
                         MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: Theme.setRealm(modelData.id) } }
-                    Label { text: modelData.label; anchors.horizontalCenter: parent.horizontalCenter; font.weight: Theme.t.realm === modelData.id ? Font.DemiBold : Font.Normal } } } } }
+                    Label { text: modelData.label; anchors.horizontalCenter: parent.horizontalCenter; font.weight: Theme.t.realm === modelData.id ? Font.DemiBold : Font.Normal } } } }
+        // the accent: the realm's, or the colour the wallpaper is most about (huginn_shell.wall_accent)
+        SetRow { objectName: "accentRow"; title: "Accent colour"
+            sub: Settings.accentFrom !== "wallpaper" ? "Buttons, switches and highlights take the realm's colour."
+                 : Theme.t.accentFromWall ? "Picked from your wallpaper; it changes when the wallpaper does."
+                 : "The wallpaper has too little colour to pick from, so the realm's is used."
+            Row { spacing: 12
+                Rectangle { width: 26; height: 26; radius: 13; anchors.verticalCenter: parent.verticalCenter; color: Theme.t.realmAccent || Theme.t.accent
+                    border.width: 1; border.color: Theme.t.separator; Behavior on color { ColorAnimation { duration: 300 } } }
+                SetChoice { each: 120; options: [["realm", "The realm's"], ["wallpaper", "From wallpaper"]]; value: Settings.accentFrom
+                    onPicked: function (v) { Settings.set("accentFrom", v) } } } } }
     property var pictures: []
     readonly property bool madeOne: Settings.wallpaper.slice(-15) === "/wallpaper.json"
     readonly property var liveList: pg.look.live || []

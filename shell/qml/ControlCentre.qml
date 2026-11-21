@@ -234,6 +234,9 @@ Glass {
                     }
                     // no night light on this computer: Dark on its own, as wide as Do Not Disturb above it
                     QuickTile { visible: !Status.nightLight.available; label: "Dark"; glyph: "contrast"; on: Theme.t.dark; onClicked: Theme.setDark(!Theme.t.dark) }
+                    // live captions (Super+Ctrl+L): what's playing, written out in a bar on the screen
+                    QuickTile { visible: typeof Captions !== "undefined" && Captions !== null; label: "Live captions"; glyph: "captions"
+                        on: Settings.captions; onClicked: Settings.set("captions", Settings.captions ? "false" : "true") }
                 }
             }
 

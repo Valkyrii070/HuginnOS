@@ -61,6 +61,10 @@ pub struct Huginn {
     pub desktop_shown: Option<Vec<u64>>,
     /// Super is down and nothing else has been pressed since (on its release: the start menu).
     pub super_alone: bool,
+    /// Super pressed on its own so far (each press counts one, so a wait from an earlier press does nothing), and
+    /// whether holding it has brought up the shortcut sheet (shown until Super is let go or another key goes down).
+    pub super_press: u64,
+    pub sheet: bool,
     /// Screens turned off in Settings › Displays (displays.rs): kept, dark, out of the desktop
     pub off_outputs: Vec<smithay::output::Output>,
     /// Where each app's window last was (places.rs), and how often that's been looked at

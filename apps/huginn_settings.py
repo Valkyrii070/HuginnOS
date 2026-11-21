@@ -733,6 +733,7 @@ SHORTCUTS = [  # id, what it does, group, default keys ("|" between more than on
     ("gamebar", "Game bar: stats, Do Not Disturb, microphone, volume, a screenshot (again: close it)", "Screen", "Super+G"),
     ("layout", "The next keyboard layout", "Typing and reading", "Super+Ctrl+Space"),
     ("reader", "Screen reader on or off", "Typing and reading", "Super+Alt+S"),
+    ("captions", "Live captions on or off", "Typing and reading", "Super+Ctrl+L"),
 ]
 FIXED_SHORTCUTS = [("Start menu", "Super"), ("The app's menu", "Alt"), ("Go to space 1 to 9", "Super+1…9"), ("Switch between windows", "Alt+Tab")]
 MOD_ORDER = ("Super", "Ctrl", "Alt", "Shift")

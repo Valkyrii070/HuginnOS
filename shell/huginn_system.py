@@ -93,6 +93,69 @@ def _js(text: str) -> str:
     return json.dumps(text)
 
 
+def apps_module(name: str):
+    """One of the apps' Python modules (huginn_settings, ...), from the installed apps or the kit's."""
+    here = Path(__file__).resolve().parent
+    for d in (Path("/usr/share/huginn-apps"), here.parent / "apps"):
+        if (d / (name + ".py")).exists():
+            if str(d) not in sys.path:
+                sys.path.append(str(d))
+            return __import__(name)
+    return None
+
+
+# How a key is shown on a keycap in the shortcut sheet (hold Super)
+KEYCAPS = {"period": ".", "comma": ",", "equal": "=", "plus": "+", "minus": "\u2212", "slash": "/", "semicolon": ";", "apostrophe": "'",
+           "grave": "`", "bracketleft": "[", "bracketright": "]", "backslash": "\\", "KP_Add": "Num +", "KP_Subtract": "Num \u2212",
+           "KP_0": "Num 0", "Left": "\u2190", "Right": "\u2192", "Up": "\u2191", "Down": "\u2193", "Print": "PrtSc", "Return": "Enter",
+           "Escape": "Esc", "Delete": "Del", "Prior": "PgUp", "Next": "PgDn"}
+SHEET_GROUPS = ("Finding and opening", "Windows", "Spaces", "Screen", "Typing and reading")
+SHEET_FIXED = {"Start menu": ("Finding and opening", "Start menu (tap)", 0), "The app's menu": ("Windows", "The app's menu (tap)", None),
+               "Switch between windows": ("Windows", "Switch between windows", None), "Go to space 1 to 9": ("Spaces", "Go to space 1 to 9", 0)}
+
+
+def keycaps(combo: str) -> list:
+    """'Super+Shift+S' -> ['Super', 'Shift', 'S']; 'Super+equal' -> ['Super', '=']."""
+    parts = combo.split("+")
+    if len(parts) >= 2 and parts[-1] == "" and parts[-2] == "":
+        parts = parts[:-2] + ["+"]
+    caps = {k.lower(): v for k, v in KEYCAPS.items()}
+    return [caps.get(p.lower(), p) for p in parts if p]
+
+
+SHEET_SHORT = {"Take the window to the space on the left": "Window to the space on the left",
+               "Take the window to the space on the right": "Window to the space on the right",
+               "Keep the window on top of the others": "Keep the window on top", "Overview of windows and spaces": "Overview",
+               "Screenshot of a part, or a window": "Screenshot of a part or a window"}
+
+
+def sheet_label(label: str) -> str:
+    """A shortcut's line in Settings cut to what it is: 'Dictation: talk, and it types (again: done)' -> 'Dictation'."""
+    label = label.split(" (")[0].split(": ")[0].strip()
+    return SHEET_SHORT.get(label, label)
+
+
+def shortcut_sheet(keys: dict) -> list:
+    """The shortcut sheet's groups, from Settings › Keyboard shortcuts as it stands (huginn_settings.load_keys):
+    [{"title", "rows": [{"label", "keys": [keycaps]}]}], in Settings' order, the person's own last."""
+    groups = {g: [] for g in SHEET_GROUPS}
+    for it in keys.get("items", []):
+        if it.get("keys"):
+            groups.setdefault(it.get("group") or "Windows", []).append({"label": sheet_label(it.get("label", "")), "keys": keycaps(it["keys"][0])})
+    for f in keys.get("fixed", []):
+        group, label, at = SHEET_FIXED.get(f.get("label"), ("Windows", f.get("label", ""), None))
+        row = {"label": label, "keys": keycaps(f.get("keys", ""))}
+        groups.setdefault(group, [])
+        if at is None:
+            groups[group].append(row)
+        else:
+            groups[group].insert(at, row)
+    own = [{"label": o.get("name") or o.get("run", ""), "keys": keycaps(o["keys"])} for o in keys.get("own", []) if o.get("keys")]
+    if own:
+        groups["Your own"] = own
+    return [{"title": g, "rows": rows} for g, rows in groups.items() if rows]
+
+
 
 
 def app_streams(text: str) -> list:
@@ -1179,6 +1242,15 @@ for (var i = 0; i < all.length; i++) {{ var win = all[i]; if (String(win.interna
                 break
         found.sort(reverse=True)
         return [QUrl.fromLocalFile(p).toString() for _t, p in found[:300]]
+
+    @Slot(result="QVariantList")
+    def shortcutSheet(self) -> list:
+        """Hold Super: every shortcut as Settings › Keyboard shortcuts has it now, grouped (shortcut_sheet)."""
+        try:
+            hs = apps_module("huginn_settings")
+            return shortcut_sheet(hs.load_keys({})) if hs else []
+        except Exception:      # (a sheet with nothing on it is better than a shell that stops here)
+            return []
 
     @Slot()
     def clearHistory(self) -> None:

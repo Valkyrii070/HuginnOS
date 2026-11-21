@@ -57,6 +57,27 @@ Column {
         SetRow { glyph: "bolt"; tile: "#EF4444"; title: "Flash the screen for alert sounds"; sub: "Instead of the beep, the screen flashes briefly."
             Toggle { on: !!pg.a.flash; onToggled: function (v) { Backend.setA11y("flash", v) } } } }
 
+    // Live captions (Super+Ctrl+L): the shell's CaptionBar, with dictation's speech models (huginn_captions.py)
+    readonly property var capModels: typeof Dictation !== "undefined" && Dictation ? (Dictation.st.models || []) : []
+    readonly property var capHere: capModels.filter(function (m) { return m.here })
+    SetCard { title: "Live captions"; objectName: "liveCaptions"
+        note: "What's playing (a video, a call, a game) written out in a bar you can drag anywhere. It all happens on this computer: the sound never leaves it and nothing is kept. Super+Ctrl+L turns it on and off from anywhere."
+        SetRow { glyph: "captions"; tile: "#0EA5E9"; title: "Live captions"
+            sub: pg.capHere.length ? "Uses " + (Settings.captionsModel ? pg.capLabel(Settings.captionsModel) : "the quickest speech model you have") + "."
+                                   : "Needs a speech model first: the same ones dictation uses."
+            Toggle { on: Settings.captions; onToggled: function (v) { Settings.set("captions", v ? "true" : "false") } } }
+        SetRow { title: "Text size"
+            SetChoice { each: 76; options: [["small", "Small"], ["medium", "Medium"], ["large", "Large"]]; value: Settings.captionsSize
+                onPicked: function (v) { Settings.set("captionsSize", v) } } }
+        SetRow { visible: pg.capHere.length > 1; title: "Speech model"; sub: "Quick keeps up best; Accurate catches more."
+            SetChoice { each: 84; options: [["", "Quickest"]].concat(pg.capHere.map(function (m) { return [m.name, m.label] })); value: Settings.captionsModel
+                onPicked: function (v) { Settings.set("captionsModel", v) } } }
+        SetRow { visible: !pg.capHere.length; title: "Speech models"; sub: "Download one under Dictation (Quick is best for captions)."
+            Btn { text: "Keyboard & Mouse…"; onClicked: win.go("input") } }
+        SetRow { title: "Put the bar back"; sub: "Low in the middle of the screen, where it starts"
+            Btn { text: "Put Back"; enabled: Settings.captionsPos !== ""; onClicked: Settings.set("captionsPos", "") } } }
+    function capLabel(name) { var m = capModels.filter(function (x) { return x.name === name })[0]; return m ? m.label + " (" + m.size + ")" : name }
+
     SetCard { title: "Moving and typing"
         SetRow { glyph: "sparkle"; tile: "#14B8A6"; title: "Reduce motion"; sub: "Windows, menus and pages appear without sliding, zooming or fading."
             Toggle { on: Settings.reduceMotion; onToggled: function (v) { Settings.set("reduceMotion", v ? "true" : "false"); Backend.setA11y("animations", !v) } } }

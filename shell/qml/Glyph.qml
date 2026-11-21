@@ -120,6 +120,7 @@ Canvas {
         case "code": line(8, 7, 3, 12, 8, 17); line(16, 7, 21, 12, 16, 17); line(13.5, 4.5, 10.5, 19.5); break
         case "bluetooth": line(7, 7.5, 16.5, 16, 12, 20.5, 12, 3.5, 16.5, 8, 7, 16.5); break
         case "battery": box(3, 7.5, 16, 9, 2.5); line(21, 10.5, 21, 13.5); c.fillRect(5.5, 10, 7, 4); break
+        case "captions": box(2.5, 5.5, 19, 13, 2.5); line(6, 10.5, 10.5, 10.5); line(12.5, 10.5, 18, 10.5); line(6, 14.5, 15, 14.5); break
         case "keyboard": box(2.5, 6, 19, 12, 2.5); dot(6.5, 9.8, 0.9); dot(10, 9.8, 0.9); dot(13.5, 9.8, 0.9); dot(17, 9.8, 0.9); line(7.5, 14.2, 16.5, 14.2); break
         case "refresh": c.beginPath(); c.arc(12, 12, 7.5, Math.PI * 1.15, Math.PI * 2.85); c.stroke(); line(4.4, 5.5, 4.6, 9.4, 8.5, 9.2); break
         case "power": c.beginPath(); c.arc(12, 13, 7.5, -Math.PI * 0.3, Math.PI * 1.3); c.stroke(); line(12, 3, 12, 11); break

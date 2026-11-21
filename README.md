@@ -2419,6 +2419,30 @@ backend in `huginn_app.py` went) and `apps/qml/Monitor.qml`.
 - Huginn AI's new places (Dictation, Files, Look Up) each have their switch in Settings › AI › Where it shows, and a
   one-shot call (`huginn_ai.ask_once`) for tools without a window of their own.
 
+## Shortcuts at a glance, live captions, the wallpaper's colour (2026-11-21, afternoon)
+
+- **Hold Super to see every shortcut.** The compositor notices Super held on its own for 0.7 s (`sheet_later` in
+  `input_handler.rs`) and tells the shell (`keys-show`); letting go, another key or a click hides it, and that Super
+  no longer opens the start menu. The sheet (`KeysSheet.qml`) reads Settings › Keyboard Shortcuts as they are
+  (`huginn_system.shortcut_sheet`), with your own shortcuts last, grouped into as many columns as the screen takes. It
+  takes no clicks and no keys, so a shortcut pressed while it shows works. Settings › Keyboard Shortcuts › Hold Super
+  to see them all turns it off.
+- **Live captions (Super+Ctrl+L, the Control Centre, Settings › Accessibility).** `apps/huginn_captions.py` reads what
+  the speakers play (PipeWire's monitor of the default output: `pw-record` with `stream.capture.sink`, which the
+  privacy dot doesn't count as the microphone), cuts it where the speech pauses or every 5 s, and has whisper-cli
+  write each piece out with the quickest of dictation's models (greedy, no second tries, the last words as its
+  prompt); pieces that wait meanwhile go together, so it never falls far behind. Whisper's stock lines for music
+  and silence are dropped. The shell (`huginn_livecaptions.py`) runs it while Settings says captions are on and shows
+  the last two lines in `CaptionBar.qml`: a dark bar over everything (full-screen games and films too), dragged
+  anywhere and kept there; only the bar takes the pointer. Text size, model and Put Back are in Accessibility.
+- **Accent colour from the wallpaper.** Settings › Appearance › Accent colour: the realm's, or From wallpaper.
+  `huginn_shell.wall_accent` reads the wallpaper small (a 48-pixel-wide decode) and finds the hue its vivid,
+  middling-bright parts are most about; `accent_colour` makes that bright enough for the dark text on it in dark
+  mode, deep enough for white text in light mode (contrast 5:1 and 3.6:1). A picture, a live wallpaper's picture or
+  scene, or the realm's still; a grey one keeps the realm's. Every process works it out the same way (cached by the
+  picture's time), so the shell and Settings change together, and each app keeps its own colour.
+- What's new (0.5) shows these after an update; the first tour mentions holding Super.
+
 ## Huginn, the browser
 
 Inside the Huginn repository (this kit is its `os/` folder) the image ships the repository's own browser. A kit used

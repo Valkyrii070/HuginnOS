@@ -46,13 +46,14 @@ GlassWindow {
                                     a11y: "SetAccessibility", printers: "SetPrinters", livemaker: "SetLiveMaker", graphics: "SetGraphics", controllers: "SetControllers", storage: "SetStorage" })
     readonly property var index: [
         ["a11y", "Screen reader", "orca blind read aloud speech voice spoken accessibility"], ["a11y", "Zoom", "magnifier magnify enlarge screen accessibility"],
+        ["a11y", "Live captions", "subtitles captions transcribe deaf hard of hearing speech to text video call accessibility"],
         ["a11y", "Make everything bigger", "large text size font scale accessibility"], ["a11y", "High contrast", "contrast low vision accessibility"],
         ["a11y", "Solid surfaces", "transparency glass blur opaque accessibility"], ["a11y", "Colour filter", "color blind colour blindness protanopia deuteranopia tritanopia invert accessibility"],
         ["a11y", "Pointer size", "cursor mouse big large accessibility"], ["a11y", "Reduce motion", "animation still movement vestibular accessibility"],
         ["a11y", "On-screen keyboard", "virtual keyboard touch tablet accessibility"], ["a11y", "Sticky keys", "modifier one hand shortcut accessibility"],
         ["a11y", "Slow keys", "typing accidental accessibility"], ["a11y", "Bounce keys", "tremor repeat accessibility"],
         ["a11y", "Mouse keys", "number pad pointer keyboard accessibility"], ["a11y", "Flash the screen", "deaf hearing beep bell alert visual accessibility"],
-        ["appearance", "Dark mode", "light theme night"], ["appearance", "Realm", "accent colour color wallpaper tint"],
+        ["appearance", "Dark mode", "light theme night"], ["appearance", "Accent colour", "accent color colour highlight match wallpaper picture tint"], ["appearance", "Realm", "accent colour color wallpaper tint"],
         ["appearance", "Wallpaper", "picture photo image background desktop own live scene"],
         ["appearance", "Make a live wallpaper", "animated moving video snow rain stars fireflies particles create own design"],
         ["appearance", "Icons", "icon theme app icons pack style papirus breeze change"], ["appearance", "Change an app's icon", "custom icon picture app"],
