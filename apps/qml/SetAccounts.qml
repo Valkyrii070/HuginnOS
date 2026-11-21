@@ -47,7 +47,8 @@ Column {
                             text: modelData.error ? modelData.error : modelData.syncing ? "Bringing it up to date…" : "Up to date " + modelData.synced.toLowerCase() + (modelData.summary ? " · " + modelData.summary : "") } }
                     Row { anchors { right: parent.right; rightMargin: 14; verticalCenter: parent.verticalCenter } spacing: 8
                         Btn { visible: modelData.error.indexOf("Sign in again") >= 0; text: "Sign In Again"; primary: true
-                            onClicked: { var a = modelData; Accounts.remove(a.id); pg.start(Accounts.providers.filter(function (p) { return p.id === a.provider })[0]) } }
+                            onClicked: { var a = modelData, page = pg, acc = Accounts        // (removing the account takes this row with it)
+                                var prov = acc.providers.filter(function (p) { return p.id === a.provider })[0]; acc.remove(a.id); page.start(prov) } }
                         Btn { visible: modelData.error.indexOf("Sign in again") < 0; text: "Sync Now"; enabled: !modelData.syncing; onClicked: Accounts.syncNow(modelData.id) }
                         Seg { icon: "trash"; tip: "Remove"; onClicked: { var a = modelData; win.confirm("Remove " + a.providerName + " (" + a.email + ")?", "Its mail, events and contacts leave this computer. Nothing on the account itself changes.", "Remove", function () { Accounts.remove(a.id) }) } } } }
                 Repeater { model: modelData.services

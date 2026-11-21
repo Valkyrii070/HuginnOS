@@ -61,7 +61,7 @@ GlassWindow {
                         Repeater { model: Backend.accounts; Seg { required property var modelData; text: modelData.name; on: win.sheet && win.sheet.account === modelData.id
                             onClicked: win.sheet = { kind: "import", files: win.sheet.files, account: modelData.id } } } }
                     Repeater { id: files; model: card.kind === "import" ? win.sheet.files : []
-                        Pressable { required property var modelData; width: parent.width; height: 38; radius: 9; onClicked: { var a = win.sheet.account, p = modelData.path; win.sheet = null; Backend.importFile(p, a) }
+                        Pressable { required property var modelData; width: parent.width; height: 38; radius: 9; onClicked: { var a = win.sheet.account, p = modelData.path; var be = Backend; win.sheet = null; be.importFile(p, a) }
                             Glyph { x: 10; anchors.verticalCenter: parent.verticalCenter; name: "doc"; size: 15 }
                             Label { x: 36; width: parent.width - 150; elide: Text.ElideMiddle; anchors.verticalCenter: parent.verticalCenter; text: modelData.name }
                             Label { anchors { right: parent.right; rightMargin: 10; verticalCenter: parent.verticalCenter } text: modelData.where + " · " + modelData.when; secondary: true; font.pixelSize: 11 } } } }
@@ -75,7 +75,7 @@ GlassWindow {
                 // pick a category
                 Flow { visible: card.kind === "category"; x: 20; y: 58; width: parent.width - 40; spacing: 6
                     Repeater { model: Backend.allCategories
-                        Pressable { required property var modelData; readonly property bool on: win.sheet && win.sheet.txn && win.sheet.txn.category === modelData.name
+                        Pressable { required property var modelData; readonly property bool on: !!(win.sheet && win.sheet.txn && win.sheet.txn.category === modelData.name)
                             width: catRow.width + 22; height: 32; radius: 16; color: on ? modelData.colour : hovered ? Theme.t.hover : Theme.t.group
                             onClicked: { var t = win.sheet.txn; Backend.recategorise(t.id, modelData.name, always.on); win.sheet = null }
                             Row { id: catRow; anchors.centerIn: parent; spacing: 6

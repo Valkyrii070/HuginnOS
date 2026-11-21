@@ -11,6 +11,7 @@ GlassWindow {
     property var lastPic: null
     property var growRect: null
     onPicChanged: {
+        if (!pic && slideshow) toggleSlideshow()        // (the last picture went: the slideshow is over)
         if (pic) { lastPic = pic; if (!viewer.shown && viewer.pending === null) { viewer.pending = growRect || "whole"; growWait.restart() } }   // grows once it has loaded
         else if (viewer.shown) viewer.close()
         growRect = null
@@ -39,10 +40,46 @@ GlassWindow {
     function trashPicture() { if (pic) asking = pic }
     function details() { if (pic) showInfo = !showInfo }
     Timer { id: hide; interval: 5000; onTriggered: win.notice = "" }
+    // A slideshow: the pictures showing, one after another, full screen with nothing over them. Any key but the arrows
+    // and Space, or a click, ends it.
+    property bool slideshow: false
+    function toggleSlideshow() {
+        if (!slideshow && shown.length === 0) return
+        slideshow = !slideshow
+        if (slideshow) { if (viewing < 0) viewing = 0; showInfo = false; wasFull = visibility === Window.FullScreen; showFullScreen() }
+        else if (!wasFull) showNormal()
+        photoKeys.forceActiveFocus()
+    }
+    property bool wasFull: false
+    bare: slideshow
+    Timer { interval: 4000; repeat: true; running: win.slideshow && !Backend.editing; onTriggered: win.viewing = (win.viewing + 1) % Math.max(1, win.shown.length) }
+    Item { id: photoKeys; focus: true
+        Keys.onPressed: function (e) {
+            if (Backend.editing || e.modifiers & (Qt.ControlModifier | Qt.AltModifier | Qt.MetaModifier)) return
+            var k = e.key
+            if (win.slideshow && k !== Qt.Key_Left && k !== Qt.Key_Right && k !== Qt.Key_Space) { win.toggleSlideshow(); e.accepted = true; return }
+            if (!win.pic) { if (k === Qt.Key_Space && win.shown.length) win.toggleSlideshow(); else return; e.accepted = true; return }
+            if (k === Qt.Key_Right || k === Qt.Key_Down || k === Qt.Key_PageDown) win.nextPicture()
+            else if (k === Qt.Key_Left || k === Qt.Key_Up || k === Qt.Key_PageUp) win.previousPicture()
+            else if (k === Qt.Key_Home) win.viewing = 0
+            else if (k === Qt.Key_End) win.viewing = win.shown.length - 1
+            else if (k === Qt.Key_Escape || k === Qt.Key_Backspace) win.viewing = -1
+            else if (k === Qt.Key_Space) win.toggleSlideshow()
+            else if (k === Qt.Key_Delete) win.trashPicture()
+            else if (k === Qt.Key_F || k === Qt.Key_F11) { if (win.visibility === Window.FullScreen) win.showNormal(); else win.showFullScreen() }
+            else if (k === Qt.Key_I) win.details()
+            else if (k === Qt.Key_Plus || k === Qt.Key_Equal) win.zoom = Math.min(8, win.zoom * 1.25)
+            else if (k === Qt.Key_Minus) win.zoom = Math.max(1, win.zoom / 1.25)
+            else if (k === Qt.Key_0) win.zoom = 1
+            else return
+            e.accepted = true
+        } }
+    MouseArea { visible: win.slideshow; z: 50; anchors.fill: parent; cursorShape: Qt.BlankCursor; onClicked: win.toggleSlideshow() }
     islands: [
         Island {   // what you can do with the picture that is open
             visible: !!win.pic && !Backend.editing; anchors.horizontalCenter: parent.horizontalCenter; y: 12
             Seg { icon: "grid"; text: "All Pictures"; onClicked: win.viewing = -1 }
+            Seg { icon: "play"; tip: "Slideshow (Space)"; onClicked: win.toggleSlideshow() }
             IslandGap {}
             Label { text: win.pic ? win.pic.name : ""; font.pixelSize: 12; font.weight: Font.DemiBold; leftPadding: 6; rightPadding: 6; width: Math.min(implicitWidth, 260); elide: Text.ElideMiddle; anchors.verticalCenter: parent.verticalCenter }
             IslandGap {}

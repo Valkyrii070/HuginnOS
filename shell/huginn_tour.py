@@ -48,6 +48,8 @@ WHAT_IS_NEW = {
          "a video, a call, a game. On this computer only; drag the bar anywhere.", "try": "", "done": "", "check": ""},
         {"target": "centre", "title": "Your wallpaper's colour", "words": "Settings › Appearance › Accent colour can take its colour from your "
          "wallpaper, so buttons, switches and highlights match it.", "try": "", "done": "", "check": ""},
+        {"target": "dock", "title": "Alarms, and apps gone over", "words": "Clock has alarms that ring with Clock closed. Calculator has scientific keys, "
+         "Terminal selects with the mouse, Media Player has subtitles and speed, Music shuffles, Photos has a slideshow.", "try": "", "done": "", "check": ""},
     ],
 }
 

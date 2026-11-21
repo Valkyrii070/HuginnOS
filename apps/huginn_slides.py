@@ -326,6 +326,15 @@ class Slides(FileList):
         self.changed.emit()
 
     @Slot(str, result=str)
+    def sendByMail(self, kind: str) -> str:
+        """Export a copy (as `export` does) and start a message in Mail with it attached. Returns the copy's path."""
+        out = self.export(kind)
+        if out:
+            import huginn_sendmail
+            huginn_sendmail.send_files([out], Path(out).stem)
+        return out
+
+    @Slot(str, result=str)
     def export(self, kind: str) -> str:
         if self._path is None:
             return ""

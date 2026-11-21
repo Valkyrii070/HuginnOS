@@ -25,10 +25,10 @@ from PySide6.QtCore import (Property, QMarginsF, QObject, QPointF, QProcess, QRe
 from PySide6.QtGui import QImage, QPageLayout, QPageSize, QPainter, QPdfWriter, QPolygonF, QTransform
 from PySide6.QtQuick import QQuickImageProvider
 
-try:
-    import cv2
-except ImportError:                                          # corners are still found, a simpler way
-    cv2 = None
+from huginn_lazy import Lazy
+
+cv2 = Lazy("cv2")          # brought in when first used (it takes half a second to import); false when it isn't installed
+cv2.warm(2.5)
 
 DATA = Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local/share") / "huginn" / "scan"
 FMT = QImage.Format.Format_RGB888
@@ -125,7 +125,7 @@ def find_page(a: np.ndarray) -> list:
     sh, sw = small.shape[:2]
     whole = [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]]
     quad = None
-    if cv2 is not None:
+    if cv2:
         g = cv2.GaussianBlur(cv2.cvtColor(np.ascontiguousarray(small), cv2.COLOR_RGB2GRAY), (5, 5), 0)
         edges = cv2.dilate(cv2.Canny(g, 40, 120), np.ones((3, 3), np.uint8))
         contours, _ = cv2.findContours(edges, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)

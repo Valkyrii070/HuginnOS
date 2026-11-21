@@ -5,7 +5,7 @@ Follow shows and listen.
 Search by name, or paste the feed address. Finding by name asks Apple's public podcast directory (only the words you typed are sent).
 
 ## Listen
-Skip back 15 seconds or forward 30; change the speed from 0.8× to 2×. Podcasts remembers where you stopped.
+Skip back 15 seconds or forward 30; change the speed from 0.8× to 2×. Podcasts remembers where you stopped. The moon is a sleep timer: click it for 15, 30, 45 or 60 minutes, after which the episode pauses.
 
 ## Offline
 Keep an episode to play it without a connection.

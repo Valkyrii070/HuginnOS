@@ -42,7 +42,7 @@ EDIT = [item("Undo", "edit:undo", "Ctrl+Z"), item("Redo", "edit:redo", "Ctrl+Shi
         item("Cut", "edit:cut", "Ctrl+X"), item("Copy", "edit:copy", "Ctrl+C"), item("Paste", "edit:paste", "Ctrl+V"),
         item("Select All", "edit:selectAll", "Ctrl+A")]
 OFFICE_FILE = [item("New", "backend:create", "Ctrl+N"), item("Open…", "qml:openFile", "Ctrl+O"), item("Open recent", "recent"), SEP,
-               item("Save", "backend:save", "Ctrl+S"), item("Export as PDF…", "qml:exportPdf", "Ctrl+Shift+E"), item("Share…", "qml:share")]
+               item("Save", "backend:save", "Ctrl+S"), item("Export as PDF…", "qml:exportPdf", "Ctrl+Shift+E"), item("Send by Mail as PDF", "qml:share", "Ctrl+Shift+M")]
 
 APP_MENUS = {
     "writer": [("File", OFFICE_FILE[:-1] + [item("Print…", "qml:printIt", "Ctrl+P"), item("Page Setup…", "qml:pageSetup"), SEP, item("Share…", "qml:share")]),
@@ -158,15 +158,18 @@ APP_MENUS = {
     "machines": [("Machine", [item("New machine", "short:Ctrl+N", "Ctrl+N")])],
     "recorder": [("Recording", [item("Record or stop", "short:Space", "Space")])],
     "music": [("Controls", [item("Play or pause", "qml:playPause", "Ctrl+P"), item("Next", "qml:nextSong", "Ctrl+Right"), item("Previous", "qml:previousSong", "Ctrl+Left"), SEP,
+                            item("Shuffle", "qml:toggleShuffle", "Ctrl+S"), item("Repeat: off, all, one", "qml:cycleRepeat", "Ctrl+R"), SEP,
                             item("Louder", "qml:louder", "Ctrl+Up"), item("Quieter", "qml:quieter", "Ctrl+Down")]),
               ("View", [item("Now Playing", "qml:setView:playing", "Ctrl+1"), item("Library", "qml:setView:library", "Ctrl+2")])],
     "video": [("Controls", [item("Play or pause", "qml:playPause", "Ctrl+P"), item("Forward 10 seconds", "qml:skip:10000", "Ctrl+Right"),
                             item("Back 10 seconds", "qml:skip:-10000", "Ctrl+Left")]),
-              ("View", [item("Videos", "qml:toggleList", "Ctrl+L")])],
+              ("Playback", [item("Faster", "qml:stepRate:1", "Ctrl+Up"), item("Slower", "qml:stepRate:-1", "Ctrl+Down"), item("Normal speed", "qml:setRate:1", "Ctrl+0"), SEP,
+                            item("Repeat this video", "qml:toggleLoop", "Ctrl+R"), item("Subtitles", "qml:toggleSubs", "Ctrl+T")]),
+              ("View", [item("Videos", "qml:toggleList", "Ctrl+L"), item("Full screen", "qml:full", "Ctrl+F")])],
     "photos": [("Picture", [item("Next", "qml:nextPicture", "Ctrl+Right"), item("Previous", "qml:previousPicture", "Ctrl+Left"), SEP,
                             item("Edit", "qml:edit", "Ctrl+E"), item("Rotate", "qml:rotate", "Ctrl+R"), item("Details", "qml:details", "Ctrl+I"), SEP,
                             item("Move to Trash", "qml:trashPicture", "Ctrl+Delete")]),
-               ("View", [item("All Pictures", "qml:allPictures", "Ctrl+Up")])],
+               ("View", [item("All Pictures", "qml:allPictures", "Ctrl+Up"), item("Slideshow", "qml:toggleSlideshow", "Ctrl+Shift+S")])],
     "weather": [("Weather", [item("Add a place…", "qml:addPlace", "Ctrl+N"), item("Refresh", "qml:refresh", "Ctrl+R"), item("°C or °F", "qml:flipUnit", "Ctrl+U")])],
     "feeds": [("Feeds", [item("Follow…", "qml:follow", "Ctrl+N"), item("Your sources", "qml:sources", "Ctrl+Shift+S"), SEP,
                          item("Check for new stories", "qml:refresh", "Ctrl+R"), item("Mark all as read", "qml:allRead", "Ctrl+Shift+A")])],
@@ -177,7 +180,8 @@ APP_MENUS = {
     "money": [("Money", [item("Bring in a statement…", "qml:importStatement", "Ctrl+I"), item("Add a cash payment…", "qml:addPayment", "Ctrl+N"),
                          item("New account…", "qml:addAccount", "Ctrl+Shift+N")]),
               ("View", [item("Overview", "qml:setView:overview", "Ctrl+1"), item("Activity", "qml:setView:activity", "Ctrl+2"), item("Plan", "qml:setView:plan", "Ctrl+3")])],
-    "calculator": [("View", [item("Earlier sums", "qml:toggleHistory", "Ctrl+H")])],
+    "calculator": [("Edit", [item("Copy the Answer", "qml:copyAnswer", "Ctrl+C"), item("Paste a Sum", "qml:pasteSum", "Ctrl+V")]),
+                   ("View", [item("Scientific keys", "qml:toggleScientific", "Ctrl+E"), item("Earlier sums", "qml:toggleHistory", "Ctrl+H")])],
     "monitor": [("View", [item("Your programs", "qml:setMine:true", "Ctrl+1"), item("All programs", "qml:setMine:false", "Ctrl+2")])],
     "print": [("View", [item("Print", "qml:setTab:print", "Ctrl+1"), item("Scan", "qml:setTab:scan", "Ctrl+2")])],
     "maps": [("Map", [item("Find a place…", "qml:find", "Ctrl+F"), item("Kilometres or miles", "qml:flipUnits", "Ctrl+U")])],
@@ -189,8 +193,9 @@ APP_MENUS = {
     "backup": [("Backup", [item("Back up now", "qml:backUpNow", "Ctrl+B"), item("Choose a drive…", "qml:chooseDrive", "Ctrl+Shift+D")])],
     "fonts": [("Fonts", [item("Add fonts…", "qml:addFonts", "Ctrl+N")])],
     "authenticator": [("Codes", [item("Add a code…", "qml:addCode", "Ctrl+N"), item("Lock", "qml:lockNow", "Ctrl+L")])],
-    "clock": [("View", [item("World Clock", "qml:setPage:World Clock", "Ctrl+1"), item("Stopwatch", "qml:setPage:Stopwatch", "Ctrl+2"),
-                        item("Timer", "qml:setPage:Timer", "Ctrl+3")])],
+    "clock": [("File", [item("New Alarm…", "qml:newAlarm", "Ctrl+N"), item("Add a City…", "qml:addCity", "Ctrl+Shift+N")]),
+              ("View", [item("World Clock", "qml:setPage:World Clock", "Ctrl+1"), item("Alarms", "qml:setPage:Alarms", "Ctrl+2"),
+                        item("Stopwatch", "qml:setPage:Stopwatch", "Ctrl+3"), item("Timer", "qml:setPage:Timer", "Ctrl+4")])],
 }
 NAMES = {"files": "Files"}
 # Apps that are about typing: they always have the Edit menu. Every other app has it only while you're typing in one

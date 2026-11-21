@@ -171,11 +171,11 @@ Glass {
                 Item { width: 112; height: 112
                     LiveRing { anchors.fill: parent; tone: panel.tone; thick: 7; value: panel.kind === "alarm" ? 1 : (panel.it.total ? Math.max(0, tv.leftMs) / panel.it.total : 0) }
                     Column { anchors.centerIn: parent
-                        Label { anchors.horizontalCenter: parent.horizontalCenter; text: panel.kind === "alarm" ? "0:00" : L.clock(tv.leftMs); font.pixelSize: 24; font.weight: Font.Bold }
+                        Label { anchors.horizontalCenter: parent.horizontalCenter; text: panel.kind === "alarm" ? (panel.it.sub || "0:00") : L.clock(tv.leftMs); font.pixelSize: 24; font.weight: Font.Bold }
                         Label { anchors.horizontalCenter: parent.horizontalCenter; visible: !!panel.it.total; text: "of " + L.clock(panel.it.total || 0); font.pixelSize: 11; secondary: true } } }
                 Column { anchors.verticalCenter: parent.verticalCenter; spacing: 3; width: parent.width - 130
-                    Label { width: parent.width; text: panel.kind === "alarm" ? "Time's up" : (panel.it.title || "Timer"); font.pixelSize: 18; font.weight: Font.DemiBold; elide: Text.ElideRight; color: panel.kind === "alarm" ? Theme.t.danger : Theme.t.text }
-                    Label { width: parent.width; text: (panel.it.title && panel.kind === "alarm" ? panel.it.title + " · " : "Timer · ") + (panel.it.app || "Clock"); secondary: true; elide: Text.ElideRight }
+                    Label { width: parent.width; text: panel.kind === "alarm" ? (panel.it.sub ? (panel.it.title || "Alarm") : "Time's up") : (panel.it.title || "Timer"); font.pixelSize: 18; font.weight: Font.DemiBold; elide: Text.ElideRight; color: panel.kind === "alarm" ? Theme.t.danger : Theme.t.text }
+                    Label { width: parent.width; text: (panel.kind === "alarm" && panel.it.sub ? "Alarm · " : panel.it.title && panel.kind === "alarm" ? panel.it.title + " · " : "Timer · ") + (panel.it.app || "Clock"); secondary: true; elide: Text.ElideRight }
                     Label { width: parent.width; visible: panel.kind === "timer"; text: panel.it.paused ? "Paused" : "Rings at " + Qt.formatTime(new Date(panel.it.ends || 0), "HH:mm"); font.pixelSize: 12; color: Theme.t.text_tertiary } }
             }
             Actions { width: parent.width; list: panel.it.actions || [] }

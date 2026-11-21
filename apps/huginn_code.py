@@ -2234,6 +2234,14 @@ def advice(sky: Sky) -> str:
             prev = b["sha"]
         return out
 
+    @Slot(int, result=str)
+    def relOf(self, i: int) -> str:
+        """An open file's path inside the project ("" when it isn't in it): for This File's History."""
+        if not self._root or not (0 <= i < len(self._docs)):
+            return ""
+        path = self._docs[i].path or ""
+        return os.path.relpath(path, self._root) if path.startswith(str(self._root) + os.sep) else ""
+
     @Slot(str, result="QVariantList")
     def history(self, rel: str) -> list:
         """The project's commits (or one file's, following renames), newest first, with a lane graph to draw."""

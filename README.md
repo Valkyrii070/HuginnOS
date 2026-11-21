@@ -2443,6 +2443,42 @@ backend in `huginn_app.py` went) and `apps/qml/Monitor.qml`.
   picture's time), so the shell and Settings change together, and each app keeps its own colour.
 - What's new (0.5) shows these after an update; the first tour mentions holding Super.
 
+## Every app gone over (2026-11-21, evening)
+
+How it was checked, so it can be done again: a harness (not in the kit) loads each app with its sample content and
+(1) checks every `Backend.x`, `Settings.x`, `Theme.t.x` and glyph name its QML uses against the Python object behind
+it, and every menu item against the window's functions; (2) presses everything clickable for half a minute, every
+Settings page included, collecting QML errors and Python tracebacks. The shell's QML got the first check too.
+
+Bugs it found, fixed:
+- **Slides: the resize, line-end and turn handles did nothing.** Inside the handles `layer` meant the item's own
+  `layer` property, not the slide layer's id (renamed `slideLayer`).
+- **Settings › Keyboard & Mouse: adding or removing a keyboard layout failed** (a list from QML reaches a `QVariant`
+  slot wrapped; `setKeyboard` now unwraps it).
+- **Rows that close their own sheet** ran the rest of their handler in a context that was gone, so the action never
+  happened: Contacts' and Passwords' and Money's and Feeds' recent-file import, Easel's New from a preset size, Code's
+  Open Folder from the list, Mail's move-to-folder, Translate's language choice, Settings › Online Accounts' Sign In
+  Again.
+- Code: This File's History showed the whole project's (`relOf` didn't exist), and errors when the last file closed.
+- Media Player: a video opened from Files didn't play, the next one didn't follow, and there were no keys at all.
+- Music: clicking a row moved the "now playing" mark without playing; searching changed which song Next went to.
+- Photos: no keys at all (← → Esc now browse). Terminal: closing the last tab raised errors; Money, Clock, the
+  text boxes' focus warning. Menu items that were hidden because their function was missing now work: Terminal ›
+  Find, Monitor › Your programs / All programs, the office apps' Send by Mail.
+
+Added where an app was missing what such an app has:
+- **Clock: alarms** (`apps/huginn_alarms.py`), rung by the live island with Stop and Snooze whether or not Clock is
+  open, with a sound that repeats until stopped (a finished timer rings the same way now); your own world-clock
+  cities; timer lengths you type.
+- **Calculator:** scientific keys and functions (powers, roots, trig in degrees or radians, logs, factorials, π, e),
+  implied multiplication, copy and paste, history kept between openings.
+- **Media Player:** keys for everything, speed, repeat, subtitles from a file beside the video, carrying on where a
+  long video was stopped, dropping files on the window. **Music:** each file's own tags and length (ffprobe, in the
+  background, kept), shuffle, repeat, a queue that survives searching.
+- **Terminal:** selecting with the mouse (word on double-click), copy of the selection, Find, text size.
+  **Photos:** a slideshow. **Podcasts:** a sleep timer. **Writer, Sheets, Slides:** Send by Mail as PDF.
+- Scan and Clips open about half a second sooner: OpenCV is brought in when first needed (`huginn_lazy.py`).
+
 ## Huginn, the browser
 
 Inside the Huginn repository (this kit is its `os/` folder) the image ships the repository's own browser. A kit used

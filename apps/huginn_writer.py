@@ -1911,6 +1911,15 @@ class Writer(FileList):
 
     # ------------------------------------------------------------------ export
     @Slot(str, result=str)
+    def sendByMail(self, kind: str) -> str:
+        """Export a copy (as `export` does) and start a message in Mail with it attached. Returns the copy's path."""
+        out = self.export(kind)
+        if out:
+            import huginn_sendmail
+            huginn_sendmail.send_files([out], Path(out).stem)
+        return out
+
+    @Slot(str, result=str)
     def export(self, kind: str) -> str:
         """kind: pdf | docx | odt | md | html | txt. Writes beside the document and returns the new file's path ('' on failure)."""
         if self._doc is None or self._path is None:

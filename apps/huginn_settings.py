@@ -2183,6 +2183,8 @@ class SystemSettings(QObject):
 
     @Slot(str, "QVariant")
     def setKeyboard(self, key: str, value) -> None:
+        if hasattr(value, "toVariant"):                 # (a list from QML arrives wrapped)
+            value = value.toVariant()
         def work():
             rc, xkb = CONFIG / "kcminputrc", CONFIG / "kxkbrc"
             if key == "repeat":

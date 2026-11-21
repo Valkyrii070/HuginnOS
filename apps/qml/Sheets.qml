@@ -163,6 +163,7 @@ GlassWindow {
     function openPop(kind, from) { if (pop === kind) { pop = ""; return } popFrom = from; pop = kind }
     // the top bar's menus
     function openFile() { Picker.open("Open a spreadsheet", [["Spreadsheets", "*.xlsx *.ods *.xls *.csv *.hsheet"]], function (paths) { if (paths.length) Backend.open(paths[0]) }) }
+    function share() { if (Backend.current === "") return; endEdit(true); var p = Backend.sendByMail("pdf"); if (p) { exported = p; hide.restart() } }
     function exportPdf() { if (Backend.current === "") return; var p = Backend.export("pdf"); if (p) { exported = p; hide.restart() } }
     function insertRow() { Backend.insert("r", r0, r1 - r0 + 1); tick++ }
     function insertColumn() { Backend.insert("c", c0, c1 - c0 + 1); tick++ }
@@ -427,7 +428,7 @@ GlassWindow {
                             Row { anchors { right: parent.right; verticalCenter: parent.verticalCenter } spacing: 0
                                 Seg { icon: "up"; tip: "Earlier"; enabled: index > 0; opacity: enabled ? 1 : 0.35; onClicked: { Backend.moveRule(modelData.id, true); win.tick++ } }
                                 Seg { icon: "down"; tip: "Later"; enabled: index < Backend.rules.length - 1; opacity: enabled ? 1 : 0.35; onClicked: { Backend.moveRule(modelData.id, false); win.tick++ } }
-                                Seg { icon: "trash"; tip: "Take it off"; onClicked: { Backend.removeRule(modelData.id); win.tick++ } } } } } } } },
+                                Seg { icon: "trash"; tip: "Take it off"; onClicked: { var w = win; Backend.removeRule(modelData.id); w.tick++ } } } } } } } },
         // ---- the little menus over the formatting island
         Rectangle { id: popBox; visible: win.pop !== "" && win.popFrom !== null; z: 20; radius: 14; color: Theme.t.menu_bg; border.width: 1; border.color: Theme.t.menu_border
             readonly property point at: win.popFrom ? win.popFrom.mapToItem(parent, 0, 0) : Qt.point(0, 0)

@@ -22,10 +22,10 @@ import numpy as np
 from PySide6.QtCore import Property, QObject, QProcess, QStandardPaths, QTimer, QUrl, Signal, Slot
 from PySide6.QtGui import QImage
 
-try:
-    import cv2
-except ImportError:                                         # tracking still works, more slowly
-    cv2 = None
+from huginn_lazy import Lazy
+
+cv2 = Lazy("cv2")          # brought in when first used (it takes half a second to import); false when it isn't installed
+cv2.warm(2.5)
 try:
     import mlt7 as mlt
 except ImportError:                                         # the viewer falls back to frames rendered by melt
@@ -560,7 +560,7 @@ def track_box(frames: list, box: tuple) -> list:
         if area.shape[0] < h or area.shape[1] < w:
             out.append((x, y, w, h))
             continue
-        if cv2 is not None:
+        if cv2:
             res = cv2.matchTemplate(area, tmpl, cv2.TM_CCOEFF_NORMED)
             _, score, _, loc = cv2.minMaxLoc(res)
             dx, dy = loc
@@ -576,7 +576,7 @@ def track_box(frames: list, box: tuple) -> list:
         out.append((x, y, w, h))
         if score > 0.6:
             tmpl = 0.85 * tmpl + 0.15 * f[y:y + h, x:x + w].astype(np.float32)
-        if cv2 is not None and score < 0.3:                  # lost it: look for the first look again, wider
+        if cv2 and score < 0.3:                  # lost it: look for the first look again, wider
             res = cv2.matchTemplate(f.astype(np.float32), first, cv2.TM_CCOEFF_NORMED)
             _, sc2, _, loc2 = cv2.minMaxLoc(res)
             if sc2 > 0.5:

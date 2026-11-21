@@ -94,6 +94,10 @@ GlassWindow {
                     Pressable { width: pl.width + 16; height: 26; radius: 8; border.width: 1; border.color: Theme.t.capsule_border; color: "transparent"
                         opacity: hit.containsMouse || hovered ? 1 : 0; onClicked: Backend.togglePlayed(row.modelData.id); Label { id: pl; anchors.centerIn: parent; font.pixelSize: 11; text: row.modelData.played ? "Not Played" : "Played" } } } } } }
 
+    property int sleepSet: 0                 // the sleep timer's minutes (0: off)
+    property int sleepLeft: 0                // seconds until it stops the episode
+    Timer { interval: 1000; repeat: true; running: win.sleepLeft > 0 && win.playing
+        onTriggered: { win.sleepLeft -= 1; if (win.sleepLeft <= 0) { player.pause(); win.sleepSet = 0 } } }
     // ---------------- what's playing
     Rectangle { visible: !!win.now.id; anchors { horizontalCenter: parent.horizontalCenter; bottom: parent.bottom; bottomMargin: 14 } width: Math.min(parent.width - 60, 720); height: 68; radius: 34; color: Theme.t.menu_bg; border.width: 1; border.color: Theme.t.accent
         Row { x: 14; anchors.verticalCenter: parent.verticalCenter; spacing: 6
@@ -101,11 +105,18 @@ GlassWindow {
             Pressable { width: 44; height: 44; radius: 22; color: Theme.t.accent; onClicked: win.playing ? player.pause() : (outLoader.active = true, player.play())
                 Glyph { anchors.centerIn: parent; name: win.playing ? "pause" : "play"; size: 17; ink: Theme.t.onAccent } }
             Pressable { width: 38; height: 38; radius: 19; onClicked: player.position = Math.min(player.duration, player.position + 30000); Label { anchors.centerIn: parent; text: "+30"; font.pixelSize: 12 } } }
-        Label { x: 160; y: 12; width: parent.width - 360; elide: Text.ElideRight; text: win.now.title || ""; font.weight: Font.DemiBold }
+        Label { x: 160; y: 12; width: parent.width - 430; elide: Text.ElideRight; text: win.now.title || ""; font.weight: Font.DemiBold }
         Pressable { anchors { right: parent.right; rightMargin: 14 } y: 8; width: 44; height: 24; radius: 8; border.width: 1; border.color: Theme.t.capsule_border; color: "transparent"
             onClicked: { var steps = [0.8, 1.0, 1.2, 1.5, 2.0], i = steps.indexOf(Backend.speed); Backend.setSpeed(steps[(i + 1) % steps.length]) }
             Label { anchors.centerIn: parent; text: Backend.speed + "×"; font.pixelSize: 11 } }
-        Label { anchors { right: parent.right; rightMargin: 68 } y: 13; text: demo ? "12:40 / 42:00" : win.clock(player.position) + " / " + win.clock(player.duration); secondary: true; font.pixelSize: 11 }
+        // a sleep timer: stops playing after a while (click to go through 15, 30, 45 and 60 minutes, then off)
+        Pressable { anchors { right: parent.right; rightMargin: 64 } y: 8; width: win.sleepLeft > 0 ? 62 : 44; height: 24; radius: 8; border.width: 1
+            border.color: win.sleepLeft > 0 ? Theme.t.accent : Theme.t.capsule_border; color: "transparent"
+            onClicked: { var steps = [0, 15, 30, 45, 60], i = steps.indexOf(win.sleepSet); win.sleepSet = steps[(i + 1) % steps.length]; win.sleepLeft = win.sleepSet * 60 }
+            Row { anchors.centerIn: parent; spacing: 4
+                Glyph { name: "moon"; size: 11; anchors.verticalCenter: parent.verticalCenter; ink: win.sleepLeft > 0 ? Theme.t.accent : Theme.t.text }
+                Label { visible: win.sleepLeft > 0; text: Math.ceil(win.sleepLeft / 60) + " min"; font.pixelSize: 11; color: Theme.t.accent } } }
+        Label { anchors { right: parent.right; rightMargin: win.sleepLeft > 0 ? 134 : 116 } y: 13; text: demo ? "12:40 / 42:00" : win.clock(player.position) + " / " + win.clock(player.duration); secondary: true; font.pixelSize: 11 }
         Rectangle { id: bar; x: 160; y: 44; width: parent.width - 178; height: 6; radius: 3; color: Theme.t.islandLine
             Rectangle { width: parent.width * (demo ? 0.3 : player.duration > 0 ? player.position / player.duration : 0); height: 6; radius: 3; color: Theme.t.accent }
             MouseArea { anchors { fill: parent; margins: -8 } onClicked: function (m) { if (player.seekable) player.position = Math.max(0, Math.min(1, (m.x - 8) / bar.width)) * player.duration } } }

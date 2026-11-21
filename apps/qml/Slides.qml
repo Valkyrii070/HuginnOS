@@ -97,6 +97,7 @@ GlassWindow {
     // ------------------------------------------------------------------ actions (the menus call these too)
     function openFile() { Picker.open("Open a presentation", [["Presentations", "*.pptx *.odp *.ppt *.hslides"]], function (paths) { if (paths.length) Backend.open(paths[0]) }) }
     function exportPdf() { doExport("pdf") }
+    function share() { if (Backend.current === "") return; endEdit(); var p = Backend.sendByMail("pdf"); if (p) { exported = p; hide.restart() } }
     function doExport(kind) { endEdit(); var p = Backend.export(kind); if (p) { exported = p; hide.restart() } }
     function newSlide() { if (Backend.current !== "") { endEdit(); Backend.add(""); sel = [] } }
     function duplicateSlide() { if (Backend.current !== "") { endEdit(); Backend.duplicate() } }
@@ -421,7 +422,7 @@ GlassWindow {
                 slide: win.cur; hints: true; hideText: win.editId; preview: win.preview }
             Rectangle { anchors.fill: face; color: "transparent"; border.width: 1; border.color: Theme.t.dark ? "#000000" : "#C3C9D0" }
             // the working layer, in slide units: choosing, moving, sizing, turning, typing
-            Item { id: layer; x: face.x; y: face.y; width: Backend.slideW; height: 1080; scale: face.k; transformOrigin: Item.TopLeft
+            Item { id: slideLayer; x: face.x; y: face.y; width: Backend.slideW; height: 1080; scale: face.k; transformOrigin: Item.TopLeft
                 Item { id: canvasKeys; focus: true; Keys.onPressed: function (e) { win.canvasKey(e) } }
                 MouseArea { id: pointer; anchors.fill: parent; acceptedButtons: Qt.LeftButton | Qt.RightButton; hoverEnabled: true; preventStealing: true
                     property var hitItem: null
@@ -594,15 +595,15 @@ GlassWindow {
                     cursorShape: (parent.modelData[0] === 0.5) ? Qt.SizeVerCursor : (parent.modelData[1] === 0.5) ? Qt.SizeHorCursor
                                  : ((parent.modelData[0] === parent.modelData[1]) ? Qt.SizeFDiagCursor : Qt.SizeBDiagCursor)
                     property var start
-                    onPressed: function (m) { var p = mapToItem(layer, m.x, m.y); start = { px: p.x, py: p.y, x: ch.it.x, y: ch.it.y, w: ch.it.w, h: ch.it.h } }
-                    onPositionChanged: function (m) { var p = mapToItem(layer, m.x, m.y); win.resizeTo(ch.it, start, parent.modelData, p.x - start.px, p.y - start.py, !!(m.modifiers & Qt.ShiftModifier)) }
+                    onPressed: function (m) { var p = mapToItem(slideLayer, m.x, m.y); start = { px: p.x, py: p.y, x: ch.it.x, y: ch.it.y, w: ch.it.w, h: ch.it.h } }
+                    onPositionChanged: function (m) { var p = mapToItem(slideLayer, m.x, m.y); win.resizeTo(ch.it, start, parent.modelData, p.x - start.px, p.y - start.py, !!(m.modifiers & Qt.ShiftModifier)) }
                     onReleased: { var v = win.preview[ch.it.id]; if (v) Backend.place(ch.it.id, v.x, v.y, v.w, v.h); win.preview = ({}) } } } }
         // the handle to turn it
         Rectangle { visible: ch.solo && !ch.line && !ch.it.locked; width: 1.5 / win.k; height: 26 / win.k; x: ch.width / 2; y: -height; color: Theme.t.accent }
         Rectangle { visible: ch.solo && !ch.line && !ch.it.locked; width: ch.hs * 1.2; height: width; radius: width / 2; x: ch.width / 2 - width / 2; y: -26 / win.k - height
             color: Theme.t.accent; border.width: 1.5 / win.k; border.color: "#FFFFFF"
             MouseArea { anchors.fill: parent; anchors.margins: -4 / win.k; preventStealing: true; cursorShape: Qt.CrossCursor
-                onPositionChanged: function (m) { var p = mapToItem(layer, m.x, m.y), cx = ch.it.x + ch.it.w / 2, cy = ch.it.y + ch.it.h / 2
+                onPositionChanged: function (m) { var p = mapToItem(slideLayer, m.x, m.y), cx = ch.it.x + ch.it.w / 2, cy = ch.it.y + ch.it.h / 2
                     var deg = Math.atan2(p.y - cy, p.x - cx) * 180 / Math.PI + 90
                     deg = ((m.modifiers & Qt.ShiftModifier) ? Math.round(deg / 15) * 15 : Math.round(deg)); deg = ((deg % 360) + 360) % 360
                     if (!(m.modifiers & Qt.ShiftModifier)) for (var s = 0; s <= 360; s += 90) if (Math.abs(deg - s) < 4) deg = s % 360
@@ -615,7 +616,7 @@ GlassWindow {
                 width: ch.hs; height: ch.hs; radius: ch.hs / 2; color: "#FFFFFF"; border.width: 1.5 / win.k; border.color: Theme.t.accent
                 x: ((startEnd !== !!ch.it.flipH) ? 0 : ch.width) - width / 2; y: ((startEnd !== !!ch.it.flipV) ? 0 : ch.height) - height / 2
                 MouseArea { anchors.fill: parent; anchors.margins: -4 / win.k; preventStealing: true; cursorShape: Qt.CrossCursor
-                    onPositionChanged: function (m) { var p = mapToItem(layer, m.x, m.y)
+                    onPositionChanged: function (m) { var p = mapToItem(slideLayer, m.x, m.y)
                         var x0 = ch.it.flipH ? ch.it.x + ch.it.w : ch.it.x, y0 = ch.it.flipV ? ch.it.y + ch.it.h : ch.it.y
                         var x1 = ch.it.flipH ? ch.it.x : ch.it.x + ch.it.w, y1 = ch.it.flipV ? ch.it.y : ch.it.y + ch.it.h
                         if (parent.startEnd) { x0 = p.x; y0 = p.y } else { x1 = p.x; y1 = p.y }

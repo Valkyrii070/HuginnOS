@@ -52,7 +52,8 @@ GlassWindow {
                     Column { id: rows; width: parent.width
                         Repeater { model: win.aiMode ? (win.sheet === "to" ? win.aiLanguages : []) : win.sheet === "from" ? Backend.sources : win.sheet === "to" ? Backend.targets : []
                             Pressable { required property var modelData; width: parent.width; height: 34; radius: 9; color: (win.aiMode ? win.aiTo : win.sheet === "from" ? Backend.source : Backend.target) === modelData.code ? win.pick : hovered ? Theme.t.hover : "transparent"
-                                onClicked: { var c = modelData.code; if (win.aiMode) win.aiTo = c; else if (win.sheet === "from") Backend.setSource(c); else Backend.setTarget(c); win.sheet = null; soon.restart() }
+                                onClicked: { var c = modelData.code, w = win, be = Backend, later = soon, from = win.sheet === "from"   // (closing the sheet takes this row with it)
+                                    w.sheet = null; if (w.aiMode) w.aiTo = c; else if (from) be.setSource(c); else be.setTarget(c); later.restart() }
                                 Label { x: 12; anchors.verticalCenter: parent.verticalCenter; text: modelData.name } } }
                         Label { visible: win.sheet === "packs"; x: 6; width: parent.width - 12; wrapMode: Text.WordWrap; secondary: true; font.pixelSize: 12; bottomPadding: 6
                             text: "Each pack translates one way between two languages and is about 100 MB. Fetching a pack is the only time Translate uses the network." }

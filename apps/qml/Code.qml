@@ -495,7 +495,7 @@ GlassWindow {
                         model: card.kind === "open" ? (Backend.recent.length && win.browseAt === Backend.home ? Backend.recent.map(function (r) { return { name: r.name, path: r.path, git: false, recent: r.where } }).concat(Backend.browse(win.browseAt)) : Backend.browse(win.browseAt)) : []
                         delegate: Pressable { required property var modelData; width: folders.width; height: 38; radius: 9; color: hovered ? Theme.t.hover : "transparent"
                             onClicked: win.browseAt = modelData.path
-                            onDoubleClicked: { var p = modelData.path; win.sheet = null; Backend.openFolder(p) }
+                            onDoubleClicked: { var p = modelData.path; var be = Backend; win.sheet = null; be.openFolder(p) }
                             Glyph { x: 10; anchors.verticalCenter: parent.verticalCenter; name: modelData.recent ? "history" : "folder"; size: 15; ink: modelData.recent ? Theme.t.accent : Theme.t.icon }
                             Label { x: 36; width: parent.width - 180; elide: Text.ElideRight; anchors.verticalCenter: parent.verticalCenter; text: modelData.name }
                             Label { anchors { right: parent.right; rightMargin: 10; verticalCenter: parent.verticalCenter } font.pixelSize: 11; secondary: true
@@ -758,7 +758,7 @@ GlassWindow {
                 property var marks: ({})
                 property var probs: []
                 property var starts: [0]
-                readonly property var info: index < Backend.tabs.length ? Backend.tabs[index] : ({})
+                readonly property var info: (index >= 0 && index < Backend.tabs.length && Backend.tabs[index]) || ({})
                 function reload() { loading = true; var at = edit.cursorPosition; known = Backend.textOf(index); edit.text = known; edit.cursorPosition = Math.min(at, edit.length); loading = false; restyle(); refresh() }
                 function restyle() { Backend.style(index, { doc: edit.textDocument, colours: win.colours() }) }
                 function refresh() { marks = Backend.marksOf(index); probs = Backend.problemsOf(index); bps = Backend.breakpointsOf(index); lineStarts() }

@@ -74,6 +74,7 @@ GlassWindow {
     function say(text) { win.notice = text; hide.restart() }
     // the top bar's menus (and their keys)
     function openFile() { Picker.open("Open a document", [["Documents", "*.odt *.docx *.doc *.rtf *.md *.txt *.html"]], function (paths) { if (paths.length) Backend.open(paths[0]) }) }
+    function share() { if (Backend.current === "") return; var p = Backend.sendByMail("pdf"); if (p) { win.exported = p; win.notice = ""; hide.restart() } }
     function exportPdf() { if (Backend.current === "") return; var p = Backend.export("pdf"); if (p) { win.exported = p; win.notice = ""; hide.restart() } }
     function find() { if (Backend.current === "") return; finding = true; replacing = false; findBox.text = editor.selectedText || findBox.text; findBox.focusIn(); runFind() }
     function replace() { find(); replacing = true }

@@ -668,7 +668,7 @@ GlassWindow {
             Flow { visible: card.kind === "new"; x: 20; y: 58; width: parent.width - 40; spacing: 8
                 Repeater { model: card.kind === "new" ? Backend.presets : []
                     Pressable { required property var modelData; width: 140; height: 46; radius: 10; color: hovered ? Theme.t.hover : Theme.t.group
-                        onClicked: { var m = modelData; win.sheet = ""; Backend.newDoc(m.w, m.h, "#FFFFFF") }
+                        onClicked: { var m = modelData; var be = Backend; win.sheet = ""; be.newDoc(m.w, m.h, "#FFFFFF") }
                         Column { x: 10; anchors.verticalCenter: parent.verticalCenter
                             Label { text: modelData.name; font.pixelSize: 12; font.weight: Font.DemiBold }
                             Label { text: modelData.w + " × " + modelData.h; font.pixelSize: 10; secondary: true } } } }

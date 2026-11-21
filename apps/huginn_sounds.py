@@ -22,7 +22,7 @@ ALERTS = [("bell", "Bell", "bell.oga"), ("chime", "Chime", "complete.oga"), ("so
           ("knock", "Knock", "window-attention.oga"), ("question", "Question", "window-question.oga"),
           ("warning", "Warning", "dialog-warning.oga"), ("none", "None", "")]
 DEFAULTS = {"alert": "bell", "alertVolume": 0.7, "volumeFeedback": True}
-FILES = {"message": "message-new-instant.oga", "volume": "audio-volume-change.oga"}
+FILES = {"message": "message-new-instant.oga", "volume": "audio-volume-change.oga", "alarm": "alarm-clock-elapsed.oga"}
 
 
 def settings() -> dict:
@@ -60,6 +60,8 @@ def file_for(kind: str, prefs: dict = None) -> str:
         return find(name)
     if kind.startswith("alert:"):                       # one to try out in Settings
         return find(next((f for i, _l, f in ALERTS if i == kind[6:]), ""))
+    if kind == "alarm":                                 # (an alarm rings whatever alert sound is chosen, None too)
+        return find(FILES["alarm"]) or find("bell.oga") or find("complete.oga")
     return find(FILES.get(kind, ""))
 
 

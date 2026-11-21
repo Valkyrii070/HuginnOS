@@ -27,6 +27,7 @@ GlassWindow {
     property string sortKey: "cpu"
     property bool sortUp: false
     property bool everyone: false                // Processes: everyone's, not only yours
+    function setMine(mine) { everyone = !(mine === true || mine === "true") }     // (the top bar's View menu)
     property bool showSystem: false              // Apps: the System section unfolded
     property var open: ({})                      // Apps: unfolded apps, by key
     property var picked: null                    // {kind: "app", key} or {kind: "proc", pid}

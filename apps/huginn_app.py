@@ -3729,32 +3729,116 @@ class Documents(QObject):
 
 # ------------------------------------------------------------------------------------------ Calculator
 class Calculator(QObject):
-    """Exact decimal arithmetic (no 0.1 + 0.2 surprises). Understands + − × ÷, brackets and %."""
+    """Exact decimal arithmetic (no 0.1 + 0.2 surprises). Understands + − × ÷, brackets, % and powers; and, worked out
+    as ordinary floating-point numbers, roots, logarithms, trigonometry (degrees or radians), factorials, π and e.
+    Finished sums are kept (the last 50) between openings."""
     changed = Signal()
+    FUNCS = ("sqrt", "sin", "cos", "tan", "asin", "acos", "atan", "ln", "log", "abs", "fact")
 
-    def __init__(self):
+    def __init__(self, demo: bool = False):
         super().__init__()
-        self._history = []
+        self._demo = demo
+        self._file = Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local/share") / "huginn" / "calculator.json"
+        self._history, self._degrees = [], True
+        if demo:
+            self._history = [{"sum": "1,250 × 12", "result": "15,000"}, {"sum": "√(3^2 + 4^2)", "result": "5"}]
+        else:
+            try:
+                kept = json.loads(self._file.read_text(encoding="utf-8"))
+                self._history = [h for h in kept.get("history", []) if isinstance(h, dict) and "sum" in h and "result" in h][:50]
+                self._degrees = bool(kept.get("degrees", True))
+            except (OSError, ValueError, AttributeError):
+                pass
 
     history = Property("QVariantList", lambda self: self._history, notify=changed)
+    degrees = Property(bool, lambda self: self._degrees, notify=changed)
+
+    def _keep(self) -> None:
+        if self._demo:
+            return
+        try:
+            self._file.parent.mkdir(parents=True, exist_ok=True)
+            tmp = self._file.with_suffix(".tmp")
+            tmp.write_text(json.dumps({"history": self._history, "degrees": self._degrees}), encoding="utf-8")
+            os.replace(tmp, self._file)
+        except OSError:
+            pass
 
     @staticmethod
-    def _eval(text: str):
+    def _spell(text: str) -> str:
+        """The sum as typed, as an expression Python's parser reads: 2π → 2*(pi), √9 → sqrt(9), 5! → fact(5), ^ → **."""
+        text = text.replace("×", "*").replace("÷", "/").replace("−", "-").replace(",", "").replace("^", "**").replace("π", "(pi)")
+        text = re.sub(r"√\s*(\d+(?:\.\d+)?|\(pi\))", r"sqrt(\1)", text).replace("√", "sqrt")
+        for _ in range(8):                                   # 5! and (2+3)! (innermost brackets first)
+            new = re.sub(r"(\d+(?:\.\d+)?|(?:[a-z]+)?\((?:[^()]|\([^()]*\))*\))!", r"fact(\1)", text)
+            if new == text:
+                break
+            text = new
+        text = text.replace("%", "/100")
+        # a number or a closing bracket straight before a name or an opening bracket multiplies: 2(3+4), 2sin(30), (1+2)(3+4)
+        text = re.sub(r"(\d|\))\s*(?=[a-z(])", r"\1*", text)
+        return re.sub(r"\b(%s)\*\(" % "|".join(Calculator.FUNCS), r"\1(", text)
+
+    @staticmethod
+    def _eval(text: str, degrees: bool = True):
         import ast
-        from decimal import Decimal, DivisionByZero, InvalidOperation, getcontext
+        import math
+        from decimal import Decimal, DivisionByZero, InvalidOperation, Overflow, getcontext
         getcontext().prec = 28
-        text = text.replace("×", "*").replace("÷", "/").replace("−", "-").replace(",", "").replace("%", "/100")
         if not text.strip() or len(text) > 200:
             raise ValueError("empty")
+        text = Calculator._spell(text)
+
+        def real(x: float):
+            if x != x or x in (float("inf"), float("-inf")):
+                raise ValueError("bad")
+            return Decimal(repr(round(x, 12))).normalize() if abs(x) < 1e15 else Decimal(repr(x))
+
+        def call(name, v):
+            x = float(v)
+            if name == "abs":
+                return abs(v)
+            if name == "fact":
+                if v != v.to_integral_value() or v < 0 or v > 170:
+                    raise ValueError("bad")
+                return Decimal(math.factorial(int(v)))
+            if name == "sqrt":
+                if v < 0:
+                    raise ValueError("bad")
+                return v.sqrt()
+            if name in ("sin", "cos", "tan"):
+                r = math.radians(x) if degrees else x
+                if name == "tan" and abs(math.cos(r)) < 1e-12:
+                    raise ValueError("bad")
+                return real(getattr(math, name)(r))
+            if name in ("asin", "acos", "atan"):
+                r = getattr(math, name)(x)
+                return real(math.degrees(r) if degrees else r)
+            if name == "ln":
+                return real(math.log(x))
+            return real(math.log10(x))
 
         def walk(node):
             if isinstance(node, ast.Expression):
                 return walk(node.body)
-            if isinstance(node, ast.Constant) and isinstance(node.value, (int, float)):
+            if isinstance(node, ast.Constant) and isinstance(node.value, (int, float)) and not isinstance(node.value, bool):
                 return Decimal(str(node.value))
+            if isinstance(node, ast.Name) and node.id in ("pi", "e"):
+                return Decimal(repr(math.pi if node.id == "pi" else math.e))
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id in Calculator.FUNCS and len(node.args) == 1 and not node.keywords:
+                return call(node.func.id, walk(node.args[0]))
             if isinstance(node, ast.UnaryOp) and isinstance(node.op, (ast.USub, ast.UAdd)):
                 value = walk(node.operand)
                 return -value if isinstance(node.op, ast.USub) else value
+            if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Pow):
+                a, b = walk(node.left), walk(node.right)
+                if abs(b) > 10000 or (b == b.to_integral_value() and abs(a) > 1 and abs(b) * max(1, abs(a).adjusted()) > 4000):
+                    raise ValueError("bad")                  # (too big to be worth working out)
+                if b == b.to_integral_value():
+                    return a ** int(b)
+                if a < 0:
+                    raise ValueError("bad")
+                return real(float(a) ** float(b))
             if isinstance(node, ast.BinOp) and isinstance(node.op, (ast.Add, ast.Sub, ast.Mult, ast.Div)):
                 a, b = walk(node.left), walk(node.right)
                 return a + b if isinstance(node.op, ast.Add) else a - b if isinstance(node.op, ast.Sub) else a * b if isinstance(node.op, ast.Mult) else a / b
@@ -3763,7 +3847,7 @@ class Calculator(QObject):
             return walk(ast.parse(text, mode="eval"))
         except (DivisionByZero, ZeroDivisionError):
             raise ZeroDivisionError
-        except (SyntaxError, InvalidOperation, RecursionError, MemoryError):
+        except (SyntaxError, InvalidOperation, Overflow, OverflowError, RecursionError, MemoryError):
             raise ValueError("bad")
 
     @staticmethod
@@ -3779,29 +3863,67 @@ class Calculator(QObject):
     @Slot(str, result=str)
     def preview(self, text: str) -> str:
         try:
-            return self._show(self._eval(text))
+            return self._show(self._eval(text, self._degrees))
         except (ValueError, ZeroDivisionError):
             return ""
 
     @Slot(str, result=str)
     def solve(self, text: str) -> str:
         try:
-            result = self._show(self._eval(text))
+            result = self._show(self._eval(text, self._degrees))
         except ZeroDivisionError:
             return "Can't divide by zero"
         except ValueError:
             return "Not a complete sum"
-        self._history = ([{"sum": text, "result": result}] + self._history)[:30]
+        self._history = ([{"sum": text, "result": result}] + [h for h in self._history if h.get("sum") != text])[:50]
+        self._keep()
         self.changed.emit()
         return result
+
+    @Slot(bool)
+    def setDegrees(self, on: bool) -> None:
+        self._degrees = bool(on)
+        self._keep()
+        self.changed.emit()
+
+    @Slot()
+    def clearHistory(self) -> None:
+        self._history = []
+        self._keep()
+        self.changed.emit()
+
+    @Slot(str)
+    def copy(self, text: str) -> None:
+        QGuiApplication.clipboard().setText(text.replace(",", ""))
+
+    @Slot(result=str)
+    def pasted(self) -> str:
+        """What's on the clipboard, if it's a sum: digits, operators, brackets and the names it knows."""
+        text = (QGuiApplication.clipboard().text() or "").strip().replace("*", "×").replace("/", "÷")
+        return text if text and len(text) <= 120 and re.fullmatch(r"[0-9.,+\-−×÷()%^!√πa-z\s]+", text) else ""
 
 
 # ----------------------------------------------------------------------------------------------- Clock
 class Clock(QObject):
-    """World clock data; the stopwatch and timer live in the QML."""
+    """World clock (the cities are yours to choose), alarms (rung by the desktop whether or not Clock is open:
+    huginn_alarms.py) and the timer's ring; the stopwatch and timer themselves live in the QML."""
     changed = Signal()
-    CITIES = [("Reykjavík", "Atlantic/Reykjavik"), ("London", "Europe/London"), ("New York", "America/New_York"),
-              ("Los Angeles", "America/Los_Angeles"), ("Tokyo", "Asia/Tokyo"), ("Sydney", "Australia/Sydney")]
+
+    def __init__(self, demo: bool = False):
+        super().__init__()
+        import huginn_alarms
+        self._al, self._demo = huginn_alarms, demo
+        self._data = {"alarms": [{"id": "a1", "time": "07:00", "days": [0, 1, 2, 3, 4], "label": "Wake up", "on": True},
+                                 {"id": "a2", "time": "09:30", "days": [5, 6], "label": "", "on": False}],
+                      "cities": [list(c) for c in huginn_alarms.DEFAULT_CITIES], "rang": {}} if demo else huginn_alarms.read()
+        self._zones = None
+
+    def _change(self, edit) -> None:
+        if self._demo:
+            edit(self._data)
+        else:
+            self._data = self._al.change(edit)
+        self.changed.emit()
 
     @Slot(result="QVariantList")
     def world(self) -> list:
@@ -3810,7 +3932,7 @@ class Clock(QObject):
         except ImportError:
             return []
         here, out = dt.datetime.now().astimezone(), []
-        for city, zone in self.CITIES:
+        for city, zone in self._data["cities"]:
             try:
                 there = here.astimezone(ZoneInfo(zone))
             except Exception:       # zone data missing on this system
@@ -3818,8 +3940,108 @@ class Clock(QObject):
             hours = (there.utcoffset() - here.utcoffset()).total_seconds() / 3600
             day = "Today" if there.date() == here.date() else ("Tomorrow" if there.date() > here.date() else "Yesterday")
             gap = "Same time" if hours == 0 else f"{abs(hours):g} h {'ahead' if hours > 0 else 'behind'}"
-            out.append({"city": city, "time": there.strftime("%H:%M"), "note": f"{day} · {gap}", "night": there.hour < 6 or there.hour >= 20})
+            out.append({"city": city, "zone": zone, "time": there.strftime("%H:%M"), "note": f"{day} · {gap}", "night": there.hour < 6 or there.hour >= 20})
         return out
+
+    @Slot(str, result="QVariantList")
+    def findCities(self, text: str) -> list:
+        """Places to add to the world clock: time zones whose city (or region) has these letters, up to 30."""
+        if self._zones is None:
+            self._zones = self._al.zones()
+        q = (text or "").strip().lower()
+        have = {z for _c, z in self._data["cities"]}
+        rows = [(c, z) for c, z in self._zones if z not in have and (not q or q in c.lower() or q in z.lower().replace("_", " "))]
+        rows.sort(key=lambda r: (not r[0].lower().startswith(q), r[0]))
+        return [{"city": c, "zone": z, "region": z.split("/")[0].replace("_", " ")} for c, z in rows[:30]]
+
+    @Slot(str, str)
+    def addCity(self, city: str, zone: str) -> None:
+        self._change(lambda d: d["cities"].append([city, zone]) if [city, zone] not in d["cities"] and len(d["cities"]) < 24 else None)
+
+    @Slot(str)
+    def removeCity(self, zone: str) -> None:
+        self._change(lambda d: d.update(cities=[c for c in d["cities"] if c[1] != zone]))
+
+    # ---- alarms
+    @Property("QVariantList", notify=changed)
+    def alarms(self):
+        now, out = dt.datetime.now(), []
+        for a in sorted(self._data["alarms"], key=lambda a: a["time"]):
+            nxt = self._al.next_ring(a, now)
+            out.append({"id": a["id"], "time": a["time"], "label": a.get("label", ""), "on": bool(a.get("on")), "days": list(a.get("days") or []),
+                        "daysWords": self._al.days_words(a.get("days") or []), "next": self._al.until_words(nxt, now) if nxt else "",
+                        "snoozed": bool(a.get("snooze")) and bool(a.get("on"))})
+        return out
+
+    @Slot(str, str, "QVariantList", str, result=str)
+    def saveAlarm(self, ident: str, when: str, days, label: str) -> str:
+        """A new alarm (ident "") or a changed one. Returns "" or what's wrong."""
+        at = self._al.parse_time(when)
+        if not at:
+            return "Type a time, like 7:30 or 19:30."
+        try:
+            days = sorted({int(d) for d in days if 0 <= int(d) <= 6})
+        except (TypeError, ValueError):
+            days = []
+
+        def edit(d):
+            for a in d["alarms"]:
+                if a["id"] == ident:
+                    a.update(time=at, days=days, label=label.strip()[:60], on=True)
+                    a.pop("snooze", None)
+                    d["rang"].pop(ident, None)
+                    return
+            if len(d["alarms"]) < 40:
+                d["alarms"].append({"id": self._al.new_id(), "time": at, "days": days, "label": label.strip()[:60], "on": True})
+        self._change(edit)
+        return ""
+
+    @Slot(str, bool)
+    def setAlarmOn(self, ident: str, on: bool) -> None:
+        def edit(d):
+            for a in d["alarms"]:
+                if a["id"] == ident:
+                    a["on"] = bool(on)
+                    a.pop("snooze", None)
+                    d["rang"].pop(ident, None)
+        self._change(edit)
+
+    @Slot(str)
+    def removeAlarm(self, ident: str) -> None:
+        self._change(lambda d: d.update(alarms=[a for a in d["alarms"] if a["id"] != ident]))
+
+    @Slot()
+    def reread(self) -> None:
+        """An alarm rang (it may have turned itself off or been snoozed): show the alarms as they are now."""
+        if not self._demo:
+            self._data = self._al.read()
+        self.changed.emit()
+
+    @Slot(str, result=int)
+    def timerSeconds(self, text: str) -> int:
+        """A timer's length as typed, in seconds (0: not one): 5 (minutes), 1:30 (minutes:seconds), 1:05:00, 45s, 2h, 2h15m."""
+        t = (text or "").strip().lower().replace(" ", "")
+        if not t:
+            return 0
+        if ":" in t:
+            try:
+                parts = [int(x) for x in t.split(":")]
+            except ValueError:
+                return 0
+            if len(parts) > 3 or any(x < 0 for x in parts):
+                return 0
+            total = 0
+            for x in parts:
+                total = total * 60 + x
+            return total if 0 < total <= 100 * 3600 else 0
+        m = re.fullmatch(r"(?:(\d+)h)?(?:(\d+)m(?:in)?)?(?:(\d+)s)?", t)
+        if m and any(m.groups()):
+            total = int(m.group(1) or 0) * 3600 + int(m.group(2) or 0) * 60 + int(m.group(3) or 0)
+        elif t.isdigit():
+            total = int(t) * 60                                # a bare number is minutes
+        else:
+            return 0
+        return total if 0 < total <= 100 * 3600 else 0
 
 
 # -------------------------------------------------------------------------------------------- Terminal
@@ -3994,11 +4216,50 @@ class Shell(QObject):
         if text:
             self._send(text.replace("\r\n", "\r").replace("\n", "\r").encode("utf-8"))
 
+    def _text_rows(self) -> list:
+        """Every line as plain text: what has scrolled off the top, then the screen (as `lines` lists them)."""
+        scr = self._screen
+        return ["".join(row[x].data for x in range(scr.columns)) for row in list(scr.history.top) + [scr.buffer[y] for y in range(scr.lines)]]
+
     @Slot()
     def copyAll(self) -> None:
-        scr = self._screen
-        rows = ["".join(row[x].data for x in range(scr.columns)).rstrip() for row in list(scr.history.top) + [scr.buffer[y] for y in range(scr.lines)]]
-        QGuiApplication.clipboard().setText("\n".join(rows).rstrip() + "\n")
+        QGuiApplication.clipboard().setText("\n".join(r.rstrip() for r in self._text_rows()).rstrip() + "\n")
+
+    def text_in(self, r0: int, c0: int, r1: int, c1: int) -> str:
+        """The text from one cell to another (rows as `lines` counts them; c1 is the last cell taken)."""
+        rows = self._text_rows()
+        if (r0, c0) > (r1, c1):
+            r0, c0, r1, c1 = r1, c1, r0, c0
+        r0, r1 = max(0, r0), min(len(rows) - 1, r1)
+        if r0 > r1:
+            return ""
+        if r0 == r1:
+            return rows[r0][max(0, c0):c1 + 1].rstrip()
+        out = [rows[r0][max(0, c0):].rstrip()] + [r.rstrip() for r in rows[r0 + 1:r1]] + [rows[r1][:c1 + 1].rstrip()]
+        return "\n".join(out)
+
+    def word_at(self, r: int, c: int) -> list:
+        """The first and last cell of the word (or path, or address) at a cell; [] when there's a space there."""
+        rows = self._text_rows()
+        if not (0 <= r < len(rows)) or not (0 <= c < len(rows[r])) or rows[r][c].isspace():
+            return []
+        line = rows[r]
+
+        def part(ch):
+            return ch.isalnum() or ch in "_-./~:@%+#=?&"
+        if not part(line[c]):
+            return [c, c]
+        a = b = c
+        while a > 0 and part(line[a - 1]):
+            a -= 1
+        while b + 1 < len(line) and part(line[b + 1]):
+            b += 1
+        return [a, b]
+
+    def find_rows(self, text: str) -> list:
+        """The lines that have these letters (any case), top to bottom."""
+        q = (text or "").lower()
+        return [i for i, r in enumerate(self._text_rows()) if q in r.lower()] if q else []
 
     def stop(self) -> None:
         if self._pid > 0:
@@ -4043,13 +4304,14 @@ class Terminal(QObject):
     def _ended(self, tab) -> None:
         if tab not in self._tabs:
             return
+        if len(self._tabs) == 1:              # the last one: Terminal closes (the tab stays for the window to read until it has)
+            tab.stop()
+            self.closed.emit()
+            return
         i = self._tabs.index(tab)
         self._tabs.remove(tab)
         tab.stop()
         tab.deleteLater()
-        if not self._tabs:
-            self.closed.emit()
-            return
         self._at = min(self._at if i > self._at else max(0, self._at - 1) if i < self._at else i, len(self._tabs) - 1)
         self._seen = self._labels()
         self.changed.emit()
@@ -4115,6 +4377,21 @@ class Terminal(QObject):
     @Slot()
     def copyAll(self) -> None:
         self._now().copyAll()
+
+    @Slot(int, int, int, int)
+    def copyRange(self, r0: int, c0: int, r1: int, c1: int) -> None:
+        """Copy what's selected (dragged over with the mouse)."""
+        text = self._now().text_in(r0, c0, r1, c1)
+        if text:
+            QGuiApplication.clipboard().setText(text)
+
+    @Slot(int, int, result="QVariantList")
+    def wordAt(self, r: int, c: int) -> list:
+        return self._now().word_at(r, c)
+
+    @Slot(str, result="QVariantList")
+    def find(self, text: str) -> list:
+        return self._now().find_rows(text)
 
     def stop(self) -> None:
         for t in self._tabs:
@@ -4544,14 +4821,81 @@ class Archives(QObject):
 
 
 # --------------------------------------------------------------------------------------- Music + Video
+def media_tags(path: str) -> dict:
+    """A song's or video's own title, artist, album, track number and length, read with ffprobe ({} when it can't)."""
+    try:
+        out = subprocess.run(["ffprobe", "-v", "quiet", "-print_format", "json", "-show_format", "-show_streams", path],
+                             capture_output=True, text=True, timeout=8).stdout
+        probe = json.loads(out or "{}")
+        fmt = probe.get("format") or {}
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return {}
+    tags = {}
+    for holder in (probe.get("streams") or []) + [fmt]:          # (Ogg keeps its tags on the stream; the file's own win)
+        tags.update({str(k).lower(): str(v).strip() for k, v in (holder.get("tags") or {}).items()})
+    try:
+        seconds = float(fmt.get("duration") or 0)
+    except ValueError:
+        seconds = 0.0
+    track = tags.get("track", "").split("/")[0]
+    return {"title": tags.get("title", ""), "artist": tags.get("artist") or tags.get("album_artist", ""), "album": tags.get("album", ""),
+            "track": int(track) if track.isdigit() else 0, "seconds": round(seconds, 1)}
+
+
+def clock_words(seconds: float) -> str:
+    s = int(round(seconds))
+    return f"{s // 3600}:{s // 60 % 60:02d}:{s % 60:02d}" if s >= 3600 else f"{s // 60}:{s % 60:02d}"
+
+
+def read_subtitles(text: str) -> list:
+    """Subtitles from a .srt or .vtt file's text: [{"a": start ms, "b": end ms, "text"}], in order."""
+    cues = []
+    stamp = r"(?:(\d+):)?(\d{1,2}):(\d{2})[.,](\d{1,3})"
+    for block in re.split(r"\n\s*\n", text.replace("\r", "")):
+        lines = [ln for ln in block.strip().split("\n") if ln.strip()]
+        at = next((i for i, ln in enumerate(lines) if "-->" in ln), -1)
+        if at < 0:
+            continue
+        m = re.match(r"\s*%s\s*-->\s*%s" % (stamp, stamp), lines[at])
+        if not m:
+            continue
+        g = m.groups()
+
+        def ms(h, mi, sec, frac):
+            return ((int(h or 0) * 60 + int(mi)) * 60 + int(sec)) * 1000 + int(frac.ljust(3, "0"))
+        words = "\n".join(lines[at + 1:])
+        words = re.sub(r"</?[a-zA-Z][^>]*>|\{\\[^}]*\}", "", words).strip()       # (styling marks: <i>, {\an8})
+        if words:
+            cues.append({"a": ms(*g[:4]), "b": ms(*g[4:]), "text": words})
+    return sorted(cues, key=lambda c: c["a"])
+
+
 class Library(QObject):
-    """Media files in a folder (Music or Videos by default), newest-first for video, by name for music."""
+    """Media files in a folder (Music or Videos by default), newest-first for video, by name for music. Each file's
+    own tags and length are read in the background (ffprobe) and kept, so the list fills in a moment after it opens
+    the first time and at once after that."""
     changed = Signal()
+    _tagged = Signal()
 
     def __init__(self, kinds: set, folder: Path, demo: bool, first: str = ""):
         super().__init__()
-        self._kinds, self._folder, self._first = kinds, folder, first
+        self._kinds, self._folder, self._first, self._demo = kinds, folder, first, demo
+        state = Path(os.environ.get("XDG_STATE_HOME") or Path.home() / ".local/state") / "huginn"
+        cache = Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache") / "huginn"
+        self._places_file = state / "video-positions.json"
+        self._tags_file = cache / ("video-tags.json" if kinds is VIDEO else "music-tags.json")
+        self._tags, self._places = {}, {}
+        if not demo:
+            for attr, file in (("_tags", self._tags_file), ("_places", self._places_file)):
+                try:
+                    kept = json.loads(file.read_text(encoding="utf-8"))
+                    setattr(self, attr, kept if isinstance(kept, dict) else {})
+                except (OSError, ValueError):
+                    pass
         self._items = self._sample() if demo else self._scan()
+        self._tagged.connect(self._retag)
+        if not demo and shutil.which("ffprobe"):
+            threading.Thread(target=self._read_tags, daemon=True).start()
 
     def _sample(self) -> list:
         if self._kinds is VIDEO:
@@ -4561,29 +4905,71 @@ class Library(QObject):
                 ("Paper Boats", "Nine Lanterns", "Harbour Songs", "3:15"), ("Salt Road", "Nine Lanterns", "Harbour Songs", "4:40"),
                 ("Tin Roof Rain", "Mara Quill", "Small Hours", "2:58"), ("Small Hours", "Mara Quill", "Small Hours", "3:36"),
                 ("Lighthouse Keeper", "Mara Quill", "Small Hours", "4:09")]
-        return [{"title": t, "artist": a, "album": al, "length": d, "url": "", "path": ""} for t, a, al, d in rows]
+        return [{"title": t, "artist": a, "album": al, "length": d, "url": "", "path": f"/demo/{t}"} for t, a, al, d in rows]
+
+    def _row(self, p: Path) -> dict:
+        artist, _, title = p.stem.partition(" - ")
+        row = {"title": title or p.stem, "artist": artist if title else "", "album": p.parent.name, "length": "", "track": 0,
+               "url": QUrl.fromLocalFile(str(p)).toString(), "path": str(p)}
+        return self._with_tags(row)
+
+    def _with_tags(self, row: dict) -> dict:
+        t = self._tags.get(row["path"])
+        if t and self._kinds is not VIDEO:                 # (a video is known by its file's name)
+            row.update({k: t[k] for k in ("title", "artist", "album") if t.get(k)}, track=t.get("track", 0))
+        if t and t.get("seconds"):
+            row["length"] = clock_words(t["seconds"])
+        return row
 
     def _scan(self) -> list:
         rows = []
         if self._first and Path(self._first).is_file():
-            p = Path(self._first)
-            rows.append({"title": p.stem, "artist": "", "album": p.parent.name, "length": "", "url": QUrl.fromLocalFile(str(p)).toString(), "path": str(p)})
+            rows.append(self._row(Path(self._first)))
         if self._folder.is_dir():
             for root, dirs, files in os.walk(self._folder):
                 dirs[:] = sorted(d for d in dirs if not d.startswith("."))
                 for name in sorted(files):
                     p = Path(root, name)
                     if p.suffix.lower() in self._kinds and str(p) != self._first:
-                        artist, _, title = p.stem.partition(" - ")
-                        rows.append({"title": title or p.stem, "artist": artist if title else "", "album": p.parent.name,
-                                     "length": "", "url": QUrl.fromLocalFile(str(p)).toString(), "path": str(p)})
+                        rows.append(self._row(p))
                 if len(rows) > 5000:
                     break
         return rows
 
+    def _read_tags(self) -> None:
+        """In the background: the tags of files not read yet (or changed since), a batch at a time."""
+        fresh = 0
+        for row in list(self._items):
+            path = row["path"]
+            try:
+                stamp = os.stat(path).st_mtime_ns
+            except OSError:
+                continue
+            if (self._tags.get(path) or {}).get("stamp") == stamp:
+                continue
+            self._tags[path] = dict(media_tags(path), stamp=stamp)
+            fresh += 1
+            if fresh % 25 == 0:
+                self._tagged.emit()
+        if fresh:
+            self._tags = {p: t for p, t in self._tags.items() if os.path.exists(p)}
+            try:
+                self._tags_file.parent.mkdir(parents=True, exist_ok=True)
+                tmp = self._tags_file.with_suffix(".tmp")
+                tmp.write_text(json.dumps(self._tags), encoding="utf-8")
+                os.replace(tmp, self._tags_file)
+            except OSError:
+                pass
+            self._tagged.emit()
+
+    def _retag(self) -> None:
+        self._items = [self._with_tags(dict(r)) for r in self._items]
+        self.changed.emit()
+
     items = Property("QVariantList", lambda self: self._items, notify=changed)
     folder = Property(str, lambda self: str(self._folder), constant=True)
     folderName = Property(str, lambda self: said_place(self._folder), constant=True)
+    opened = Property(bool, lambda self: bool(self._first) and Path(self._first).is_file(), constant=True)   # started with a file: it plays
 
     @Property("QVariantList", notify=changed)
     def albums(self):
@@ -4591,6 +4977,80 @@ class Library(QObject):
         for it in self._items:
             seen.setdefault(it["album"] or "Unknown album", it["artist"])
         return [{"name": k, "artist": v} for k, v in seen.items()]
+
+    @Slot()
+    def rescan(self) -> None:
+        """Look in the folder again (a file was added or taken away)."""
+        if self._demo:
+            return
+        self._items = self._scan()
+        self.changed.emit()
+        if shutil.which("ffprobe"):
+            threading.Thread(target=self._read_tags, daemon=True).start()
+
+    @Slot("QVariantList", result=int)
+    def addFiles(self, urls) -> int:
+        """Files dropped on the window: they join the list (first). Returns how many were media."""
+        added = []
+        for u in urls or []:
+            p = Path(QUrl(str(u)).toLocalFile() or str(u))
+            if p.is_file() and p.suffix.lower() in self._kinds and not any(r["path"] == str(p) for r in self._items + added):
+                added.append(self._row(p))
+        if added:
+            self._items = added + self._items
+            self.changed.emit()
+        return len(added)
+
+    # ---- videos: subtitles beside the file, and where you stopped watching
+    @Slot(str, result="QVariantList")
+    def subtitles(self, path: str) -> list:
+        """Subtitles in a file beside the video with its name (film.srt, film.en.srt, film.vtt), if there is one."""
+        p = Path(path)
+        try:
+            found = sorted(f for f in p.parent.iterdir() if f.suffix.lower() in (".srt", ".vtt") and (f.stem == p.stem or f.stem.startswith(p.stem + ".")))
+        except OSError:
+            return []
+        for f in found:
+            try:
+                raw = f.read_bytes()[:4_000_000]
+            except OSError:
+                continue
+            for enc in ("utf-8-sig", "utf-16", "cp1252"):
+                try:
+                    cues = read_subtitles(raw.decode(enc))
+                    if cues:
+                        return cues
+                except UnicodeError:
+                    continue
+        return []
+
+    @Slot(str, result=float)
+    def resumeAt(self, path: str) -> float:
+        """Where this video was stopped (ms), if it was partway through."""
+        try:
+            return float((self._places.get(path) or {}).get("at", 0))
+        except (TypeError, ValueError):
+            return 0.0
+
+    @Slot(str, float, float)
+    def remember(self, path: str, position: float, duration: float) -> None:
+        """Keep where a video was stopped: only for ones over five minutes long, and not at the very start or end."""
+        if self._demo or not path:
+            return
+        if duration > 300000 and 30000 < position < duration - 60000:
+            self._places[path] = {"at": round(position), "when": int(time.time())}
+        elif path in self._places:
+            del self._places[path]
+        else:
+            return
+        self._places = dict(sorted(self._places.items(), key=lambda kv: kv[1].get("when", 0))[-200:])
+        try:
+            self._places_file.parent.mkdir(parents=True, exist_ok=True)
+            tmp = self._places_file.with_suffix(".tmp")
+            tmp.write_text(json.dumps(self._places), encoding="utf-8")
+            os.replace(tmp, self._places_file)
+        except OSError:
+            pass
 
 
 # ----------------------------------------------------------------------------------------------- Store
@@ -5426,9 +5886,9 @@ def main() -> int:
     elif args.app == "documents":
         backend = Documents(target)
     elif args.app == "calculator":
-        backend = Calculator()
+        backend = Calculator(args.demo)
     elif args.app == "clock":
-        backend = Clock()
+        backend = Clock(args.demo)
     elif args.app == "terminal":
         backend = Terminal(settings, target, args.run)
         app.aboutToQuit.connect(backend.stop)

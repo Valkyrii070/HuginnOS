@@ -1452,6 +1452,15 @@ class Sheets(FileList):
         return out.getvalue()
 
     @Slot(str, result=str)
+    def sendByMail(self, kind: str) -> str:
+        """Export a copy (as `export` does) and start a message in Mail with it attached. Returns the copy's path."""
+        out = self.export(kind)
+        if out:
+            import huginn_sendmail
+            huginn_sendmail.send_files([out], Path(out).stem)
+        return out
+
+    @Slot(str, result=str)
     def export(self, kind: str) -> str:
         """csv (the sheet in front, as shown) | xlsx (every sheet: formulas with their results, formats, widths,
         frozen panes, charts) | pdf (the sheet in front, on pages)."""

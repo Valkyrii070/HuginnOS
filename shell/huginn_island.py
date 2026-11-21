@@ -146,8 +146,10 @@ class Live(QObject):
             self._bus.signal_subscribe(None, PHONE, "callReceived", None, None, Gio.DBusSignalFlags.NONE, self._on_phone)
             self._bus.call("org.freedesktop.DBus", "/org/freedesktop/DBus", "org.freedesktop.DBus", "ListNames", None, GLib.VariantType("(as)"),
                            Gio.DBusCallFlags.NONE, 2000, None, self._listed, None)
-        for interval, fn in ((1500, self._read_privacy), (2000, self._read_downloads), (30000, self._read_calendar), (10000, self._arrange)):
+        for interval, fn in ((1500, self._read_privacy), (2000, self._read_downloads), (30000, self._read_calendar), (10000, self._arrange),
+                             (5000, self._read_alarms), (3200, self._ring)):
             QTimer(self, interval=interval, timeout=fn).start()
+        self._alarms_ringing = {}                          # Clock's alarms going off now: key -> when it started
         QTimer.singleShot(1500, self._read_calendar)
 
     # ------------------------------------------------------------------------------------------------ the result
@@ -241,6 +243,9 @@ class Live(QObject):
                 self._arrange()
             else:
                 _launch("huginn-calendar")
+        elif ident.startswith("alarm:"):
+            self._end_alarm(ident[6:], action == "snooze")
+            self._arrange()
         elif ident.startswith("call:"):
             if action == "silence" and self._bus:
                 self._bus.call("org.kde.kdeconnect", item["path"], PHONE, "sendMutePacket", None, None, Gio.DBusCallFlags.NONE, 2000, None, None, None)
@@ -518,6 +523,59 @@ class Live(QObject):
             self._items["downloads"] = item
             self._arrange()
 
+    # Clock's alarms (apps/huginn_alarms.py): rung here, so they ring whether or not Clock is open.
+    def _alarms(self):
+        for d in (Path("/usr/share/huginn-apps"), Path(__file__).resolve().parent.parent / "apps"):
+            if (d / "huginn_alarms.py").exists():
+                if str(d) not in sys.path:
+                    sys.path.append(str(d))
+                import huginn_alarms
+                return huginn_alarms
+        return None
+
+    def _read_alarms(self) -> None:
+        try:
+            al = self._alarms()
+            if al is None:
+                return
+            now, changed = dt.datetime.now(), False
+            for key, alarm in al.due(now, self._alarms_ringing):
+                self._alarms_ringing[key] = time.time()
+                self._items["alarm:" + key] = alarm_item(key, alarm)
+                changed = True
+                self._ring()
+            for key, since in list(self._alarms_ringing.items()):      # nobody stopped it: it gives up
+                if time.time() - since > al.RING_FOR:
+                    self._end_alarm(key, False)
+                    changed = True
+            if changed:
+                self._arrange()
+        except Exception as err:                              # noqa: BLE001 - the island never falls over an alarm
+            print(f"alarms: {err}", file=sys.stderr)
+
+    def _end_alarm(self, key: str, snooze: bool) -> None:
+        self._alarms_ringing.pop(key, None)
+        self._items.pop("alarm:" + key, None)
+        try:
+            al = self._alarms()
+            if al is not None:
+                al.rang(key, snooze)
+        except Exception as err:                              # noqa: BLE001
+            print(f"alarms: {err}", file=sys.stderr)
+
+    def _ring(self) -> None:
+        """While an alarm or a finished timer has the island: its sound, over and over, until it's stopped."""
+        if self._demo or self._main.get("kind") != "alarm" and not self._alarms_ringing:
+            return
+        try:
+            for d in (Path("/usr/share/huginn-apps"), Path(__file__).resolve().parent.parent / "apps"):
+                if (d / "huginn_sounds.py").exists() and str(d) not in sys.path:
+                    sys.path.append(str(d))
+            import huginn_sounds
+            huginn_sounds.play("alarm", 0.9)
+        except Exception as err:                              # noqa: BLE001
+            print(f"alarm sound: {err}", file=sys.stderr)
+
     def _read_calendar(self) -> None:
         try:
             if self._calendar is None:
@@ -573,6 +631,13 @@ def privacy_item(what: str, apps: list) -> dict:
             "sub": "Since " + time.strftime("%H:%M", time.localtime(since)), "apps": [{"name": n, "since": min(a["since"] for a in apps if a["name"] == n)} for n in names],
             "glyph": {"screen": "display", "camera": "camera", "mic": "mic"}[what], "tone": TONES[what], "since": since,
             "actions": [{"id": "report", "label": "Privacy Report", "glyph": "shield"}]}
+
+
+def alarm_item(key: str, alarm: dict) -> dict:
+    """One of Clock's alarms going off, for the island: Stop, or Snooze for nine minutes."""
+    return {"id": "alarm:" + key, "kind": "alarm", "app": "Clock", "title": alarm.get("label") or "Alarm", "sub": alarm.get("time", ""),
+            "glyph": "bell", "tone": TONES["alarm"], "since": time.time(),
+            "actions": [{"id": "stop", "label": "Stop", "glyph": "stop", "tone": "danger"}, {"id": "snooze", "label": "Snooze", "glyph": "history"}]}
 
 
 def calendar_items(rows: list, now: dt.datetime, dismissed=()) -> dict:

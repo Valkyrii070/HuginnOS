@@ -2,7 +2,10 @@
 Your pictures, by month, by album and favourites. Edit any picture without ever losing the original.
 
 ## Look
-Click a photo to see it large; zoom with the wheel, go to the next one and see its details.
+Click a photo to see it large; zoom with the wheel (or + and −), go to the next one with ← and →, and see its details (I). Esc goes back to all your pictures; F fills the screen.
+
+## Slideshow
+Space, or the play button, shows the pictures listed one after another on the whole screen. ← and → still step; any other key or a click ends it.
 
 ## Edit
 Open a picture and choose Edit. Adjust has Light (exposure, brightness, contrast, highlights, shadows, black point), Colour (saturation, vibrance, warmth, tint) and Detail (sharpen, vignette, grain, fade). Auto Enhance makes a good start. Double-click a slider to put it back.
