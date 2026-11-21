@@ -548,7 +548,12 @@ impl<B: Backend + 'static> HuginnState<B> {
                     }
                 }
             }
-            _ => {}
+            // the green button's layouts (an app's own, on hover): a part of its screen, the other half offered
+            other => {
+                if let Some(snap) = other.strip_prefix("snap:").and_then(crate::wm::Snap::parse) {
+                    self.snap_window(&window, snap, true);
+                }
+            }
         }
     }
 
@@ -571,9 +576,11 @@ impl<B: Backend + 'static> HuginnState<B> {
         let full = w.0.toplevel().is_some_and(|t| t.with_committed_state(|s| s.is_some_and(|s| s.states.contains(xdg_toplevel::State::Fullscreen))));
         let size = w.geometry().size;
         let at = at.unwrap_or_default();
+        let screen = self.output_of(w).map(|o| o.name()).unwrap_or_default();
+        let snap = self.snapped_as(w).map(|s| s.name()).unwrap_or("");
         serde_json::json!({"id": window_id(w).to_string(), "app": app, "title": title, "minimised": minimised,
                            "active": !minimised && Some(w) == focused, "space": Self::window_space(w).unwrap_or(0), "pid": pid, "full": full, "x": at.x, "y": at.y, "w": size.w, "h": size.h,
-                           "above": crate::wm::is_above(w)})
+                           "above": crate::wm::is_above(w), "screen": screen, "snap": snap, "max": Self::is_maximised(w)})
     }
 
     /// Every window (bottom to top, then the hidden ones) and the spaces, for the shell.
@@ -626,11 +633,28 @@ impl<B: Backend + 'static> HuginnState<B> {
                 self.window_action("maximise");
             }
             other => {
-                if let Some(snap) = other.strip_prefix("snap:").and_then(crate::wm::Snap::parse) {
+                // snap:<part>, or snap:<part>@<screen> for a part of another screen (Layouts)
+                let (part, screen) = other.strip_prefix("snap:").map(|p| p.split_once('@').map_or((p, None), |(a, b)| (a, Some(b)))).unwrap_or(("", None));
+                if let Some(snap) = crate::wm::Snap::parse(part) {
                     if hidden {
                         self.activate_window(&window);
                     }
-                    self.snap_window(&window, snap, false);
+                    if screen.is_some() {
+                        self.snap_on(&window, snap, screen);
+                    } else {
+                        self.snap_window(&window, snap, false);
+                    }
+                } else if let Some(rest) = other.strip_prefix("place:") {
+                    // place:<screen>:<x>,<y>,<w>,<h>, shares of its work area (a window set put back)
+                    if let Some((screen, nums)) = rest.rsplit_once(':') {
+                        let n: Vec<f64> = nums.split(',').filter_map(|v| v.parse().ok()).collect();
+                        if n.len() == 4 {
+                            if hidden {
+                                self.activate_window(&window);
+                            }
+                            self.place_on(&window, screen, n[0], n[1], n[2], n[3]);
+                        }
+                    }
                 } else if let Some(n) = other.strip_prefix("space:").and_then(|n| n.parse::<usize>().ok()) {
                     self.space_do(&format!("move:{id}:{n}"));
                 }

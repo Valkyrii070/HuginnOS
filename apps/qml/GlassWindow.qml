@@ -115,9 +115,10 @@ Window {
             id: grid
             x: 10; y: 10; columns: 4; spacing: 8
             Repeater {
-                model: [["left", [[0, 0, .5, 1]]], ["right", [[.5, 0, .5, 1]]], ["left-third", [[0, 0, .333, 1]]], ["right-third", [[.667, 0, .333, 1]]],
+                model: [["left", [[0, 0, .5, 1]]], ["right", [[.5, 0, .5, 1]]], ["top-half", [[0, 0, 1, .5]]], ["bottom-half", [[0, .5, 1, .5]]],
+                        ["left-third", [[0, 0, .333, 1]]], ["middle-third", [[.333, 0, .334, 1]]], ["right-third", [[.667, 0, .333, 1]]], ["max", [[0, 0, 1, 1]]],
                         ["left-two-thirds", [[0, 0, .667, 1]]], ["right-two-thirds", [[.333, 0, .667, 1]]], ["top-left", [[0, 0, .5, .5]]], ["top-right", [[.5, 0, .5, .5]]],
-                        ["bottom-left", [[0, .5, .5, .5]]], ["bottom-right", [[.5, .5, .5, .5]]], ["max", [[0, 0, 1, 1]]]]
+                        ["bottom-left", [[0, .5, .5, .5]]], ["bottom-right", [[.5, .5, .5, .5]]]]
                 Rectangle {
                     required property var modelData
                     width: 56; height: 36; radius: 7; color: lh.containsMouse ? Qt.alpha(Theme.t.accent, 0.18) : Theme.t.hover

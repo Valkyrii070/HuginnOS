@@ -272,11 +272,12 @@ if (!w || w.normalWindow || w.dialog)
                          "name": self.app_for_window(app_id, w.get("cls", ""), pid),
                          "title": w.get("title", ""), "minimised": bool(w.get("minimised")), "active": bool(w.get("active") or w.get("focused")),
                          "space": int(w.get("space", 0)), "full": bool(w.get("full")), "x": w.get("x", 0), "y": w.get("y", 0), "w": w.get("w", 0), "h": w.get("h", 0),
-                         "above": bool(w.get("above"))})
+                         "above": bool(w.get("above")), "screen": w.get("screen", ""), "snap": w.get("snap", ""), "max": bool(w.get("max"))})
         self._windows = rows
         self._others = self._other_apps(rows)
         self._spaces = {"current": int(data.get("current", 0)), "names": list(data.get("spaces") or ["Main"])}
         self.windowsChanged.emit()
+        self._place_waiting()
 
     def _name_windows(self):
         for w in self._windows:
@@ -370,7 +371,7 @@ if (!w || w.normalWindow || w.dialog)
     def windowDo(self, wid: str, action: str) -> None:
         """Something done to one window, by its id in the list: activate, minimise, close, toggle (hide it if it's
         in front, else bring it forward), maximise."""
-        own = action.startswith(("snap:", "space:"))           # Huginn's compositor only (KWin: snapFront / spaceDo)
+        own = action.startswith(("snap:", "space:", "place:"))  # Huginn's compositor only (KWin: snapFront / spaceDo)
         if action not in ("activate", "minimise", "close", "toggle", "maximise") and not own or not wid:
             return
         if own and (self._demo or not self.sb or not self._own_compositor()):
@@ -587,7 +588,8 @@ for (var i = 0; i < all.length; i++) {{ var w = all[i]; if (String(w.internalId)
             return
         part = {"left": (0, 0, .5, 1), "right": (.5, 0, .5, 1), "max": (0, 0, 1, 1), "top-left": (0, 0, .5, .5), "top-right": (.5, 0, .5, .5),
                 "bottom-left": (0, .5, .5, .5), "bottom-right": (.5, .5, .5, .5), "left-third": (0, 0, 1 / 3, 1), "right-third": (2 / 3, 0, 1 / 3, 1),
-                "left-two-thirds": (0, 0, 2 / 3, 1), "right-two-thirds": (1 / 3, 0, 2 / 3, 1)}.get(layout)
+                "left-two-thirds": (0, 0, 2 / 3, 1), "right-two-thirds": (1 / 3, 0, 2 / 3, 1), "middle-third": (1 / 3, 0, 1 / 3, 1),
+                "top-half": (0, 0, 1, .5), "bottom-half": (0, .5, 1, .5)}.get(layout)
         if part:
             x, y, w, h = part
             self.kwin(f"""var all = workspace.windowList();
@@ -595,6 +597,151 @@ for (var i = 0; i < all.length; i++) {{ var win = all[i]; if (String(win.interna
   var a = workspace.clientArea(KWin.MaximizeArea, win), g = 8;
   win.frameGeometry = {{ x: a.x + g + (a.width - 2 * g) * {x} + ({x} > 0 ? g / 2 : 0), y: a.y + g + (a.height - 2 * g) * {y} + ({y} > 0 ? g / 2 : 0),
                         width: (a.width - 2 * g) * {w} - ({w} < 1 ? g / 2 : 0), height: (a.height - 2 * g) * {h} - ({h} < 1 ? g / 2 : 0) }}; }}""")
+
+    # ---------------------------------------------------------------- window sets (Layouts, Super+Z)
+    # The windows on screen now, kept under a name: each one's app, screen and place on it (snapped part, filled, or
+    # its share of the screen). Putting a set back moves the app's windows that are open there and starts the apps
+    # that aren't (the shell starts them; their windows are placed as they appear, for up to a minute).
+    def _sets_file(self) -> Path:
+        return Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "huginn" / "window-sets.json"
+
+    def _read_sets(self) -> list:
+        if self._demo:
+            return getattr(self, "_demo_sets", None) or [
+                {"name": "Writing", "saved": 0, "windows": [{"app": "Writer", "appId": "huginn-writer", "screen": "DP-1", "snap": "left-two-thirds"},
+                                                           {"app": "Notes", "appId": "huginn-notes", "screen": "DP-1", "snap": "right-third"}]},
+                {"name": "Gaming", "saved": 0, "windows": [{"app": "Discord", "appId": "discord", "screen": "HDMI-A-1", "snap": "max"},
+                                                          {"app": "Steam", "appId": "steam", "screen": "DP-2", "snap": "left"}, {"app": "Huginn", "appId": "huginn", "screen": "DP-2", "snap": "right"}]}]
+        try:
+            data = json.loads(self._sets_file().read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return []
+        return [d for d in data if isinstance(d, dict) and d.get("name") and isinstance(d.get("windows"), list)] if isinstance(data, list) else []
+
+    windowSetsChanged = Signal()
+
+    def _get_sets(self) -> list:
+        out = []
+        for d in self._read_sets():
+            apps = []
+            for w in d["windows"]:
+                if w.get("app") and w["app"] not in apps:
+                    apps.append(w["app"])
+            out.append({"name": d["name"], "count": len(d["windows"]), "apps": ", ".join(apps[:4]) + (f" and {len(apps) - 4} more" if len(apps) > 4 else ""),
+                        "screens": len({w.get("screen") for w in d["windows"]})})
+        return out
+    windowSets = Property("QVariantList", _get_sets, notify=windowSetsChanged)
+
+    @Slot(str, result=str)
+    def saveWindowSet(self, name: str) -> str:
+        """Keep the windows on screen now as a set. Returns "" or why it couldn't."""
+        from PySide6.QtGui import QGuiApplication
+        name = " ".join(name.split())[:40] or "Windows"
+        current = self._spaces.get("current", 0) if isinstance(getattr(self, "_spaces", None), dict) else 0
+        shown = [w for w in self._windows if not w.get("minimised") and int(w.get("space", 0)) == current and (w.get("name") or w.get("appId"))]
+        if not shown:
+            return "There are no windows on screen to keep."
+        screens = [(sc.name(), sc.geometry()) for sc in (QGuiApplication.screens() if QGuiApplication.instance() else [])]
+
+        def screen_of(w):
+            for n, g in screens:
+                if n == w.get("screen"):
+                    return n, g
+            cx, cy = w.get("x", 0) + w.get("w", 0) / 2, w.get("y", 0) + w.get("h", 0) / 2
+            for n, g in screens:
+                if g.x() <= cx < g.x() + g.width() and g.y() <= cy < g.y() + g.height():
+                    return n, g
+            return (screens[0] if screens else (w.get("screen", ""), None))
+        rows = []
+        for w in shown:
+            n, g = screen_of(w)
+            row = {"app": w.get("name", ""), "appId": w.get("appId", ""), "screen": w.get("screen") or n}
+            if w.get("snap"):
+                row["snap"] = w["snap"]
+            elif w.get("max") or w.get("full"):
+                row["snap"] = "max"
+            elif g is not None and g.width() and g.height():
+                row.update({"fx": round(max(0.0, (w.get("x", 0) - g.x()) / g.width()), 4), "fy": round(max(0.0, (w.get("y", 0) - g.y()) / g.height()), 4),
+                            "fw": round(min(1.0, w.get("w", 0) / g.width()), 4), "fh": round(min(1.0, w.get("h", 0) / g.height()), 4)})
+            rows.append(row)
+        sets = [d for d in self._read_sets() if d["name"].lower() != name.lower()]
+        sets.insert(0, {"name": name, "saved": int(time.time()), "windows": rows})
+        if self._demo:
+            self._demo_sets = sets
+        else:
+            try:
+                path = self._sets_file()
+                path.parent.mkdir(parents=True, exist_ok=True)
+                part = path.with_name(".window-sets.json.saving")
+                part.write_text(json.dumps(sets[:20], indent=1), encoding="utf-8")
+                os.replace(part, path)
+            except OSError as err:
+                return f"Couldn't keep it: {err.strerror or err}"
+        self.windowSetsChanged.emit()
+        return ""
+
+    @Slot(str)
+    def removeWindowSet(self, name: str) -> None:
+        sets = [d for d in self._read_sets() if d["name"] != name]
+        if self._demo:
+            self._demo_sets = sets
+        else:
+            try:
+                self._sets_file().write_text(json.dumps(sets, indent=1), encoding="utf-8")
+            except OSError:
+                return
+        self.windowSetsChanged.emit()
+
+    @Slot(str, result="QVariantList")
+    def putBackWindowSet(self, name: str) -> list:
+        """Move the set's apps' open windows into place. Returns the apps to start (by name): their windows are
+        placed as they appear."""
+        entry = next((d for d in self._read_sets() if d["name"] == name), None)
+        if not entry:
+            return []
+        used, missing = set(), []
+        for item in entry["windows"]:
+            w = self._window_for(item, used)
+            if w:
+                used.add(w["id"])
+                self._place(w["id"], item)
+            else:
+                missing.append(item)
+        self._set_waiting = {"items": missing, "until": time.time() + 60, "known": {w["id"] for w in self._windows}}
+        return [i.get("app", "") for i in missing if i.get("app")]
+
+    def _window_for(self, item: dict, used: set, among: list = None):
+        for w in among if among is not None else self._windows:
+            if w["id"] in used:
+                continue
+            if (item.get("app") and w.get("name") == item["app"]) or (item.get("appId") and w.get("appId") == item["appId"]):
+                return w
+        return None
+
+    def _place(self, wid: str, item: dict) -> None:
+        screen = item.get("screen", "")
+        if item.get("snap"):
+            self.windowDo(wid, f"snap:{item['snap']}" + (f"@{screen}" if screen else ""))
+        elif all(k in item for k in ("fx", "fy", "fw", "fh")):
+            self.windowDo(wid, f"place:{screen}:{item['fx']},{item['fy']},{item['fw']},{item['fh']}")
+
+    def _place_waiting(self) -> None:
+        wait = getattr(self, "_set_waiting", None)
+        if not wait or not wait["items"]:
+            return
+        if time.time() > wait["until"]:
+            self._set_waiting = None
+            return
+        new = [w for w in self._windows if w["id"] not in wait["known"] and not w.get("minimised")]
+        used = set()
+        for item in list(wait["items"]):
+            w = self._window_for(item, used, new)
+            if w:
+                used.add(w["id"])
+                wait["items"].remove(item)
+                wid = w["id"]
+                QTimer.singleShot(350, lambda wid=wid, item=item: self._place(wid, item))   # (once it has its first size)
+        wait["known"] |= used
 
     @Slot()
     def assistDone(self) -> None:
@@ -1401,11 +1548,13 @@ callDBus("org.huginn.Shell", "/org/huginn/Shell", "org.huginn.Shell", "Activated
 
     @Slot(str)
     def windowAction(self, action: str) -> None:
-        """The app menu in the top bar: minimise or close the window in front."""
-        if action not in ("minimise", "close", "ontop") or self._demo or not self.sb:
+        """The app menu in the top bar: minimise or close the window in front; Layouts: snap it (snap:<part>)."""
+        if (action not in ("minimise", "close", "ontop") and not action.startswith("snap:")) or self._demo or not self.sb:
             return
         if self._own_compositor():
             self._compositor("WindowAction", GLib.Variant("(s)", (action,)), None)
+            return
+        if action.startswith("snap:"):
             return
         if action == "ontop":
             self.kwin("if (workspace.activeWindow) workspace.activeWindow.keepAbove = !workspace.activeWindow.keepAbove;")

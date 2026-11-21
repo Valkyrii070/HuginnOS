@@ -59,6 +59,9 @@ pub enum Snap {
     RightThird,
     LeftTwoThirds,
     RightTwoThirds,
+    MiddleThird,
+    TopHalf,
+    BottomHalf,
 }
 
 impl Snap {
@@ -75,10 +78,13 @@ impl Snap {
             "right-third" => Snap::RightThird,
             "left-two-thirds" => Snap::LeftTwoThirds,
             "right-two-thirds" => Snap::RightTwoThirds,
+            "middle-third" => Snap::MiddleThird,
+            "top-half" => Snap::TopHalf,
+            "bottom-half" => Snap::BottomHalf,
             _ => return None,
         })
     }
-    fn name(self) -> &'static str {
+    pub fn name(self) -> &'static str {
         match self {
             Snap::Left => "left",
             Snap::Right => "right",
@@ -91,6 +97,9 @@ impl Snap {
             Snap::RightThird => "right-third",
             Snap::LeftTwoThirds => "left-two-thirds",
             Snap::RightTwoThirds => "right-two-thirds",
+            Snap::MiddleThird => "middle-third",
+            Snap::TopHalf => "top-half",
+            Snap::BottomHalf => "bottom-half",
         }
     }
     /// The half or part across from this one (for "fill the other half").
@@ -646,6 +655,7 @@ impl<B: Backend + 'static> HuginnState<B> {
     }
 
     pub fn snap_rect(&self, output: &Output, snap: Snap) -> Rectangle<i32, Logical> {
+        // (for a window: fit_min, so a part narrower than the window can be drawn widens to its smallest size)
         let a = self.work_area(output);
         let g = if self.huginn.wm.gaps { GAP } else { 0 };
         let (x0, y0, w, h) = (a.loc.x + g, a.loc.y + g, a.size.w - 2 * g, a.size.h - 2 * g);
@@ -663,6 +673,9 @@ impl<B: Backend + 'static> HuginnState<B> {
             Snap::RightThird => (x0 + w - third, y0, third, h),
             Snap::LeftTwoThirds => (x0, y0, w - third - g, h),
             Snap::RightTwoThirds => (x0 + third + g, y0, w - third - g, h),
+            Snap::MiddleThird => (x0 + third + g, y0, w - 2 * third - 2 * g, h),
+            Snap::TopHalf => (x0, y0, w, (h - g) / 2),
+            Snap::BottomHalf => (x0, y0 + h - (h - g) / 2, w, (h - g) / 2),
         };
         Rectangle::new((x, y).into(), (ww, hh).into())
     }
@@ -774,7 +787,7 @@ impl<B: Backend + 'static> HuginnState<B> {
         let Some(output) = self.output_of(window) else {
             return;
         };
-        let rect = self.snap_rect(&output, snap);
+        let rect = fit_min(self.snap_rect(&output, snap), self.snap_rect(&output, Snap::Max), min_size_of(window));
         let id = window_id(window);
         if !self.huginn.wm.snapped.contains_key(&id) {
             let size = window.geometry().size;
@@ -818,6 +831,58 @@ impl<B: Backend + 'static> HuginnState<B> {
             }
         }
         self.report_windows_now();
+    }
+
+    /// A screen by its name (DP-1, HDMI-A-1…), or by the key Huginn keeps for it.
+    pub fn output_named(&self, name: &str) -> Option<Output> {
+        self.space.outputs().find(|o| o.name() == name || crate::displays::key(o) == name).cloned()
+    }
+
+    /// Snap a window into a part of a given screen (Layouts, Super+Z): moved there first if it's on another.
+    pub fn snap_on(&mut self, window: &WindowElement, snap: Snap, screen: Option<&str>) {
+        if let Some(to) = screen.and_then(|n| self.output_named(n))
+            && self.output_of(window).as_ref() != Some(&to)
+            && let Some(geo) = self.space.output_geometry(&to)
+        {
+            Self::set_home(window, None);
+            self.huginn.wm.snapped.remove(&window_id(window));
+            self.put_on(window, geo, 0.1, 0.1, true);
+        }
+        self.snap_window(window, snap, screen.is_none());
+    }
+
+    /// Put a window at a place on a screen given as shares of its work area (a window set put back): x, y, w, h
+    /// each 0…1. Not snapped or full any more.
+    pub fn place_on(&mut self, window: &WindowElement, screen: &str, fx: f64, fy: f64, fw: f64, fh: f64) {
+        let Some(output) = self.output_named(screen).or_else(|| self.output_of(window)) else {
+            return;
+        };
+        let a = self.work_area(&output);
+        let w = ((fw.clamp(0.05, 1.0) * a.size.w as f64) as i32).max(200);
+        let h = ((fh.clamp(0.05, 1.0) * a.size.h as f64) as i32).max(150);
+        let x = a.loc.x + (fx.clamp(0.0, 1.0) * a.size.w as f64) as i32;
+        let y = a.loc.y + (fy.clamp(0.0, 1.0) * a.size.h as f64) as i32;
+        let rect = Rectangle::<i32, Logical>::new((x.min(a.loc.x + a.size.w - w.min(a.size.w)), y.min(a.loc.y + a.size.h - h.min(a.size.h))).into(), (w.min(a.size.w), h.min(a.size.h)).into());
+        Self::set_home(window, None);
+        self.huginn.wm.snapped.remove(&window_id(window));
+        if Self::is_maximised(window)
+            && let Some(t) = window.0.toplevel().cloned()
+        {
+            smithay::wayland::shell::xdg::XdgShellHandler::unmaximize_request(self, t);
+        }
+        self.configure_size(window, rect.size, false);
+        let offset = window.geometry().loc;
+        self.space.map_element(window.clone(), rect.loc - offset, true);
+        #[cfg(feature = "xwayland")]
+        if let Some(x) = window.0.x11_surface() {
+            let _ = x.configure(rect);
+        }
+        self.report_windows_now();
+    }
+
+    /// The part a window is snapped to, if it is.
+    pub fn snapped_as(&self, window: &WindowElement) -> Option<Snap> {
+        self.huginn.wm.snapped.get(&window_id(window)).copied()
     }
 
     /// Super+Alt+←/→: the window in front to the screen beside it (by where the screens are, going round), at the
@@ -1421,4 +1486,42 @@ impl<B: Backend + 'static> HuginnState<B> {
         };
         self.say(Outgoing::Switcher(msg));
     }
+}
+
+
+/// The smallest size a window says it can be drawn at (xdg-shell's min size); 0 where it sets none.
+fn min_size_of(window: &WindowElement) -> Size<i32, Logical> {
+    window
+        .0
+        .toplevel()
+        .map(|t| {
+            smithay::wayland::compositor::with_states(t.wl_surface(), |states| {
+                states.cached_state.get::<smithay::wayland::shell::xdg::SurfaceCachedState>().current().min_size
+            })
+        })
+        .unwrap_or_default()
+}
+
+/// A snapped part, widened (or made taller) to a window's smallest size where the part is smaller: a window can't be
+/// drawn smaller, and squeezed into the part it would be cut off. It grows away from the screen's edge it's on (from
+/// both sides for a middle part) and stays on the screen.
+fn fit_min(rect: Rectangle<i32, Logical>, area: Rectangle<i32, Logical>, min: Size<i32, Logical>) -> Rectangle<i32, Logical> {
+    fn fit(pos: i32, len: i32, start: i32, room: i32, want: i32) -> (i32, i32) {
+        if want <= len {
+            return (pos, len);
+        }
+        let len2 = want.min(room);
+        let end = start + room;
+        let pos2 = if pos <= start {
+            start
+        } else if pos + len >= end {
+            end - len2
+        } else {
+            (pos + len / 2 - len2 / 2).clamp(start, end - len2)
+        };
+        (pos2, len2)
+    }
+    let (x, w) = fit(rect.loc.x, rect.size.w, area.loc.x, area.size.w, min.w);
+    let (y, h) = fit(rect.loc.y, rect.size.h, area.loc.y, area.size.h, min.h);
+    Rectangle::new((x, y).into(), (w, h).into())
 }

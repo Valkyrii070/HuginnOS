@@ -1390,6 +1390,7 @@ fn process_keyboard_shortcut(modifiers: ModifiersState, keysym: Keysym, raw: Opt
             "snap-right" => KeyAction::Snap("right"),
             "snap-up" => KeyAction::Snap("up"),
             "snap-down" => KeyAction::Snap("down"),
+            "layouts" => KeyAction::Shell("layouts"),
             "close" => KeyAction::CloseWindow,
             "screenshot" => KeyAction::Screenshot("screen"),
             "screenshot-choose" => KeyAction::Screenshot("choose"),

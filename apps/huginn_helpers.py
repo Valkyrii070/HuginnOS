@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """Huginn's quiet helpers, in one process: the shortcuts agent (huginn_shortcuts.py), the privacy watcher
-(huginn_privacy.py), automatic updates (huginn_updates.py) and keeping accounts in step (huginn_accounts.py).
+(huginn_privacy.py), automatic updates (huginn_updates.py), keeping accounts in step (huginn_accounts.py) and Huginn
+sync (huginn_sync.py).
 
 Each is a loop that looks now and then and sleeps between; run as four Pythons, each carried its own interpreter,
 GLib and Qt (about 20 MB apiece). Here they share one, each in its own thread, started a little apart as they were
 (huginn-session-apps), and one failing never stops the others: it's started again a minute later.
 
-    python3 huginn_helpers.py          all four (huginn-session-apps starts it)
+    python3 huginn_helpers.py          all of them (huginn-session-apps starts it)
 
 Each can still run on its own as before (`huginn_privacy.py watch` and so on); the locks they take mean only one copy
 of each runs in a session, whichever started it.
@@ -50,8 +51,13 @@ def accounts() -> None:
     huginn_accounts.watch()
 
 
+def sync() -> None:
+    import huginn_sync
+    huginn_sync.watch()
+
+
 # (name, what, seconds after the start: as huginn-session-apps spaced them)
-JOBS = (("shortcuts", shortcuts, 0), ("privacy", privacy, 2), ("updates", updates, 0), ("accounts", accounts, 10))
+JOBS = (("shortcuts", shortcuts, 0), ("privacy", privacy, 2), ("updates", updates, 0), ("accounts", accounts, 10), ("sync", sync, 12))
 
 
 def keep(name: str, job, wait: float) -> None:

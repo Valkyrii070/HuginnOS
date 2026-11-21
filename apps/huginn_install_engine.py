@@ -10,11 +10,12 @@ disk) and writes one JSON line per step to stdout: {"step", "label", "fraction"}
                   "encrypt": false, "passphrase": "", "root": "/dev/sda3", "efi": "/dev/sda1", "formatEfi": false,
                   "hostname": "…", "user": {"name", "realName", "password", "autologin"}, "timezone": "Europe/Oslo",
                   "locale": "nb_NO.UTF-8", "keyboard": {"layout": "no", "variant": ""}, "kernelArgs": ""}
-    the steps    partition (sfdisk), format (FAT32 for EFI, ext4, LUKS2 when encrypted, with a plain /boot beside
-                 it), copy the system (unsquashfs from the live medium), the kernel (casper keeps it beside the
-                 squashfs), settings (hostname, fstab, crypttab, locale, keyboard, time zone, the person, sign-in),
-                 tidy up the live session's pieces, initramfs and GRUB (UEFI with shim for Secure Boot, or BIOS),
-                 a swap file, then unmount.
+    the steps    partition (sfdisk), format (FAT32 for EFI, btrfs with subvolumes @ for the system, @home, @snapshots
+                 for restore points and @swap, LUKS2 when encrypted, with a plain ext4 /boot beside it), copy the
+                 system (unsquashfs from the live medium), the kernel (casper keeps it beside the squashfs), settings
+                 (hostname, fstab, crypttab, locale, keyboard, time zone, the person, sign-in), tidy up the live
+                 session's pieces, initramfs and GRUB (UEFI with shim for Secure Boot, or BIOS), a swap file, the
+                 first restore point ("Just installed"), then unmount.
 
 Each disk action goes through Engine.run(), so tests can run the same engine against disk images.
 
@@ -81,16 +82,25 @@ def sfdisk_script(parts: list, start: int = 0) -> str:
     return "\n".join(lines) + "\n"
 
 
+SUBVOLUMES = ("@", "@home", "@snapshots", "@swap")
+BTRFS_OPTS = "compress=zstd:1,noatime"
+
+
 def fstab(root_uuid: str, efi_uuid: str = "", boot_uuid: str = "", encrypted: bool = False, swap: bool = True) -> str:
     rows = ["# /etc/fstab: the disks Huginn OS mounts at start-up (written by the installer).",
+            "# The system is btrfs subvolume @ (restore points are snapshots of it, in @snapshots: huginn-snapshot);",
+            "# your files are @home, which going back to a restore point never touches.",
             "# <file system>  <mount point>  <type>  <options>  <dump>  <pass>"]
-    rows.append(f"{'/dev/mapper/' + MAPPER if encrypted else 'UUID=' + root_uuid}  /  ext4  errors=remount-ro  0  1")
+    dev = "/dev/mapper/" + MAPPER if encrypted else "UUID=" + root_uuid
+    rows.append(f"{dev}  /  btrfs  subvol=@,{BTRFS_OPTS}  0  0")
+    rows.append(f"{dev}  /home  btrfs  subvol=@home,{BTRFS_OPTS}  0  0")
+    rows.append(f"{dev}  /swap  btrfs  subvol=@swap,noatime  0  0")
     if boot_uuid:
         rows.append(f"UUID={boot_uuid}  /boot  ext4  defaults  0  2")
     if efi_uuid:
         rows.append(f"UUID={efi_uuid}  /boot/efi  vfat  umask=0077  0  1")
     if swap:
-        rows.append("/swapfile  none  swap  sw  0  0")
+        rows.append("/swap/swapfile  none  swap  sw  0  0")
     return "\n".join(rows) + "\n"
 
 
@@ -146,7 +156,7 @@ class Engine:
         self.lines = []
         self.mounts = []
         self.opened = False
-        self.dev = {}                 # role → device: efi, bios, boot, root (the partition), rootfs (what's formatted ext4)
+        self.dev = {}                 # role → device: efi, bios, boot, root (the partition), rootfs (what's formatted btrfs)
         self.version = ""
         self.reuse_efi = False        # sharing the disk's EFI partition (with Windows, say): it's not formatted
 
@@ -317,13 +327,23 @@ class Engine:
             self.dev["rootfs"] = f"/dev/mapper/{MAPPER}"
         else:
             self.dev["rootfs"] = root
-        self.run(["mkfs.ext4", "-F", "-q", "-L", "Huginn OS", self.dev["rootfs"]], timeout=1800)
+        self.run(["mkfs.btrfs", "-f", "-q", "-L", "Huginn OS", self.dev["rootfs"]], timeout=1800)
+        # the subvolumes, made at the file system's top
+        self.t.mkdir(parents=True, exist_ok=True)
+        self.run(["mount", "-t", "btrfs", self.dev["rootfs"], str(self.t)])
+        try:
+            for sv in SUBVOLUMES:
+                self.run(["btrfs", "subvolume", "create", str(self.t / sv)])
+        finally:
+            subprocess.run(["umount", str(self.t)], capture_output=True)
         self.reread(p.get("disk", ""))                            # udev names the new file systems (by-uuid, for GRUB)
         self.step("format", 1)
 
     def mount_target(self) -> None:
-        """Huginn OS's partition (and /boot); the EFI partition goes on after the copy (FAT can't take Linux owners)."""
-        self.mount(self.dev["rootfs"], self.t)
+        """Huginn OS's subvolumes (and /boot); the EFI partition goes on after the copy (FAT can't take Linux owners)."""
+        self.mount(self.dev["rootfs"], self.t, "-t", "btrfs", "-o", f"subvol=@,{BTRFS_OPTS}")
+        self.mount(self.dev["rootfs"], self.t / "home", "-t", "btrfs", "-o", f"subvol=@home,{BTRFS_OPTS}")
+        self.mount(self.dev["rootfs"], self.t / "swap", "-t", "btrfs", "-o", "subvol=@swap,noatime")
         if "boot" in self.dev:
             self.mount(self.dev["boot"], self.t / "boot")
 
@@ -475,13 +495,32 @@ class Engine:
         while gib > 1 and free < (gib << 30) * 4:                # a swap file never takes more than a quarter of what's free
             gib -= 1
         if free < (gib << 30) * 4:                                # a small disk keeps its space
-            text = (self.t / "etc/fstab").read_text().replace("/swapfile  none  swap  sw  0  0\n", "")
+            text = (self.t / "etc/fstab").read_text().replace("/swap/swapfile  none  swap  sw  0  0\n", "")
             (self.t / "etc/fstab").write_text(text)
             return
-        sw = self.t / "swapfile"
-        self.run(["fallocate", "-l", f"{gib}G", str(sw)])
-        os.chmod(sw, 0o600)
-        self.run(["mkswap", str(sw)])
+        # on btrfs a swap file must not be copied-on-write or compressed: btrfs makes one that way itself, in @swap
+        # (its own subvolume, so restore points don't take it in)
+        (self.t / "swap").mkdir(exist_ok=True)
+        self.run(["btrfs", "filesystem", "mkswapfile", "--size", f"{gib}g", str(self.t / "swap/swapfile")])
+        os.chmod(self.t / "swap/swapfile", 0o600)
+
+    def restore_point(self) -> None:
+        """The first restore point, of the system just as installed (kept: it counts as one you made), and the
+        start-up menu's list of them."""
+        try:
+            sys.path.insert(0, str(Path(__file__).resolve().parent))
+            import huginn_snapshots as snap
+            boot = self.t / "boot" if "boot" in self.dev else None
+            snap.create("Just installed", dev=self.dev["rootfs"], mine=True, boot=boot, kernel=self.version,
+                        state=self.t / "var/lib/huginn/snapshots.json", menu=False)
+            pts = json.loads((self.t / "var/lib/huginn/snapshots.json").read_text()).get("points", [])
+            root = f"/dev/mapper/{MAPPER}" if self.p.get("encrypt") else f"UUID={self.uuid(self.dev['rootfs'])}"
+            args = f"root={root} ro quiet splash" + (f" {self.p['kernelArgs']}" if self.p.get("kernelArgs") else "") + " rootflags=subvol=@"
+            text = snap.menu_text(pts, self.uuid(self.dev["rootfs"]), self.uuid(self.dev["boot"]) if "boot" in self.dev else "", args)
+            if text and (self.t / "boot/grub").is_dir():
+                (self.t / "boot/grub" / snap.MENU).write_text(text)
+        except Exception as err:                                  # noqa: BLE001 — a missing restore point never fails an install
+            self.log(f"(no first restore point: {err})")
 
     def bootloader(self) -> None:
         p, t = self.p, self.t
@@ -566,6 +605,7 @@ class Engine:
             self.bind_system()
             self.settings()
             self.bootloader()
+            self.restore_point()
             self.step("finish", 0)
             self.save_log()
             self.unmount()

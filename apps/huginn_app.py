@@ -2743,6 +2743,13 @@ class Notes(QObject):
         self._saver.setSingleShot(True)
         self._saver.setInterval(700)
         self._saver.timeout.connect(self.save)
+        # a note changed from outside (Huginn sync bringing another computer's version, another editor): taken in
+        # while it isn't being typed in; new or removed notes show in the list
+        self._seen, self._folder_seen = None, None
+        self._outside = QTimer(self)
+        self._outside.setInterval(2000)
+        self._outside.timeout.connect(self._look_outside)
+        self._outside.start()
         if target and target.is_file():
             self._extra = target                       # a file opened from elsewhere (Files, the command line)
             self.open(str(target))
@@ -2826,8 +2833,38 @@ class Notes(QObject):
             self.failed.emit(f"Couldn't open that note: {err.strerror or err}")
             return
         self._path, self._dirty = Path(path), False
+        self._seen = self._stamp(self._path)
         self.textLoaded.emit()
         self.changed.emit()
+
+    @staticmethod
+    def _stamp(path):
+        try:
+            st = path.stat()
+            return (st.st_mtime_ns, st.st_size)
+        except OSError:
+            return None
+
+    def _look_outside(self) -> None:
+        folder = self._stamp(self._folder)
+        if folder != self._folder_seen:
+            if self._folder_seen is not None:
+                self.changed.emit()                     # a note came or went
+            self._folder_seen = folder
+        if self._path is None or self._dirty or self._saver.isActive():
+            return
+        now = self._stamp(self._path)
+        if now == self._seen or now is None:
+            return
+        self._seen = now
+        try:
+            text = self._path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            return
+        if text != self._text:
+            self._text = text
+            self.textLoaded.emit()
+            self.changed.emit()
 
     @Slot(str)
     def edit(self, text: str) -> None:
@@ -2846,6 +2883,7 @@ class Notes(QObject):
             tmp.write_text(self._text, encoding="utf-8")
             os.replace(tmp, self._path)                 # never leaves a half-written note behind
             self._dirty = False
+            self._seen = self._stamp(self._path)
         except OSError as err:
             self.failed.emit(f"Couldn't save: {err.strerror or err}")
         self.changed.emit()
@@ -5347,6 +5385,9 @@ def main() -> int:
         updates = huginn_updates.Updates(args.demo, settings)
         ctx.setContextProperty("Updates", updates)
         if args.app == "settings":
+            import huginn_sync
+            sync = huginn_sync.SyncSettings(args.demo)
+            ctx.setContextProperty("Sync", sync)
             import huginn_deskprefs
             deskprefs = huginn_deskprefs.DeskPrefs()
             ctx.setContextProperty("DeskPrefs", deskprefs)

@@ -6,6 +6,8 @@ dosfstools
 ntfs-3g
 fdisk
 e2fsprogs
+# btrfs: Huginn OS installs on it, in subvolumes, for restore points (huginn-snapshot); its tool goes in the initramfs
+btrfs-progs
 util-linux
 cryptsetup
 cryptsetup-initramfs

@@ -31,6 +31,7 @@ GlassWindow {
         { id: "users", label: "Users", glyph: "user", a: "#B39BFF", b: "#6D28D9", group: "SYSTEM", sub: "Your account, and other people who use this computer." },
         { id: "defaults", label: "Default Apps", glyph: "apps", a: "#FFC060", b: "#D97706", group: "SYSTEM", sub: "Which app opens what, and what starts when you sign in." },
         { id: "privacy", label: "Privacy & Security", glyph: "shield", a: "#7D8CA3", b: "#334155", group: "SYSTEM", sub: "Firewall, app permissions, screen lock and history." },
+        { id: "sync", label: "Sync", glyph: "cloud", a: "#5FD3A6", b: "#0A8071", group: "SYSTEM", sub: "Notes, Reminders, settings and Huginn's Favorites and passwords on all your devices." },
         { id: "updates", label: "Software Update", glyph: "refresh", a: "#4C8DFF", b: "#1E40AF", group: "SYSTEM", sub: "Keep the system, your apps and Huginn up to date." },
         { id: "about", label: "About", glyph: "info", a: "#A3B1C4", b: "#475569", group: "SYSTEM", sub: "This computer and the version of Huginn OS." },
         // reached from Appearance, not the rail
@@ -41,7 +42,7 @@ GlassWindow {
     property string makerId: ""                  // the live wallpaper being changed in the maker ("" a new one)
     readonly property var files: ({ appearance: "SetAppearance", desktop: "SetDesktop", notifications: "SetNotifications", network: "SetNetwork", bluetooth: "SetBluetooth",
                                     accounts: "SetAccounts", ai: "SetAI", displays: "SetDisplays", sound: "SetSound", power: "SetPower", input: "SetInput", keys: "SetKeys", time: "SetTime",
-                                    language: "SetLanguage", users: "SetUsers", defaults: "SetDefaults", privacy: "SetPrivacy", updates: "SetUpdates", about: "SetAbout",
+                                    language: "SetLanguage", users: "SetUsers", defaults: "SetDefaults", privacy: "SetPrivacy", updates: "SetUpdates", sync: "SetSync", about: "SetAbout",
                                     a11y: "SetAccessibility", printers: "SetPrinters", livemaker: "SetLiveMaker", graphics: "SetGraphics", controllers: "SetControllers", storage: "SetStorage" })
     readonly property var index: [
         ["a11y", "Screen reader", "orca blind read aloud speech voice spoken accessibility"], ["a11y", "Zoom", "magnifier magnify enlarge screen accessibility"],
@@ -93,7 +94,8 @@ GlassWindow {
         ["defaults", "Default apps", "browser mail open with file types"], ["defaults", "Start-up apps", "autostart login sign in"],
         ["privacy", "Firewall", "ufw block incoming"], ["privacy", "App permissions", "camera microphone location flatpak"], ["privacy", "Screen lock", "lock password idle"],
         ["privacy", "Recent files", "history forget"], ["privacy", "Clipboard history", "copy paste super v history clear"], ["privacy", "Empty the Trash", "days automatically"],
-        ["updates", "Software Update", "upgrade security patches flatpak automatic huginn browser"],
+        ["updates", "Software Update", "upgrade security patches flatpak automatic huginn browser restore point undo go back snapshot"],
+        ["sync", "Sync", "sync devices computers notes reminders settings bookmarks favorites passwords tabs bifrost pairing key nextcloud syncthing"],
         ["storage", "Storage", "disk drive space full free uninstall remove delete apps games steam size big flatpak"],
         ["storage", "Uninstall an app", "remove delete app program flatpak space"],
         ["about", "About this computer", "model processor memory storage version graphics problem report logs crash bug"]

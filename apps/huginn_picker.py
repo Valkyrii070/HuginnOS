@@ -1,6 +1,7 @@
 """Open… for any Huginn app: the desktop's own Open window (Huginn's, through the desktop portal), asked from QML.
 
     Picker.open("Open a document", [["Documents", "*.odt *.docx *.md *.txt"]], function (paths) { ... })
+    Picker.openFolder("Choose a sync folder", function (paths) { ... })
 
 The function gets the chosen paths (an empty list if nothing was chosen, or if there's no portal to ask).
 """
@@ -30,7 +31,12 @@ class Picker(QObject):
     def openMany(self, title: str, filters, done: QJSValue) -> None:
         self._ask("OpenFile", title, filters, done, multiple=True)
 
-    def _ask(self, method: str, title: str, filters, done: QJSValue, multiple: bool) -> None:
+    @Slot(str, QJSValue)
+    def openFolder(self, title: str, done: QJSValue) -> None:
+        """Choose a folder (Settings › Sync's sync folder): the paths list holds the one chosen."""
+        self._ask("OpenFile", title, [], done, multiple=False, directory=True)
+
+    def _ask(self, method: str, title: str, filters, done: QJSValue, multiple: bool, directory: bool = False) -> None:
         try:
             from gi.repository import Gio, GLib
             bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
@@ -48,6 +54,8 @@ class Picker(QObject):
             if globs:
                 rows.append((str(name), globs))
         options = {"handle_token": GLib.Variant("s", token), "multiple": GLib.Variant("b", multiple), "modal": GLib.Variant("b", True)}
+        if directory:
+            options["directory"] = GLib.Variant("b", True)
         if rows:
             options["filters"] = GLib.Variant("a(sa(us))", rows)
             options["current_filter"] = GLib.Variant("(sa(us))", rows[0])

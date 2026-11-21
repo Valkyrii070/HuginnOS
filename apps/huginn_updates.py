@@ -373,6 +373,17 @@ DEMO = [{"id": "deb:linux-image-generic", "name": "linux-image-generic", "versio
         {"id": "huginn", "name": "Huginn", "version": "2026-11-14 · 4b1e9c2", "from": "2026-11-13", "security": False, "kind": "huginn", "repo": "Valkyrii070/Huginn", "sha": "4b1e9c2", "date": "2026-11-14"}]
 
 
+
+def _when(stamp: float) -> str:
+    """A restore point's time, said plainly: today 14:05, yesterday 09:30, Tue 18 Nov 22:10."""
+    t, now = time.localtime(stamp), time.localtime()
+    hm = time.strftime("%H:%M", t)
+    if t.tm_yday == now.tm_yday and t.tm_year == now.tm_year:
+        return f"Today {hm}"
+    if time.localtime(stamp + 86400).tm_yday == now.tm_yday and time.localtime(stamp + 86400).tm_year == now.tm_year:
+        return f"Yesterday {hm}"
+    return time.strftime("%a %d %b", t) + f" {hm}"
+
 class Updates(QObject):
     """Software Update in Settings, and the App Store's Updates page."""
     changed = Signal()
@@ -396,6 +407,15 @@ class Updates(QObject):
 
     @Slot(str, object)
     def _take(self, what: str, data) -> None:
+        if what == "restore":
+            then, result = data
+            self._restore_busy = ""
+            if result.get("error") and result["error"] != "cancelled":
+                self.said.emit("Restore points: " + result["error"], True)
+            elif not result.get("error"):
+                then(result)
+            self.restoreChanged.emit()
+            return
         if what == "said":
             self.said.emit(*data)
         elif what == "problem":
@@ -573,6 +593,90 @@ class Updates(QObject):
     def restartNow(self) -> None:
         if not self._demo:
             RUN(["systemctl", "reboot"], None, 10)
+
+    # ---- restore points (huginn-snapshot): a copy of the system before each change to it, to go back to
+    restoreChanged = Signal()
+
+    def _restore(self) -> dict:
+        if self._demo:
+            now = time.time()
+            pts = getattr(self, "_demo_points", None) or [
+                {"n": 7, "date": now - 2 * 3600, "reason": "Before software was installed or updated", "mine": False},
+                {"n": 6, "date": now - 3 * 86400, "reason": "Before software was installed or updated", "mine": False},
+                {"n": 1, "date": now - 9 * 86400, "reason": "Just installed", "mine": True}]
+            return {"available": True, "points": pts, "leftovers": getattr(self, "_demo_left", []), "pending": getattr(self, "_demo_pending", 0), "undone": 0, "busy": self._restore_busy}
+        try:
+            data = json.loads(Path("/var/lib/huginn/snapshots.json").read_text())
+        except (OSError, ValueError):
+            data = {}
+        try:
+            undone = json.loads(Path("/var/lib/huginn/undone").read_text()).get("n", 0)
+        except (OSError, ValueError):
+            undone = 0
+        return {"available": "points" in data, "points": data.get("points", []), "leftovers": data.get("leftovers", []),
+                "pending": self._restore_pending, "undone": undone, "busy": self._restore_busy}
+
+    def _restore_view(self) -> dict:
+        r = self._restore()
+        r["points"] = [dict(p, when=_when(p["date"])) for p in r["points"]]
+        return r
+    restore = Property("QVariantMap", _restore_view, notify=restoreChanged)
+    _restore_busy = ""
+    _restore_pending = 0
+
+    def _snapshot(self, words: list, busy: str, then) -> None:
+        """Runs huginn-snapshot as root (pkexec: org.huginn.snapshot), off the window's thread."""
+        self._restore_busy = busy
+        self.restoreChanged.emit()
+
+        def work():
+            code, out, err = RUN(["pkexec", "/usr/libexec/huginn-snapshot", *words], None, 900)
+            try:
+                data = json.loads(out.strip().splitlines()[-1]) if out.strip() else {}
+            except (ValueError, IndexError):
+                data = {}
+            if code in (126, 127):
+                data = {"error": "cancelled"}
+            elif code and not data.get("error"):
+                data = {"error": (err or out).strip().splitlines()[-1] if (err or out).strip() else "It didn't work."}
+            self._emit("restore", (then, data))
+        threading.Thread(target=work, daemon=True).start()
+
+    @Slot()
+    def makeRestorePoint(self) -> None:
+        if self._demo:
+            self._demo_points = [{"n": 8, "date": time.time(), "reason": "Made by you", "mine": True}] + self._restore()["points"]
+            self.restoreChanged.emit()
+            return
+        self._snapshot(["create", "Made by you"], "making", lambda d: self.said.emit("Made a restore point.", False))
+
+    @Slot(int)
+    def undoTo(self, n: int) -> None:
+        if self._demo:
+            self._demo_pending = n
+            self.restoreChanged.emit()
+            return
+
+        def then(d):
+            self._restore_pending = n
+            self.said.emit("Done. Restart, and the system is as it was then.", False)
+        self._snapshot(["undo", str(int(n))], "undoing", then)
+
+    @Slot(int)
+    def forgetPoint(self, n: int) -> None:
+        if self._demo:
+            self._demo_points = [p for p in self._restore()["points"] if p["n"] != n]
+            self.restoreChanged.emit()
+            return
+        self._snapshot(["forget", str(int(n))], "forgetting", lambda d: None)
+
+    @Slot()
+    def tidyRestore(self) -> None:
+        if self._demo:
+            self._demo_left = []
+            self.restoreChanged.emit()
+            return
+        self._snapshot(["tidy"], "tidying", lambda d: self.said.emit("Removed what going back left behind.", False))
 
 
 # ------------------------------------------------------------------------------------------- in the background

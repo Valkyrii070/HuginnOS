@@ -93,6 +93,7 @@ pub fn frosted(namespace: &str) -> bool {
             | "huginn-control-centre"
             | "huginn-launcher"
             | "huginn-search"
+            | "huginn-layouts"
             | "huginn-switcher"
             | "huginn-tabs"
             | "huginn-space-name"

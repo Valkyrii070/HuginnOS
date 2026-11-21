@@ -1,0 +1,9 @@
+#!/bin/sh
+# Huginn OS's restore points in the start-up menu: huginn-snapshot writes their list beside grub.cfg (it changes
+# with each restore point, without update-grub), and this has GRUB read it.
+set -e
+cat <<'GRUB'
+if [ -f "${config_directory}/huginn-snapshots.cfg" ]; then
+  source "${config_directory}/huginn-snapshots.cfg"
+fi
+GRUB

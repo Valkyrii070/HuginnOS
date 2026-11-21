@@ -7,6 +7,7 @@ import org.kde.layershell 1.0 as LayerShell
 QtObject {
     id: shell
     property string open: ""
+    property string layoutsFor: ""         // Layouts (Super+Z): the window it's for
     property bool editWidgets: false       // the desktop's widgets being added, taken off and moved (Widgets.qml)
     property var deskMenuAt: null          // the desktop's menu, open: {x, y, screen} where it was right-clicked
     property bool settled: !arriving       // after the arrival from the sign-in screen, the desktop's pieces come in
@@ -261,6 +262,11 @@ QtObject {
             if (what === "today") shell.open = shell.open === "today" ? "" : "today"
             else if (what === "clipboard") shell.open = shell.open === "clipboard" ? "" : "clipboard"
             else if (what === "emoji") shell.open = shell.open === "emoji" ? "" : "emoji"
+            else if (what === "layouts") {    // for the window in front now (it stays the one, whatever takes focus)
+                if (shell.open === "layouts") { shell.open = ""; return }
+                var ws = Status.windows || [], front = ""
+                for (var wi = 0; wi < ws.length; wi++) if (ws[wi].active && !ws[wi].minimised) front = ws[wi].id
+                shell.layoutsFor = front; shell.open = "layouts" }
             else if (what === "menu") shell.appMenu("")
             else if (what.indexOf("run:") === 0) shell.runKey(what.slice(4))
             else if (what.indexOf("edge:") === 0) shell.pointerAtEdge(what.slice(5))
@@ -723,6 +729,19 @@ QtObject {
         LayerShell.Window.keyboardInteractivity: shell.open === "emoji" ? LayerShell.Window.KeyboardInteractivityExclusive : LayerShell.Window.KeyboardInteractivityNone
         Rectangle { anchors.fill: parent; color: "black"; opacity: emojiPanel.presence * 0.18 }
         EmojiPanel { id: emojiPanel; anchors.fill: parent; shown: shell.open === "emoji"; onDone: shell.open = "" }
+    },
+    Window {   // Layouts and window sets (Super+Z): over the screen the pointer is on
+        id: layoutsWin
+        Component.onCompleted: Status.glassWindow(layoutsWin, "huginn-layouts")      // only its glass is blurred behind it
+        visible: shell.open === "layouts" || layoutsPanel.visible; color: "transparent"
+        LayerShell.Window.scope: "huginn-layouts"
+        LayerShell.Window.wantsToBeOnActiveScreen: true
+        LayerShell.Window.layer: LayerShell.Window.LayerOverlay
+        LayerShell.Window.anchors: LayerShell.Window.AnchorTop | LayerShell.Window.AnchorBottom | LayerShell.Window.AnchorLeft | LayerShell.Window.AnchorRight
+        LayerShell.Window.exclusionZone: -1
+        LayerShell.Window.keyboardInteractivity: shell.open === "layouts" ? LayerShell.Window.KeyboardInteractivityExclusive : LayerShell.Window.KeyboardInteractivityNone
+        Rectangle { anchors.fill: parent; color: "black"; opacity: layoutsPanel.presence * 0.25 }
+        Layouts { id: layoutsPanel; anchors.fill: parent; shown: shell.open === "layouts"; forId: shell.layoutsFor; onDone: shell.open = "" }
     },
     Window {   // an app's island, from the dock (right-click or a long press on its tile)
         id: islandWin

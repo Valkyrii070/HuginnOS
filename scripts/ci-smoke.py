@@ -35,6 +35,36 @@ def run(name: str, cmd: list, picture: Path) -> bool:
     return good
 
 
+def bifrost_same():
+    """Huginn sync (apps/huginn_sync.py) and the browser's Bifröst must read each other's files: the browser's own
+    functions, taken from vendor/huginn, against ours."""
+    import ast
+    browser = ROOT / "vendor/huginn/safari_browser.py"
+    if not browser.exists():
+        return "skipped: no vendor/huginn"
+    import importlib.util
+    if importlib.util.find_spec("cryptography") is None:
+        return "skipped: no python3-cryptography"
+    sys.path.insert(0, str(ROOT / "apps"))
+    import huginn_sync as ours
+    src = browser.read_text(encoding="utf-8")
+    want = {"_hkdf", "bifrost_keys", "bifrost_seal", "bifrost_open", "bifrost_hash", "bifrost_key_text", "bifrost_key_from_text", "_b64e", "_b64d"}
+    code = "\n\n".join(ast.get_source_segment(src, n) for n in ast.parse(src).body if isinstance(n, ast.FunctionDef) and n.name in want)
+    theirs = {k: getattr(ours, k) for k in ("base64", "hashlib", "hmac", "re", "zlib", "json", "os", "AESGCM", "InvalidTag",
+                                            "BIFROST_FORMAT", "BIFROST_MAX_BLOB", "BIFROST_KEY_PREFIX")}
+    exec(compile("from __future__ import annotations\n" + code, "safari_browser.py", "exec"), theirs)
+    if not want <= set(theirs):
+        return ""
+    key, pk = os.urandom(32), os.urandom(32)
+    payload = {"device": "d1", "name": "n", "at": 1.0, "records": [{"c": "notes", "i": "x", "m": 1.0, "d": "d1", "h": "", "x": {"t": "ø"}}]}
+    ok = (theirs["bifrost_open"](key, ours.bifrost_seal(key, "d1", payload)) == payload
+          and ours.bifrost_open(key, theirs["bifrost_seal"](key, "d1", payload)) == payload
+          and theirs["bifrost_key_text"](key, pk) == ours.bifrost_key_text(key, pk)
+          and ours.bifrost_key_from_text(theirs["bifrost_key_text"](key, pk)) == (key, pk)
+          and theirs["bifrost_hash"](payload) == ours.bifrost_hash(payload))
+    return "the browser and the system read each other's files" if ok else ""
+
+
 def main() -> int:
     for d in ("home", "run", "shots"):
         (OUT / d).mkdir(parents=True, exist_ok=True)
@@ -49,6 +79,9 @@ def main() -> int:
     told = "org.freedesktop.appearance color-scheme" in portal.stdout
     print(f"{'ok  ' if told else 'FAIL'} {'settings':14} {'the portal answers' if told else portal.stderr[-300:]}")
     results.append(told)
+    same = bifrost_same()
+    print(f"{'ok  ' if same else 'FAIL'} {'sync':14} {same or 'huginn_sync.py no longer understands the browser'}")
+    results.append(bool(same))
     shot = OUT / "shots" / "shell.png"
     results.append(run("shell", [sys.executable, str(ROOT / "shell/huginn_shell.py"), "--preview", "--shot", str(shot)], shot))
     for key in sys.argv[1:] or APPS:

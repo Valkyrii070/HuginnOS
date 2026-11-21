@@ -43,6 +43,7 @@ pub const DEFAULTS: &[(&str, &str)] = &[
     ("snap-right", "Super+Right"),
     ("snap-up", "Super+Up"),
     ("snap-down", "Super+Down"),
+    ("layouts", "Super+Z"),
     ("close", "Alt+F4"),
     ("screenshot", "Print"),
     ("screenshot-choose", "Super+Shift+S|Shift+Print"),

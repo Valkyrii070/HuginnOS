@@ -1321,7 +1321,7 @@ def main() -> int:
     ap.add_argument("--socket", default="huginn-0", help="--compositor: the Wayland socket apps connect to")
     ap.add_argument("--no-services", action="store_true", help="--compositor: don't start the session's services in it")
     ap.add_argument("--shot", metavar="PNG")
-    ap.add_argument("--open", choices=["cc", "launcher", "tabs", "search", "live"], default="")
+    ap.add_argument("--open", choices=["cc", "launcher", "tabs", "search", "live", "layouts"], default="")
     ap.add_argument("--query", default="", help="with --open search or launcher in a preview: what's typed")
     ap.add_argument("--realm", default="")
     ap.add_argument("--menus", action="store_true", help="preview: start with the app menus open")

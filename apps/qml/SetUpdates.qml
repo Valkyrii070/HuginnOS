@@ -62,4 +62,26 @@ Column {
             Label { text: pg.have ? Updates.huginn.date + " · " + Updates.huginn.commit : ""; secondary: true; font.family: Theme.t.fontMono } }
         SetRow { visible: pg.have && Updates.huginn.canGoBack; title: "Go back to the version before"; sub: "If the newest one gives you trouble"
             Btn { text: "Go Back"; onClicked: Updates.goBack() } } }
+    // Restore points: a copy of the system (not your files) before each update, to go back to here or from the
+    // start-up menu (huginn-snapshot). Only on a computer Huginn OS was installed on, which puts the system on btrfs.
+    readonly property var restore: have ? Updates.restore : ({})
+    SetCard { visible: pg.have && !!pg.restore.available; title: "Restore points"
+        note: "Before every update, Huginn OS keeps a copy of the system as it was: the apps, drivers and settings, not your files. If an update gives you trouble, go back to one here, or pick \"Huginn OS restore points\" in the start-up menu if the computer won't start. Your files in your home folder stay as they are."
+        SetRow { visible: (pg.restore.pending || 0) > 0; title: "Restart to finish going back"; sub: "The system will be as it was then. What you have now is kept, in case you want it back."; glyph: "refresh"; tile: "#C46A00"
+            Btn { primary: true; text: "Restart"; onClicked: win.confirm("Restart now?", "Save your work first: open apps close.", "Restart", function () { Updates.restartNow() }, false) } }
+        SetRow { visible: (pg.restore.undone || 0) > 0 && !(pg.restore.pending > 0); title: "This computer went back to restore point " + (pg.restore.undone || ""); sub: "Updates you install from now on make new restore points as usual."; glyph: "check"; tile: "#0A8071" }
+        Repeater { model: pg.restore.points || []
+            SetRow { required property var modelData
+                title: modelData.when; sub: modelData.reason + (modelData.mine ? " · kept until you remove it" : "")
+                glyph: modelData.mine ? "pin" : "clock"; tile: modelData.mine ? "#5A3FE0" : "#475569"
+                Row { spacing: 8
+                    Btn { text: "Go Back to This"; enabled: !pg.restore.busy && !(pg.restore.pending > 0)
+                        onClicked: win.confirm("Go back to " + modelData.when.toLowerCase() + "?", "The system goes back to how it was then, after a restart: apps installed or updated since are gone or older again. Your files aren't touched, and what you have now is kept in case you want it back.", "Go Back", function () { Updates.undoTo(modelData.n) }, true) }
+                    Btn { visible: modelData.mine; text: "Remove"; enabled: !pg.restore.busy
+                        onClicked: win.confirm("Remove this restore point?", modelData.reason + ", " + modelData.when.toLowerCase() + ". You can't go back to it after this.", "Remove", function () { Updates.forgetPoint(modelData.n) }, true) } } } }
+        SetRow { visible: (pg.restore.points || []).length === 0; title: "No restore points yet"; sub: "The first one is made before the next update." }
+        SetRow { title: pg.restore.busy === "making" ? "Making a restore point…" : "Make a restore point now"; sub: "Before you change something big yourself. Kept until you remove it."; glyph: "plus"; tile: "#1E40AF"
+            Btn { text: "Make One"; enabled: !pg.restore.busy; onClicked: Updates.makeRestorePoint() } }
+        SetRow { visible: (pg.restore.leftovers || []).length > 0; title: "What going back left behind"; sub: "The system as it was before you went back (" + (pg.restore.leftovers || []).length + "). Remove it once everything works, to free the space."; glyph: "trash"; tile: "#8A3B3B"
+            Btn { text: "Remove"; enabled: !pg.restore.busy; onClicked: Updates.tidyRestore() } } }
 }

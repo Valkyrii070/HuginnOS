@@ -709,6 +709,7 @@ SHORTCUTS = [  # id, what it does, group, default keys ("|" between more than on
     ("snap-right", "Snap to the right (again: a third, two-thirds)", "Windows", "Super+Right"),
     ("snap-up", "Fill the screen", "Windows", "Super+Up"),
     ("snap-down", "Back to its size, then hide it", "Windows", "Super+Down"),
+    ("layouts", "Layouts and window sets", "Windows", "Super+Z"),
     ("screen-left", "Move to the screen on the left", "Windows", "Super+Alt+Left"),
     ("screen-right", "Move to the screen on the right", "Windows", "Super+Alt+Right"),
     ("desktop", "Show the desktop (again: bring them back)", "Windows", "Super+D"),

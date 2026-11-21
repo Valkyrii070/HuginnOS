@@ -1,0 +1,4 @@
+#!/bin/sh
+# Huginn OS's restore points (apps/huginn_snapshots.py): taken before apt changes the system, listed in Settings ›
+# Software Update and in the start-up menu. Settings runs it through pkexec (org.huginn.snapshot).
+exec /usr/bin/python3 /usr/share/huginn-apps/huginn_snapshots.py "$@"
