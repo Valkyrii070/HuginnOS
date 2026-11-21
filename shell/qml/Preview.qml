@@ -18,7 +18,7 @@ Window {
     property string searchText: ""
     TopBar { id: bar; width: parent.width; menuOpen: win.open === "menu"; onAppMenu: function (group) { win.open = win.open === "menu" ? "" : "menu" }
              onControlCentre: win.open = win.open === "cc" ? "" : "cc"; onLauncher: win.open = win.open === "launcher" ? "" : "launcher"; onSearch: win.open = win.open === "search" ? "" : "search" }
-    AppMenuIsland { z: 20; shown: win.open === "menu"; only: ""; x: Math.max(6, bar.nameLeft - 6); y: 3; onDone: win.open = "" }   // (--menus)
+    AppMenuIsland { z: 20; visible: win.open === "menu"; shown: win.open === "menu"; only: ""; x: Math.max(6, bar.nameLeft - 6); y: 3; onDone: win.open = "" }   // (--menus)
     Dock {
         id: dock
         anchors { horizontalCenter: parent.horizontalCenter; bottom: parent.bottom; bottomMargin: 14 }

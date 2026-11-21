@@ -31,7 +31,9 @@ NOT_GAMES = re.compile(r"^(Proton\b|Steam Linux Runtime|Steamworks Common|SteamV
 SYNC = {"": "Automatic", "fsync": "Fsync", "esync": "Esync", "none": "Off"}
 LANGS = [("", "Same as the computer"), ("en_US", "English"), ("ja_JP", "Japanese"), ("zh_CN", "Chinese (Simplified)"), ("zh_TW", "Chinese (Traditional)"),
          ("ko_KR", "Korean"), ("ru_RU", "Russian"), ("de_DE", "German"), ("fr_FR", "French"), ("es_ES", "Spanish")]
-DEFAULTS = {"runner": "auto", "args": "", "env": "", "overlay": False, "gamemode": False, "sync": "", "dlls": {}, "lang": "", "novideo": False}
+DEFAULTS = {"runner": "auto", "args": "", "env": "", "overlay": False, "gamemode": False, "sync": "", "dlls": {}, "lang": "", "novideo": False,
+            "fps": "", "fsr": False, "proton": ""}
+FPS_CAPS = [("", "Off"), ("30", "30"), ("40", "40"), ("60", "60"), ("90", "90"), ("120", "120"), ("144", "144"), ("165", "165"), ("240", "240")]
 ENV_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 DLL_NAME = re.compile(r"^[A-Za-z0-9_.\-]{1,40}$")
 
@@ -395,8 +397,9 @@ def pick_runner(game: dict, protons: list, have: dict) -> dict:
     return {"kind": "none", "name": "Nothing to run it with", "path": ""}
 
 
-def build_launch(game: dict, protons: list, have: dict, steam_root: str = "") -> dict:
-    """The command, the extra environment and the folder a game of yours starts with. Pure: runs nothing."""
+def build_launch(game: dict, protons: list, have: dict, steam_root: str = "", screen: tuple = None) -> dict:
+    """The command, the extra environment and the folder a game of yours starts with. Pure: runs nothing.
+    `screen`: the size of the screen it will fill, for FSR through gamescope (a Linux game)."""
     runner = pick_runner(game, protons, have)
     if runner["kind"] == "none":
         raise ValueError("This is a Windows game, and neither Proton (it comes with Steam) nor Wine is installed.")
@@ -405,11 +408,14 @@ def build_launch(game: dict, protons: list, have: dict, steam_root: str = "") ->
     wrap = []
     if game.get("gamemode") and have.get("gamemoderun"):
         wrap.append(have["gamemoderun"])
-    if game.get("overlay") and have.get("mangohud"):
+    hud = mangohud_config(game) if runner["kind"] == "native" else ""
+    if (game.get("overlay") or hud) and have.get("mangohud"):
         wrap.append(have["mangohud"])
+    if hud and have.get("mangohud"):
+        env["MANGOHUD_CONFIG"] = hud
     sync = game.get("sync") or ""
     if runner["kind"] == "native":
-        argv = wrap + [exe]
+        argv = gamescope_fsr(game, screen, have.get("gamescope", "")) + wrap + [exe]
     else:
         prefix = str(game.get("prefix") or DATA_HOME / "games" / "bottles" / str(game.get("id", "game")))
         overrides = dll_overrides(game.get("dlls"), bool(game.get("novideo")))
@@ -417,6 +423,7 @@ def build_launch(game: dict, protons: list, have: dict, steam_root: str = "") ->
             env["WINEDLLOVERRIDES"] = overrides
         if game.get("lang"):
             env["LC_ALL"] = f"{game['lang']}.UTF-8"
+        env.update(perf_env(game, True))
         if runner["kind"] == "proton":
             if sync == "esync":
                 env["PROTON_NO_FSYNC"] = "1"
@@ -468,6 +475,243 @@ def steam_launch_options(profile: dict, have: dict = None, flatpak: bool = False
     if not words and not args:
         return ""
     return " ".join(words + ["%command%"] + [shlex.quote(a) for a in args])
+
+
+# ============================================================================================== a game's speed settings
+# A frame-rate cap and FSR (AMD's upscaling: the game draws fewer pixels, sharpened up to the screen). For a Windows
+# game Proton and Wine do both themselves (DXVK and VKD3D cap the frames; GE-Proton's fullscreen FSR upscales when
+# the game is set to a lower resolution than the screen). For a Linux game MangoHud caps the frames and gamescope
+# upscales: it draws the game at two thirds of the screen's size and sharpens it up to the screen.
+def perf_env(profile: dict, windows: bool) -> dict:
+    env = {}
+    fps = str(profile.get("fps") or "")
+    if windows:
+        if fps.isdigit():
+            env["DXVK_FRAME_RATE"] = env["VKD3D_FRAME_RATE"] = fps
+        if profile.get("fsr"):
+            env["WINE_FULLSCREEN_FSR"] = "1"
+            env["WINE_FULLSCREEN_FSR_STRENGTH"] = "2"
+    return env
+
+
+def mangohud_config(profile: dict) -> str:
+    """MANGOHUD_CONFIG for a Linux game: its cap, and hidden when only the cap is wanted ("" for nothing)."""
+    fps = str(profile.get("fps") or "")
+    if not fps.isdigit():
+        return ""
+    return f"fps_limit={fps}" + ("" if profile.get("overlay") else ",no_display")
+
+
+def gamescope_fsr(profile: dict, screen: tuple, gamescope: str) -> list:
+    """gamescope's words that draw a Linux game at two thirds of the screen and upscale it with FSR ([] for none)."""
+    if not profile.get("fsr") or not gamescope or not screen or not screen[0] or not screen[1]:
+        return []
+    w, h = int(screen[0]), int(screen[1])
+    rw, rh = (round(w / 1.5) // 2) * 2, (round(h / 1.5) // 2) * 2
+    return [gamescope, "-f", "-F", "fsr", "-W", str(w), "-H", str(h), "-w", str(rw), "-h", str(rh), "--"]
+
+
+# ============================================================================================== Steam games, set up once
+# A Steam game takes Huginn's settings through its Launch Options: once set up, they read `<folder>/huginn-game
+# %command%`, and that small script starts the game with whatever Games says for it now (`<folder>/<appid>.sh`). So a
+# change in Games applies the next time it starts, with Steam open or not; only that one Launch Options line, and the
+# game's Proton, are Steam's own files, which Steam rewrites from memory when it closes, so they're written only while
+# it's closed. Steam from Flathub only sees its own folder, so there the script lives in it.
+WRAPPER = """#!/bin/sh
+# Huginn OS: starts a Steam game with what Games set for it (a frame-rate cap, FSR, GameMode, the overlay, its
+# variables and arguments). Steam runs this from the game's Launch Options; each game's settings are in <appid>.sh
+# beside it, written by Games. Delete this game's line in Steam's Launch Options to stop.
+here=$(dirname "$0")
+id=${SteamAppId:-${STEAM_COMPAT_APP_ID:-0}}
+HUGINN_WRAP=
+[ -f "$here/$id.sh" ] && . "$here/$id.sh"
+exec $HUGINN_WRAP "$@"
+"""
+
+
+def steam_side(flatpak: bool, home: Path = None) -> Path:
+    home = home or Path.home()
+    return home / ".var/app/com.valvesoftware.Steam/data/huginn" if flatpak else DATA_HOME / "games" / "steam"
+
+
+def steam_game_script(profile: dict, have: dict, flatpak: bool, screen: tuple = None) -> str:
+    """The `<appid>.sh` huginn-game reads: shell lines setting the environment and HUGINN_WRAP (what runs the game)."""
+    q = shlex.quote
+    common, wrap = {}, []
+    overrides = dll_overrides(profile.get("dlls"), bool(profile.get("novideo")))
+    if overrides:
+        common["WINEDLLOVERRIDES"] = overrides
+    if profile.get("lang"):
+        common["LC_ALL"] = f"{profile['lang']}.UTF-8"
+    if profile.get("sync") == "esync":
+        common["PROTON_NO_FSYNC"] = "1"
+    elif profile.get("sync") == "none":
+        common["PROTON_NO_FSYNC"] = common["PROTON_NO_ESYNC"] = "1"
+    if not flatpak and profile.get("gamemode") and have.get("gamemoderun"):
+        wrap.append(have["gamemoderun"])
+    hud = mangohud_config(profile)
+    lines = ["# Made by Huginn's Games for this game. Change it there: it's written again each time."]
+    env = dict(common, **parse_env(profile.get("env")))
+    if env:
+        lines.append("export " + " ".join(f"{k}={q(v)}" for k, v in env.items()))
+    lines.append("HUGINN_WRAP=" + q(" ".join(wrap)))
+    win = perf_env(profile, True)
+    lines.append('if [ -n "$STEAM_COMPAT_DATA_PATH" ]; then      # a Windows game, through Proton')
+    if win:
+        lines.append("  export " + " ".join(f"{k}={q(v)}" for k, v in win.items()))
+    if profile.get("overlay"):
+        lines.append("  export MANGOHUD=1" if flatpak else f"  HUGINN_WRAP=\"$HUGINN_WRAP {have.get('mangohud') or 'mangohud'}\"")
+    lines.append("  :")
+    lines.append("else                                          # a Linux game")
+    if hud:
+        lines.append(f"  export MANGOHUD_CONFIG={q(hud)}")
+    if profile.get("overlay") or hud:
+        lines.append("  export MANGOHUD=1" if flatpak else f"  HUGINN_WRAP=\"$HUGINN_WRAP {have.get('mangohud') or 'mangohud'}\"")
+    scope = [] if flatpak else gamescope_fsr(profile, screen, have.get("gamescope", ""))
+    if scope:
+        lines.append(f"  HUGINN_WRAP=\"{' '.join(scope)} $HUGINN_WRAP\"")
+    lines.append("  :")
+    lines.append("fi")
+    args = split_args(profile.get("args"))
+    if args:
+        lines.append('set -- "$@" ' + " ".join(q(a) for a in args))
+    return "\n".join(lines) + "\n"
+
+
+def write_steam_side(folder: Path, appid: str, script: str) -> Path:
+    """The wrapper and this game's settings, in `folder`. Returns the wrapper's path."""
+    folder.mkdir(parents=True, exist_ok=True)
+    wrapper = folder / "huginn-game"
+    if not wrapper.exists() or wrapper.read_text(errors="replace") != WRAPPER:
+        wrapper.write_text(WRAPPER)
+    wrapper.chmod(0o755)
+    part = folder / f".{appid}.sh.saving"
+    part.write_text(script)
+    os.replace(part, folder / f"{appid}.sh")
+    return wrapper
+
+
+def _block(data: dict, *path) -> dict:
+    """The block at `path`, made where it's missing; keys matched without minding their case."""
+    for want in path:
+        hit = next((k for k in data if k.lower() == want.lower()), None)
+        if hit is None or not isinstance(data[hit], dict):
+            data[hit or want] = {}
+            hit = hit or want
+        data = data[hit]
+    return data
+
+
+def with_wrapper(options: str, wrapper: str) -> str:
+    """A game's Launch Options with Huginn's wrapper put in front of %command%; what was there stays."""
+    word = shlex.quote(wrapper) if any(c in wrapper for c in " '\"") else wrapper
+    options = (options or "").strip()
+    if wrapper in options:
+        return options
+    if "%command%" in options:
+        return options.replace("%command%", f"{word} %command%", 1)
+    return f"{word} %command%" + (f" {options}" if options else "")
+
+
+def local_configs(root: Path) -> list:
+    try:
+        return sorted(p for p in (root / "userdata").glob("*/config/localconfig.vdf") if p.is_file())
+    except OSError:
+        return []
+
+
+def launch_options(root: Path) -> dict:
+    """Each game's Launch Options (appid -> text), from every account's settings on this computer."""
+    out = {}
+    for path in local_configs(root):
+        apps = vget(read_vdf(_read(path)), "UserLocalConfigStore", "Software", "Valve", "Steam", "apps")
+        if isinstance(apps, dict):
+            for appid, block in apps.items():
+                if isinstance(block, dict):
+                    text = vget(block, "LaunchOptions")
+                    if isinstance(text, str) and text and appid not in out:
+                        out[appid] = text
+    return out
+
+
+def hook_games(root: Path, appids: list, wrapper: str) -> int:
+    """Put Huginn's wrapper into these games' Launch Options, for every account. Steam must be closed. Returns how
+    many settings files changed; each is kept as it was first, beside it (.before-huginn)."""
+    changed = 0
+    for path in local_configs(root):
+        data = read_vdf(_read(path))
+        if not data:
+            continue
+        apps = _block(data, "UserLocalConfigStore", "Software", "Valve", "Steam", "apps")
+        dirty = False
+        for appid in appids:
+            game = _block(apps, str(appid))
+            old = vget(game, "LaunchOptions") or ""
+            new = with_wrapper(old if isinstance(old, str) else "", wrapper)
+            if new != old:
+                _vset(game, "LaunchOptions", new)
+                dirty = True
+        if dirty:
+            backup = path.with_name("localconfig.vdf.before-huginn")
+            if not backup.exists():
+                shutil.copy2(path, backup)
+            part = path.with_name(".localconfig.vdf.saving")
+            part.write_text(write_vdf(data), encoding="utf-8")
+            os.replace(part, path)
+            changed += 1
+    return changed
+
+
+def steam_tool_name(folder: Path) -> str:
+    """The name Steam knows a Proton by (CompatToolMapping): a downloaded one says it in compatibilitytool.vdf;
+    Valve's are proton_experimental, proton_hotfix, proton_9 (9.0), proton_63 (6.3)…"""
+    tools = vget(read_vdf(_read(folder / "compatibilitytool.vdf", 200_000)), "compatibilitytools", "compat_tools")
+    if isinstance(tools, dict) and tools:
+        return next(iter(tools))
+    name = folder.name.lower()
+    if "experimental" in name:
+        return "proton_experimental"
+    if "hotfix" in name:
+        return "proton_hotfix"
+    m = re.search(r"(\d+)\.(\d+)", name)
+    if m:
+        return f"proton_{m.group(1)}" if m.group(2) == "0" else f"proton_{m.group(1)}{m.group(2)}"
+    return re.sub(r"[^a-z0-9]+", "_", name).strip("_")
+
+
+def compat_tools(root: Path) -> dict:
+    """Which Proton each game is set to in Steam (appid -> name)."""
+    mapping = vget(read_vdf(_read(root / "config/config.vdf", 20_000_000)), "InstallConfigStore", "Software", "Valve", "Steam", "CompatToolMapping")
+    out = {}
+    if isinstance(mapping, dict):
+        for appid, block in mapping.items():
+            name = vget(block, "name") if isinstance(block, dict) else None
+            if isinstance(name, str) and name and appid != "0":
+                out[appid] = name
+    return out
+
+
+def set_compat_tools(root: Path, wants: dict) -> bool:
+    """Set games' Protons in Steam (appid -> name; "" = Steam's own choice). Steam must be closed."""
+    path = root / "config/config.vdf"
+    data = read_vdf(_read(path, 20_000_000))
+    if not data:
+        return False
+    mapping = _block(data, "InstallConfigStore", "Software", "Valve", "Steam", "CompatToolMapping")
+    for appid, name in wants.items():
+        hit = next((k for k in mapping if k == str(appid)), None)
+        if not name:
+            if hit is not None:
+                del mapping[hit]
+        else:
+            mapping[str(appid)] = {"name": name, "config": "", "priority": "250"}
+    backup = path.with_name("config.vdf.before-huginn")
+    if not backup.exists():
+        shutil.copy2(path, backup)
+    part = path.with_name(".config.vdf.saving")
+    part.write_text(write_vdf(data), encoding="utf-8")
+    os.replace(part, path)
+    return True
 
 
 # ============================================================================================== GE-Proton
@@ -602,7 +846,7 @@ class Games(QObject):
     changed = Signal()
     said = Signal(str, bool)
     _back = Signal(object)
-    TOOLS = ("steam", "heroic", "wine", "mangohud", "gamemoderun", "umu-run", "flatpak")
+    TOOLS = ("steam", "heroic", "wine", "mangohud", "gamemoderun", "umu-run", "flatpak", "gamescope")
 
     def __init__(self, demo: bool = False, target=None):
         super().__init__()
@@ -611,6 +855,7 @@ class Games(QObject):
         self._own, self._profiles, self._steam, self._accounts, self._protons, self._heroic, self._hhomes = [], {}, [], [], [], [], []
         self._roots, self._have, self._picked, self._filter, self._query, self._busy = [], {}, "", "all", "", ""
         self._running, self._listing, self._folder = {}, [], str(Path.home())
+        self._opts, self._compat = {}, {}                    # Steam's: each game's Launch Options, and its Proton
         if demo:
             self._demo_fill()
             return
@@ -661,6 +906,9 @@ class Games(QObject):
         self._heroic = [{"id": f"{k}:d{i}", "appid": f"d{i}", "kind": k, "name": n, "folder": "", "size": int(s), "last": int(now - d * 86400), "minutes": m, "ready": True, "cover": "", "hero": ""}
                         for i, (k, n, m, d, s) in enumerate([("epic", "Cinder Circuit", 1480, 1, 44e9), ("epic", "Marrow Deep", 210, 20, 7e9), ("gog", "Old Kings' Road", 2890, 3, 12e9),
                                                              ("gog", "Tinker's Almanac", 35, 60, 600e6), ("amazon", "Saltwind", 120, 8, 5e9)])]
+        self._profiles = {"1000": {"fps": "60", "fsr": True, "gamemode": True}, "1001": {"fps": "120", "proton": "GE-Proton10-25"}}
+        self._opts = {"1000": f"{steam_side(False) / 'huginn-game'} %command%"}
+        self._compat = {"1001": "proton_experimental"}
         self._hhomes = [Path("/demo")]
         self._roots = [Path("/demo")]
         self._picked = "own1"
@@ -701,13 +949,14 @@ class Games(QObject):
                     if g["id"] not in seen:
                         seen.add(g["id"])
                         heroic.append(g)
-            return roots, have, games, accounts, find_protons(roots), heroic, homes
+            opts, compat = (launch_options(roots[0]), compat_tools(roots[0])) if roots else ({}, {})
+            return roots, have, games, accounts, find_protons(roots), heroic, homes, opts, compat
 
         def done(result):
             if isinstance(result, Exception):
                 self.said.emit(f"Couldn't read the launchers' files: {result}", True)
                 return
-            self._roots, self._have, self._steam, self._accounts, self._protons, self._heroic, self._hhomes = result
+            self._roots, self._have, self._steam, self._accounts, self._protons, self._heroic, self._hhomes, self._opts, self._compat = result
             if not self._find(self._picked):
                 self._picked = ""
             self.changed.emit()
@@ -757,8 +1006,124 @@ class Games(QObject):
         face.update(profile)
         face["dllList"] = [{"name": k, "how": v} for k, v in sorted((profile.get("dlls") or {}).items())]
         face["line"] = steam_launch_options(profile, self._have, self._steam_flatpak()) if face["kind"] == "steam" else ""
+        if face["kind"] == "steam":
+            face.update(self._steam_state(g))
         face["prefix"] = "" if face["kind"] != "own" else str(g.get("prefix") or DATA_HOME / "games" / "bottles" / g["id"])
         return face
+
+    # ---- Steam games: Huginn's settings through Launch Options (set up once) and Proton
+    def _custom(self, appid: str) -> bool:
+        stored = self._profiles.get(appid, {})
+        return any(k != "proton" and stored.get(k, DEFAULTS[k]) != DEFAULTS[k] for k in DEFAULTS)
+
+    def _steam_state(self, g: dict) -> dict:
+        appid, stored = g["appid"], self._profiles.get(g["appid"], {})
+        now = self._compat.get(appid, "")
+        want = stored["proton"] if "proton" in stored else now
+        hooked = "huginn-game" in self._opts.get(appid, "")
+        return {"proton": want, "protonNow": now, "hooked": hooked,
+                "needsHook": self._custom(appid) and not hooked, "needsProton": "proton" in stored and stored["proton"] != now}
+
+    def _pending(self) -> tuple:
+        hooks = [g["appid"] for g in self._steam if self._custom(g["appid"]) and "huginn-game" not in self._opts.get(g["appid"], "")]
+        protons = {g["appid"]: self._profiles[g["appid"]]["proton"] for g in self._steam
+                   if "proton" in self._profiles.get(g["appid"], {}) and self._profiles[g["appid"]]["proton"] != self._compat.get(g["appid"], "")}
+        return hooks, protons
+
+    def _screen(self) -> tuple:
+        from PySide6.QtGui import QGuiApplication
+        scr = QGuiApplication.primaryScreen() if QGuiApplication.instance() else None
+        if not scr:
+            return None
+        ratio = scr.devicePixelRatio() or 1
+        return (round(scr.size().width() * ratio), round(scr.size().height() * ratio))
+
+    def _write_side(self, g: dict) -> Path:
+        """This Steam game's settings for huginn-game (written any time; Steam reads them when the game starts)."""
+        flat = self._steam_flatpak()
+        script = steam_game_script(self._profile(g), self._have, flat, self._screen())
+        return write_steam_side(steam_side(flat), g["appid"], script)
+
+    def _apply_steam(self, quiet: bool = False) -> None:
+        """What's waiting for Steam to be closed: Huginn's line in Launch Options, and Protons. Asks only if Steam
+        is open (it would put its own copy back when it closes)."""
+        if self._demo or not self._roots:
+            return
+        hooks, protons = self._pending()
+        if not hooks and not protons:
+            return
+        if steam_running():
+            self.changed.emit()                                   # the profile shows "Close Steam to set this up"
+            return
+        root, wrapper = self._roots[0], str(steam_side(self._steam_flatpak()) / "huginn-game")
+
+        def work():
+            for g in self._steam:
+                if g["appid"] in hooks:
+                    write_steam_side(steam_side(self._steam_flatpak()), g["appid"],
+                                     steam_game_script(self._profile(g), self._have, self._steam_flatpak(), screen))
+            hook_games(root, hooks, wrapper)
+            if protons:
+                set_compat_tools(root, protons)
+            return launch_options(root), compat_tools(root)
+        screen = self._screen()
+
+        def done(result):
+            if isinstance(result, Exception):
+                self.said.emit(f"Couldn't set this up in Steam: {result}", True)
+                return
+            self._opts, self._compat = result
+            if not quiet:
+                self.said.emit("Set up in Steam. These settings apply each time it starts.", False)
+            self.changed.emit()
+        self.bg(work, done)
+
+    @Slot()
+    def setUpInSteam(self) -> None:
+        """Close Steam, write what's waiting, and start Steam again (in the background, as it was)."""
+        if self._demo or not self._roots or self._busy:
+            return
+        cmd = self._steam_cmd()
+        hooks, protons = self._pending()
+        if not cmd or (not hooks and not protons):
+            return
+        self._busy = "steam-setup"
+        self.changed.emit()
+        root, flat = self._roots[0], self._steam_flatpak()
+        wrapper, screen = str(steam_side(flat) / "huginn-game"), self._screen()
+        games = [g for g in self._steam if g["appid"] in hooks]
+        profiles = {g["appid"]: self._profile(g) for g in games}
+
+        def work():
+            was = steam_running()
+            if was:
+                subprocess.run(cmd + ["-shutdown"], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=20)
+                for _ in range(60):
+                    if not steam_running():
+                        break
+                    time.sleep(0.5)
+                else:
+                    raise RuntimeError("Steam didn't close. Close it yourself and try again.")
+                time.sleep(1)                                        # (it writes its files on the way out)
+            for g in games:
+                write_steam_side(steam_side(flat), g["appid"], steam_game_script(profiles[g["appid"]], self._have, flat, screen))
+            hook_games(root, hooks, wrapper)
+            if protons:
+                set_compat_tools(root, protons)
+            return was, launch_options(root), compat_tools(root)
+
+        def done(result):
+            self._busy = ""
+            if isinstance(result, Exception):
+                self.said.emit(str(result) if isinstance(result, RuntimeError) else f"Couldn't set this up in Steam: {result}", True)
+                self.changed.emit()
+                return
+            was, self._opts, self._compat = result
+            if was:
+                self._steam_do("-silent")
+            self.said.emit("Set up in Steam. " + ("It's starting again. " if was else "") + "These settings apply each time the game starts.", False)
+            self.changed.emit()
+        self.bg(work, done)
 
     def _steam_flatpak(self) -> bool:
         """Steam is Flathub's (its folder is in ~/.var/app), and the system has no Steam of its own."""
@@ -899,8 +1264,11 @@ class Games(QObject):
             self.said.emit("Game Mode couldn't be started from here.", True)
     tools = Property("QVariantMap", lambda self: {"mangohud": bool(self._have.get("mangohud")), "gamemode": bool(self._have.get("gamemoderun")), "wine": bool(self._have.get("wine")),
                                                   "proton": len(self._protons), "umu": bool(self._have.get("umu-run")),
-                                                  "steamFlatpak": self._steam_flatpak()}, notify=changed)
+                                                  "gamescope": bool(self._have.get("gamescope")), "steamFlatpak": self._steam_flatpak()}, notify=changed)
     syncs = Property("QVariantList", lambda self: [{"id": k, "name": v} for k, v in SYNC.items()], constant=True)
+    fpsCaps = Property("QVariantList", lambda self: [{"id": k, "name": v} for k, v in FPS_CAPS], constant=True)
+    steamTools = Property("QVariantList", lambda self: self._get_steamTools(), notify=changed)
+    steamOpen = Property(bool, lambda self: not self._demo and steam_running(), notify=changed)
     langs = Property("QVariantList", lambda self: [{"id": k, "name": v} for k, v in LANGS], constant=True)
     listing = Property("QVariantList", lambda self: self._listing, notify=changed)
     folder = Property(str, lambda self: self._folder, notify=changed)
@@ -1001,17 +1369,49 @@ class Games(QObject):
         g = self._find(ident)
         if not g or key not in DEFAULTS or key == "dlls" or g.get("kind") in SHOPS:
             return
+        if key == "proton" and g.get("kind") != "steam":
+            return
         if isinstance(DEFAULTS[key], bool):
             value = bool(value)
         else:
             value = str(value)[:4000]
-            if key == "sync" and value not in SYNC or key == "lang" and value not in dict(LANGS):
+            if key == "sync" and value not in SYNC or key == "lang" and value not in dict(LANGS) or key == "fps" and value not in dict(FPS_CAPS):
                 return
             if key == "runner" and value not in [r["id"] for r in self._get_runners()]:
                 return
+            if key == "proton" and value not in [t["id"] for t in self._get_steamTools()]:
+                return
         self._store(g)[key] = value
         self._keep()
+        self._changed_steam(g)
         self.changed.emit()
+
+    def _changed_steam(self, g: dict) -> None:
+        """A Steam game's settings changed: its huginn-game settings now; Steam's own files when Steam is closed."""
+        if g.get("kind") != "steam" or self._demo:
+            return
+        try:
+            self._write_side(g)
+        except OSError as err:
+            self.said.emit(f"Couldn't save the game's settings for Steam: {err.strerror or err}", True)
+            return
+        self._apply_steam()
+
+    def _get_steamTools(self) -> list:
+        """The Protons a Steam game can be set to: Steam's own choice, then each one on this computer."""
+        out, seen = [{"id": "", "name": "Steam's choice"}], {""}
+        for p in self._protons:
+            if self._demo:
+                name = p["name"].replace(" ", "_").lower()
+            else:
+                cache = self.__dict__.setdefault("_tool_names", {})
+                name = cache.get(p["path"]) or cache.setdefault(p["path"], steam_tool_name(Path(p["path"])))
+            if name not in seen:
+                seen.add(name)
+                out.append({"id": name, "name": p["name"]})
+        if self._demo:
+            out.append({"id": "GE-Proton10-25", "name": "GE-Proton10-25"})
+        return out
 
     def _store(self, g: dict) -> dict:
         return self._profiles.setdefault(g["appid"], {}) if g.get("kind") == "steam" else g
@@ -1035,6 +1435,7 @@ class Games(QObject):
             dlls.pop(name, None)
         store["dlls"] = dlls
         self._keep()
+        self._changed_steam(g)
         self.changed.emit()
 
     # ---- playing
@@ -1058,7 +1459,7 @@ class Games(QObject):
             self.said.emit("The game's file isn't there any more. Was it moved, or on a drive that isn't plugged in?", True)
             return
         try:
-            plan = build_launch(g, self._protons, self._have, str(self._roots[0]) if self._roots else "")
+            plan = build_launch(g, self._protons, self._have, str(self._roots[0]) if self._roots else "", self._screen())
             if plan["prefix"]:
                 os.makedirs(plan["prefix"], exist_ok=True)
             logs = DATA_HOME / "games" / "logs"

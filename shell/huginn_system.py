@@ -93,6 +93,30 @@ def _js(text: str) -> str:
 
 
 
+
+def app_streams(text: str) -> list:
+    """pactl's sink inputs (JSON) as the control centre lists them: one per stream that has a volume, not the
+    desktop's own clicks; its app (name and program), what it says it's playing, volume (%) and mute."""
+    try:
+        items = json.loads(text or "[]")
+    except ValueError:
+        return []
+    out = []
+    for s in items if isinstance(items, list) else []:
+        props = s.get("properties") or {}
+        if props.get("media.role") == "event" or not s.get("has_volume", True) or props.get("application.id") == "org.huginn.sounds":
+            continue
+        vols = [v.get("value_percent", "0%") for v in (s.get("volume") or {}).values() if isinstance(v, dict)]
+        try:
+            vol = round(sum(int(str(v).rstrip("%")) for v in vols) / len(vols)) if vols else 100
+        except ValueError:
+            vol = 100
+        out.append({"index": int(s.get("index", -1)),
+                    "app": props.get("application.name") or props.get("application.process.binary") or "Something",
+                    "binary": props.get("application.process.binary", ""), "icon": props.get("application.icon_name", ""),
+                    "what": props.get("media.name", ""), "volume": vol, "mute": bool(s.get("mute"))})
+    return out
+
 def _ptr(obj) -> int:
     """The C++ object behind a Qt wrapper (two wrappers of one window compare equal by it); 0 for none."""
     if obj is None:
@@ -123,6 +147,7 @@ class System(QObject):
         self._network = {"wifiDevice": False, "wifiOn": False, "kind": "none", "name": "", "signal": 0}
         self._bt = {"present": False, "on": False}
         self._levels = {"brightness": -1.0, "volume": 0.0, "muted": False}
+        self._app_volumes_read.connect(self._app_volumes_got)          # (read off the window's thread, kept on it)
         self._dnd = False
         self._night = {"available": False, "on": False}
         self._notes = []
@@ -789,6 +814,57 @@ for (var i = 0; i < all.length; i++) {{ var win = all[i]; if (String(win.interna
         self.changed.emit()
         if not self._demo:
             self._session("SetMuted", GLib.Variant("(b)", (muted,)))
+
+    # ---------------------------------------------------------------- each app's own volume (the control centre)
+    appVolumesChanged = Signal()
+    appVolumes = Property("QVariantList", lambda self: getattr(self, "_app_volumes", []), notify=appVolumesChanged)
+
+    @Slot()
+    def loadAppVolumes(self) -> None:
+        """What's playing sound now, each with its volume (PipeWire's streams, through pactl): read off the window's
+        thread; the control centre asks every second or two while it's open."""
+        if self._demo:
+            self._app_volumes = [{"index": 41, "app": "Music", "binary": "huginn-music", "icon": "", "what": "Northbound", "volume": 82, "mute": False},
+                                 {"index": 57, "app": "Discord", "binary": "Discord", "icon": "discord", "what": "Voice", "volume": 64, "mute": False},
+                                 {"index": 63, "app": "Steam", "binary": "steamwebhelper", "icon": "steam", "what": "Game audio", "volume": 100, "mute": True}]
+            self.appVolumesChanged.emit()
+            return
+        if not shutil.which("pactl") or getattr(self, "_app_volumes_busy", False):
+            return
+        self._app_volumes_busy = True
+
+        def read():
+            try:
+                out = subprocess.run(["pactl", "-f", "json", "list", "sink-inputs"], capture_output=True, text=True, timeout=3).stdout
+            except (OSError, subprocess.TimeoutExpired):
+                out = ""
+            self._app_volumes_busy = False
+            self._app_volumes_read.emit(app_streams(out))
+        threading.Thread(target=read, daemon=True).start()
+
+    _app_volumes_read = Signal(list)
+
+    def _app_volumes_got(self, items: list) -> None:
+        if items != getattr(self, "_app_volumes", []):
+            self._app_volumes = items
+            self.appVolumesChanged.emit()
+
+    @Slot(int, int)
+    def setAppVolume(self, index: int, percent: int) -> None:
+        percent = max(0, min(150, percent))
+        self._app_volumes = [dict(a, volume=percent, mute=False) if a["index"] == index else a for a in getattr(self, "_app_volumes", [])]
+        self.appVolumesChanged.emit()
+        if not self._demo and shutil.which("pactl"):
+            threading.Thread(target=lambda: subprocess.run(["pactl", "set-sink-input-volume", str(index), f"{percent}%"], capture_output=True, timeout=3)
+                             and subprocess.run(["pactl", "set-sink-input-mute", str(index), "0"], capture_output=True, timeout=3), daemon=True).start()
+
+    @Slot(int, bool)
+    def setAppMuted(self, index: int, mute: bool) -> None:
+        self._app_volumes = [dict(a, mute=mute) if a["index"] == index else a for a in getattr(self, "_app_volumes", [])]
+        self.appVolumesChanged.emit()
+        if not self._demo and shutil.which("pactl"):
+            threading.Thread(target=lambda: subprocess.run(["pactl", "set-sink-input-mute", str(index), "1" if mute else "0"], capture_output=True, timeout=3),
+                             daemon=True).start()
 
     @Slot(result=bool)
     def micMuted(self) -> bool:

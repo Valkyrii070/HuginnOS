@@ -78,6 +78,19 @@ Glass {
                 onPositionChanged: function (m) { if (pressed) to(m) } onPressed: function (m) { to(m) } }
         }
     }
+    // each app playing sound, with its own volume (under Sound): read every second and a half while this is open
+    property bool appsOpen: false
+    readonly property var appLevels: Status.appVolumes || []
+    function appOf(v) {
+        var a = Apps.all || [], want = [(v.app || "").toLowerCase(), (v.binary || "").toLowerCase(), (v.icon || "").toLowerCase()]
+        for (var i = 0; i < a.length; i++) {
+            var names = [(a[i].name || "").toLowerCase(), (a[i].id || "").toLowerCase(), (a[i].wm || "").toLowerCase()]
+            for (var k = 0; k < want.length; k++) if (want[k] && names.indexOf(want[k]) >= 0) return a[i]
+        }
+        return null
+    }
+    Timer { interval: 1500; repeat: true; triggeredOnStart: true; running: cc.visible && cc.opacity > 0.5; onTriggered: Status.loadAppVolumes() }
+    onAppLevelsChanged: if (appLevels.length === 0) appsOpen = false
     readonly property var net: Status.network
     readonly property var levels: Status.levels
     // what's running in the background: apps with a tray icon (Steam, Discord: their icon, their own menu), then apps
@@ -225,7 +238,42 @@ Glass {
                         onMoved: function (v) { Status.setBrightness(Math.max(0.02, v)) } }
                     Slider { title: cc.levels.muted ? "Sound · muted" : "Sound"; glyph: cc.levels.muted ? "volumeoff" : cc.levels.volume < 0.4 ? "volumelow" : "volumehigh"
                         value: cc.levels.muted ? 0 : cc.levels.volume
-                        onMoved: function (v) { Status.setVolume(v) } onGlyphClicked: Status.setMuted(!cc.levels.muted) } } }
+                        onMoved: function (v) { Status.setVolume(v) } onGlyphClicked: Status.setMuted(!cc.levels.muted) }
+                    // the apps playing sound: one line saying how many, which opens each with its own level
+                    Rectangle { visible: cc.appLevels.length > 0; width: parent.width; height: 30; radius: 10
+                        color: appsHit.containsMouse ? Theme.t.hover : "transparent"
+                        Label { x: 4; anchors.verticalCenter: parent.verticalCenter; font.pixelSize: 12; secondary: true
+                                text: cc.appLevels.length === 1 ? (cc.appLevels[0].app + " is playing sound") : (cc.appLevels.length + " apps playing sound") }
+                        Glyph { anchors { right: parent.right; rightMargin: 6; verticalCenter: parent.verticalCenter } name: "down"; size: 12
+                                rotation: cc.appsOpen ? 180 : 0; Behavior on rotation { NumberAnimation { duration: 150 } } }
+                        MouseArea { id: appsHit; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor; onClicked: cc.appsOpen = !cc.appsOpen } }
+                    Column { visible: cc.appsOpen && cc.appLevels.length > 0; width: parent.width; spacing: 4
+                        Repeater { model: cc.appsOpen ? cc.appLevels : []
+                            Item { id: lv; required property var modelData; width: parent.width; height: 44
+                                readonly property var app: cc.appOf(modelData)
+                                readonly property real level: modelData.mute ? 0 : Math.min(1, modelData.volume / 100)
+                                Item { x: 2; width: 28; height: 28; anchors.verticalCenter: parent.verticalCenter
+                                    AppIcon { visible: !!lv.app; size: 28; name: lv.app ? lv.app.name : ""; glyph: lv.app ? lv.app.glyph || "" : ""
+                                              image: lv.app ? lv.app.image || "" : ""; own: lv.app ? lv.app.own || "" : "" }
+                                    Image { id: lvPic; visible: !lv.app && status === Image.Ready; anchors.fill: parent; sourceSize: Qt.size(56, 56); asynchronous: true
+                                            source: !lv.app && lv.modelData.icon ? "image://sysicon/" + lv.modelData.icon : "" }
+                                    Rectangle { visible: !lv.app && lvPic.status !== Image.Ready; anchors.fill: parent; radius: 8; color: Theme.t.group
+                                        Label { anchors.centerIn: parent; text: (lv.modelData.app || "?").charAt(0).toUpperCase(); font.pixelSize: 12; font.weight: Font.DemiBold } }
+                                    Rectangle {   // muted: a slash over its picture; a click on the picture mutes or unmutes it
+                                        visible: lv.modelData.mute; anchors.fill: parent; radius: 8; color: Qt.rgba(0, 0, 0, 0.45)
+                                        Glyph { anchors.centerIn: parent; name: "volumeoff"; size: 14; ink: "#FFFFFF" } }
+                                    MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: Status.setAppMuted(lv.modelData.index, !lv.modelData.mute) } }
+                                Label { x: 40; y: 3; width: parent.width - 40 - 44; elide: Text.ElideRight; font.pixelSize: 12; font.weight: Font.DemiBold
+                                        text: lv.app ? lv.app.name : lv.modelData.app }
+                                Label { anchors { right: parent.right; rightMargin: 2 } y: 3; font.pixelSize: 11; secondary: true
+                                        text: lv.modelData.mute ? "Muted" : lv.modelData.volume + "%" }
+                                Rectangle { id: lvTrack; x: 40; y: 24; width: parent.width - 42; height: 14; radius: 7; color: Theme.t.dark ? "#2EFFFFFF" : "#24141E28"
+                                    Rectangle { width: Math.max(14, parent.width * lv.level); height: parent.height; radius: 7
+                                                color: lv.modelData.mute ? Theme.t.line : (Theme.t.dark ? "#F2FFFFFF" : "#FFFFFF")
+                                                border.width: Theme.t.dark ? 0 : 1; border.color: Theme.t.line }
+                                    MouseArea { anchors.fill: parent; anchors.margins: -6; cursorShape: Qt.PointingHandCursor
+                                        function to(m) { Status.setAppVolume(lv.modelData.index, Math.round(100 * Math.max(0, Math.min(1, (m.x - 6) / lvTrack.width)))) }
+                                        onPositionChanged: function (m) { if (pressed) to(m) } onPressed: function (m) { to(m) } } } } } } } }
 
             // what's playing
             Block { visible: cc.playing !== null; width: parent.width; height: 68

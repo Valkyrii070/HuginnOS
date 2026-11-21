@@ -40,7 +40,15 @@ GlassWindow {
     }
     function go(step) { if (ids.length) { var at = (reel.currentIndex + step + ids.length) % ids.length; Backend.choose(ids[at]) } }
     Connections { target: Backend; function onSaid(msg, wrong) { toast.say(msg, wrong) } function onChanged() { win.lineUp() } }
-    Component.onCompleted: lineUp()
+    Component.onCompleted: {
+        lineUp()
+        // previews: "profile" opens the profile of the game picked, "profile:<id>" of that one
+        if (typeof startPage !== "undefined" && startPage.indexOf("profile") === 0) {
+            var id = startPage.indexOf(":") > 0 ? startPage.slice(startPage.indexOf(":") + 1) : ""
+            if (id) Backend.choose(id)
+            profile = true
+        }
+    }
     DropArea { anchors.fill: parent; onDropped: function (drop) { if (drop.hasUrls) for (var i = 0; i < drop.urls.length; i++) Backend.addGame(drop.urls[i]) } }
     Item { id: keys; focus: true; Keys.onLeftPressed: win.go(-1); Keys.onRightPressed: win.go(1); Keys.onReturnPressed: if (win.cur.id && win.sheet === "" && !win.cur.running) Backend.play(win.cur.id) }
 
@@ -302,10 +310,12 @@ GlassWindow {
             Label { y: 6; width: parent.width - slot.width - 12; elide: Text.ElideRight; text: parent.title; font.weight: Font.Medium }
             Label { id: hintLabel; visible: parent.hint !== ""; y: 25; width: parent.width - slot.width - 16; wrapMode: Text.WordWrap; text: parent.hint; secondary: true; font.pixelSize: 11 }
             Item { id: slot; anchors { right: parent.right; top: parent.top; topMargin: 4 } width: childrenRect.width; height: 30 } }
+        // a choice opens its list over the profile (two options just swap)
+        property Item menuFor: null
         component Choice: Pressable { id: ch; property var options: []; property string value: ""; signal picked(string id)
             readonly property int at: { for (var i = 0; i < options.length; i++) if (options[i].id === value) return i; return 0 }
             width: Math.min(190, chLabel.implicitWidth + 40); height: 30; radius: 10; color: hovered ? Theme.t.hover : Theme.t.group; border.width: 1; border.color: Theme.t.islandLine
-            onClicked: if (options.length) picked(options[(at + 1) % options.length].id)
+            onClicked: { if (options.length === 2) picked(options[(at + 1) % 2].id); else if (options.length) pane.menuFor = ch }
             Label { id: chLabel; x: 12; width: parent.width - 34; height: parent.height; verticalAlignment: Text.AlignVCenter; elide: Text.ElideRight; text: ch.options.length ? ch.options[ch.at].name : ""; font.pixelSize: 12 }
             Glyph { anchors { right: parent.right; rightMargin: 9; verticalCenter: parent.verticalCenter } name: "down"; size: 12; ink: Theme.t.text_secondary } }
         Pressable { anchors { right: parent.right; top: parent.top; margins: 12 } z: 2; width: 28; height: 28; radius: 14; onClicked: win.profile = false; Glyph { anchors.centerIn: parent; name: "x"; size: 13 } }
@@ -321,7 +331,7 @@ GlassWindow {
                 Rectangle { visible: !pane.mine; width: parent.width; height: steamNote.height + 20; radius: 12; color: win.pick
                     Label { id: steamNote; x: 12; y: 10; width: parent.width - 24; wrapMode: Text.WordWrap; font.pixelSize: 11
                         text: pane.heroic ? "Heroic starts this " + (pane.g.shop || "") + " game and keeps its settings: which Wine or Proton, the overlay, arguments, cloud saves. Change them in Heroic; Games shows it and plays it."
-                                          : "Steam starts this game, with its own Proton. Set the switches below, then copy the line they make into the game's Launch Options in Steam." } }
+                                          : "Steam starts this game. Huginn hands it these settings through the game's Launch Options in Steam, so they apply every time, even when you start it from Steam." } }
                 Btn { visible: pane.heroic; text: "Open Heroic"; onClicked: Backend.openHeroic() }
                 Column { visible: !pane.heroic; width: parent.width; spacing: 6
 
@@ -329,6 +339,10 @@ GlassWindow {
                 Label { visible: pane.mine; text: "COMPATIBILITY"; secondary: true; font.pixelSize: 10; font.weight: Font.Bold; font.letterSpacing: 1.4 }
                 Line { visible: pane.mine; title: "Runs with"; hint: pane.g.canRun === false ? "Needs Steam (for Proton) or Wine" : "Now: " + (pane.g.runnerName || "")
                     Choice { objectName: "runner"; options: Backend.runners; value: pane.g.runner || "auto"; onPicked: function (id) { Backend.setOption(pane.g.id, "runner", id) } } }
+                Label { visible: pane.g.kind === "steam"; text: "COMPATIBILITY"; secondary: true; font.pixelSize: 10; font.weight: Font.Bold; font.letterSpacing: 1.4 }
+                Line { visible: pane.g.kind === "steam"; title: "Proton"; objectName: "protonLine"
+                    hint: pane.g.needsProton ? "Changes when Steam closes" : "For a Windows game. Steam's choice is usually its newest"
+                    Choice { objectName: "proton"; options: Backend.steamTools; value: pane.g.proton || ""; onPicked: function (id) { Backend.setOption(pane.g.id, "proton", id) } } }
                 Line { title: "Lock waiting (sync)"; hint: "How Windows' way of waiting is imitated. Change it only if a game stutters or hangs."
                     Choice { objectName: "sync"; options: Backend.syncs; value: pane.g.sync || ""; onPicked: function (id) { Backend.setOption(pane.g.id, "sync", id) } } }
                 Line { title: "Game's language"; hint: "For games that pick their language from the computer's"
@@ -338,6 +352,14 @@ GlassWindow {
 
                 Item { width: 1; height: 6 }
                 Label { text: "PERFORMANCE"; secondary: true; font.pixelSize: 10; font.weight: Font.Bold; font.letterSpacing: 1.4 }
+                Line { title: "Frame-rate cap"; objectName: "fpsLine"
+                    hint: !pane.g.fps ? "As fast as it goes. A cap keeps the card cooler and quieter, and frames even"
+                        : pane.mine && !pane.g.windows && !Backend.tools.mangohud ? "Needs MangoHud for a Linux game" : "At most " + pane.g.fps + " frames a second"
+                    Choice { objectName: "fps"; options: Backend.fpsCaps; value: pane.g.fps || ""; onPicked: function (id) { Backend.setOption(pane.g.id, "fps", id) } } }
+                Line { title: "FSR upscaling"; objectName: "fsrLine"
+                    hint: pane.mine && !pane.g.windows ? (Backend.tools.gamescope ? "Draws it at two thirds of the screen's size and sharpens it up: more frames" : "Needs gamescope for a Linux game")
+                        : "Set the game to a lower resolution than the screen; it's sharpened up to fill it (GE-Proton)"
+                    Toggle { objectName: "fsr"; on: !!pane.g.fsr; onToggled: function (v) { Backend.setOption(pane.g.id, "fsr", v) } } }
                 Line { title: "Performance overlay"; opacity: Backend.tools.mangohud || pane.flatSteam ? 1 : 0.5
                     hint: pane.flatSteam ? "Frames per second and temperatures over the game (MangoHud, inside Steam's sandbox)"
                         : Backend.tools.mangohud ? "Frames per second and temperatures over the game (MangoHud)" : "MangoHud isn't installed"
@@ -372,17 +394,40 @@ GlassWindow {
                     Btn { y: 3; text: "Add"; onClicked: { Backend.setDll(pane.g.id, dllBox.text, "native"); dllBox.text = "" } } }
 
                 Item { width: 1; height: 6 }
-                Rectangle { visible: pane.g.kind === "steam"; width: parent.width; height: lineCol.height + 22; radius: 12; color: Theme.t.group
+                // in Steam: set up (Huginn's line is in its Launch Options), or waiting for Steam to close once
+                Rectangle { visible: pane.g.kind === "steam"; objectName: "steamSetup"; width: parent.width; height: lineCol.height + 22; radius: 12
+                    color: pane.g.needsHook || pane.g.needsProton ? Qt.alpha(Theme.t.accent, 0.12) : Theme.t.group
                     Column { id: lineCol; x: 12; y: 11; width: parent.width - 24; spacing: 8
-                        Label { text: "Launch Options line"; font.weight: Font.Medium }
-                        Label { objectName: "line"; width: parent.width; wrapMode: Text.WrapAnywhere; font.family: Theme.t.fontMono; font.pixelSize: 11; text: pane.g.line || "Nothing to add: the switches above are all at their usual setting."; opacity: pane.g.line ? 1 : 0.6 }
+                        Label { text: pane.g.needsHook || pane.g.needsProton ? "Waiting for Steam" : pane.g.hooked ? "Set up in Steam" : "In Steam"; font.weight: Font.Medium }
+                        Label { objectName: "line"; width: parent.width; wrapMode: Text.WordWrap; font.pixelSize: 11; secondary: true
+                            text: pane.g.needsHook || pane.g.needsProton
+                                  ? (Backend.busy === "steam-setup" ? "Closing Steam and setting this up…"
+                                     : "Steam is open, and would put back its own copy of this game's settings when it closes. Close it once to set this up; it starts again by itself.")
+                                  : pane.g.hooked ? "Its Launch Options start it through Huginn, so the settings above apply each time it starts, from here or from Steam."
+                                  : "Nothing to hand Steam: everything above is at its usual setting." }
                         Row { spacing: 6
-                            Btn { primary: true; text: "Copy"; opacity: pane.g.line ? 1 : 0.5; onClicked: Backend.copyLine(pane.g.id) }
+                            Btn { primary: true; visible: !!(pane.g.needsHook || pane.g.needsProton); text: "Close Steam and Set Up"; opacity: Backend.busy ? 0.5 : 1
+                                  onClicked: if (!Backend.busy) Backend.setUpInSteam() }
                             Btn { text: "Open in Steam"; onClicked: Backend.steamProperties(pane.g.id) } } } }
                 }
                 Label { visible: pane.mine && !!pane.g.windows; width: parent.width; wrapMode: Text.WrapAnywhere; secondary: true; font.pixelSize: 11; text: "Its Windows bottle (saves and settings): " + (pane.g.prefix || "") }
                 Btn { visible: pane.mine; danger: true; text: "Take Off the Shelf"; onClicked: { Backend.removeGame(pane.g.id); win.profile = false } }
                 Label { visible: pane.mine; width: parent.width; wrapMode: Text.WordWrap; secondary: true; font.pixelSize: 11; text: "Only removes it from this list. The game's files and saves stay." }
-                Item { width: 1; height: 10 } } } }
+                Item { width: 1; height: 10 } } }
+        MouseArea { visible: pane.menuFor !== null; anchors.fill: parent; z: 9; onClicked: pane.menuFor = null }
+        Rectangle { id: choiceMenu; visible: pane.menuFor !== null; z: 10; radius: 12; color: Theme.t.popup; border.width: 1; border.color: Theme.t.islandLine
+            readonly property var at: pane.menuFor ? pane.menuFor.mapToItem(pane, 0, 0) : Qt.point(0, 0)
+            width: Math.max(160, pane.menuFor ? pane.menuFor.width : 0)
+            height: Math.min(pane.height - 24, menuCol.height + 8)
+            x: Math.min(pane.width - width - 10, at.x + (pane.menuFor ? pane.menuFor.width : 0) - width)
+            y: Math.max(10, Math.min(pane.height - height - 10, at.y + 34))
+            Flickable { anchors { fill: parent; margins: 4 } contentHeight: menuCol.height; clip: true; boundsBehavior: Flickable.StopAtBounds
+                Column { id: menuCol; width: parent.width
+                    Repeater { model: pane.menuFor ? pane.menuFor.options : []
+                        Pressable { required property var modelData; required property int index; width: menuCol.width; height: 30; radius: 8
+                            color: hovered ? Theme.t.hover : "transparent"
+                            onClicked: { var c = pane.menuFor; pane.menuFor = null; if (c) c.picked(modelData.id) }
+                            Glyph { visible: pane.menuFor && pane.menuFor.at === index; x: 8; anchors.verticalCenter: parent.verticalCenter; name: "check"; size: 12; ink: Theme.t.accent }
+                            Label { x: 26; width: parent.width - 34; height: parent.height; verticalAlignment: Text.AlignVCenter; elide: Text.ElideRight; text: modelData.name; font.pixelSize: 12 } } } } } } }
 }
 
