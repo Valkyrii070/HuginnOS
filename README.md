@@ -2258,9 +2258,9 @@ From the testing on the PC and its problem report:
 - **The dock's pop-ups** (an app's windows, the live island, names, the browser's tabs) sit above the dock again, not
   past the bottom of the screen; the part of their surface over the dock lets clicks through to it.
 - **Japanese, Chinese and Korean text** showed as boxes: Noto CJK is in the image.
-- **Pointers left on the screen** (copies beside the control centre on one screen): not seen here, with the pointer
-  drawn by the compositor in a window (`HUGINN_SOFT_POINTER=1`, for testing) over a moving wallpaper. One fault near it
-  was found and fixed: the HDR pass turned a line beside each damaged part a second time every frame.
+- **The pointer copies in a photo** of the control centre were the camera catching the pointer as it moved, not the
+  screen. Looking for them turned up one real fault nearby, fixed: the HDR pass turned a line beside each damaged part
+  a second time every frame. (`HUGINN_SOFT_POINTER=1` makes the nested session draw the pointer itself, for testing.)
 
 ## Huginn, the browser
 
