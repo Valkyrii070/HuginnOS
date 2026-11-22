@@ -260,8 +260,13 @@ its job needs it.
   follows the desktop's light or dark, and until a realm is picked in the browser it wears the desktop's; both change
   as you change them in Settings (it reads `~/.config/huginn-shell/settings.json`). Its own menus (File, Edit, View,
   History, Bookmarks, Window, Help) are in the top bar's menu under its name, answered the way these apps answer
-  (`org.huginn.App.p<pid>`). The browser's pull requests #4 and #6. Checked in the nested session, dark and light,
-  two realms, and a command picked from the bar; not on real hardware.
+  (`org.huginn.App.p<pid>`). Its toolbar groups are the islands' size (40 tall, 12 from the edge). Pages are told
+  light or dark as the window is: Qt's plain Linux theme never asks the portal at the start (it only hears changes),
+  so the browser starts Qt with its portal-aware theme here. Other Qt programs on this desktop still start "light"
+  to their pages until the setting next changes; the session could set that theme for all of them. The browser's
+  pull requests #4 and #6. Checked in the nested session, dark and light, two realms, commands picked from the bar,
+  and a stress run (about 2,300 driven steps, 1,200 random key presses, eight repeated sessions: no errors, memory
+  level); not on real hardware.
 
 ## The third set of apps
 
