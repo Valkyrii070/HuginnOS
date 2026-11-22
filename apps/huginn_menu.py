@@ -203,6 +203,9 @@ NAMES = {"files": "Files"}
 TEXT_APPS = {"writer", "sheets", "slides", "notes", "mail", "code", "documents", "messages", "translate", "terminal"}
 
 
+# A filled app sharing the top bar's row (concept "M8") was tried and turned down: filled apps sit under the bar with
+# their islands where they always are. The pieces are kept (the compositor lifts only apps that ask), switched off.
+SHARE_BAR_ROW = False
 BAR_FILE = Path(os.environ.get("XDG_RUNTIME_DIR") or f"/run/user/{os.getuid()}") / "huginn" / "bar.json"
 
 
@@ -319,7 +322,7 @@ class AppMenu(QObject):
             data = json.loads(BAR_FILE.read_text())
         except (OSError, ValueError):
             data = {}
-        if not isinstance(data, dict) or not os.environ.get("HUGINN_COMPOSITOR"):
+        if not SHARE_BAR_ROW or not isinstance(data, dict) or not os.environ.get("HUGINN_COMPOSITOR"):
             data = {}
         if str(BAR_FILE) not in self._bar_watch.files() and BAR_FILE.exists():
             self._bar_watch.addPath(str(BAR_FILE))

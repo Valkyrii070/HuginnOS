@@ -53,7 +53,7 @@ WHAT_IS_NEW = {
         {"target": "centre", "title": "A looser desktop", "words": "Your Desktop folder's files are on the desktop. Right-click it › Edit Widgets and drag "
          "widgets anywhere. The start menu finds files and settings too, and the Control Centre's tiles are yours to arrange.", "try": "", "done": "", "check": ""},
         {"target": "centre", "title": "The top bar, as islands", "words": "The top bar is now glass islands like the dock, and the live island (music, timers, calls) "
-         "sits in its middle. Fill the screen with an app and its buttons join the bar. Settings › Desktop & Dock › Top bar puts the live island back by the dock, or makes the bar plain.", "try": "", "done": "", "check": ""},
+         "sits in its middle. Settings › Desktop & Dock › Top bar puts the live island back by the dock, or makes the bar plain.", "try": "", "done": "", "check": ""},
     ],
 }
 

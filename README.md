@@ -2503,7 +2503,8 @@ date; the app and its menus; status), and the bar grows from 30 to 40 px (`shell
 `LiveIsland` gained a `slim` form (one line, no buttons, 28 px) that sits in the middle of the main screen's bar;
 `LivePanel` hangs under it (`fromTop`) from a top-anchored surface whose input region is just the panel.
 `Settings.barStyle` ("islands" | "plain") and `Settings.liveAt` ("top" | "dock") choose; with "dock" the island and
-its panel are where they were, at the dock's right end. A filled app shares the bar's row ("M8"): `GlassWindow` apps
+its panel are where they were, at the dock's right end. A filled app sharing the bar's row ("M8") was built, tried and turned down (off: `SHARE_BAR_ROW` in
+`apps/huginn_menu.py`); how it works, should it come back: `GlassWindow` apps
 tell the shell they can (`org.huginn.Shell.Lift`), the shell passes their ids to the compositor (`DockLayout`:
 `liftApps`), and `maximize_request` lets those windows reach up behind the bar. The shell writes where its islands end
 to `$XDG_RUNTIME_DIR/huginn/bar.json`; `AppMenu.bar` watches it and `GlassWindow.lifted/topY/liftLeft/liftRight`
