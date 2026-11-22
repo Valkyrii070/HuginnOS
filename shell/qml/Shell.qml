@@ -452,7 +452,9 @@ QtObject {
     },
     Window {   // dock. Wider than the dock, so the live island can grow and shrink without the surface changing size
         id: dockWin
-        visible: true; width: Math.max(dock.width, dock.restWidth + 780); color: "transparent"
+        visible: true; color: "transparent"
+        // (never wider than the screen: a surface that is gets cut at the right and its middle is no longer the screen's)
+        width: Math.min(dockWin.screen ? dockWin.screen.width : 100000, Math.max(dock.width, dock.restWidth + 780))
         property string placedOn: ""
         LayerShell.Window.screen: shell.dockScreen
         Component.onCompleted: placedOn = shell.dockScreen ? shell.dockScreen.name : ""
@@ -761,7 +763,7 @@ QtObject {
             anchors { horizontalCenter: parent.horizontalCenter; bottom: parent.bottom; bottomMargin: 10 + shell.dockRoom }
             height: Math.min(660, parent.height - 20 - shell.dockRoom)
             // the dock's orb (its window sits just below this one): where the menu grows from
-            orb: Qt.point((launcherWin.width - dock.width) / 2 + 32 - x, launcherWin.height - shell.dockRoom + 32 - y)
+            orb: Qt.point((launcherWin.width - dock.width) / 2 + dock.lead + 32 - x, launcherWin.height - shell.dockRoom + 32 - y)
         }
     },
     Window {   // Search everything: over the whole screen, bar and dock included
@@ -882,7 +884,7 @@ QtObject {
             windowCount: Status.windows.length
             snapped: { var w = shell.frontWindow(); return !!w && w.x <= 24 && w.w < tourWin.width * 0.62 && w.h > tourWin.height * 0.55 }
             target: function (name) {
-                var W = tourWin.width, H = tourWin.height, dx = (W - dock.width) / 2
+                var W = tourWin.width, H = tourWin.height, dx = (W - dock.width) / 2 + dock.lead
                 var isl = dock.tile + 20, top = H - dockWin.full
                 if (name === "dock") return Qt.rect(dx, top, dock.restWidth, isl)
                 if (name === "orb") return Qt.rect(dx, top, isl, isl)

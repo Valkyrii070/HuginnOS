@@ -290,6 +290,11 @@ Row {
         }
     }
 
+    // The dock keeps its middle: with the live island at its right end, the same room is kept at its left, so the
+    // orb and the apps stay centred on the screen and grow evenly both ways.
+    Item { id: leadRoom; height: 1; width: liveIsland.visible ? liveIsland.width : 0; visible: width > 0.5 }
+    readonly property real lead: leadRoom.visible ? leadRoom.width + spacing : 0      // where the orb's island starts
+
     Island {
         id: orbIsland
         width: dock.tile + 20
