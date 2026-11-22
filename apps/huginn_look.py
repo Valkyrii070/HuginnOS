@@ -153,6 +153,11 @@ def apply(realm: str, dark: bool, contrast: bool = False, force: bool = False) -
             _run(["plasma-apply-colorscheme", name])
         else:                                                   # (Plasma's workspace isn't in the image any more)
             _apply_colours(SHARE / "color-schemes" / f"{name}.colors", name)
+            # ...and tell the Qt and KDE apps that are open, as plasma-apply-colorscheme did: without this they kept
+            # the old colours (and told their web pages the old light or dark) until they were started again.
+            for kind in ("0", "2"):                             # the palette; the style
+                _run(["dbus-send", "--session", "--type=signal", "/KGlobalSettings", "org.kde.KGlobalSettings.notifyChange",
+                      f"int32:{kind}", "int32:0"])
     # GTK 3 and 4: Breeze-GTK in Huginn's colours; libadwaita's named colours for GTK 4
     gtk = SHARE / "huginn-os" / "gtk"
     breeze = gtk / f"{name}-breeze.css"

@@ -877,6 +877,22 @@ impl<BackendData: Backend> HuginnState<BackendData> {
             },
         );
         pointer.frame(self);
+        self.settle_pointer(pos, evt.time());
+    }
+
+    /// A menu's grab that has just ended swallows the one motion that tells it so (Smithay puts the pointer back
+    /// where it was and drops the event). With a mouse the next motion follows at once; after a single jump (a
+    /// touchpad tap elsewhere, a tablet, a remote desktop) nothing does, and the press that follows lands where the
+    /// pointer used to be. So when a motion left the pointer somewhere else and nothing holds it, send it once more.
+    fn settle_pointer(&mut self, location: Point<f64, Logical>, time: smithay::backend::input::InputTime) {
+        let pointer = self.pointer.clone();
+        let at = pointer.current_location();
+        if pointer.is_grabbed() || ((at.x - location.x).abs() < 0.01 && (at.y - location.y).abs() < 0.01) {
+            return;
+        }
+        let under = self.surface_under(location);
+        pointer.motion(self, under, &MotionEvent { location, serial: SCOUNTER.next_serial(), time });
+        pointer.frame(self);
     }
 
     pub fn release_all_keys(&mut self) {
@@ -1046,6 +1062,7 @@ impl HuginnState<UdevData> {
             },
         );
         pointer.frame(self);
+        self.settle_pointer(pointer_location, evt.time());
         self.edge_watch(pointer_location);
 
         // If pointer is now in a constraint region, activate it
@@ -1107,6 +1124,7 @@ impl HuginnState<UdevData> {
             },
         );
         pointer.frame(self);
+        self.settle_pointer(pointer_location, evt.time());
         self.edge_watch(pointer_location);
     }
 

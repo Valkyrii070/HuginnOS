@@ -260,13 +260,19 @@ its job needs it.
   follows the desktop's light or dark, and until a realm is picked in the browser it wears the desktop's; both change
   as you change them in Settings (it reads `~/.config/huginn-shell/settings.json`). Its own menus (File, Edit, View,
   History, Bookmarks, Window, Help) are in the top bar's menu under its name, answered the way these apps answer
-  (`org.huginn.App.p<pid>`). Its toolbar groups are the islands' size (40 tall, 12 from the edge). Pages are told
-  light or dark as the window is: Qt's plain Linux theme never asks the portal at the start (it only hears changes),
-  so the browser starts Qt with its portal-aware theme here. Other Qt programs on this desktop still start "light"
-  to their pages until the setting next changes; the session could set that theme for all of them. The browser's
-  pull requests #4 and #6. Checked in the nested session, dark and light, two realms, commands picked from the bar,
-  and a stress run (about 2,300 driven steps, 1,200 random key presses, eight repeated sessions: no errors, memory
-  level); not on real hardware.
+  (`org.huginn.App.p<pid>`). Its toolbar groups are the islands' size (40 tall, 12 from the edge), and its Web
+  Inspector opens in a window of the desktop's kind. The browser's pull requests #4 and #6. Checked in the nested
+  session, dark and light, two realms, commands picked from the bar, and a stress run under the session's own Qt
+  settings (about 1,700 driven steps, 1,200 random key presses, eight repeated sessions: no errors, memory level);
+  not on real hardware.
+- **Light and dark reach the apps that are open.** Changing light, dark or the realm rewrote KDE's colours
+  (`apps/huginn_look.py`) but, since Plasma's own tool left the image, told nobody: Qt and KDE apps kept the old
+  colours, and web pages inside them the old light or dark, until started again. It now sends KDE's own notice
+  (`org.kde.KGlobalSettings.notifyChange`). The browser passes it on to the pages it has open.
+- **A menu closed with Escape no longer eats the next pointer move.** The first motion after a menu's grab ended was
+  dropped (Smithay puts the pointer back and discards the event), so a single jump followed by a press (a tap
+  elsewhere on a touchpad, a tablet, a remote desktop) landed where the pointer used to be. The compositor sends that
+  motion once more (`input_handler.rs`: `settle_pointer`). Checked in the nested session.
 
 ## The third set of apps
 
