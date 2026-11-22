@@ -1,7 +1,9 @@
 import QtQuick
 import QtQuick.Shapes
 
-// Top bar, Googlebook-leaning: no strip, just text and glyphs floating on the wallpaper.
+// Top bar. As islands (Settings › Desktop & Dock › Top bar; the default): the dock's glass cards along the top: the orb
+// and the time, the app in front, what's going on (the live island, in the middle), and status. Plain: Googlebook-
+// leaning, no strip, just text and glyphs floating on the wallpaper.
 // Time and date on the left, then the active app (its menus open from the name); status on the right.
 // When a window is maximised the bar turns to glass (`solid`) so it stays readable over app content.
 Item {
@@ -16,6 +18,14 @@ Item {
     readonly property real dateLeft: leftRow.x + dateButton.x
     readonly property real dateWidth: dateButton.width
     property bool solid: false
+    readonly property bool islands: Settings.barStyle === "islands"
+    readonly property int islandH: 28
+    property bool live: false             // this bar carries the live island (the main screen's, when it's kept up here)
+    signal liveHover(bool inside)
+    signal liveFocus(string id)
+    signal liveOpen(string app)
+    signal liveIsland(string app)
+    readonly property real liveCentre: liveIsl.x + liveIsl.pillCentre
     property string appName: "Huginn"
     // The app's name opens its one menu (AppMenuIsland.qml, in a surface of its own); "A row of menus" (Settings ›
     // Desktop & Dock) puts the app's groups along the bar instead, each opening its own list.
@@ -35,11 +45,26 @@ Item {
     // realm's evening), light text on a bright picture (huginn_shell.py: wall_top)
     readonly property bool wallGlass: Theme.t.wallTop !== undefined && Theme.t.wallTop >= 0
                                       && (Theme.t.dark ? Theme.t.wallTop > 0.62 : Theme.t.wallTop < 0.55)
-    Glass { anchors.fill: parent; radius: 0; border.width: 0; opacity: bar.solid || bar.wallGlass ? 1 : 0; Behavior on opacity { NumberAnimation { duration: 150 } } }
+    Glass { anchors.fill: parent; radius: 0; border.width: 0; visible: !bar.islands; opacity: bar.solid || bar.wallGlass ? 1 : 0; Behavior on opacity { NumberAnimation { duration: 150 } } }
+    // the islands' glass, under what they hold
+    component Card: Glass { visible: bar.islands; height: bar.islandH; radius: bar.islandH / 2; anchors.verticalCenter: parent.verticalCenter }
+    Card { x: leftRow.x - 12; width: gap.x + 6 }
+    Card { visible: bar.islands && bar.appName !== ""; x: leftRow.x + gap.x + gap.width - 6; width: leftRow.width - gap.x - gap.width + 14 }
+    Card { x: rightStart.x - 6; width: statusPill.x + statusPill.width + 4 - x }
+    Item { id: rightStart; x: privRow.width > 0 ? privRow.x - 4 : layoutButton.visible ? layoutButton.x : searchButton.x }
+    LiveIsland {
+        id: liveIsl
+        on: bar.live && bar.islands && Settings.liveAt === "top"; slim: true; h: bar.islandH
+        anchors.centerIn: parent
+        onHovered: function (inside) { bar.liveHover(inside) }
+        onFocusWanted: function (id) { bar.liveFocus(id) }
+        onOpenWanted: function (app) { bar.liveOpen(app) }
+        onIslandWanted: function (name, x) { bar.liveIsland(name) }
+    }
 
     Row {
         id: leftRow
-        anchors { left: parent.left; leftMargin: 16; verticalCenter: parent.verticalCenter }
+        anchors { left: parent.left; leftMargin: bar.islands ? 22 : 16; verticalCenter: parent.verticalCenter }
         spacing: 10
         Rectangle {   // the realm orb: Huginn's mark, and the way into the launcher
             width: 16; height: 16; radius: 8; anchors.verticalCenter: parent.verticalCenter
@@ -82,7 +107,8 @@ Item {
                 }
             }
         }
-        Rectangle { width: 1; height: 12; color: Theme.t.line; anchors.verticalCenter: parent.verticalCenter; visible: bar.appName !== "" }
+        Item { id: gap; width: bar.islands ? 12 : 1; height: 12; anchors.verticalCenter: parent.verticalCenter; visible: bar.appName !== "" || bar.islands
+            Rectangle { anchors.fill: parent; color: Theme.t.line; visible: !bar.islands } }
         Pressable {   // the app in front: its icon, its name; its menu opens from here
             id: appButton
             visible: bar.appName !== ""; width: appRow.width + 16; height: 22; radius: Theme.t.radiusControl
@@ -105,6 +131,7 @@ Item {
     }
 
     Row {   // the screen, the camera, the microphone: a dot for each while it's in use (it can't be turned off)
+        id: privRow
         anchors { right: layoutButton.left; rightMargin: 6; verticalCenter: parent.verticalCenter }
         spacing: 5
         Repeater {
@@ -140,7 +167,7 @@ Item {
     }
     Pressable {
         id: statusPill
-        anchors { right: parent.right; rightMargin: 10; verticalCenter: parent.verticalCenter }
+        anchors { right: parent.right; rightMargin: bar.islands ? 14 : 10; verticalCenter: parent.verticalCenter }
         width: status.width + 16; height: 22; radius: 11
         onClicked: { Status.refreshPanel(); bar.controlCentre() }
         Row {

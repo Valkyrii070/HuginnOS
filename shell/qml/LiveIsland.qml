@@ -8,7 +8,6 @@ import "live.js" as L
 // island; scroll over it and the next thing takes it; click a bubble and that one does.
 Row {
     id: isl
-    spacing: 12
     signal hovered(bool inside)             // the pointer is on the island or a bubble (the host opens it after a moment)
     signal focusWanted(string id)           // a screen/camera/mic bubble was clicked: open the island on it
     signal openWanted(string app)           // the island was clicked: bring that app forward (or start it)
@@ -18,11 +17,14 @@ Row {
     readonly property real pillCentre: pill.x + pill.width / 2
     readonly property bool anyHover: pillArea.containsMouse || hoverCount > 0
     property int hoverCount: 0
+    property bool on: true                // the host has it here (and not in the other place)
+    property bool slim: false             // in the top bar: one line, no buttons
     property int h: 64                    // the dock islands' height (Settings › Desktop & Dock › Size)
     onAnyHoverChanged: hovered(anyHover)
     property real now: Date.now()
     Timer { interval: 250; repeat: true; running: Live.active; onTriggered: isl.now = Date.now() }
-    visible: Live.active || pill.width > 0.5 || bubbleList.width > 0.5
+    visible: on && (Live.active || pill.width > 0.5 || bubbleList.width > 0.5)
+    spacing: slim ? 8 : 12
 
     // ---- the island: two faces, so the old one fades out as the new one comes in, while the island changes size
     property var faceA: ({})
@@ -36,7 +38,7 @@ Row {
     }
     Glass {
         id: pill
-        height: isl.h; radius: 22
+        height: isl.h; radius: isl.slim ? isl.h / 2 : 22
         readonly property Item face: isl.onA ? fa : fb
         width: isl.main && isl.main.id ? face.want : 0
         visible: width > 0.5
@@ -83,8 +85,8 @@ Row {
     Component.onCompleted: syncBubbles()
     ListView {
         id: bubbleList
-        orientation: ListView.Horizontal; interactive: false; spacing: 12
-        height: isl.h; width: count > 0 ? count * isl.h + (count - 1) * 12 : 0
+        orientation: ListView.Horizontal; interactive: false; spacing: isl.spacing
+        height: isl.h; width: count > 0 ? count * isl.h + (count - 1) * isl.spacing : 0
         visible: width > 0.5
         Behavior on width { NumberAnimation { duration: Theme.t.moveMs; easing.type: Easing.OutCubic } }
         model: bubbleModel
@@ -104,19 +106,23 @@ Row {
         property var it: ({})
         readonly property string kind: L.kindOf(it)
         readonly property bool priv: L.privacy(it)
-        readonly property real want: kind ? width + 26 : 0
-        x: 12; height: isl.h; spacing: 12
-        LiveLead { it: face.it; now: isl.now; anchors.verticalCenter: parent.verticalCenter }
+        readonly property real want: kind ? width + (isl.slim ? 20 : 26) : 0
+        x: isl.slim ? 8 : 12; height: isl.h; spacing: isl.slim ? 8 : 12
+        LiveLead { it: face.it; now: isl.now; size: isl.slim ? Math.max(14, isl.h - 10) : 40; round: isl.slim; bare: isl.slim; anchors.verticalCenter: parent.verticalCenter }
         Column {
+            visible: !isl.slim
             anchors.verticalCenter: parent.verticalCenter; spacing: face.kind === "progress" ? 5 : 1
             width: face.priv ? Math.min(250, Math.max(150, t1.implicitWidth)) : 150
             Label { id: t1; width: parent.width; text: face.it.title || ""; elide: Text.ElideRight; font.pixelSize: 14; font.weight: Font.DemiBold }
             LiveBar { visible: face.kind === "progress"; width: parent.width; value: face.it.progress === undefined ? -1 : face.it.progress; tone: face.it.tone || Theme.t.accent }
             Label { width: parent.width; text: L.sub(face.it, isl.now); elide: Text.ElideRight; font.pixelSize: 12; secondary: true }
         }
-        LiveEq { visible: face.kind === "playing"; playing: !!face.it.playing; tone: face.it.tone || Theme.t.accent; anchors.verticalCenter: parent.verticalCenter }
+        // slim: the title, then what's under it, on one line
+        Label { visible: isl.slim; width: Math.min(implicitWidth, 170); text: face.it.title || ""; elide: Text.ElideRight; font.pixelSize: 12; font.weight: Font.DemiBold; anchors.verticalCenter: parent.verticalCenter }
+        Label { visible: isl.slim && text !== ""; width: Math.min(implicitWidth, 130); text: L.sub(face.it, isl.now); elide: Text.ElideRight; font.pixelSize: 12; secondary: true; anchors.verticalCenter: parent.verticalCenter }
+        LiveEq { visible: face.kind === "playing"; playing: !!face.it.playing; tone: face.it.tone || Theme.t.accent; anchors.verticalCenter: parent.verticalCenter; scale: isl.slim ? 0.7 : 1 }
         Repeater {
-            model: L.quick(face.it)
+            model: isl.slim ? [] : L.quick(face.it)
             RoundButton { required property var modelData; a: modelData; target: face.it; anchors.verticalCenter: parent ? parent.verticalCenter : undefined }
         }
     }
@@ -144,14 +150,14 @@ Row {
         readonly property string kind: L.kindOf(it)
         readonly property bool ringed: kind === "timer" || kind === "progress" || kind === "event"
         width: isl.h; height: isl.h
-        Glass { anchors.fill: parent; radius: 32 }
-        LiveLead { visible: !bub.ringed; anchors.centerIn: parent; it: bub.it; now: isl.now; size: bub.kind === "playing" ? 44 : 44; round: true }
+        Glass { anchors.fill: parent; radius: width / 2 }
+        LiveLead { visible: !bub.ringed; anchors.centerIn: parent; it: bub.it; now: isl.now; size: isl.slim ? isl.h - 8 : 44; round: true }
         LiveRing {
-            visible: bub.ringed; anchors.centerIn: parent; width: 46; height: 46; tone: bub.it.tone || Theme.t.accent
+            visible: bub.ringed; anchors.centerIn: parent; width: isl.slim ? isl.h - 6 : 46; height: width; tone: bub.it.tone || Theme.t.accent
             value: bub.kind === "timer" ? (bub.it.total ? Math.max(0, L.left(bub.it, isl.now)) / bub.it.total : 0)
                  : bub.kind === "event" ? 1 : (bub.it.progress >= 0 ? bub.it.progress : 0.25)
-            text: bub.kind === "timer" ? L.clock(L.left(bub.it, isl.now)) : ""
-            glyph: bub.kind === "timer" ? "" : (bub.it.glyph || "download")
+            text: bub.kind === "timer" && !isl.slim ? L.clock(L.left(bub.it, isl.now)) : ""
+            glyph: bub.kind === "timer" ? (isl.slim ? "clock" : "") : (bub.it.glyph || "download")
             RotationAnimation on rotation { running: bub.kind === "progress" && !(bub.it.progress >= 0) && Theme.t.moveMs > 0; loops: Animation.Infinite; from: 0; to: 360; duration: 1600 }
         }
         Rectangle {   // more going on than there are bubbles: how many more
@@ -165,7 +171,7 @@ Row {
             onContainsMouseChanged: isl.hoverCount = Math.max(0, isl.hoverCount + (containsMouse ? 1 : -1))
             Component.onDestruction: if (containsMouse) isl.hoverCount = Math.max(0, isl.hoverCount - 1)
             onClicked: function (m) {
-                if (m.button === Qt.RightButton) { isl.islandWanted(bub.it.app || "", bubbleList.x + bub.x + 32); return }
+                if (m.button === Qt.RightButton) { isl.islandWanted(bub.it.app || "", bubbleList.x + bub.x + bub.width / 2); return }
                 if (L.privacy(bub.it)) isl.focusWanted(bub.bid); else Live.pick(bub.bid)
             }
         }

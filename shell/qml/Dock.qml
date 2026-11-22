@@ -348,6 +348,7 @@ Row {
     }
     LiveIsland {
         h: dock.tile + 20
+        on: Settings.liveAt !== "top"
         id: liveIsland
         onHovered: function (inside) { dock.liveHover(inside) }
         onFocusWanted: function (id) { dock.liveFocus(id) }

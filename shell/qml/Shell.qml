@@ -17,6 +17,8 @@ QtObject {
     property real dockIslandX: 0
     // the live island, opened: after a moment of pointing at it (and while the pointer stays on it or the opened
     // island), or by itself while a call or an alarm rings
+    readonly property int barH: Settings.barStyle === "islands" ? 40 : 30      // the top bar: islands want air round them
+    readonly property bool liveTop: Settings.liveAt === "top" && Settings.barStyle === "islands"
     property bool liveOpen: false
     property string liveFocus: ""
     readonly property bool liveShown: (liveOpen || Live.ringing) && Live.active && shell.open === "" && shell.dockIsland === null   // (dockIsland alone is the AppIsland's id)
@@ -384,14 +386,14 @@ QtObject {
         model: Settings.barEverywhere && shell.mainScreen ? Status.screenList.filter(function (sc) { return sc.name !== shell.mainScreen.name }) : []
         delegate: Window {
             required property var modelData
-            visible: true; height: 30; color: "transparent"
+            visible: true; height: shell.barH; color: "transparent"
             LayerShell.Window.screen: modelData
             LayerShell.Window.wantsToBeOnActiveScreen: false
             LayerShell.Window.scope: "huginn-topbar-more"
             LayerShell.Window.keyboardInteractivity: LayerShell.Window.KeyboardInteractivityNone
             LayerShell.Window.layer: LayerShell.Window.LayerTop
             LayerShell.Window.anchors: LayerShell.Window.AnchorTop | LayerShell.Window.AnchorLeft | LayerShell.Window.AnchorRight
-            LayerShell.Window.exclusionZone: 30
+            LayerShell.Window.exclusionZone: shell.barH
             TopBar { width: parent.width; appName: Status.active.name || "Huginn"; solid: Status.active.maximized
                 onWindowAction: function (action) { Status.windowAction(action) }
                 opacity: shell.settled ? 1 : 0; Behavior on opacity { NumberAnimation { duration: 500; easing.type: Easing.OutCubic } }
@@ -417,7 +419,7 @@ QtObject {
     Window {   // top bar
         id: topBarWin
         // Grows while the dropdown menu list is open; the reserved strip (exclusionZone) stays 30 px.
-        visible: true; height: 30; color: "transparent"
+        visible: true; height: shell.barH; color: "transparent"
         property string placedOn: ""
         LayerShell.Window.screen: shell.mainScreen
         Component.onCompleted: placedOn = shell.mainScreen ? shell.mainScreen.name : ""
@@ -425,14 +427,19 @@ QtObject {
         LayerShell.Window.keyboardInteractivity: LayerShell.Window.KeyboardInteractivityNone
         LayerShell.Window.layer: LayerShell.Window.LayerTop
         LayerShell.Window.anchors: LayerShell.Window.AnchorTop | LayerShell.Window.AnchorLeft | LayerShell.Window.AnchorRight
-        LayerShell.Window.exclusionZone: 30
+        LayerShell.Window.exclusionZone: shell.barH
         TopBar { id: topBar; width: parent.width; appName: Status.active.name || "Huginn"; solid: Status.active.maximized
             onWindowAction: function (action) { Status.windowAction(action) }
             opacity: shell.settled ? 1 : 0; Behavior on opacity { NumberAnimation { duration: 500; easing.type: Easing.OutCubic } } onControlCentre: shell.open = shell.open === "cc" ? "" : "cc"; onLauncher: shell.open = shell.open === "launcher" ? "" : "launcher"
             onSearch: shell.open = shell.open === "search" ? "" : "search"
             todayOpen: shell.open === "today"; onToday: shell.open = shell.open === "today" ? "" : "today"
             menuOpen: shell.open === "menu"; menuGroup: shell.menuGroup
-            onAppMenu: function (group) { shell.appMenu(group) } }
+            onAppMenu: function (group) { shell.appMenu(group) }
+            live: true
+            onLiveHover: function (inside) { shell.livePointer(inside) }
+            onLiveFocus: function (id) { shell.liveFocus = id; shell.liveHide.stop(); shell.liveOpen = true }
+            onLiveOpen: function (app) { dock.openApp(app) }
+            onLiveIsland: function (name) { var app = dock.appNamed(name); if (app) dock.islandWanted(app, dock.restWidth / 2) } }
     },
     Window {   // dock. Wider than the dock, so the live island can grow and shrink without the surface changing size
         id: dockWin
@@ -456,7 +463,7 @@ QtObject {
         }
         property bool peek: false
         readonly property bool busy: shell.open === "launcher" || shell.dockIsland !== null || shell.winApp !== null || shell.stackFolder !== ""
-                                     || shell.liveShown || shell.tabsOpen || shell.touring || !shell.settled
+                                     || (shell.liveShown && !shell.liveTop) || shell.tabsOpen || shell.touring || !shell.settled
         readonly property bool away: Settings.dockMakeRoom && covered && !peek && !busy
         property bool shrunk: false
         onAwayChanged: if (away) shrink.restart(); else { shrink.stop(); shrunk = false }
@@ -486,25 +493,32 @@ QtObject {
             onStackWanted: function (folder, x, menu) { shell.open = ""; shell.winApp = null; shell.stackMenu = menu; shell.stackX = x; shell.stackFolder = shell.stackFolder === folder && !menu ? "" : folder }
         }
     },
-    Window {   // the live island, opened: just above the dock, lined up with the island's right edge
-        id: liveWin
-        visible: shell.liveShown || livePanel.visible; width: dockWin.width; height: livePanel.height + 60 + shell.dockRoom; color: "transparent"
+    Window {   // the live island, opened: just above the dock, lined up with the island's right edge; or, when the
+        id: liveWin   // island is kept in the top bar, hanging under it, centred on it
+        readonly property bool top: shell.liveTop
+        visible: shell.liveShown || livePanel.visible; width: top ? topBarWin.width : dockWin.width
+        height: livePanel.height + 60 + (top ? 0 : shell.dockRoom); color: "transparent"
         LayerShell.Window.scope: "huginn-live"
-        LayerShell.Window.screen: shell.dockScreen
+        LayerShell.Window.screen: top ? shell.mainScreen : shell.dockScreen
         // When the dock makes room it keeps no strip of its own, so this reaches down over it: the panel sits above
         // the dock as it always did, and the strip over the dock leaves the pointer to the dock
-        function fitInput() { Status.setInputRegion(liveWin, 0, 0, width, height - shell.dockRoom) }
-        onHeightChanged: fitInput(); onWidthChanged: fitInput(); onVisibleChanged: if (visible) fitInput()
+        function fitInput() {
+            if (top) Status.setInputRegion(liveWin, livePanel.x, 0, livePanel.width, livePanel.height + 12)   // the rest stays the windows'
+            else Status.setInputRegion(liveWin, 0, 0, width, height - shell.dockRoom)
+        }
+        onHeightChanged: fitInput(); onWidthChanged: fitInput(); onVisibleChanged: if (visible) fitInput(); onTopChanged: fitInput()
         LayerShell.Window.keyboardInteractivity: LayerShell.Window.KeyboardInteractivityNone
         LayerShell.Window.layer: LayerShell.Window.LayerTop
-        LayerShell.Window.anchors: LayerShell.Window.AnchorBottom
+        LayerShell.Window.anchors: top ? LayerShell.Window.AnchorTop : LayerShell.Window.AnchorBottom
         LivePanel {
             id: livePanel
-            shown: shell.liveShown; focusId: shell.liveFocus
+            shown: shell.liveShown; focusId: shell.liveFocus; fromTop: liveWin.top
             readonly property real dockX: (liveWin.width - dock.width) / 2
-            x: Math.max(8, Math.min(liveWin.width - width - 8, dockX + dock.liveRight - width))
-            y: liveWin.height - shell.dockRoom - height - 10
-            originX: dockX + dock.liveCentre - x
+            x: liveWin.top ? Math.max(8, Math.min(liveWin.width - width - 8, topBar.liveCentre - width / 2))
+                           : Math.max(8, Math.min(liveWin.width - width - 8, dockX + dock.liveRight - width))
+            y: liveWin.top ? 6 : liveWin.height - shell.dockRoom - height - 10
+            originX: liveWin.top ? topBar.liveCentre - x : dockX + dock.liveCentre - x
+            onXChanged: liveWin.fitInput()
             onPointer: function (inside) { shell.livePointer(inside) }
             onOpenWanted: function (app) { dock.openApp(app) }
         }
@@ -863,8 +877,8 @@ QtObject {
                 var isl = dock.tile + 20, top = H - dockWin.full
                 if (name === "dock") return Qt.rect(dx, top, dock.restWidth, isl)
                 if (name === "orb") return Qt.rect(dx, top, isl, isl)
-                if (name === "date") return Qt.rect(topBar.dateLeft, 4, topBar.dateWidth, 22)
-                if (name === "name") return Qt.rect(topBar.nameLeft, 4, topBar.nameWidth, 22)
+                if (name === "date") return Qt.rect(topBar.dateLeft, (shell.barH - 22) / 2, topBar.dateWidth, 22)
+                if (name === "name") return Qt.rect(topBar.nameLeft, (shell.barH - 22) / 2, topBar.nameWidth, 22)
                 if (name === "window") { var w = shell.frontWindow(); if (w && w.w > 0) return Qt.rect(w.x, w.y, w.w, w.h) }
                 return Qt.rect(W / 2 - 1, H / 2 - 1, 2, 2)
             }

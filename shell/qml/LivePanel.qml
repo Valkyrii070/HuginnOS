@@ -9,6 +9,7 @@ Glass {
     property string focusId: ""
     property bool shown: false
     property real originX: width - 150
+    property bool fromTop: false                // it hangs under the top bar (the glow and the growing turn over)
     signal pointer(bool inside)                 // the pointer is on it (the host keeps it open)
     signal openWanted(string app)               // "go to the app" from inside it
     readonly property var all: Live.main && Live.main.id ? [Live.main].concat(Live.others) : Live.others
@@ -27,7 +28,7 @@ Glass {
     property real grow: shown ? 1 : 0.55
     Behavior on grow { NumberAnimation { duration: panel.shown ? Theme.t.openMs * 1.3 : Theme.t.closeMs; easing.type: panel.shown ? Easing.OutBack : Easing.InCubic; easing.overshoot: 1.1 } }
     Behavior on opacity { NumberAnimation { duration: panel.shown ? Theme.t.openMs : Theme.t.closeMs } }
-    transform: Scale { origin.x: panel.originX; origin.y: panel.height + 40; xScale: panel.grow; yScale: panel.grow }
+    transform: Scale { origin.x: panel.originX; origin.y: panel.fromTop ? -40 : panel.height + 40; xScale: panel.grow; yScale: panel.grow }
     HoverHandler { onHoveredChanged: panel.pointer(hovered) }
 
     Rectangle {   // the colour of what it shows, as a glow from the top

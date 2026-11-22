@@ -32,6 +32,7 @@ tokens, settings, theme = sh.make_theme(False, False, "", True)
 for k, v, want in [("widgetPlaces", '{"clock":{"s":"DP-1","x":0.4,"y":0.3}}', True), ("widgetPlaces", '{"clock":{"s":"DP-1","x":1.4,"y":0.3}}', False),
                    ("widgetPlaces", '{"nope":{"s":"DP-1","x":0.4,"y":0.3}}', False), ("widgetPlaces", "not json", False), ("widgetPlaces", "", True),
                    ("quickTiles", "dnd,mute,shot", True), ("quickTiles", "dnd,dnd", False), ("quickTiles", "dnd,rocket", False), ("quickTiles", "", True),
+                   ("barStyle", "islands", True), ("barStyle", "tabs", False), ("liveAt", "dock", True), ("liveAt", "left", False),
                    ("dockEverywhere", "true", True), ("desktopFiles", "maybe", False)]:
     check(f"{k}={v!r} {'taken' if want else 'refused'}", settings._allowed(k, v) == want)
 settings.set("widgetPlaces", '{"clock":{"s":"DP-1","x":0.4,"y":0.3}}')

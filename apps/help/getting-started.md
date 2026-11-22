@@ -16,6 +16,9 @@ At the right end of the apps, **Downloads** is a stack: the newest files piled u
 
 With more than one screen, rest the pointer at the bottom of another screen for a moment and the dock comes there (Settings › Desktop & Dock › Moves to the screen you're using). The Overview spreads out every screen's windows on that screen.
 
+## The top bar
+Along the top are glass islands like the dock's: the orb and the time (the orb opens the start menu, the date opens Today), the app in front (its name opens its menus), and on the right the keyboard layout, Search and the outline that opens the Control Centre. When something is going on (music, a timer, a call, your screen being shared), the live island appears in the middle; point at it and it opens underneath. Settings › Desktop & Dock › Top bar has Style (Islands, or Plain: just words on the wallpaper) and Live island (In the top bar, or By the dock, at the dock's right end).
+
 ## The start menu finds things too
 Type in the start menu and, under the apps that match, it shows Settings' pages, your files and the answer to a sum or a conversion. The arrow keys go down into them and Enter opens the one chosen. Tab still opens Search with everything.
 
@@ -23,7 +26,7 @@ Type in the start menu and, under the apps that match, it shows Settings' pages,
 Press Super+Space, or click the magnifier in the top bar. Type, and apps, files, Settings pages, sums ("84.60 × 15%", "5 km in mi") and Huginn's open tabs come up; Enter opens the top one, Tab narrows it to one kind. Everything is searched on this computer; only "Search the web" sends what you typed anywhere. Before you type, it offers what you were doing last: the file you had open, the song you paused.
 
 ## The live island
-At the right end of the dock, an island appears while something is going on: music or a video playing (in any app, Netflix in Huginn included), a timer in Clock, an install in App Store, files arriving in Downloads, an event starting soon, a call on your phone. When several things happen at once, the most important gets the island and up to two more wait beside it as round bubbles; click a bubble to swap it in, or scroll over the island. With two things playing, the island shows the one whose window isn't in front.
+In the middle of the top bar (or at the right end of the dock, if you chose that in Settings › Desktop & Dock › Top bar), an island appears while something is going on: music or a video playing (in any app, Netflix in Huginn included), a timer in Clock, an install in App Store, files arriving in Downloads, an event starting soon, a call on your phone. When several things happen at once, the most important gets the island and up to two more wait beside it as round bubbles; click a bubble to swap it in, or scroll over the island. With two things playing, the island shows the one whose window isn't in front.
 
 Point at the island for a moment and it opens, with all its controls and everything else going on; move away and it closes. Click it to go to the app; right-click for the app's own island. Calls and timers that go off open it by themselves. The play/pause key works on whatever the island shows.
 

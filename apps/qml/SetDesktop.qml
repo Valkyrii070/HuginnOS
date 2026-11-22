@@ -129,6 +129,11 @@ Column {
     }
     // ---------------------------------------------------------------- the top bar
     SetCard { title: "Top bar"
+        SetRow { title: "Style"; sub: "Islands: glass cards like the dock's. Plain: words on the wallpaper."
+            SetChoice { each: 90; options: [["islands", "Islands"], ["plain", "Plain"]]; value: Settings.barStyle; onPicked: function (v) { Settings.set("barStyle", v) } } }
+        SetRow { title: "Live island"; sub: "Music, timers, calls and what's being shared: in the middle of the top bar, or beside the dock."
+            visible: Settings.barStyle === "islands"
+            SetChoice { each: 110; options: [["top", "In the top bar"], ["dock", "By the dock"]]; value: Settings.liveAt; onPicked: function (v) { Settings.set("liveAt", v) } } }
         SetRow { title: "App menus"; sub: "What clicking the app's name opens."
             SetChoice { each: 120; options: [["one", "One menu"], ["row", "A row of menus"]]; value: Settings.menuStyle === "inline" ? "row" : Settings.menuStyle === "dropdown" ? "one" : Settings.menuStyle
                 onPicked: function (v) { Settings.set("menuStyle", v); pg.show("menu:" + v) }

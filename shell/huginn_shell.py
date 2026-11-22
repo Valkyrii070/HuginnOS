@@ -338,7 +338,7 @@ class Settings(QObject):
     """User customisation, kept in ~/.config/huginn-shell/settings.json and shared by the shell and every app.
     Each process watches the file, so a change made anywhere (realm, dark mode, menu style) shows everywhere."""
     changed = Signal()
-    DEFAULTS = {"menuStyle": "one", "dark": "true", "realm": "aurora", "clock24": "true", "barDate": "true", "batteryPercent": "false", "barEverywhere": "true",
+    DEFAULTS = {"menuStyle": "one", "barStyle": "islands", "liveAt": "top", "dark": "true", "realm": "aurora", "clock24": "true", "barDate": "true", "batteryPercent": "false", "barEverywhere": "true",
                 "dockMakeRoom": "true", "dockDots": "true", "dockFollows": "true", "glass": "full", "frameTimes": "false", "gameStats": "false", "autoUpdate": "true", "liveWallpaper": "false",
                 "contrast": "false", "reduceTransparency": "false", "reduceMotion": "false", "uiScale": "1",       # accessibility
                 # Settings › Desktop & Dock
@@ -386,7 +386,7 @@ class Settings(QObject):
     def __init__(self, path: Path, realms: list, persist: bool = True):
         super().__init__()
         self._path, self._persist, self._values = path, persist, dict(self.DEFAULTS)
-        self._choices = {"menuStyle": ("one", "row", "dropdown", "inline"), "dark": ("true", "false"), "realm": tuple(realms), "uiScale": self.SCALES,
+        self._choices = {"menuStyle": ("one", "row", "dropdown", "inline"), "barStyle": ("islands", "plain"), "liveAt": ("top", "dock"), "dark": ("true", "false"), "realm": tuple(realms), "uiScale": self.SCALES,
                          "dockSize": ("36", "40", "44", "52", "60"), "hideStyle": ("drop", "line", "comet"), "overviewOpen": ("glide", "light"),
                          "inAppMotion": ("grow", "slide"), "adaptiveSync": ("auto", "off"), "glass": ("full", "light", "off"),
                          **{k: self.CORNERS for k in ("cornerTL", "cornerTR", "cornerBL", "cornerBR")},
@@ -461,6 +461,8 @@ class Settings(QObject):
             self.changed.emit()
 
     menuStyle = Property(str, lambda self: self._values["menuStyle"], notify=changed)
+    barStyle = Property(str, lambda self: self._values["barStyle"], notify=changed)      # the top bar: "islands" (as the dock) or "plain"
+    liveAt = Property(str, lambda self: self._values["liveAt"], notify=changed)          # the live island: "top" (in the bar) or "dock"
     dark = Property(bool, lambda self: self._values["dark"] == "true", notify=changed)
     realm = Property(str, lambda self: self._values["realm"], notify=changed)
     clock24 = Property(bool, lambda self: self._values["clock24"] == "true", notify=changed)

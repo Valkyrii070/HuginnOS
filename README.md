@@ -2496,6 +2496,16 @@ Added where an app was missing what such an app has:
   dock (whose islands, live island and stacks open over it) trades places with a stand-in the moment the pointer
   reaches it. Not yet tried on real second and third screens: the nested test session has one.
 
+## The top bar as islands (2026-11-21, late)
+
+Concept "M6" from the desktop mockups. `TopBar.qml` draws three `Glass` cards behind what it already held (orb and
+date; the app and its menus; status), and the bar grows from 30 to 40 px (`shell.barH`) so they have air.
+`LiveIsland` gained a `slim` form (one line, no buttons, 28 px) that sits in the middle of the main screen's bar;
+`LivePanel` hangs under it (`fromTop`) from a top-anchored surface whose input region is just the panel.
+`Settings.barStyle` ("islands" | "plain") and `Settings.liveAt` ("top" | "dock") choose; with "dock" the island and
+its panel are where they were, at the dock's right end. Still to come from the concept: a full-screen app lending
+its own islands to the bar ("M8").
+
 ## Huginn, the browser
 
 Inside the Huginn repository (this kit is its `os/` folder) the image ships the repository's own browser. A kit used

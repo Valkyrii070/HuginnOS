@@ -8,6 +8,7 @@ Item {
     property var it: ({})
     property real now: Date.now()
     property int size: 40
+    property bool bare: false               // too small for the time inside the ring
     property bool round: false              // in a bubble: the cover is round too
     readonly property string kind: L.kindOf(it)
     width: kind === "event" ? 4 : size; height: size
@@ -15,7 +16,7 @@ Item {
     LiveArt { visible: lead.kind === "playing"; anchors.fill: parent; it: lead.it; r: lead.round ? width / 2 : width * 0.25 }
     LiveRing { visible: lead.kind === "timer"; anchors.fill: parent; tone: lead.it.tone || Theme.t.accent
         value: lead.it.total ? Math.max(0, L.left(lead.it, lead.now)) / lead.it.total : 0
-        text: L.clock(L.left(lead.it, lead.now)) }
+        text: lead.bare ? "" : L.clock(L.left(lead.it, lead.now)); glyph: lead.bare ? "clock" : "" }
     Rectangle {
         id: round
         visible: lead.kind !== "event" && lead.kind !== "playing" && lead.kind !== "timer"
