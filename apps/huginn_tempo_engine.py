@@ -36,6 +36,8 @@ import hashlib
 import json
 import math
 import os
+import threading
+import zipfile
 import shutil
 import struct
 import subprocess
@@ -343,11 +345,19 @@ def soundfont() -> str:
 
 
 _GM = {}
+_GM_LOCK = threading.Lock()
 
 
 def gm_samples(program: int) -> dict:
     """Every note of a General MIDI instrument, played once by FluidSynth into one file and cut into notes:
     {pitch: mono float32}. Cached on disk. {} when there's no FluidSynth or SoundFont."""
+    if program in _GM:
+        return _GM[program]
+    with _GM_LOCK:                                             # two renders at once: one makes it, the other waits
+        return _gm_samples(program)
+
+
+def _gm_samples(program: int) -> dict:
     if program in _GM:
         return _GM[program]
     sf = soundfont()
@@ -362,8 +372,8 @@ def gm_samples(program: int) -> dict:
             data = np.load(npz)
             _GM[program] = {int(k): data[k] for k in data.files}
             return _GM[program]
-        except (OSError, ValueError):
-            pass
+        except (OSError, ValueError, EOFError, zipfile.BadZipFile):   # half-written, or damaged: made again
+            npz.unlink(missing_ok=True)
     pitches = list(range(21, 109, 3))                          # every third key: the rest are tuned from neighbours
     hold, gap = 2.0, 3.0
     notes = [(i * gap, hold, p, 100) for i, p in enumerate(pitches)]
@@ -382,7 +392,12 @@ def gm_samples(program: int) -> dict:
         seg = audio[a:a + int(gap * SR)].astype(np.float32)
         if seg.size:
             out[p] = seg
-    np.savez_compressed(npz, **{str(k): v for k, v in out.items()})
+    try:
+        tmp = CACHE / f"gm-{program}-{key}.{os.getpid()}.tmp.npz"       # whole, or not there at all
+        np.savez_compressed(tmp, **{str(k): v for k, v in out.items()})
+        os.replace(tmp, npz)
+    except OSError:
+        pass
     mid.unlink(missing_ok=True)
     wav.unlink(missing_ok=True)
     _GM[program] = out

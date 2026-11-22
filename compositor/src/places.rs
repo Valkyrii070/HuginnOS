@@ -113,7 +113,18 @@ impl<B: Backend + 'static> HuginnState<B> {
         let was = *self.huginn.places.seen.get(&app)?;
         // a second window of the app goes beside the first, not on it
         let taken = self.space.elements().filter(|w| *w != window).any(|w| crate::shell::window_names(w).1 == app);
-        self.configure_size(window, was.size, false);
+        // no bigger than the room its screen has now (a smaller screen, or a taller bar, since)
+        let room = self
+            .space
+            .outputs()
+            .find(|o| self.space.output_geometry(o).is_some_and(|g| g.contains(was.loc)))
+            .or_else(|| self.space.outputs().next())
+            .map(|o| smithay::desktop::layer_map_for_output(o).non_exclusive_zone().size);
+        let size = match room {
+            Some(r) if r.w > 0 && r.h > 0 => Size::from((was.size.w.min(r.w), was.size.h.min(r.h))),
+            _ => was.size,
+        };
+        self.configure_size(window, size, false);
         let at = if taken { was.loc + Point::from((32, 32)) } else { was.loc };
         Some(self.on_a_screen(at))
     }

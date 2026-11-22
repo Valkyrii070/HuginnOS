@@ -750,7 +750,12 @@ impl<B: Backend + 'static> HuginnState<B> {
             return;
         }
         // a rule for the app, or where its window last was (places.rs)
-        if let Some(at) = self.place_from_memory(window) {
+        if let Some(mut at) = self.place_from_memory(window) {
+            // …but never with its top behind the top bar (the bar may be taller than when the place was kept)
+            if let Some(o) = self.space.outputs().find(|o| self.space.output_geometry(o).is_some_and(|g| g.contains(at))).cloned() {
+                let top = self.space.output_geometry(&o).unwrap_or_default().loc.y + layer_map_for_output(&o).non_exclusive_zone().loc.y;
+                at.y = at.y.max(top);
+            }
             let offset = window.geometry().loc;
             self.space.map_element(window.clone(), at - offset, true);
             self.tell_x11_where(window);
