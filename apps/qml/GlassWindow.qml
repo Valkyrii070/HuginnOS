@@ -28,7 +28,8 @@ Window {
     // islands sit in the bar's row, beside the shell's. Where those end: AppMenu.bar (the shell keeps it).
     readonly property var barInfo: typeof AppMenu !== "undefined" && AppMenu !== null && AppMenu.bar ? AppMenu.bar : ({})
     readonly property bool lifted: maximised && (barInfo.h || 0) > 0 && (barInfo.screens || []).indexOf(Screen.name) >= 0
-    readonly property real topY: lifted ? Math.max(0, (barInfo.h - 40) / 2) : 12        // where the top islands sit
+    readonly property int barIh: lifted ? Math.max(32, Math.min(40, barInfo.ih || 34)) : 40   // the top islands, as tall as the bar's
+    readonly property real topY: lifted ? Math.max(0, (barInfo.h - barIh) / 2) : 12            // where the top islands sit
     readonly property real liftLeft: lifted ? (barInfo.left || 0) + 8 : 12              // and how far in, each side
     readonly property real liftRight: lifted ? (barInfo.right || 0) + 8 : 12
     readonly property real r: maximised || visibility === Window.FullScreen ? 0.01 : corner
@@ -79,14 +80,14 @@ Window {
     }
     Item { id: body; anchors { fill: parent; topMargin: win.bare ? 0 : win.padTop; bottomMargin: win.bare ? 0 : win.padBottom; rightMargin: win.bare ? 0 : win.padRight
                               leftMargin: win.bare ? 0 : Math.max(win.padLeft, win.sidebarWidth > 0 ? win.sidebarWidth + 24 : 0) } }
-    Item { id: over; anchors.fill: parent; z: 5; visible: !win.bare }
+    Item { id: over; objectName: "glassOver"; anchors.fill: parent; z: 5; visible: !win.bare }
     Rail { id: sideRail; visible: win.sidebarWidth > 0 && !win.bare; x: 12; y: 64; z: 6; width: Math.max(win.sidebarWidth, 60); maxHeight: win.height - 64 - 14 }
     // (shown by opacity: hiding an island whose width comes from what's showing in it would hide what's in it for good)
-    Island { id: toolIsland; visible: !win.bare; opacity: width > 12 ? 1 : 0; enabled: width > 12; z: 7; rtl: true; anchors { right: parent.right; rightMargin: win.liftRight } y: win.topY }
+    Island { id: toolIsland; bar: true; visible: !win.bare; opacity: width > 12 ? 1 : 0; enabled: width > 12; z: 7; rtl: true; anchors { right: parent.right; rightMargin: win.liftRight } y: win.topY }
     readonly property real titleEnd: titleIsland.x + titleIsland.width      // where the top left island ends, for islands beside it
     readonly property real toolStart: toolIsland.opacity > 0 ? toolIsland.x : width - 12     // and where the toolbar begins
     Island {   // close, minimise, maximise and the app's name: always top left
-        id: titleIsland; x: win.liftLeft; y: win.topY; z: 6; drags: true; visible: !win.bare
+        id: titleIsland; bar: true; x: win.liftLeft; y: win.topY; z: 6; drags: true; visible: !win.bare
         Item { width: 4; height: 1 }
         Repeater {
             model: [["#FF5F57", "Close"], ["#FEBC2E", "Minimize"], ["#28C840", "Maximize"]]

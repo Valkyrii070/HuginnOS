@@ -155,7 +155,7 @@ Row {
         width: dock.tile; height: dock.tile
         scale: hit.pressed ? Theme.t.pressScale : 1
         Behavior on scale { NumberAnimation { duration: 100 } }
-        AppIcon { name: slot.app.name; glyph: slot.app.glyph; image: slot.app.image; own: slot.app.own || ""; web: slot.app.web }
+        AppIcon { size: dock.tile; name: slot.app.name; glyph: slot.app.glyph; image: slot.app.image; own: slot.app.own || ""; web: slot.app.web }
         // Open: a bar for each window (three at most), a soft glow behind; all hidden: one dim bar.
         Rectangle { visible: slot.open && !slot.allHidden; width: 34; height: 9; radius: 5; color: Theme.t.accent; opacity: 0.22; anchors { horizontalCenter: parent.horizontalCenter; top: parent.bottom; topMargin: 1 } }
         Row {

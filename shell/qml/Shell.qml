@@ -17,7 +17,7 @@ QtObject {
     property real dockIslandX: 0
     // the live island, opened: after a moment of pointing at it (and while the pointer stays on it or the opened
     // island), or by itself while a call or an alarm rings
-    readonly property int barH: Settings.barStyle === "islands" ? 40 : 30      // the top bar: islands want air round them
+    readonly property int barH: Settings.barStyle === "islands" ? 44 : 30      // the top bar: islands want air round them
     readonly property bool liveTop: Settings.liveAt === "top" && Settings.barStyle === "islands"
     property bool liveOpen: false
     property string liveFocus: ""
@@ -446,7 +446,7 @@ QtObject {
             // islands: only they take the pointer; and a filled app of Huginn's own is told where they end
             function fit() { if (islands) Status.setInputRects(topBarWin, rects); else Status.setInputRegion(topBarWin, 0, 0, 0, 0) }
             onRectsChanged: fit(); onIslandsChanged: fit(); Component.onCompleted: fit()
-            readonly property string insets: JSON.stringify({ h: islands ? shell.barH : 0, left: Math.round(leftEnd), right: Math.round(rightStart),
+            readonly property string insets: JSON.stringify({ h: islands ? shell.barH : 0, ih: islandH, left: Math.round(leftEnd), right: Math.round(rightStart),
                 screens: Settings.barEverywhere ? Status.screenList.map(function (sc) { return sc.name }) : (shell.mainScreen ? [shell.mainScreen.name] : []) })
             onInsetsChanged: Status.setBarInsets(insets) }
     },

@@ -19,7 +19,7 @@ Item {
     readonly property real dateWidth: dateButton.width
     property bool solid: false
     readonly property bool islands: Settings.barStyle === "islands"
-    readonly property int islandH: 28
+    readonly property int islandH: 34
     property bool live: false             // this bar carries the live island (the main screen's, when it's kept up here)
     signal liveHover(bool inside)
     signal liveFocus(string id)
@@ -29,7 +29,7 @@ Item {
     // A filled app of Huginn's own shares this row (its top islands sit beside these): where these end, for it, and
     // the parts of the bar that take the pointer (between them it goes to what's underneath)
     readonly property real leftEnd: bar.appName !== "" ? appCard.x + appCard.width : orbCard.x + orbCard.width
-    readonly property real rightStart: bar.width - statusCard.x
+    readonly property real rightStart: bar.width - statusCard.x + (bar.crowded && liveIsl.visible && liveIsl.width > 1 ? liveIsl.width + 8 : 0)
     readonly property bool crowded: Status.active.maximized === true && (Status.liftApps || []).some(function (a) { return String(a).toLowerCase() === String(Status.active.appId || "").toLowerCase() })
     readonly property var rects: {
         var r = [[orbCard.x, 0, orbCard.width, height], [statusCard.x, 0, statusCard.width, height]]
@@ -50,7 +50,7 @@ Item {
     readonly property var front: { var a = Apps.all; for (var i = 0; i < a.length; i++) if (a[i].name === appName) return a[i]; return null }
     readonly property var battery: Status.battery
     readonly property var net: Status.network
-    height: 30
+    height: islands ? islandH + 10 : 30
 
     // …and where its text wouldn't read on the wallpaper: dark text on a dark scene (the light appearance over a
     // realm's evening), light text on a bright picture (huginn_shell.py: wall_top)
@@ -66,7 +66,8 @@ Item {
     LiveIsland {
         id: liveIsl
         on: bar.live && bar.islands && Settings.liveAt === "top"; slim: true; tiny: bar.crowded; h: bar.islandH
-        anchors.centerIn: parent
+        // in the middle; beside a filled app it moves next to the status island, and the app is told to leave it room
+        x: bar.crowded ? statusCard.x - width - 8 : (bar.width - width) / 2; y: (bar.height - height) / 2
         onHovered: function (inside) { bar.liveHover(inside) }
         onFocusWanted: function (id) { bar.liveFocus(id) }
         onOpenWanted: function (app) { bar.liveOpen(app) }
