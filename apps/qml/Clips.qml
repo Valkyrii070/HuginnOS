@@ -28,6 +28,13 @@ GlassWindow {
     readonly property color cutBg: Theme.t.dark ? "#101216" : "#F4F5F8"
     function rowH(t) { return t.role === "captions" ? 40 : t.kind === "video" ? 66 : 52 }
     function ask(kind, extra) { var s = extra || {}; s.kind = kind; sheet = s }
+    property string libPick: ""          // the library item picked for Insert ( , ) and Overwrite ( . )
+    function editIn(how) {
+        if (!win.libPick) { toast.say("Click something in the library first, then " + (how === "insert" ? "Insert" : "Overwrite") + " puts it in at the playhead", true); return }
+        var why = Backend.edit(win.libPick, how, ""); if (why) toast.say(why, true)
+    }
+    function nextBlend(t) { var l = Backend.blends, k = 0; for (var i = 0; i < l.length; i++) if (l[i].key === (t.blend || "normal")) k = i; return l[(k + 1) % l.length] }
+    function blendName(t) { var l = Backend.blends; for (var i = 0; i < l.length; i++) if (l[i].key === t.blend) return l[i].name; return "" }
     function tracksTop() { var y = 0, out = []; for (var i = 0; i < Backend.tracks.length; i++) { out.push(y); y += rowH(Backend.tracks[i]) + 4 } return out }
     function trackAt(y) { var tops = tracksTop(); for (var i = Backend.tracks.length - 1; i >= 0; i--) if (y >= tops[i]) return Backend.tracks[i]; return Backend.tracks.length ? Backend.tracks[0] : null }
     function clipColour(c) { return c.kind === "compound" ? "#EC4899" : c.kind === "multicam" ? "#22D3EE" : c.kind === "title" ? "#8B5CF6" : c.mediaKind === "audio" || c.audioTrack ? "#10B981" : c.mediaKind === "image" ? "#F59E0B" : "#3B82F6" }
@@ -44,9 +51,12 @@ GlassWindow {
     DropArea { anchors.fill: parent; onDropped: function (d) { if (d.hasUrls) Backend.importFiles(d.urls) } }
 
     Shortcut { sequence: "Space"; onActivated: Backend.toggle() }
-    Shortcut { sequence: "K"; onActivated: Backend.pause() }
-    Shortcut { sequence: "L"; onActivated: Backend.play() }
-    Shortcut { sequence: "J"; onActivated: Backend.seek(Backend.head - 1) }
+    Shortcut { sequence: "K"; onActivated: Backend.shuttle(0) }
+    Shortcut { sequence: "L"; onActivated: Backend.shuttle(1) }       // again: twice, four, eight times as fast
+    Shortcut { sequence: "J"; onActivated: Backend.shuttle(-1) }      // backwards, the same way
+    Shortcut { sequence: ","; onActivated: win.editIn("insert") }
+    Shortcut { sequence: "."; onActivated: win.editIn("overwrite") }
+    Shortcut { sequence: "Ctrl+Shift+S"; onActivated: Backend.saveFrame() }
     Shortcut { sequence: "Left"; onActivated: Backend.step(-1) }
     Shortcut { sequence: "Right"; onActivated: Backend.step(1) }
     Shortcut { sequence: "Shift+Left"; onActivated: Backend.step(-Backend.fps) }
@@ -328,8 +338,11 @@ GlassWindow {
             boundsBehavior: Flickable.StopAtBounds
             model: Backend.media.filter(function (m) { return !win.bin || m.bin === win.bin })
             delegate: Item { id: tile; required property var modelData; width: mediaGrid.cellWidth; height: mediaGrid.cellHeight
-                Rectangle { x: 4; y: 4; width: parent.width - 8; height: 72; radius: 10; color: Theme.t.dark ? "#0B0D10" : "#E5E7EB"; clip: true; border.width: 1; border.color: Theme.t.islandLine
-                    Image { anchors.fill: parent; source: tile.modelData.thumb || ""; fillMode: Image.PreserveAspectCrop; visible: !!tile.modelData.thumb; asynchronous: true }
+                Rectangle { x: 4; y: 4; width: parent.width - 8; height: 72; radius: 10; color: Theme.t.dark ? "#0B0D10" : "#E5E7EB"; clip: true
+                    border.width: win.libPick === tile.modelData.id ? 2 : 1; border.color: win.libPick === tile.modelData.id ? Theme.t.accent : Theme.t.islandLine
+                    Image { anchors.fill: parent; source: tile.modelData.thumb || ""; fillMode: Image.PreserveAspectCrop; visible: !!tile.modelData.thumb; asynchronous: true; opacity: tile.modelData.missing ? 0.35 : 1 }
+                    Rectangle { objectName: "missingBadge"; visible: !!tile.modelData.missing; anchors.centerIn: parent; width: missL.width + 14; height: 20; radius: 6; color: Theme.t.danger
+                        Label { id: missL; anchors.centerIn: parent; text: "missing"; font.pixelSize: 10; font.weight: Font.DemiBold; color: "#FFFFFF" } }
                     Glyph { anchors.centerIn: parent; visible: !tile.modelData.thumb; size: 24; name: tile.modelData.kind === "audio" ? "music" : tile.modelData.kind === "image" ? "image" : "video"; ink: Theme.t.text_secondary }
                     Rectangle { anchors { right: parent.right; bottom: parent.bottom; margins: 4 } width: durL.width + 8; height: 16; radius: 5; color: "#B0000000"
                         Label { id: durL; anchors.centerIn: parent; text: tile.modelData.kind === "image" ? "still" : tile.modelData.length; font.pixelSize: 9; color: "#FFFFFF" } }
@@ -341,15 +354,20 @@ GlassWindow {
                 Label { x: 6; y: 80; width: parent.width - 12; elide: Text.ElideMiddle; text: tile.modelData.name; font.pixelSize: 11 }
                 MouseArea { anchors.fill: parent; acceptedButtons: Qt.LeftButton
                     property point from
-                    onPressed: function (m) { from = Qt.point(m.x, m.y) }
+                    onPressed: function (m) { from = Qt.point(m.x, m.y); win.libPick = tile.modelData.id }
                     onPositionChanged: function (m) { if (Math.abs(m.x - from.x) + Math.abs(m.y - from.y) > 6) { var p = mapToItem(win.contentItem, m.x, m.y); win.dragMedia = { id: tile.modelData.id, name: tile.modelData.name, x: p.x, y: p.y } } }
                     onReleased: function (m) { if (win.dragMedia) { var p = mapToItem(win.contentItem, m.x, m.y); win.dropMedia(p.x, p.y) } }
                     onDoubleClicked: { var why = Backend.place(tile.modelData.id, "", -1); if (why) toast.say(why, true) } } }
             Column { visible: mediaGrid.count === 0; anchors.centerIn: parent; spacing: 8; width: parent.width - 30
                 Label { width: parent.width; wrapMode: Text.WordWrap; horizontalAlignment: Text.AlignHCenter; secondary: true; text: "Drop videos, music and pictures here, or press Import." } } }
         Row { x: 10; anchors { bottom: parent.bottom; bottomMargin: 8 } spacing: 4
-            Seg { icon: "plus"; text: "Import"; onClicked: win.ask("import", { list: Backend.mediaChoices() }) }
-            Seg { text: "Make Proxies"; tip: "Light copies of 4K footage, so editing stays smooth"; onClicked: Backend.makeProxies() } } }
+            Seg { visible: !win.libPick && !Backend.missingCount; icon: "plus"; text: "Import"; onClicked: win.ask("import", { list: Backend.mediaChoices() }) }
+            Seg { visible: !win.libPick && !Backend.missingCount; text: "Make Proxies"; tip: "Light copies of 4K footage, so editing stays smooth"; onClicked: Backend.makeProxies() }
+            Seg { objectName: "insertBtn"; visible: !!win.libPick; text: "Insert"; tip: "( , ) Put it in at the playhead; everything after moves along, on every track"; onClicked: win.editIn("insert") }
+            Seg { objectName: "overwriteBtn"; visible: !!win.libPick; text: "Overwrite"; tip: "( . ) Put it in at the playhead, over what's there. With In and Out marked, it fills just that stretch"; onClicked: win.editIn("overwrite") }
+            Seg { visible: !!win.libPick; icon: "x"; tip: "Done picking"; onClicked: win.libPick = "" }
+            Seg { objectName: "findMissingBtn"; visible: Backend.missingCount > 0 && !win.libPick; text: "Find " + Backend.missingCount + " Missing"; on: true
+                tip: "Look for footage whose files have moved, by name, in your folders and drives. Or drop the files on the window"; onClicked: Backend.findMissing() } } }
 
     // ================================================================ the viewer
     Item { id: viewer; objectName: "viewer"; x: lib.x + lib.width + 12; y: 64; width: insp.x - x - 12; height: win.topH
@@ -427,7 +445,10 @@ GlassWindow {
                     Rectangle { anchors.fill: parent; color: "#33000000" }
                     Rectangle { x: parent.r.x; y: parent.r.y; width: parent.r.width; height: parent.r.height; color: "#22FACC15"; border.width: 2; border.color: "#FACC15" } } } }
         Item { y: screen.height + 8; width: parent.width; height: 44
-            Text { anchors.verticalCenter: parent.verticalCenter; text: Backend.headText; font.family: Theme.t.fontMono; font.pixelSize: 16; color: Theme.t.text }
+            Text { id: headT; anchors.verticalCenter: parent.verticalCenter; text: Backend.headText; font.family: Theme.t.fontMono; font.pixelSize: 16; color: Theme.t.text }
+            Rectangle { objectName: "rateChip"; visible: Backend.rate !== 0 && Backend.rate !== 1; anchors { left: headT.right; leftMargin: 10; verticalCenter: parent.verticalCenter }
+                width: rateL.width + 14; height: 22; radius: 7; color: Theme.t.accent
+                Label { id: rateL; anchors.centerIn: parent; font.pixelSize: 11; font.weight: Font.DemiBold; color: Theme.t.onAccent; text: (Backend.rate < 0 ? "◂ " : "") + Math.abs(Backend.rate) + "×" } }
             Row { anchors.centerIn: parent; spacing: 4
                 Seg { icon: "prev"; tip: "Previous cut (Up)"; onClicked: Backend.jumpEdit(-1) }
                 Seg { text: "◂"; tip: "Back a frame (Left)"; onClicked: Backend.step(-1) }
@@ -435,7 +456,8 @@ GlassWindow {
                     Glyph { anchors.centerIn: parent; name: Backend.playing ? "pause" : "play"; size: 18; ink: Theme.t.onAccent } }
                 Seg { text: "▸"; tip: "On a frame (Right)"; onClicked: Backend.step(1) }
                 Seg { icon: "next"; tip: "Next cut (Down)"; onClicked: Backend.jumpEdit(1) } }
-            Text { anchors { right: parent.right; verticalCenter: parent.verticalCenter } text: Backend.lengthText; font.family: Theme.t.fontMono; font.pixelSize: 12; color: Theme.t.text_secondary } } }
+            Text { id: lenT; anchors { right: parent.right; verticalCenter: parent.verticalCenter } text: Backend.lengthText; font.family: Theme.t.fontMono; font.pixelSize: 12; color: Theme.t.text_secondary }
+            Seg { objectName: "frameBtn"; anchors { right: lenT.left; rightMargin: 10 } icon: "camera"; tip: "Save this frame as a picture, in Pictures/Clips (Ctrl+Shift+S)"; onClicked: Backend.saveFrame() } } }
 
     // ================================================================ the inspector
     Rectangle { id: insp; objectName: "inspector"; x: parent.width - width - 12; y: 64; width: 330; height: win.topH; radius: 18; color: Theme.t.island; border.width: 1; border.color: Theme.t.islandLine; clip: true
@@ -698,6 +720,9 @@ GlassWindow {
                     Row { spacing: 10; height: 34
                         Toggle { anchors.verticalCenter: parent.verticalCenter; on: win.clip.keepPitch !== false; onToggled: function (v) { Backend.set(win.clip.id, "keepPitch", v) } }
                         Label { anchors.verticalCenter: parent.verticalCenter; text: "Keep voices sounding natural"; font.pixelSize: 12 } }
+                    Row { objectName: "reverseRow"; visible: !win.clip.ramped && (win.clip.mediaKind === "video" || win.clip.mediaKind === "audio"); spacing: 10; height: 34
+                        Toggle { objectName: "reverseToggle"; anchors.verticalCenter: parent.verticalCenter; on: !!win.clip.reverse; onToggled: function (v) { Backend.set(win.clip.id, "reverse", v) } }
+                        Label { anchors.verticalCenter: parent.verticalCenter; text: "Play it backwards"; font.pixelSize: 12 } }
                     Label { visible: win.clip.mediaKind === "video"; text: "SPEED RAMP"; font.pixelSize: 10; font.weight: Font.Bold; font.letterSpacing: 1.2; secondary: true; topPadding: 6 }
                     Label { visible: win.clip.mediaKind === "video"; width: parent.width; wrapMode: Text.WordWrap; font.pixelSize: 11; secondary: true
                         text: win.clip.ramped ? "Pick a stretch, then its speed above. The bar under the clip shows them: orange slower, blue faster, red held."
@@ -780,7 +805,14 @@ GlassWindow {
                 Repeater { model: Backend.tracks
                     Rectangle { required property var modelData; width: win.headW - 10; x: 8; height: win.rowH(modelData); radius: 10; color: Theme.t.island; border.width: 1; border.color: Theme.t.islandLine
                         Label { x: 10; y: 8; text: modelData.name; font.pixelSize: 12; font.weight: Font.DemiBold }
-                        Label { x: 10; y: 26; text: modelData.role === "captions" ? "captions" : modelData.kind === "video" ? (modelData.id === "v1" ? "main" : "layer") : (modelData.role || "sound"); font.pixelSize: 9; secondary: true }
+                        Label { x: 10; y: 26; visible: !blendBtn.visible; text: modelData.role === "captions" ? "captions" : modelData.kind === "video" ? (modelData.id === "v1" ? "main" : "layer") : (modelData.role || "sound"); font.pixelSize: 9; secondary: true }
+                        // a layer's way of meeting what's under it: click to go through them
+                        Pressable { id: blendBtn; objectName: "blend_" + modelData.id; visible: modelData.kind === "video" && modelData.role !== "captions" && modelData.id !== "v1"
+                            x: 6; y: 22; width: blendL.width + 10; height: 18; radius: 5
+                            color: (modelData.blend && modelData.blend !== "normal") ? Theme.t.accent : hovered ? Theme.t.hover : "transparent"
+                            onClicked: Backend.setTrack(modelData.id, "blend", win.nextBlend(modelData).key)
+                            Label { id: blendL; anchors.centerIn: parent; font.pixelSize: 9; text: (modelData.blend && modelData.blend !== "normal") ? win.blendName(modelData) : "layer"
+                                color: (modelData.blend && modelData.blend !== "normal") ? Theme.t.onAccent : Theme.t.text_secondary } }
                         Row { anchors { right: parent.right; rightMargin: 6; verticalCenter: parent.verticalCenter } spacing: 2
                             Pressable { width: 24; height: 24; radius: 6; onClicked: Backend.setTrack(modelData.id, modelData.kind === "video" ? "hidden" : "muted", !(modelData.hidden || modelData.muted))
                                 Glyph { anchors.centerIn: parent; size: 13; name: modelData.kind === "video" ? "eye" : "volume"; ink: (modelData.hidden || modelData.muted) ? Theme.t.danger : Theme.t.icon; opacity: (modelData.hidden || modelData.muted) ? 0.6 : 1 } }

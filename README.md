@@ -781,6 +781,41 @@ Four apps are being taken, round by round, to the level of the professional tool
   oval with its outline, dragging it, the matte, a ramp's stretches and slowing one, opening and leaving a compound
   clip, Find Shots, matching a shot, the beat on a music clip.
 
+**Clips, pro round five** (`apps/huginn_clips.py`, `apps/qml/Clips.qml`): a fuzz run first, then five things an editor reaches for
+- *Fuzzed* (`scripts/tests/clips_fuzz.py`): random editing (45 commands, wrong arguments included: tracks that don't exist, words for
+  numbers, sizes of 40 and of none), with the project checked after every step: no clip without length, before the start, over
+  another or on a missing track; every number a number; undo giving back exactly what was there and redo the change; the film built
+  every 20 steps and played by `melt` every 140. Over 60,000 steps across some 40 sequences. What it found, now fixed:
+  - A short clip sped up (or ramped, or cut inside a held frame) could be left a fraction of a frame long: invisible and unpickable. No
+    clip is now left shorter than 0.08 s; the speed is held back, the cut not made, and Clips says why.
+  - A compound clip emptied from inside stayed as a clip of no length. It keeps a sliver while open and goes when closed (undo brings it back).
+  - A setting given the wrong kind of value could break the film's description (a name that was a number, a group of settings replaced by
+    one value, a fader given words). Every setting now has a kind and a furthest value: a clip 40 times its size is more picture than MLT
+    can hold (3 GB for one frame, here).
+  - A compound that couldn't be made left the clip order and id counter changed with nothing to undo.
+  - Not a leak: the viewer's memory follows the size of the film (about 7 MB a clip while it's loaded) and levels off; reloading the same
+    film 40 times adds nothing.
+- *Insert and overwrite* (library: click to pick, then `,` or `.`, or the buttons). Insert goes in at the playhead and everything after
+  moves along on every unlocked track (clips under the playhead are cut, markers move too); overwrite replaces what was there on its
+  track. With In and Out marked, it fills that stretch. Refused, with nothing changed, where the clip under the playhead can't be cut
+  (inside a held frame).
+- *Blend modes* per layer: Normal, Screen, Add, Lighten, Multiply, Darken, Overlay, Soft Light, Hard Light, Difference (the mode of the
+  track's `frei0r.cairoblend`). Click the word under a layer's name to go through them.
+- *Backwards* (Speed tab): MLT's `timewarp` at a negative speed, at any speed. Cutting, trimming, slipping and overwriting know the footage
+  runs the other way. Not with ramps, held frames or tracking, which belong to the footage's own time; each says so.
+- *J K L*: L plays, again goes 2, 4, 8 times as fast; J the same backwards; K stops; the other key slows a step first. Sound only at 1×.
+- *A frame as a picture* (camera under the viewer, Ctrl+Shift+S): the film's full size, from the originals, into Pictures/Clips.
+- *Missing footage*: a moved or renamed file shows as missing in the library and as a dark red card with its name in the film, which
+  still plays and exports. Find Missing looks by name in the usual folders, plugged-in drives and beside the footage that's still there;
+  a dropped file that has a missing one's name takes its place.
+- Tested (`scripts/tests/clips_round5_test.py`, 120 checks, on footage whose brightness is its own second): each blend mode's arithmetic
+  on two greys; backwards at 1× and 2×, trimmed, cut (the earlier piece keeps the later footage), slipped; insert (three pieces, the
+  music cut and moved, a marker moved, one undo) and overwrite (the tail untouched, a marked stretch filled exactly, a frame from a
+  clip's edge leaving no sliver); the saved frame's size and content; a missing file's card, found by name, not found, dropped back;
+  J K L's speeds, direction and stopping at the start; and each limit the fuzz found. Earlier rounds' tests give what they gave before
+  this round: 56 of 56, 23 of 23, 40 of 41 (a tolerance in an old check), and one that stops at a check written for an older undo. On screen: the missing tile and Find Missing, picking and
+  overwriting, the 2× chip, the Screen layer. Not tested: sound while shuttling (no sound card here).
+
 **Code, pro round four** (`apps/huginn_code.py`, `apps/huginn_code_more.py`, new; `apps/qml/Code.qml`)
 - *More than one cursor*: Ctrl+D adds the next match of the selection (or picks the word), Ctrl+Shift+L puts a
   cursor on every match, Alt+click adds one anywhere, Ctrl+Alt+Up/Down one on the line above or below. Typing,

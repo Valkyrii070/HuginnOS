@@ -11,7 +11,7 @@ Drag from the library onto a track, or double-click to add to the end of V1 (the
 Drag a clip to move it (it snaps to cuts, markers and the playhead). Drag either end to trim it. With Ripple on, what follows moves up to close the gap. B is the blade: click a clip to cut it there; S cuts everything under the playhead. Delete removes; Shift+Delete closes the gap too. Ctrl+D duplicates; Ctrl+Z undoes.
 
 ## Play and find your place
-Space plays and pauses (J, K and L too). The arrow keys step a frame, Shift+arrows a second, Up and Down jump between cuts. M drops a marker.
+Space plays and pauses. L plays too; press it again to go twice, four, then eight times as fast. J does the same backwards, K stops, and pressing the other way slows down a step first. The arrow keys step a frame, Shift+arrows a second, Up and Down jump between cuts. M drops a marker.
 
 ## Place: size, position, see-through, keyframes
 Pick a clip and use Place: size, position, turn, see-through, crop, fades. Press ◆ beside a setting to keep its value at the playhead; move the playhead, change it and press ◆ again, and it animates between them.
@@ -55,3 +55,18 @@ Filmed the same moment with two to four cameras? Pick their clips (Ctrl-click) a
 
 ## Following something that moves
 On the Effects tab, press Draw a Box Round It and draw a box round something in the picture: Clips follows it as it moves. Pixelate it (faces, number plates), or add a title that moves with it. A title or picture above can follow it too, from its Place tab.
+
+## Insert and overwrite
+Click something in the library to pick it (its edge lights up), then press Insert ( , ) or Overwrite ( . ). Insert puts it in at the playhead and moves everything after it along, on every track that isn't locked, so nothing falls out of step. Overwrite puts it over whatever was there on its track and moves nothing. Mark In and Out first (I and O) and it fills exactly that stretch.
+
+## Blending layers
+A layer (V2 and above) normally covers what's under it. Click the small word under its name to change how they meet: Screen and Add for light leaks, fire and anything shot on black; Multiply and Darken for shadows and textures; Overlay, Soft Light and Hard Light for contrast; Difference for lining two shots up.
+
+## Backwards
+On the Speed tab, Play it backwards runs a clip's footage and sound in reverse. It still trims, cuts and slips as you'd expect: its start is now the later footage. A clip with speed changes, held frames or motion tracking can't go backwards until those are cleared.
+
+## A frame as a picture
+The camera button under the viewer (Ctrl+Shift+S) saves the frame under the playhead as a picture in Pictures/Clips, at the film's full size.
+
+## When footage goes missing
+If a file is moved, renamed or on a drive that isn't plugged in, its library tile says missing and its clips show a dark red card with its name; everything else still plays. Press Find Missing: Clips looks for it by name in Videos, Music, Pictures, Downloads, Documents, the Desktop and plugged-in drives. If it's somewhere else, drop the file on the window and Clips picks up where it left off.

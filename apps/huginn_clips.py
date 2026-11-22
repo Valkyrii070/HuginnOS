@@ -63,6 +63,18 @@ TITLE_STYLES = {
     "caption": {"name": "Subtitle", "size": 46, "place": "bottom", "box": True, "align": "centre"},
 }
 EPS = 1e-6
+BLENDS = [("normal", "Normal"), ("screen", "Screen"), ("add", "Add"), ("lighten", "Lighten"), ("multiply", "Multiply"), ("darken", "Darken"),
+          ("overlay", "Overlay"), ("softlight", "Soft Light"), ("hardlight", "Hard Light"), ("difference", "Difference")]   # how a layer meets what's under it
+# The furthest each setting goes, a little past the window's own sliders. Whatever asks (a dragged slider, a project
+# from elsewhere), a clip sixty times its size is a picture MLT can't hold in memory.
+LIMITS = {"transform.scale": (0.02, 8.0), "transform.x": (-4.0, 4.0), "transform.y": (-4.0, 4.0), "transform.rotation": (-3600.0, 3600.0),
+          "transform.opacity": (0.0, 1.0), "fadeIn": (0.0, 60.0), "fadeOut": (0.0, 60.0), "colour.exposure": (-5.0, 5.0), "colour.contrast": (0.0, 4.0),
+          "colour.saturation": (0.0, 4.0), "colour.temperature": (1000.0, 20000.0), "colour.tint": (-2.0, 2.0), "shape.soft": (0.0, 1.0),
+          "effects.blur": (0.0, 1.0), "effects.sharpen": (0.0, 1.0), "effects.vignette": (0.0, 1.0), "effects.stabilise": (0.0, 1.0),
+          "volume": (-60.0, 24.0), "style.size": (6.0, 400.0), "style.boxOpacity": (0.0, 1.0), "style.outline": (0.0, 40.0), "key.amount": (0.0, 1.0),
+          "key.soft": (0.0, 1.0), "key.spill": (0.0, 1.0)}
+SHUTTLE = [1.0, 2.0, 4.0, 8.0]          # J and L: each press goes one faster
+SHORTEST = 0.08          # no clip is left shorter than this on the timeline (two frames at 25 a second): it couldn't be seen or picked
 
 
 # ============================================================================================ small things
@@ -252,6 +264,50 @@ def total(p: dict) -> float:
     return max([clip_end(c) for c in p["clips"]] + [0.0])
 
 
+def missing(m: dict) -> bool:
+    """Its file isn't where it was (moved, renamed, a drive not plugged in)."""
+    return bool(m) and bool(m.get("path")) and not os.path.exists(m["path"])
+
+
+def make_room(p: dict, at: float, length: float) -> None:
+    """An insert edit: everything from `at` on, on every track that isn't locked, moves `length` later (a clip under `at` is cut there)."""
+    blade(p, at)
+    for c in p["clips"]:
+        if track_of(p, c["track"]).get("locked"):
+            continue
+        if c["at"] < at - EPS < clip_end(c) - EPS:           # still across it: too close to one of its ends for a cut
+            if at - c["at"] <= clip_end(c) - at:
+                c["at"] = round(at, 4)                         # all but all of it is after: it moves whole
+            else:
+                end_sooner(c, at - c["at"])                    # a sliver hangs over: it ends here
+        if c["at"] >= at - EPS:
+            c["at"] = round(c["at"] + length, 4)
+    for m in p.get("markers", []):
+        if isinstance(m, dict) and float(m.get("t", 0)) >= at - EPS:
+            m["t"] = round(float(m["t"]) + length, 3)
+
+
+def clear_span(p: dict, tid: str, at: float, length: float) -> None:
+    """An overwrite edit: nothing is left on track `tid` between `at` and `at + length` (clips that reach in are cut back)."""
+    for edge in (at, at + length):
+        blade(p, edge, [c["id"] for c in on_track(p, tid)] or ["-"])
+    gone = [c["id"] for c in on_track(p, tid) if c["at"] >= at - SHORTEST and clip_end(c) <= at + length + SHORTEST]
+    for c in on_track(p, tid):                              # too little left to cut: trim it back instead
+        if c["id"] in gone:
+            continue
+        if c["at"] < at < clip_end(c):
+            end_sooner(c, at - c["at"])
+        elif c["at"] < at + length < clip_end(c):
+            start_later(c, at + length - c["at"])
+    gone += [c["id"] for c in on_track(p, tid) if clip_len(c) < SHORTEST - EPS]      # trimmed away to nothing
+    p["clips"] = [c for c in p["clips"] if c["id"] not in gone]
+    for c in p["clips"]:
+        if c.get("transition") and c["track"] == tid:
+            nxt = min((x["at"] for x in on_track(p, tid) if x["at"] >= clip_end(c) - 0.3), default=None)
+            if nxt is None or abs(nxt - clip_end(c)) > 0.3:
+                c["transition"] = None
+
+
 def fits(p: dict, tid: str, at: float, length: float, ignore: str = "") -> bool:
     if at < -EPS:
         return False
@@ -294,12 +350,19 @@ def blade(p: dict, t: float, ids: list = None) -> list:
             continue
         if track_of(p, c["track"]).get("locked"):
             continue
-        if c["at"] + 0.05 < t < clip_end(c) - 0.05:
+        if c["at"] + SHORTEST < t < clip_end(c) - SHORTEST:
             second = copy.deepcopy(c)
+            src = src_of(c, t - c["at"])
+            first = dict(c)
+            if backwards(c):                                  # the earlier piece shows the later footage
+                first["in"], second["out"] = round(src, 4), round(src, 4)
+            else:
+                first["out"], second["in"] = round(src, 4), round(src, 4)
+            if min(clip_len(first), clip_len(second)) < SHORTEST - EPS:
+                continue                                      # (in a frame held at the very start or end: nothing to cut off)
             second["id"] = f"c{p['next']}"
             p["next"] += 1
-            src = src_of(c, t - c["at"])
-            c["out"], second["in"] = round(src, 4), round(src, 4)
+            c["in"], c["out"] = first["in"], first["out"]
             second["at"] = round(c["at"] + clip_len(c), 4) if ramped(c) else round(t, 4)   # a cut in a held frame goes before it
             c["fadeOut"], second["fadeIn"] = 0.0, 0.0
             c["transition"] = None
@@ -825,6 +888,8 @@ def src_of(c: dict, u: float) -> float:
     if ramped(c):
         r = Remap(c)
         return r.src(r.out(float(c["in"])) + u)
+    if backwards(c):
+        return float(c["out"]) - u * float(c.get("speed") or 1.0)
     return float(c["in"]) + u * float(c.get("speed") or 1.0)
 
 
@@ -833,7 +898,26 @@ def out_of(c: dict, s: float) -> float:
     if ramped(c):
         r = Remap(c)
         return r.out(s) - r.out(float(c["in"]))
+    if backwards(c):
+        return (float(c["out"]) - s) / float(c.get("speed") or 1.0)
     return (s - float(c["in"])) / float(c.get("speed") or 1.0)
+
+
+def backwards(c: dict) -> bool:
+    """Played backwards (footage and sound only, and not with speed ramps: those belong to the footage's own time)."""
+    return bool(c.get("reverse")) and c.get("kind") == "media" and not ramped(c)
+
+
+def start_later(c: dict, u: float) -> None:
+    """Take the first `u` seconds off a clip; its end stays where it is."""
+    s, end = src_of(c, u), clip_end(c)
+    c["out" if backwards(c) else "in"] = round(s, 4)
+    c["at"] = round(end - clip_len(c), 4)
+
+
+def end_sooner(c: dict, u: float) -> None:
+    """Keep only the first `u` seconds of a clip."""
+    c["in" if backwards(c) else "out"] = round(src_of(c, u), 4)
 
 
 def speed_bands(c: dict) -> list:
@@ -1132,7 +1216,12 @@ class Builder:
                 path = str(stab_path(m.get("path", ""), steady))      # the steadied copy (same length, same sound)
             track = track_of(p, c["track"])
             link = ""
-            if m.get("kind") == "image":
+            if missing(m) and path == m.get("path", ""):       # its file is gone: a dark red card with its name, so the film still plays
+                props.update({"mlt_service": "color", "resource": "#FF3A1218", "mlt_image_format": "rgba", "length": length_f + 2})
+                pin, plen = 0, length_f + 2
+                if track.get("kind") != "audio":
+                    filters += self.title_filter(blank_title("x", c["track"], 0.0, clip_len(c), "Missing: " + str(m.get("name", "")), "heading"))
+            elif m.get("kind") == "image":
                 props.update({"mlt_service": "pixbuf", "resource": path, "ttl": 1, "length": length_f + 2, "aspect_ratio": 1})
                 pin, plen = 0, length_f + 2
             elif ramped(c):                                   # speed ramps and holds: a chain through MLT's timeremap link
@@ -1149,13 +1238,17 @@ class Builder:
                 if c.get("mute") or not m.get("audio") or not heard:
                     props["audio_index"] = -1
             else:
-                media_f = max(1, int(math.floor(float(m.get("duration") or clip_len(c)) * fps / speed)))
-                if abs(speed - 1.0) > 1e-3:
+                longest = float(m.get("duration") or clip_len(c))
+                media_f = max(1, int(math.floor(longest * fps / speed)))
+                back = backwards(c) and m.get("kind") in ("video", "audio")
+                if back:                                      # played backwards: MLT's timewarp at a speed below nothing
+                    props.update({"mlt_service": "timewarp", "resource": f"{-speed:g}:{path}", "warp_speed": f"{-speed:g}", "warp_pitch": 0})
+                elif abs(speed - 1.0) > 1e-3:
                     props.update({"mlt_service": "timewarp", "resource": f"{speed:g}:{path}", "warp_speed": f"{speed:g}", "warp_pitch": 1 if c.get("keepPitch", True) else 0})
                 else:
                     props.update({"mlt_service": "avformat-novalidate", "resource": path})
                 props["length"] = media_f
-                pin, plen = int(round(c["in"] * fps / speed)), media_f
+                pin, plen = int(round((max(0.0, longest - float(c["out"])) if back else c["in"]) * fps / speed)), media_f
                 if track.get("kind") == "audio" or c.get("soundOnly"):
                     props["video_index"] = -1
                 heard = (track in sounding(p)) if track else bool(c.get("heard", True))
@@ -1460,7 +1553,9 @@ class Builder:
             tr.append(f'<transition>{self.prop("mlt_service", "mix")}{self.prop("a_track", 0)}{self.prop("b_track", i)}{self.prop("always_active", 1)}{self.prop("sum", 1)}</transition>')
             if t["kind"] == "video":
                 if self.cairo:
-                    tr.append(f'<transition>{self.prop("mlt_service", "frei0r.cairoblend")}{self.prop("a_track", 0)}{self.prop("b_track", i)}{self.prop("always_active", 1)}</transition>')
+                    mode = t.get("blend") if t.get("blend") in dict(BLENDS) and t.get("blend") != "normal" else ""
+                    tr.append(f'<transition>{self.prop("mlt_service", "frei0r.cairoblend")}{self.prop("a_track", 0)}{self.prop("b_track", i)}{self.prop("always_active", 1)}'
+                              f'{self.prop("1", mode) if mode else ""}</transition>')
                 else:
                     tr.append(f'<transition>{self.prop("mlt_service", "affine")}{self.prop("a_track", 0)}{self.prop("b_track", i)}{self.prop("always_active", 1)}'
                               f'{self.prop("fill", 1)}{self.prop("distort", 0)}{self.prop("rect", f"0 0 {W} {H} 1")}</transition>')
@@ -1637,11 +1732,13 @@ class Engine:
             return None
         return QImage(bytes(data), w, h, w * 4, QImage.Format_RGBA8888).copy()
 
-    def play(self, start: int) -> None:
+    def play(self, start: int, rate: float = 1.0) -> None:
+        """Play from frame `start`; `rate` 2 is double speed, -1 backwards (sound only at 1)."""
         if mlt is None or not self.prod or self.playing:
             return
-        self.playing, self.pos = True, max(0, min(start, self.length - 1))
-        self._start_audio(self.pos)
+        self.playing, self.pos, self.rate = True, max(0, min(start, self.length - 1)), rate
+        if abs(rate - 1.0) < 1e-6:
+            self._start_audio(self.pos)
         self._thread = threading.Thread(target=self._run, daemon=True)
         self._thread.start()
 
@@ -1663,16 +1760,16 @@ class Engine:
     def _run(self) -> None:
         t0, first = time.monotonic(), self.pos
         while self.playing:
-            target = first + int((time.monotonic() - t0) * self.fps)
-            if target >= self.length:
+            target = first + int((time.monotonic() - t0) * self.fps * self.rate)
+            if target >= self.length or target < 0:
                 self.playing = False
-                self.on_end(self.length - 1)
+                self.on_end(self.length - 1 if target > 0 else 0)
                 break
             img = self.image(target)
             self.pos = target
             if img is not None:
                 self.on_frame(target, img)
-            next_at = t0 + (target - first + 1) / self.fps
+            next_at = t0 + (abs(target - first) + 1) / (self.fps * abs(self.rate))
             wait = next_at - time.monotonic()
             if wait > 0:
                 time.sleep(wait)
@@ -1738,6 +1835,7 @@ class Clips(QObject):
         self._root, self._path = self._p, []                # the film, and the compound clips opened inside it
         self._undo, self._redo = [], []
         self._picked, self._head, self._frame_no = [], 0.0, 0
+        self._rate = 1.0                                    # how fast it's playing (J and L)
         self._zoom = 60.0                                   # pixels a second on the timeline
         self._thumbs, self._waves, self._proxies, self._proxying = {}, {}, {}, set()
         self._export = {"busy": False, "share": 0.0, "path": "", "proc": None}
@@ -1854,6 +1952,8 @@ class Clips(QObject):
             if self._demo:
                 continue
             mid = m["id"]
+            if missing(m):
+                continue
             if mid not in self._thumbs and m["kind"] in ("video", "image"):
                 self._make_thumbs(m)
             if mid not in self._waves and m.get("audio"):
@@ -1928,6 +2028,15 @@ class Clips(QObject):
                 found += sorted(q for q in path.iterdir() if q.suffix.lower() in VIDEO + AUDIO + IMAGE)
             elif path.is_file():
                 found.append(path)
+        lost = {Path(m["path"]).name.lower(): m["id"] for m in self._root.get("media", []) if missing(m)}
+        back = {lost[f.name.lower()]: str(f) for f in found if f.name.lower() in lost}
+        if back:                                              # these are the files that had gone missing
+            self._before()
+            n = self._relink(back)
+            self._refresh_media()
+            self._keep()
+            self.said.emit("Found it." if n == 1 else f"Found {n} that were missing.", False)
+            found = [f for f in found if f.name.lower() not in lost]
         known = {m["path"] for m in self._p["media"]}
         found = [f for f in found if str(f) not in known]
         if not found:
@@ -2090,7 +2199,7 @@ class Clips(QObject):
 
     def _get_media(self) -> list:
         used = {c.get("media") for c in self._p["clips"]}
-        return [dict(m, thumb=(self._thumbs.get(m["id"]) or [""])[0], length=clock(m.get("duration", 0)), used=m["id"] in used,
+        return [dict(m, thumb=(self._thumbs.get(m["id"]) or [""])[0], length=clock(m.get("duration", 0)), used=m["id"] in used, missing=missing(m),
                      proxy=m["id"] in self._proxies, proxying=m["id"] in self._proxying,
                      big=max(m.get("width", 0), m.get("height", 0)) > 1920) for m in self._p["media"]]
 
@@ -2196,6 +2305,8 @@ class Clips(QObject):
         return f"{seconds:.1f} s" if seconds < 60 else clock(seconds)
     frame = Property(int, lambda self: self._frame_no, notify=frameChanged)
     playing = Property(bool, lambda self: self._engine.playing, notify=frameChanged)
+    rate = Property(float, lambda self: self._rate if self._engine.playing else 0.0, notify=frameChanged)
+    blends = Property("QVariantList", lambda self: [{"key": k, "name": n} for k, n in BLENDS], constant=True)
     name = Property(str, lambda self: self._p.get("name", ""), notify=changed)
     size = Property(str, lambda self: self._p.get("size", "1080p"), notify=changed)
     sizes = Property("QVariantList", lambda self: [{"id": k, "name": v[2], "w": v[0], "h": v[1]} for k, v in SIZES.items()], constant=True)
@@ -2336,7 +2447,38 @@ class Clips(QObject):
         start = int(round(self._head * int(self._p.get("fps", 30))))
         if start >= self._engine.length - 1:
             start = 0
+        self._rate = 1.0
         self._engine.play(start)
+        self.frameChanged.emit()
+
+    @Slot(int)
+    def shuttle(self, way: int) -> None:
+        """J, K and L. L plays, and again goes faster (2, 4, 8 times); J the same backwards; K (0) stops.
+        Pressing the other way slows down one step first, as on an editing desk."""
+        if way == 0:
+            self.pause()
+            return
+        if self._demo or not self._engine.ok or not self._p["clips"]:
+            self.play()
+            return
+        now = self._rate if self._engine.playing else 0.0
+        steps = [-r for r in reversed(SHUTTLE)] + [0.0] + SHUTTLE
+        k = min(range(len(steps)), key=lambda i: abs(steps[i] - now))
+        rate = steps[max(0, min(len(steps) - 1, k + (1 if way > 0 else -1)))]
+        if self._engine.playing:
+            n = self._engine.stop()
+            self._head = n / float(self._p.get("fps", 30))
+        self._rate = rate
+        if rate == 0.0:
+            self.frameChanged.emit()
+            return
+        self._ensure_engine()
+        start = int(round(self._head * int(self._p.get("fps", 30))))
+        if rate > 0 and start >= self._engine.length - 1:
+            start = 0
+        if rate < 0 and start <= 0:
+            start = self._engine.length - 1
+        self._engine.play(start, rate)
         self.frameChanged.emit()
 
     @Slot()
@@ -2432,25 +2574,31 @@ class Clips(QObject):
         longest = float(m.get("duration") or 3600) if m.get("kind") in ("video", "audio") else 3600.0
         if c.get("kind") == "compound":
             longest = total(c.get("inner") or {"clips": []})
+        if edge not in ("in", "out"):
+            return False
         t = snap(self._p, t, 8.0 / self._zoom, ignore=cid, playhead=self._head)
         self._before()
         old_end = clip_end(c)
-        if edge == "in":
-            new_in = max(0.0, min(src_of(c, t - c["at"]), c["out"] - 0.1))
-            new_len = clip_len(dict(c, **{"in": new_in}))
+        s = src_of(c, t - c["at"])
+        earlier = {"in": max(0.0, min(s, c["out"] - 0.1))}       # the end of the footage that is earlier in the file
+        later = {"out": max(c["in"] + 0.1, min(s, longest))}
+        if edge == "in":                                     # the clip's start: backwards, that's the later footage
+            new = later if backwards(c) else earlier
+            new_len = clip_len(dict(c, **new))
             new_at = old_end - new_len                       # the end stays put
-            if new_at < 0 or not fits(self._p, c["track"], new_at, new_len, ignore=cid):
+            if new_len < SHORTEST - EPS or new_at < 0 or not fits(self._p, c["track"], new_at, new_len, ignore=cid):
                 self._undo.pop()
                 return False
-            c["at"], c["in"] = round(new_at, 4), round(new_in, 4)
+            c.update({k: round(v, 4) for k, v in new.items()})
+            c["at"] = round(new_at, 4)
         else:
-            new_out = max(c["in"] + 0.1, min(src_of(c, t - c["at"]), longest))
-            new_len = clip_len(dict(c, out=new_out))
+            new = earlier if backwards(c) else later
+            new_len = clip_len(dict(c, **new))
             grow = new_len - clip_len(c)
-            if not ripple and not fits(self._p, c["track"], c["at"], new_len, ignore=cid):
+            if new_len < SHORTEST - EPS or (not ripple and not fits(self._p, c["track"], c["at"], new_len, ignore=cid)):
                 self._undo.pop()
                 return False
-            c["out"] = round(new_out, 4)
+            c.update({k: round(v, 4) for k, v in new.items()})
             if ripple:
                 for o in self._p["clips"]:
                     if o["track"] == c["track"] and o["id"] != cid and o["at"] >= old_end - EPS:
@@ -2513,6 +2661,42 @@ class Clips(QObject):
             return
         if hasattr(value, "toVariant"):
             value = value.toVariant()
+        parts = [k for k in path.split(".")]
+        if not path or "" in parts:
+            return
+        node = c
+        for key in parts[:-1]:                               # (looked at before anything is changed: a wrong path changes nothing)
+            node = node.get(key, {}) if isinstance(node, dict) else None
+            if not isinstance(node, dict):
+                return
+        if isinstance(node.get(parts[-1]), dict) != isinstance(value, dict) and parts[-1] in node:
+            return                                           # a group of settings is never swapped for one value, nor the other way
+        if path in ("speed", "length"):
+            try:
+                value = float(value)
+            except (TypeError, ValueError):
+                return
+            if path == "speed" and c.get("kind") != "media":
+                return                                       # only footage has a speed
+        if path in LIMITS:
+            try:
+                value = max(LIMITS[path][0], min(LIMITS[path][1], float(value)))
+            except (TypeError, ValueError):
+                return
+            if value != value:                               # not a number at all
+                return
+        if path == "text" or path.endswith(".text"):
+            value = str(value)[:4000]
+        if path == "reverse":
+            value = bool(value)
+            if value and (c.get("kind") != "media" or media_of(self._p, c.get("media", "")).get("kind") not in ("video", "audio")):
+                return
+            if value and ramped(c):
+                self.said.emit("A clip with speed changes can't play backwards. Clear them first.", True)
+                return
+            if value and (c.get("tracking") or {}).get("boxes"):
+                self.said.emit("Clear the motion tracking first: it follows the footage forwards.", True)
+                return
         self._before()
         node, parts = c, path.split(".")
         for key in parts[:-1]:
@@ -2520,6 +2704,8 @@ class Clips(QObject):
         last = parts[-1]
         if path == "speed":
             value = max(0.1, min(16.0, float(value)))
+            if not ramped(c):                                # never so fast that the clip all but vanishes
+                value = min(value, max(0.1, (float(c["out"]) - float(c["in"])) / SHORTEST))
             old_len = clip_len(c)
             new_len = clip_len(dict(c, speed=value))
             if new_len > old_len + EPS and not fits(self._p, c["track"], c["at"], new_len, ignore=cid):
@@ -2548,6 +2734,8 @@ class Clips(QObject):
             self.said.emit("Put the playhead over the clip first.", True)
             return
         self._before()
+        lo, hi = LIMITS.get("volume" if prop == "volume" else "transform." + prop, (-1e6, 1e6))
+        value = max(lo, min(hi, float(value)))
         keys = [k for k in c.setdefault("keys", {}).setdefault(prop, []) if abs(k[0] - t) > 0.02]
         keys.append([max(0.0, t), float(value)])
         c["keys"][prop] = sorted(keys)
@@ -2626,12 +2814,22 @@ class Clips(QObject):
     @Slot(str, str, "QVariant")
     def setTrack(self, tid: str, key: str, value) -> None:
         t = track_of(self._p, tid)
-        if t and key in ("name", "hidden", "locked", "muted", "role", "gain", "pan", "solo"):
+        if t and key in ("name", "hidden", "locked", "muted", "role", "gain", "pan", "solo", "blend"):
             value = value.toVariant() if hasattr(value, "toVariant") else value
-            if key == "gain":
-                value = round(max(-60.0, min(12.0, float(value))), 1)
-            elif key == "pan":
-                value = round(max(-1.0, min(1.0, float(value))), 2)
+            try:
+                if key == "gain":
+                    value = round(max(-60.0, min(12.0, float(value))), 1)
+                elif key == "pan":
+                    value = round(max(-1.0, min(1.0, float(value))), 2)
+                elif key in ("name", "role"):
+                    value = str(value)[:80]
+                elif key == "blend":
+                    if value not in dict(BLENDS) or t.get("kind") != "video":
+                        return
+                else:
+                    value = bool(value)
+            except (TypeError, ValueError):
+                return
             if not (key in ("gain", "pan") and self._undo and self._mixing == (tid, key)):   # one undo step for a whole drag of a fader
                 self._before()
                 self._mixing = (tid, key) if key in ("gain", "pan") else None
@@ -2669,7 +2867,18 @@ class Clips(QObject):
             return
         if key == "size" and value not in SIZES:
             return
-        if key == "fps" and int(value) not in RATES:
+        try:
+            if key == "fps":
+                value = int(value)
+                if value not in RATES:
+                    return
+            elif key == "name":
+                value = str(value)[:120]
+            elif key == "duckBy":
+                value = float(value)
+            elif key in ("duck", "loudness"):
+                value = bool(value)
+        except (TypeError, ValueError):
             return
         self._before()
         self._p[key] = value
@@ -2823,6 +3032,9 @@ class Clips(QObject):
         c = self._c(cid)
         if not c or c["kind"] != "media" or media_of(self._p, c["media"]).get("kind") != "video":
             self.said.emit("Pick a video clip, then draw a box round what to follow.", True)
+            return
+        if backwards(c):
+            self.said.emit("Motion tracking follows footage played forwards. Turn off Play it backwards first.", True)
             return
         m = media_of(self._p, c["media"])
         start = src_of(c, max(0.0, self._head - c["at"]))
@@ -3194,6 +3406,154 @@ class Clips(QObject):
         self.changed.emit()
 
     # ---------------------------------------------------------------- making the video
+    # ---------------------------------------------------------------- insert and overwrite, a frame as a picture, lost footage
+    def _edit_target(self, m: dict, tid: str) -> dict:
+        if not tid and len(self._picked) == 1 and self._c(self._picked[0]):
+            tid = self._c(self._picked[0])["track"]            # the track being worked on
+        t = track_of(self._p, tid) if tid else None
+        probe_clip = blank_clip("x", m["id"], "", 0.0, 0.0, 1.0)
+        if not t or not accepts(t, probe_clip, m) or t.get("role") == "captions":
+            t = next((x for x in reversed(self._p["tracks"]) if x.get("role") != "captions" and accepts(x, probe_clip, m)
+                      and (m["kind"] == "audio" or x["id"] == "v1")), None) \
+                or next((x for x in reversed(self._p["tracks"]) if x.get("role") != "captions" and accepts(x, probe_clip, m)), None)
+        return t
+
+    @Slot(str, str, str, result=str)
+    def edit(self, mid: str, how: str, tid: str = "") -> str:
+        """Three-point editing. "insert": the library item goes in at the playhead and everything after it, on every
+        track, moves along. "overwrite": it replaces whatever was there on its track. With In and Out marked on the
+        timeline it fills exactly that stretch. "" when done, else why not."""
+        m = media_of(self._p, mid)
+        if not m or how not in ("insert", "overwrite"):
+            return "Pick something in the library first."
+        t = self._edit_target(m, tid)
+        if not t:
+            return "There's no track for that."
+        if t.get("locked"):
+            return f"{t['name']} is locked."
+        length = min(float(m.get("duration") or 5.0), 3600.0) if m["kind"] != "image" else 5.0
+        at = max(0.0, round(self._head, 4))
+        marked = self._p.get("range")
+        if marked and marked[1] - marked[0] >= SHORTEST:
+            at, length = float(marked[0]), (float(marked[1]) - float(marked[0]) if m["kind"] == "image" else min(length, float(marked[1]) - float(marked[0])))
+        if length < SHORTEST:
+            return "That's too short to put in."
+        self._before()
+        if how == "insert":
+            make_room(self._p, at, length)
+        else:
+            clear_span(self._p, t["id"], at, length)
+        if not fits(self._p, t["id"], at, length):           # something there couldn't be cut just here (inside a held frame)
+            self._root = self._undo.pop()[0]
+            self._view()
+            return "The clip under the playhead can't be cut at this point (it's holding a frame). Move the playhead a little and try again."
+        c = blank_clip(f"c{self._p['next']}", mid, t["id"], at, 0.0, length)
+        self._p["next"] += 1
+        self._p["clips"].append(c)
+        self._picked = [c["id"]]
+        self._head = round(at + length, 4)
+        self._keep()
+        self._show_frame()
+        return ""
+
+    @Slot(result=str)
+    def saveFrame(self) -> str:
+        """The frame under the playhead as a picture, at the film's full size, in Pictures/Clips. Says where it went."""
+        if self._demo or not self._p["clips"]:
+            return ""
+        n = int(round(self._head * int(self._p.get("fps", 30))))
+        w, h = SIZES[self._p.get("size", "1080p")][:2]
+        self._sync()
+        xml = Builder(self._p, w, h, proxies={}, has_cairo=self._cairo).build(loudness=False)      # the originals, not the light copies
+        folder = Path(QStandardPaths.writableLocation(QStandardPaths.PicturesLocation) or Path.home() / "Pictures") / "Clips"
+        base = re.sub(r"[\\/:*?\"<>|]+", " ", self._p.get("name") or "My Movie").strip() or "My Movie"
+        stamp = timecode(self._head, int(self._p.get("fps", 30))).replace(":", ".").replace(";", ".")
+        out, k = folder / f"{base} {stamp}.png", 2
+        while out.exists():
+            out, k = folder / f"{base} {stamp} ({k}).png", k + 1
+
+        def make():
+            folder.mkdir(parents=True, exist_ok=True)
+            if mlt is not None:
+                e = Engine(lambda *a: None, lambda *a: None)
+                e.load(xml, (w, h), int(self._p.get("fps", 30)))
+                img = e.image(n)
+                if img is not None and img.save(str(out)):
+                    return str(out)
+            work = CACHE / "still"
+            work.mkdir(parents=True, exist_ok=True)
+            (work / "full.mlt").write_text(xml, encoding="utf-8")
+            subprocess.run(["melt", str(work / "full.mlt"), f"in={n}", f"out={n}", "-consumer", f"avformat:{out}", "vcodec=png", "f=image2", "update=1", "an=1",
+                            f"width={w}", f"height={h}", "sample_aspect_num=1", "sample_aspect_den=1"], capture_output=True, timeout=120)
+            return str(out) if out.exists() else ""
+
+        def done(path):
+            if isinstance(path, str) and path:
+                self.said.emit(f"Saved the frame to Pictures/Clips: {Path(path).name}", False)
+            else:
+                self.said.emit("Couldn't save that frame.", True)
+        self._bg(make, done)
+        return str(out)
+
+    missingCount = Property(int, lambda self: sum(1 for m in self._root.get("media", []) if missing(m)), notify=changed)
+
+    def _relink(self, found: dict) -> int:
+        """{media id: new path}: point those library items at where their files are now."""
+        n = 0
+        for m in self._root.get("media", []):
+            if m["id"] in found and found[m["id"]] != m.get("path"):
+                m["path"], n = found[m["id"]], n + 1
+                self._thumbs.pop(m["id"], None)
+                self._waves.pop(m["id"], None)
+        return n
+
+    @Slot()
+    def findMissing(self) -> None:
+        """Look for footage whose files have moved: by name (and size, when two share a name) in Videos, Music,
+        Pictures, Downloads, Documents, the Desktop, plugged-in drives, and beside the footage that is still there."""
+        lost = [m for m in self._root.get("media", []) if missing(m)]
+        if not lost:
+            self.said.emit("Nothing is missing.", False)
+            return
+        places = [Path(QStandardPaths.writableLocation(loc) or "") for loc in (QStandardPaths.MoviesLocation, QStandardPaths.MusicLocation, QStandardPaths.PicturesLocation,
+                                                                             QStandardPaths.DownloadLocation, QStandardPaths.DocumentsLocation, QStandardPaths.DesktopLocation)]
+        places += [Path(m["path"]).parent for m in self._root.get("media", []) if not missing(m)]
+        places += [q for base in (Path("/media"), Path("/run/media"), Path("/mnt")) if base.is_dir() for q in base.iterdir()]
+        wanted = {}
+        for m in lost:
+            wanted.setdefault(Path(m["path"]).name.lower(), []).append(m)
+
+        def look():
+            found, seen, until = {}, set(), time.time() + 25
+            for place in places:
+                if not str(place) or not place.is_dir() or str(place) in seen:
+                    continue
+                seen.add(str(place))
+                for root, dirs, files in os.walk(place):
+                    dirs[:] = [d for d in dirs if not d.startswith(".")][:200]
+                    if time.time() > until or root.count(os.sep) - str(place).count(os.sep) > 6:
+                        dirs[:] = []
+                        continue
+                    for name in files:
+                        for m in wanted.get(name.lower(), []):
+                            if m["id"] not in found:
+                                found[m["id"]] = os.path.join(root, name)
+                if len(found) == len(lost):
+                    break
+            return found
+
+        def done(found):
+            if isinstance(found, Exception) or not found:
+                self.said.emit("Couldn't find " + ("it" if len(lost) == 1 else "them") + ". Drop the file" + ("" if len(lost) == 1 else "s") + " on the window and Clips will pick up where it left off.", True)
+                return
+            self._before()
+            n = self._relink(found)
+            self._refresh_media()
+            self._keep()
+            left = len(lost) - n
+            self.said.emit(f"Found {n} of {len(lost)}." if left else ("Found it." if n == 1 else f"Found all {n}."), bool(left))
+        self._bg(look, done)
+
     def _target(self, ext: str) -> Path:
         folder = Path(QStandardPaths.writableLocation(QStandardPaths.MoviesLocation) or Path.home() / "Videos") / "Clips"
         folder.mkdir(parents=True, exist_ok=True)
@@ -3314,6 +3674,9 @@ class Clips(QObject):
         """Change a clip's timing. When it gets longer than the room after it, what follows on its track moves along."""
         old_len, old_end = clip_len(c), clip_end(c)
         new_len = clip_len(dict(c, **change))
+        if new_len < SHORTEST - EPS:
+            self.said.emit("That would leave almost nothing of the clip. Make it longer first, or pick a slower speed.", True)
+            return False
         self._before()
         c.update(change)
         if new_len > old_len + EPS and not fits(self._p, c["track"], c["at"], new_len, ignore=c["id"]):
@@ -3327,6 +3690,9 @@ class Clips(QObject):
     def _rampable(self, cid: str):
         c = self._c(cid)
         if not c or c.get("kind") != "media" or media_of(self._p, c.get("media", "")).get("kind") != "video":
+            return None
+        if c.get("reverse"):
+            self.said.emit("Speed changes and held frames go with footage played forwards. Turn off Play it backwards first.", True)
             return None
         return c
 
@@ -3599,6 +3965,8 @@ class Clips(QObject):
             old_len, old_end = clip_len(c), clip_end(c)
             c["out"] = round(now if abs(float(c["out"]) - was) < 1e-3 else min(float(c["out"]), now), 4)
             c["in"] = round(max(0.0, min(float(c["in"]), float(c["out"]) - 0.1)), 4)
+            if float(c["out"]) - float(c["in"]) < SHORTEST:   # emptied from inside: it keeps a sliver to be found by, and goes when it's closed
+                c["out"] = round(float(c["in"]) + SHORTEST, 4)
             c["innerLength"] = round(now, 4)
             grow = clip_len(c) - old_len
             if grow > EPS and not fits(container, c["track"], c["at"], clip_len(c), ignore=c["id"]):
@@ -3639,6 +4007,7 @@ class Clips(QObject):
             x = copy.deepcopy(c)
             x["at"] = round(c["at"] - start, 4)
             inner_clips.append(x)
+        as_it_was = list(self._p["clips"])
         self._p["clips"] = [c for c in self._p["clips"] if c["id"] not in self._picked]
         n = sum(1 for c in self._p["clips"] if c.get("kind") == "compound") + 1
         comp = blank_clip(f"c{self._p['next']}", "", target, start, 0.0, end - start)
@@ -3649,7 +4018,8 @@ class Clips(QObject):
             if compound_content(comp) == "video":
                 target = self._free_video_track(start, end - start, above=target)
             else:
-                self._p["clips"] += picked
+                self._p["clips"] = as_it_was                  # nothing changed, down to the order and the next id
+                self._p["next"] -= 1
                 self._undo.pop()
                 return "There's something else on that track meanwhile: pick it too, or move it."
         comp["track"] = target
@@ -3681,6 +4051,13 @@ class Clips(QObject):
         cid = self._path.pop()
         self._view()
         c = self._c(cid)
+        if c and not (c.get("inner") or {}).get("clips"):     # nothing left in it: an empty compound clip is no clip
+            self._head = max(0.0, float(c["at"]))
+            self._p["clips"] = [x for x in self._p["clips"] if x["id"] != cid]
+            self._picked = []
+            self.said.emit("That compound clip had nothing left in it, so it's gone. Undo brings it back.", False)
+            self._keep(False)
+            return
         if c:
             self._head = max(0.0, c["at"] + self._head - float(c["in"]))
             self._picked = [cid]
@@ -3748,6 +4125,9 @@ class Clips(QObject):
         if not c or c.get("kind") != "media" or m.get("kind") != "video":
             self.said.emit("Pick a video clip to find its shots.", True)
             return
+        if backwards(c):
+            self.said.emit("Find Shots works on footage played forwards. Turn off Play it backwards first.", True)
+            return
         lo, hi = float(c["in"]), float(c["out"])
         if self._demo:
             self._shots_found(cid, [lo + (hi - lo) * k / 3 for k in (1, 2)])
@@ -3793,7 +4173,7 @@ class Clips(QObject):
             return "A clip with speed changes can't slip: its speeds belong to the footage."
         if (c.get("tracking") or {}).get("boxes"):
             return "Clear the motion tracking first: it follows this footage."
-        d = float(seconds) * float(c.get("speed") or 1.0)
+        d = float(seconds) * float(c.get("speed") or 1.0) * (-1 if backwards(c) else 1)
         d = max(-float(c["in"]), min(d, float(m.get("duration") or 0) - float(c["out"])))
         if abs(d) < 0.001:
             return "There's no more footage that way."
@@ -3809,6 +4189,9 @@ class Clips(QObject):
         m = media_of(self._p, (c or {}).get("media", ""))
         if not c or c.get("kind") != "media" or not m.get("audio"):
             self.said.emit("Pick a clip with someone talking in it.", True)
+            return
+        if backwards(c):
+            self.said.emit("Pauses are found in footage played forwards. Turn off Play it backwards first.", True)
             return
         if track_of(self._p, c["track"]).get("locked"):
             self.said.emit("That track is locked.", True)
