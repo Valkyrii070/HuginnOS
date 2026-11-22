@@ -77,7 +77,7 @@ GlassWindow {
     MouseArea { visible: win.slideshow; z: 50; anchors.fill: parent; cursorShape: Qt.BlankCursor; onClicked: win.toggleSlideshow() }
     islands: [
         Island {   // what you can do with the picture that is open
-            visible: !!win.pic && !Backend.editing; anchors.horizontalCenter: parent.horizontalCenter; y: 12
+            visible: !!win.pic && !Backend.editing; anchors.horizontalCenter: parent.horizontalCenter; y: win.topY
             Seg { icon: "grid"; text: "All Pictures"; onClicked: win.viewing = -1 }
             Seg { icon: "play"; tip: "Slideshow (Space)"; onClicked: win.toggleSlideshow() }
             IslandGap {}
@@ -92,7 +92,7 @@ GlassWindow {
             Seg { icon: "trash"; tip: "Move to Trash"; danger: true; onClicked: win.asking = win.pic }
         },
         Island {   // editing: leave, undo, compare, and finish
-            visible: Backend.editing; anchors.horizontalCenter: parent.horizontalCenter; y: 12
+            visible: Backend.editing; anchors.horizontalCenter: parent.horizontalCenter; y: win.topY
             Seg { text: "Cancel"; onClicked: Backend.cancelEdit() }
             IslandGap {}
             Seg { icon: "undo"; tip: "Undo"; enabled: Backend.canUndo; opacity: enabled ? 1 : 0.4; onClicked: Backend.undoEdit() }

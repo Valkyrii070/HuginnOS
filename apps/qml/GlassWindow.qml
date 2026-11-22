@@ -24,6 +24,13 @@ Window {
     default property alias content: body.data
     property alias islands: over.data         // the floating layer: Island items, anchored to the window
     property bool maximised: visibility === Window.Maximized
+    // Filled, under the island top bar (Huginn's own compositor): the window reaches up behind the bar, and its top
+    // islands sit in the bar's row, beside the shell's. Where those end: AppMenu.bar (the shell keeps it).
+    readonly property var barInfo: typeof AppMenu !== "undefined" && AppMenu !== null && AppMenu.bar ? AppMenu.bar : ({})
+    readonly property bool lifted: maximised && (barInfo.h || 0) > 0 && (barInfo.screens || []).indexOf(Screen.name) >= 0
+    readonly property real topY: lifted ? Math.max(0, (barInfo.h - 40) / 2) : 12        // where the top islands sit
+    readonly property real liftLeft: lifted ? (barInfo.left || 0) + 8 : 12              // and how far in, each side
+    readonly property real liftRight: lifted ? (barInfo.right || 0) + 8 : 12
     readonly property real r: maximised || visibility === Window.FullScreen ? 0.01 : corner
     property color tintColor: Theme.t.accent   // Help borrows the colour of the app it is talking about
     // Where something `w` wide sits to be in the middle (a start screen's picture and button), in the window's own
@@ -75,11 +82,11 @@ Window {
     Item { id: over; anchors.fill: parent; z: 5; visible: !win.bare }
     Rail { id: sideRail; visible: win.sidebarWidth > 0 && !win.bare; x: 12; y: 64; z: 6; width: Math.max(win.sidebarWidth, 60); maxHeight: win.height - 64 - 14 }
     // (shown by opacity: hiding an island whose width comes from what's showing in it would hide what's in it for good)
-    Island { id: toolIsland; visible: !win.bare; opacity: width > 12 ? 1 : 0; enabled: width > 12; z: 7; rtl: true; anchors { right: parent.right; rightMargin: 12 } y: 12 }
+    Island { id: toolIsland; visible: !win.bare; opacity: width > 12 ? 1 : 0; enabled: width > 12; z: 7; rtl: true; anchors { right: parent.right; rightMargin: win.liftRight } y: win.topY }
     readonly property real titleEnd: titleIsland.x + titleIsland.width      // where the top left island ends, for islands beside it
     readonly property real toolStart: toolIsland.opacity > 0 ? toolIsland.x : width - 12     // and where the toolbar begins
     Island {   // close, minimise, maximise and the app's name: always top left
-        id: titleIsland; x: 12; y: 12; z: 6; drags: true; visible: !win.bare
+        id: titleIsland; x: win.liftLeft; y: win.topY; z: 6; drags: true; visible: !win.bare
         Item { width: 4; height: 1 }
         Repeater {
             model: [["#FF5F57", "Close"], ["#FEBC2E", "Minimize"], ["#28C840", "Maximize"]]
@@ -94,7 +101,8 @@ Window {
                     onContainsMouseChanged: if (index === 2) { if (containsMouse) layoutsHover.restart(); else layoutsHover.stop() } }
             }
         }
-        Label { text: win.title; font.pixelSize: 12; font.weight: Font.DemiBold; leftPadding: 4; rightPadding: win.heading !== "" ? 2 : 8; anchors.verticalCenter: parent.verticalCenter }
+        Label { visible: !win.lifted; text: win.title; font.pixelSize: 12; font.weight: Font.DemiBold; leftPadding: 4; rightPadding: win.heading !== "" ? 2 : 8; anchors.verticalCenter: parent.verticalCenter }   // (filled: the bar says it)
+        Item { visible: win.lifted && win.heading === ""; width: 4; height: 1 }
         Label { visible: win.heading !== ""; text: win.heading; secondary: true; font.pixelSize: 12; rightPadding: 8; width: Math.min(implicitWidth, 240); elide: Text.ElideRight; anchors.verticalCenter: parent.verticalCenter }
     }
     // The fill button's layouts: halves, thirds, two-thirds, quarters, all of it (Settings › Desktop & Dock can turn

@@ -26,6 +26,17 @@ Item {
     signal liveOpen(string app)
     signal liveIsland(string app)
     readonly property real liveCentre: liveIsl.x + liveIsl.pillCentre
+    // A filled app of Huginn's own shares this row (its top islands sit beside these): where these end, for it, and
+    // the parts of the bar that take the pointer (between them it goes to what's underneath)
+    readonly property real leftEnd: bar.appName !== "" ? appCard.x + appCard.width : orbCard.x + orbCard.width
+    readonly property real rightStart: bar.width - statusCard.x
+    readonly property bool crowded: Status.active.maximized === true && (Status.liftApps || []).some(function (a) { return String(a).toLowerCase() === String(Status.active.appId || "").toLowerCase() })
+    readonly property var rects: {
+        var r = [[orbCard.x, 0, orbCard.width, height], [statusCard.x, 0, statusCard.width, height]]
+        if (appCard.visible) r.push([appCard.x, 0, appCard.width, height])
+        if (liveIsl.visible && liveIsl.width > 1) r.push([liveIsl.x, 0, liveIsl.width, height])
+        return r
+    }
     property string appName: "Huginn"
     // The app's name opens its one menu (AppMenuIsland.qml, in a surface of its own); "A row of menus" (Settings ›
     // Desktop & Dock) puts the app's groups along the bar instead, each opening its own list.
@@ -48,13 +59,13 @@ Item {
     Glass { anchors.fill: parent; radius: 0; border.width: 0; visible: !bar.islands; opacity: bar.solid || bar.wallGlass ? 1 : 0; Behavior on opacity { NumberAnimation { duration: 150 } } }
     // the islands' glass, under what they hold
     component Card: Glass { visible: bar.islands; height: bar.islandH; radius: bar.islandH / 2; anchors.verticalCenter: parent.verticalCenter }
-    Card { x: leftRow.x - 12; width: gap.x + 6 }
-    Card { visible: bar.islands && bar.appName !== ""; x: leftRow.x + gap.x + gap.width - 6; width: leftRow.width - gap.x - gap.width + 14 }
-    Card { x: rightStart.x - 6; width: statusPill.x + statusPill.width + 4 - x }
-    Item { id: rightStart; x: privRow.width > 0 ? privRow.x - 4 : layoutButton.visible ? layoutButton.x : searchButton.x }
+    Card { id: orbCard; x: leftRow.x - 12; width: gap.x + 6 }
+    Card { id: appCard; visible: bar.islands && bar.appName !== ""; x: leftRow.x + gap.x + gap.width - 6; width: leftRow.width - gap.x - gap.width + 14 }
+    Card { id: statusCard; x: rightFrom.x - 6; width: statusPill.x + statusPill.width + 4 - x }
+    Item { id: rightFrom; x: privRow.width > 0 ? privRow.x - 4 : layoutButton.visible ? layoutButton.x : searchButton.x }
     LiveIsland {
         id: liveIsl
-        on: bar.live && bar.islands && Settings.liveAt === "top"; slim: true; h: bar.islandH
+        on: bar.live && bar.islands && Settings.liveAt === "top"; slim: true; tiny: bar.crowded; h: bar.islandH
         anchors.centerIn: parent
         onHovered: function (inside) { bar.liveHover(inside) }
         onFocusWanted: function (id) { bar.liveFocus(id) }

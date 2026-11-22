@@ -180,7 +180,7 @@ GlassWindow {
 
     islands: [
         Island {   // the document: its name, whether it is saved, how long it is, where the cursor is
-            visible: Backend.current !== ""; x: win.pageX + Math.max(0, (win.width - win.pageX - width - toolsIsland.width - 24) / 2); y: 12
+            visible: Backend.current !== ""; x: Math.max(win.lifted ? win.titleEnd + 10 : 0, win.pageX + Math.max(0, (win.width - win.pageX - width - toolsIsland.width - 24) / 2)); y: win.topY
             Label { text: Backend.title || "Untitled"; font.pixelSize: 12; font.weight: Font.DemiBold; leftPadding: 10; width: Math.min(implicitWidth, 220); elide: Text.ElideRight; anchors.verticalCenter: parent.verticalCenter }
             Label { leftPadding: 6; rightPadding: 10; font.pixelSize: 12; anchors.verticalCenter: parent.verticalCenter; width: Math.min(implicitWidth, Math.max(120, win.width - win.pageX - 560)); elide: Text.ElideMiddle
                 color: win.notice ? Theme.t.danger : Theme.t.text_secondary
@@ -188,7 +188,7 @@ GlassWindow {
                       + Backend.words + (Backend.words === 1 ? " word" : " words") + "  ·  page " + win.pageNow + " of " + Backend.pages)) }
             Seg { visible: win.exported !== ""; text: "Show in Files"; onClicked: Backend.reveal(win.exported) }
         },
-        Island { id: toolsIsland; visible: Backend.current !== ""; anchors { right: parent.right; rightMargin: 12 } y: 12; z: 8
+        Island { id: toolsIsland; visible: Backend.current !== ""; anchors { right: parent.right; rightMargin: win.liftRight } y: win.topY; z: 8
             Seg { icon: "search"; tip: "Find and replace (Ctrl+F)"; on: win.finding; onClicked: win.finding ? (win.finding = false) : win.find() }
             Seg { text: Backend.tracking ? "Tracking" : "Review"; on: Backend.tracking || win.railTab === "review"; tip: "Comments and tracked changes"
                 onClicked: win.railTab = win.railTab === "review" ? "docs" : "review" }

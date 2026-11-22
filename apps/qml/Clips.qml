@@ -215,7 +215,7 @@ GlassWindow {
     }
 
     islands: [
-        Island { anchors { right: parent.right; rightMargin: 12 } y: 12
+        Island { anchors { right: parent.right; rightMargin: win.liftRight } y: win.topY
             Seg { icon: "back"; tip: "Undo (Ctrl+Z)"; enabled: Backend.canUndo; opacity: Backend.canUndo ? 1 : 0.4; onClicked: Backend.undo() }
             Seg { icon: "forward"; tip: "Redo"; enabled: Backend.canRedo; opacity: Backend.canRedo ? 1 : 0.4; onClicked: Backend.redo() }
             IslandGap {}

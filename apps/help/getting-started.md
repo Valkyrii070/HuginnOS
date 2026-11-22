@@ -19,6 +19,8 @@ With more than one screen, rest the pointer at the bottom of another screen for 
 ## The top bar
 Along the top are glass islands like the dock's: the orb and the time (the orb opens the start menu, the date opens Today), the app in front (its name opens its menus), and on the right the keyboard layout, Search and the outline that opens the Control Centre. When something is going on (music, a timer, a call, your screen being shared), the live island appears in the middle; point at it and it opens underneath. Settings › Desktop & Dock › Top bar has Style (Islands, or Plain: just words on the wallpaper) and Live island (In the top bar, or By the dock, at the dock's right end).
 
+When one of Huginn's own apps fills the screen, it shares the bar's row instead of adding a second one: its close, minimise and fill buttons sit beside its name in the bar, its own top islands (search, tools) sit beside the status island, and the live island shrinks to a small round until you point at it.
+
 ## The start menu finds things too
 Type in the start menu and, under the apps that match, it shows Settings' pages, your files and the answer to a sum or a conversion. The arrow keys go down into them and Enter opens the one chosen. Tab still opens Search with everything.
 

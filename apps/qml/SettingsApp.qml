@@ -148,7 +148,7 @@ GlassWindow {
     Connections { target: Backend; function onSaid(msg, bad) { toast.say(msg, bad) } }
 
     islands: [
-        Island { anchors { right: parent.right; rightMargin: 12 } y: 12
+        Island { anchors { right: parent.right; rightMargin: win.liftRight } y: win.topY
             IslandField { id: search; placeholder: "Search settings"; width: 240; onTextChanged: win.query = text
                 onAccepted: if (win.results.length) win.go(win.results[0].page) } },
         Rail {

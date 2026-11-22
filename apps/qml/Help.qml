@@ -14,9 +14,9 @@ GlassWindow {
     Shortcut { sequence: "Escape"; enabled: win.reading; onActivated: Backend.home() }
 
     islands: [
-        Island { visible: win.reading; x: 124; y: 12
+        Island { visible: win.reading; x: win.lifted ? win.titleEnd + 10 : 124; y: win.topY
             Seg { icon: "back"; text: "All Guides"; onClicked: Backend.home() } },
-        Island { visible: win.reading; anchors { right: parent.right; rightMargin: 12 } y: 12
+        Island { visible: win.reading; anchors { right: parent.right; rightMargin: win.liftRight } y: win.topY
             IslandField { width: 200; placeholder: "Search the guides"; onAccepted: { Backend.search(text); Backend.home() } } },
         Toast { id: toast; anchors { horizontalCenter: parent.horizontalCenter; bottom: parent.bottom; bottomMargin: 22 } }
     ]

@@ -58,7 +58,7 @@ GlassWindow {
     islands: [
         Toast { id: noteToast; anchors { horizontalCenter: parent.horizontalCenter; bottom: parent.bottom; bottomMargin: 18 } },
         Island {
-            anchors { right: parent.right; rightMargin: 12 } y: 12
+            anchors { right: parent.right; rightMargin: win.liftRight } y: win.topY
             IslandField { id: noteSearch; text: win.filter; onTextChanged: win.filter = text; placeholder: "Search notes" }
             Seg { icon: "bell"; tip: "Remind me about this line"; visible: Backend.current !== ""; onClicked: noteToast.say(Backend.remind(win.here), false) }
             Seg { icon: "mail"; tip: "Send by Mail"; visible: Backend.current !== ""; onClicked: Backend.sendByMail() }

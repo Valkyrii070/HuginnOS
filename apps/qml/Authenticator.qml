@@ -24,7 +24,7 @@ GlassWindow {
         onDropped: function (drop) { if (drop.hasUrls) { var why = Backend.addPicture(drop.urls[0]); if (why) toast.say(why, true) } else if (drop.hasText) { var w2 = Backend.addLink(drop.text); if (w2) toast.say(w2, true) } } }
 
     islands: [
-        Island { visible: !Backend.locked; anchors { right: parent.right; rightMargin: 12 } y: 12
+        Island { visible: !Backend.locked; anchors { right: parent.right; rightMargin: win.liftRight } y: win.topY
             IslandField { width: 170; placeholder: "Search codes"; onTextChanged: Backend.search(text) }
             Seg { icon: "plus"; text: "Add"; onClicked: win.sheet = { kind: "add", tab: Backend.canScan ? "scan" : "paste", why: "" } }
             Seg { icon: "lock"; tip: "Lock now (Passwords too)"; onClicked: Backend.lock() } },

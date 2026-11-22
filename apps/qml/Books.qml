@@ -16,14 +16,14 @@ GlassWindow {
     Timer { id: note; interval: 1200; onTriggered: if (win.open && page.contentHeight > page.height) Backend.at(page.contentY / (page.contentHeight - page.height)) }
 
     islands: [
-        Island { visible: win.open; anchors { right: parent.right; rightMargin: 12 } y: 12
+        Island { visible: win.open; anchors { right: parent.right; rightMargin: win.liftRight } y: win.topY
             Seg { icon: "grid"; text: "Shelf"; onClicked: Backend.close() }
             Seg { icon: "list"; text: "Contents"; on: win.listing; onClicked: win.listing = !win.listing }
             Seg { text: "A–"; tip: "Smaller letters"; onClicked: Backend.setSize(Backend.size - 2) }
             Seg { text: "A+"; tip: "Larger letters"; onClicked: Backend.setSize(Backend.size + 2) }
             Repeater { model: [["theme", "Glass"], ["sepia", "Sepia"], ["white", "White"], ["black", "Black"]]
                 Seg { required property var modelData; text: modelData[1]; on: Backend.paper === modelData[0]; onClicked: Backend.setPaper(modelData[0]) } } },
-        Island { visible: !win.open; anchors { right: parent.right; rightMargin: 12 } y: 12
+        Island { visible: !win.open; anchors { right: parent.right; rightMargin: win.liftRight } y: win.topY
             Seg { icon: "history"; tip: "Look for new books"; onClicked: Backend.rescan() } },
         Island { visible: win.open; anchors { horizontalCenter: parent.horizontalCenter; bottom: parent.bottom; bottomMargin: 12 }
             Seg { icon: "back"; tip: "Previous part (Left)"; opacity: Backend.chapter > 0 ? 1 : 0.4; onClicked: Backend.turn(-1) }

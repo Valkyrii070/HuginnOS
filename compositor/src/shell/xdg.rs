@@ -359,7 +359,18 @@ impl<BackendData: Backend> XdgShellHandler for HuginnState<BackendData> {
         let geometry = {
             let geo = self.space.output_geometry(output).unwrap();
             let zone = layer_map_for_output(output).non_exclusive_zone();
-            smithay::utils::Rectangle::new(geo.loc + zone.loc, zone.size)
+            let mut r = smithay::utils::Rectangle::new(geo.loc + zone.loc, zone.size);
+            // One of Huginn's own apps under the island top bar: it reaches up behind the bar and puts its top
+            // islands in the bar's row, beside the shell's (wm.rs: LIFT_APPS, from the shell)
+            let app = with_states(surface.wl_surface(), |states| {
+                states.data_map.get::<smithay::wayland::shell::xdg::XdgToplevelSurfaceData>().and_then(|d| d.lock().ok().and_then(|d| d.app_id.clone()))
+            })
+            .unwrap_or_default();
+            if zone.loc.y > 0 && crate::wm::lifted(&app) {
+                r.loc.y -= zone.loc.y;
+                r.size.h += zone.loc.y;
+            }
+            r
         };
 
         surface.with_pending_state(|state| {
@@ -388,6 +399,16 @@ impl<BackendData: Backend> XdgShellHandler for HuginnState<BackendData> {
             state.states.unset(xdg_toplevel::State::Maximized);
             state.size = None;
         });
+        // (it may have been up behind the island top bar: back under it)
+        if let Some(window) = self.window_for_surface(surface.wl_surface())
+            && let (Some(loc), Some(output)) = (self.space.element_location(&window), self.output_of(&window))
+        {
+            let geo = self.space.output_geometry(&output).unwrap_or_default();
+            let top = geo.loc.y + layer_map_for_output(&output).non_exclusive_zone().loc.y;
+            if loc.y < top {
+                self.space.map_element(window, (loc.x, top), true);
+            }
+        }
 
         // The protocol demands us to always reply with a configure,
         // regardless of we fulfilled the request or not

@@ -16,7 +16,7 @@ GlassWindow {
     component Heading: Label { font.pixelSize: 11; font.weight: Font.Bold; font.letterSpacing: 1.2; secondary: true }
 
     islands: [
-        Island { anchors { right: parent.right; rightMargin: 12 } y: 12
+        Island { anchors { right: parent.right; rightMargin: win.liftRight } y: win.topY
             Row { spacing: 6; leftPadding: 8; rightPadding: 8; anchors.verticalCenter: parent.verticalCenter
                 Rectangle { width: 8; height: 8; radius: 4; anchors.verticalCenter: parent.verticalCenter; color: Backend.watching ? "#3DDC6E" : Theme.t.text_secondary }
                 Label { font.pixelSize: 12; secondary: true; text: Backend.watching ? "Keeping watch" : "Starting the watcher…" } }

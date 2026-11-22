@@ -57,7 +57,7 @@ GlassWindow {
     MprisLink { player: win.player; title: win.clip ? win.clip.title : ""
         onNext: win.play(win.current + 1); onPrevious: win.play(win.current - 1); onRaise: { win.raise(); win.requestActivate() } }
     islands: [
-        Island { anchors { right: parent.right; rightMargin: 12 } y: 12
+        Island { anchors { right: parent.right; rightMargin: win.liftRight } y: win.topY
             Seg { icon: "list"; text: "Videos"; on: win.showList; onClicked: win.showList = !win.showList }
             Seg { text: win.rate + "×"; tip: "Speed (the [ and ] keys)"; on: win.rate !== 1; onClicked: win.stepRate(win.rate >= 2 ? -5 : 1) }
             Seg { icon: "refresh"; tip: "Repeat this video (L)"; on: win.loop; onClicked: win.toggleLoop() }

@@ -26,7 +26,7 @@ GlassWindow {
         Rectangle { visible: parent.marker >= 0; x: parent.width * Math.min(1, parent.marker) - 1; y: -3; width: 2; height: parent.height + 6; radius: 1; color: Theme.t.text } }
 
     islands: [
-        Island { anchors { right: parent.right; rightMargin: 12 } y: 12
+        Island { anchors { right: parent.right; rightMargin: win.liftRight } y: win.topY
             Seg { objectName: "tabOverview"; text: "Overview"; on: Backend.view === "overview"; onClicked: Backend.setView("overview") }
             Seg { objectName: "tabActivity"; text: "Activity"; on: Backend.view === "activity"; onClicked: Backend.setView("activity") }
             Seg { objectName: "tabPlan"; text: "Plan"; on: Backend.view === "plan"; onClicked: Backend.setView("plan") }

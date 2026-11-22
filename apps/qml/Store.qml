@@ -62,7 +62,7 @@ GlassWindow {
         Label { visible: !!shot.info.url && pic.status !== Image.Ready; anchors.centerIn: parent; secondary: true; text: pic.status === Image.Error ? "This picture couldn't be loaded" : "Loading picture…" } }
 
     islands: [
-        Island { anchors { right: parent.right; rightMargin: 12 } y: 12; IslandField { id: search; placeholder: "Search apps"; onTextChanged: Backend.setQuery(text) } },
+        Island { anchors { right: parent.right; rightMargin: win.liftRight } y: win.topY; IslandField { id: search; placeholder: "Search apps"; onTextChanged: Backend.setQuery(text) } },
         Island {   // the sections: the main island
             anchors { horizontalCenter: parent.horizontalCenter; bottom: parent.bottom; bottomMargin: 14 }
             Repeater { model: Backend.categories

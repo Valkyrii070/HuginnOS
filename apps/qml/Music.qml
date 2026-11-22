@@ -59,7 +59,7 @@ GlassWindow {
         onNext: win.nextSong(); onPrevious: win.previousSong(); onRaise: { win.raise(); win.requestActivate() } }
     islands: [
         Island {
-            anchors { right: parent.right; rightMargin: 12 } y: 12
+            anchors { right: parent.right; rightMargin: win.liftRight } y: win.topY
             IslandField { visible: win.view === "library"; text: win.filter; onTextChanged: win.filter = text; placeholder: "Search your music" }
             Seg { text: "Now Playing"; on: win.view === "playing"; onClicked: win.view = "playing" }
             Seg { text: "Library"; on: win.view === "library"; onClicked: win.view = "library" }

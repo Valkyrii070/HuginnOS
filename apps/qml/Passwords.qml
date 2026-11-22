@@ -26,7 +26,7 @@ GlassWindow {
     Component.onCompleted: if (Backend.locked) door.focusIn()
 
     islands: [
-        Island { visible: !Backend.locked; anchors { right: parent.right; rightMargin: 12 } y: 12
+        Island { visible: !Backend.locked; anchors { right: parent.right; rightMargin: win.liftRight } y: win.topY
             IslandField { id: search; width: 190; placeholder: "Search passwords"; onTextChanged: win.query = text }
             Seg { icon: "plus"; tip: "New password"; onClicked: win.startNew() }
             Seg { icon: "lock"; tip: "Lock now"; onClicked: Backend.lock() } },

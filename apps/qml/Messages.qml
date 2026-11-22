@@ -20,7 +20,7 @@ GlassWindow {
     onActiveChanged: Backend.setFocused(active)
 
     islands: [
-        Island { visible: Backend.state === "ready"; anchors { right: parent.right; rightMargin: 12 } y: 12
+        Island { visible: Backend.state === "ready"; anchors { right: parent.right; rightMargin: win.liftRight } y: win.topY
             IslandField { width: 170; placeholder: "Find a chat"; onTextChanged: Backend.search(text) }
             Seg { icon: "plus"; text: "New Chat"; onClicked: { win.sheet = { kind: "new" }; whoBox.text = ""; whoBox.focusIn() } }
             Seg { icon: "gear"; tip: "Account"; onClicked: win.sheet = { kind: "account" } } },

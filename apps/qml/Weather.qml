@@ -13,11 +13,11 @@ GlassWindow {
     function flipUnit() { Backend.flipUnit() }
 
     islands: [
-        Island { anchors.horizontalCenter: parent.horizontalCenter; y: 12
+        Island { anchors.horizontalCenter: parent.horizontalCenter; y: win.topY
             Repeater { model: Backend.places
                 Seg { required property var modelData; required property int index; text: modelData.name; on: index === Backend.current; onClicked: Backend.choose(index) } }
             Seg { icon: "plus"; tip: "Add a place"; onClicked: { win.adding = true; finder.text = ""; finder.focusIn() } } },
-        Island { anchors { right: parent.right; rightMargin: 12 } y: 12
+        Island { anchors { right: parent.right; rightMargin: win.liftRight } y: win.topY
             Seg { text: Backend.unit === "f" ? "°F" : "°C"; tip: "Switch units"; onClicked: Backend.flipUnit() }
             Seg { icon: "history"; tip: "Refresh"; opacity: Backend.loading ? 0.4 : 1; onClicked: Backend.refresh() } },
         Toast { id: toast; anchors { horizontalCenter: parent.horizontalCenter; bottom: parent.bottom; bottomMargin: 18 } },

@@ -184,6 +184,11 @@ pub struct Hiding {
 
 /// From the shell's settings (dock_layout): snapped pairs come forward together; switching space switches every screen.
 pub static KEEP_SNAPPED: AtomicBool = AtomicBool::new(true);
+/// Huginn's own apps that asked to reach up behind the island top bar when they fill the screen (their app ids).
+pub static LIFT_APPS: std::sync::RwLock<Vec<String>> = std::sync::RwLock::new(Vec::new());
+pub fn lifted(app_id: &str) -> bool {
+    !app_id.is_empty() && LIFT_APPS.read().map(|l| l.iter().any(|a| a.eq_ignore_ascii_case(app_id))).unwrap_or(false)
+}
 pub static SPACES_ALL_SCREENS: AtomicBool = AtomicBool::new(true);
 
 #[derive(Default)]
@@ -1310,6 +1315,25 @@ impl<B: Backend + 'static> HuginnState<B> {
         }
         if let Some(g) = v.get("gaps").and_then(|s| s.as_bool()) {
             self.huginn.wm.gaps = g;
+        }
+        if let Some(apps) = v.get("liftApps").and_then(|a| a.as_array()) {
+            let now: Vec<String> = apps.iter().filter_map(|a| a.as_str().map(|s| s.to_string())).collect();
+            let changed = LIFT_APPS.read().map(|l| *l != now).unwrap_or(true);
+            if changed {
+                if let Ok(mut l) = LIFT_APPS.write() {
+                    *l = now;
+                }
+                // windows that fill the screen now: laid out again, up behind the bar or back under it
+                let full: Vec<_> = self
+                    .space
+                    .elements()
+                    .filter_map(|w| w.0.toplevel().cloned())
+                    .filter(|t| t.with_pending_state(|s| s.states.contains(xdg_toplevel::State::Maximized)))
+                    .collect();
+                for t in full {
+                    smithay::wayland::shell::xdg::XdgShellHandler::maximize_request(self, t);
+                }
+            }
         }
         if let Some(k) = v.get("keepSnapped").and_then(|s| s.as_bool()) {
             KEEP_SNAPPED.store(k, Ordering::Relaxed);

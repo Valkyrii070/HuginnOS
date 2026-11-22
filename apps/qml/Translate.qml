@@ -40,7 +40,7 @@ GlassWindow {
         Btn { height: 22; visible: Backend.result === ""; text: "Keep Earlier Translations"; onClicked: Backend.setKeepHistory(true) } }
 
     islands: [
-        Island { visible: Backend.ready; anchors { right: parent.right; rightMargin: 12 } y: 12
+        Island { visible: Backend.ready; anchors { right: parent.right; rightMargin: win.liftRight } y: win.topY
             Seg { icon: "download"; text: "Languages"; onClicked: { win.sheet = "packs"; Backend.lookForPacks() } } },
         Toast { id: toast; anchors { horizontalCenter: parent.horizontalCenter; bottom: parent.bottom; bottomMargin: 18 } },
         Item { anchors.fill: parent; z: 20; visible: win.sheet !== null

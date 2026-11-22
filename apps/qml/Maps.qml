@@ -32,7 +32,7 @@ GlassWindow {
             Label { id: cr; anchors.centerIn: parent; text: "© OpenStreetMap contributors"; color: "#333"; font.pixelSize: 10 } } }
 
     islands: [
-        Island { anchors { right: parent.right; rightMargin: 12 } y: 12
+        Island { anchors { right: parent.right; rightMargin: win.liftRight } y: win.topY
             Seg { text: Backend.miles ? "mi" : "km"; tip: "Switch between kilometres and miles"; onClicked: Backend.flipUnits() }
             Seg { icon: "route"; text: "Directions"; on: win.routing; onClicked: win.routing ? Backend.clearRoute() : Backend.setEnd("from", Backend.saved.length ? Backend.saved[0] : ({})) } },
         Toast { id: toast; anchors { horizontalCenter: parent.horizontalCenter; bottom: parent.bottom; bottomMargin: 18 } }

@@ -29,7 +29,7 @@ GlassWindow {
     component Rule: Rectangle { height: 1; color: win.cardLine }
 
     islands: [
-        Island { anchors { right: parent.right; rightMargin: 12 } y: 12
+        Island { anchors { right: parent.right; rightMargin: win.liftRight } y: win.topY
             IslandField { visible: !win.reading; width: 190; placeholder: "Search stories"; onTextChanged: Backend.search(text) }
             Seg { visible: !win.reading; icon: "plus"; text: "Follow"; onClicked: { win.sheet = { kind: "follow", why: "" }; followBox.focusIn() } }
             Seg { visible: !win.reading; icon: "history"; tip: Backend.busy ? "Checking…" : "Check for new stories"; on: Backend.busy; onClicked: Backend.refresh() }
@@ -41,7 +41,7 @@ GlassWindow {
             Seg { visible: win.reading && !!Backend.article.link; icon: "share"; text: "Open in Huginn"; onClicked: Backend.openLink(Backend.article.link) }
             Seg { visible: win.reading && aiPanel.on("feeds"); icon: "sparkle"; text: "Summarise"
                 onClicked: aiPanel.run({ task: "summarise", heading: "Summary", text: (Backend.article.title || "") + "\n\n" + String(Backend.article.content || "").replace(/<[^>]+>/g, " ").replace(/&nbsp;/g, " ").replace(/&amp;/g, "&").replace(/\s+/g, " ") }) } },
-        Island { visible: win.reading; x: 132; y: 12
+        Island { visible: win.reading; x: win.lifted ? win.titleEnd + 10 : 132; y: win.topY
             Seg { icon: "back"; text: "All Stories"; onClicked: Backend.close() } },
         Toast { id: toast; anchors { horizontalCenter: parent.horizontalCenter; bottom: parent.bottom; bottomMargin: 22 } },
 

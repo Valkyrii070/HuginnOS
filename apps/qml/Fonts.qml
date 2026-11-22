@@ -19,10 +19,10 @@ GlassWindow {
     DropArea { anchors.fill: parent; onDropped: function (d) { if (d.hasUrls) win.why = Backend.tryFile(d.urls[0].toString()); if (win.why !== "") toast.say(win.why, true) } }
 
     islands: [
-        Island { x: 134; y: 12   // which fonts: just right of the window's own island
+        Island { x: win.lifted ? win.titleEnd + 10 : 134; y: win.topY   // which fonts: just right of the window's own island
             Repeater { model: [["all", "All"], ["mine", "Yours"], ["starred", "Starred"], ["mono", "Monospace"]]
                 Seg { required property var modelData; text: modelData[1] + "  " + (Backend.counts[modelData[0]] || 0); on: Backend.view === modelData[0]; onClicked: Backend.setView(modelData[0]) } } },
-        Island { anchors { right: parent.right; rightMargin: 12 } y: 12
+        Island { anchors { right: parent.right; rightMargin: win.liftRight } y: win.topY
             IslandField { width: 170; placeholder: "Find a font"; onTextChanged: Backend.search(text) }
             Seg { icon: "plus"; text: "Add Fonts"; onClicked: win.sheet = { kind: "files", list: Backend.fileChoices() } } },
         Toast { id: toast; anchors { horizontalCenter: parent.horizontalCenter; bottom: parent.bottom; bottomMargin: 22 } },

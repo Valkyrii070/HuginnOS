@@ -2503,8 +2503,13 @@ date; the app and its menus; status), and the bar grows from 30 to 40 px (`shell
 `LiveIsland` gained a `slim` form (one line, no buttons, 28 px) that sits in the middle of the main screen's bar;
 `LivePanel` hangs under it (`fromTop`) from a top-anchored surface whose input region is just the panel.
 `Settings.barStyle` ("islands" | "plain") and `Settings.liveAt` ("top" | "dock") choose; with "dock" the island and
-its panel are where they were, at the dock's right end. Still to come from the concept: a full-screen app lending
-its own islands to the bar ("M8").
+its panel are where they were, at the dock's right end. A filled app shares the bar's row ("M8"): `GlassWindow` apps
+tell the shell they can (`org.huginn.Shell.Lift`), the shell passes their ids to the compositor (`DockLayout`:
+`liftApps`), and `maximize_request` lets those windows reach up behind the bar. The shell writes where its islands end
+to `$XDG_RUNTIME_DIR/huginn/bar.json`; `AppMenu.bar` watches it and `GlassWindow.lifted/topY/liftLeft/liftRight`
+place the title island (now just the three buttons) and the tool island in the row; each app's own top islands use
+`win.topY`. The bar's surfaces take the pointer only on their islands (`Status.setInputRects`), so the app's islands
+between them are clickable, and the live island goes `tiny` meanwhile.
 
 ## Huginn, the browser
 

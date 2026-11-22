@@ -73,7 +73,7 @@ GlassWindow {
 
     islands: [
         Island { visible: Backend.hasAccount && !win.addingAnother
-            anchors { right: parent.right; rightMargin: 12 } y: 12
+            anchors { right: parent.right; rightMargin: win.liftRight } y: win.topY
             IslandField { id: search; placeholder: "Search this mailbox"; onTextChanged: Backend.search(text) }
             Seg { icon: "history"; tip: Backend.syncing ? "Checking…" : "Check for mail"; opacity: Backend.syncing ? 0.45 : 1; onClicked: Backend.refresh() }
             Seg { visible: Backend.outbox.length > 0; icon: "history"; text: "Outbox · " + Backend.outbox.length; tip: "Written offline, waiting to be sent"; onClicked: win.sheet = { kind: "outbox" } }
@@ -81,7 +81,7 @@ GlassWindow {
             Seg { icon: "user"; tip: "Accounts"; onClicked: win.sheet = { kind: "accounts" } }
             Seg { icon: "edit"; text: "New Message"; on: true; onClicked: win.compose({}) }
         },
-        Island { visible: Backend.accounts.length > 1 && !win.addingAnother; anchors.horizontalCenter: parent.horizontalCenter; y: 12
+        Island { visible: Backend.accounts.length > 1 && !win.addingAnother; anchors.horizontalCenter: parent.horizontalCenter; y: win.topY
             Repeater { model: Backend.accounts
                 Seg { required property var modelData; text: modelData.email; on: Backend.account === modelData.id; onClicked: Backend.setAccount(modelData.id) } } },
         Island {   // mailboxes: the main island

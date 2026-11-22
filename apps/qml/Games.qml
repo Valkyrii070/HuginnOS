@@ -91,7 +91,7 @@ GlassWindow {
     Image { anchors { fill: parent; margins: 5 } z: -1; source: "grain.png"; fillMode: Image.Tile; smooth: false; visible: win.has }
 
     islands: [
-        Island { anchors { right: parent.right; rightMargin: 12 } y: 12
+        Island { anchors { right: parent.right; rightMargin: win.liftRight } y: win.topY
             IslandField { objectName: "search"; width: 170; placeholder: "Find a game"; onTextChanged: Backend.search(text) }
             Seg { icon: "user"; tip: "Steam accounts"; onClicked: win.sheet = "accounts" }
             Seg { objectName: "gameModeButton"; visible: Backend.gameModeReady || win.demoGameMode; icon: "gamepad"; text: "Game Mode"; tip: "Steam's big-screen interface, as on SteamOS"; onClicked: win.sheet = "gamemode" }

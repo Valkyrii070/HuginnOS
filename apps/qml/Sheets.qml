@@ -223,7 +223,7 @@ GlassWindow {
 
     islands: [
         // ---- the formula island: where you are, and what's in it
-        Island { id: barIsland; visible: Backend.current !== ""; x: Math.max(win.gridX, win.titleEnd + 10); y: 12; width: win.width - x - toolsIsland.width - 24
+        Island { id: barIsland; visible: Backend.current !== ""; x: Math.max(win.gridX, win.titleEnd + 10); y: win.topY; width: win.width - x - toolsIsland.width - 24
             Rectangle { width: 92; height: 30; radius: 10; color: Theme.t.accent; anchors.verticalCenter: parent.verticalCenter
                 TextInput { id: nameBox; anchors { fill: parent; leftMargin: 8; rightMargin: 8 } verticalAlignment: TextInput.AlignVCenter; horizontalAlignment: TextInput.AlignHCenter
                     color: Theme.t.onAccent; font.family: Theme.t.fontMono; font.pixelSize: 12; font.weight: Font.DemiBold; selectByMouse: true; clip: true
@@ -243,7 +243,7 @@ GlassWindow {
             Label { id: sumLine; visible: text !== "" && !win.editing; anchors.verticalCenter: parent.verticalCenter; leftPadding: 8; rightPadding: 6; font.pixelSize: 12
                 width: Math.min(implicitWidth, barIsland.width * 0.4); elide: Text.ElideRight; secondary: true
                 text: (win.tick, Backend.current !== "" ? Backend.summary(win.r0, win.c0, win.r1, win.c1) : "") } },
-        Island { id: toolsIsland; visible: Backend.current !== ""; anchors { right: parent.right; rightMargin: 12 } y: 12; z: 8
+        Island { id: toolsIsland; visible: Backend.current !== ""; anchors { right: parent.right; rightMargin: win.liftRight } y: win.topY; z: 8
             Seg { icon: "undo"; tip: "Undo (Ctrl+Z)"; opacity: Backend.canUndo ? 1 : 0.4; onClicked: { Backend.undo(); win.tick++ } }
             Seg { icon: "redo"; tip: "Redo (Ctrl+Shift+Z)"; opacity: Backend.canRedo ? 1 : 0.4; onClicked: { Backend.redo(); win.tick++ } }
             Seg { icon: "search"; tip: "Find (Ctrl+F)"; on: win.finding; onClicked: win.finding ? (win.finding = false) : win.find() }

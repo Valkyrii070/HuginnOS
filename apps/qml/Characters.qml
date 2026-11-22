@@ -12,7 +12,7 @@ GlassWindow {
     Connections { target: Backend; function onSaid(msg, wrong) { toast.say(msg, wrong) } }
 
     islands: [
-        Island { anchors { right: parent.right; rightMargin: 12 } y: 12
+        Island { anchors { right: parent.right; rightMargin: win.liftRight } y: win.topY
             IslandField { id: find; objectName: "find"; width: 240; placeholder: "Search " + Backend.count.toLocaleString(Qt.locale(), "f", 0) + " characters"; onTextChanged: Backend.search(text) } },
         Toast { id: toast; anchors { horizontalCenter: parent.horizontalCenter; bottom: parent.bottom; bottomMargin: 22 } },
         Rail { x: 12; y: 64; width: 168; maxHeight: win.height - 64 - 14

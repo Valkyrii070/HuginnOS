@@ -41,7 +41,7 @@ GlassWindow {
     Component.onCompleted: search.forceActiveFocus()
 
     islands: [
-        Island { anchors { right: parent.right; rightMargin: 12 } y: 12
+        Island { anchors { right: parent.right; rightMargin: win.liftRight } y: win.topY
             IslandField { id: search; width: 190; placeholder: "Search people"; onTextChanged: win.query = text }
             Seg { icon: "plus"; tip: "New contact"; onClicked: win.startEdit(true) }
             IslandGap {}

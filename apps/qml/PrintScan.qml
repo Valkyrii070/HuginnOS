@@ -28,7 +28,7 @@ GlassWindow {
     Component.onCompleted: settle()
 
     islands: [
-        Island { anchors.horizontalCenter: parent.horizontalCenter; y: 12
+        Island { anchors.horizontalCenter: parent.horizontalCenter; y: win.topY
             Seg { icon: "printer"; text: "Print"; on: win.tab === "print"; onClicked: win.tab = "print" }
             Seg { icon: "image"; text: "Scan" + (Backend.pages.length ? " · " + Backend.pages.length : ""); on: win.tab === "scan"; onClicked: win.tab = "scan" } },
         Toast { id: toast; anchors { horizontalCenter: parent.horizontalCenter; bottom: parent.bottom; bottomMargin: 18 } },

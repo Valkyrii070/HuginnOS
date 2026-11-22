@@ -13,11 +13,11 @@ GlassWindow {
     Connections { target: Backend; function onSaid(msg, wrong) { toast.say(msg, wrong) } }
 
     islands: [
-        Island { visible: Backend.devices.length > 0; anchors.horizontalCenter: parent.horizontalCenter; y: 12
+        Island { visible: Backend.devices.length > 0; anchors.horizontalCenter: parent.horizontalCenter; y: win.topY
             Repeater { model: Backend.devices
                 Seg { required property var modelData; text: modelData.name; on: Backend.picked === modelData.id; opacity: modelData.here ? 1 : 0.55; tip: !modelData.paired ? "Not paired" : modelData.here ? "Connected" : "Out of reach"
                     onClicked: Backend.pick(modelData.id) } } },
-        Island { anchors { right: parent.right; rightMargin: 12 } y: 12; visible: Backend.ready
+        Island { anchors { right: parent.right; rightMargin: win.liftRight } y: win.topY; visible: Backend.ready
             Seg { icon: "history"; tip: "Look again"; onClicked: Backend.refresh() } },
         Toast { id: toast; anchors { horizontalCenter: parent.horizontalCenter; bottom: parent.bottom; bottomMargin: 18 } },
         Item { anchors.fill: parent; z: 20; visible: win.choosing

@@ -28,7 +28,7 @@ GlassWindow {
         onRaise: { win.raise(); win.requestActivate() } }
 
     islands: [
-        Island { anchors { right: parent.right; rightMargin: 12 } y: 12
+        Island { anchors { right: parent.right; rightMargin: win.liftRight } y: win.topY
             Seg { icon: "history"; tip: Backend.busy ? "Checking…" : "Check for new episodes"; opacity: Backend.busy ? 0.45 : 1; onClicked: Backend.refreshAll() }
             Seg { icon: "plus"; text: "Follow a Show"; onClicked: { win.finding = true; finder.text = ""; Backend.find(""); finder.focusIn() } } },
         Toast { id: toast; anchors { horizontalCenter: parent.horizontalCenter; bottom: parent.bottom; bottomMargin: 96 } },

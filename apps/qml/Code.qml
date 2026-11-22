@@ -350,7 +350,7 @@ GlassWindow {
 
     islands: [
         // the open files, floating across the top
-        Item { id: tabsBar; objectName: "tabsBar"; x: win.sideW + 24; y: 12; height: 40; width: win.width - x - toolBox.width - 26; visible: Backend.tabs.length > 0
+        Item { id: tabsBar; objectName: "tabsBar"; x: Math.max(win.sideW + 24, win.lifted ? win.titleEnd + 10 : 0); y: win.topY; height: 40; width: win.width - x - toolBox.width - 26; visible: Backend.tabs.length > 0
             ListView { id: tabList; anchors.fill: parent; orientation: ListView.Horizontal; spacing: 6; clip: true; model: Backend.tabs; boundsBehavior: Flickable.StopAtBounds
                 currentIndex: Backend.current
                 onCurrentIndexChanged: positionViewAtIndex(currentIndex, ListView.Contain)
@@ -369,7 +369,7 @@ GlassWindow {
                                 Glyph { anchors.centerIn: parent; name: "x"; size: 10; visible: !tabPill.modelData.dirty || closeX.hovered } } } } } } },
         // The tools on the left, Run and Debug on their own at the right edge: a quick second click on the terminal
         // (or anything else) never lands on Run
-        Item { id: toolBox; anchors { right: parent.right; rightMargin: 12 } y: 12; height: runBox.height; width: toolsIsland.width + 12 + runBox.width
+        Item { id: toolBox; anchors { right: parent.right; rightMargin: win.liftRight } y: win.topY; height: runBox.height; width: toolsIsland.width + 12 + runBox.width
             Island { id: toolsIsland; objectName: "toolsIsland"
                 Seg { objectName: "newFileButton"; icon: "newfile"; tip: "New file (Ctrl+N)"; onClicked: win.newFile() }
                 Seg { icon: "search"; tip: "Go to a file or command (Ctrl+P)"; onClicked: win.openPalette("") }

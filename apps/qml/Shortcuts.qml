@@ -20,7 +20,7 @@ GlassWindow {
         Label { id: tagText; anchors.centerIn: parent; font.pixelSize: 10; font.weight: Font.DemiBold; color: parent.ink } }
 
     islands: [
-        Island { anchors { right: parent.right; rightMargin: 12 } y: 12
+        Island { anchors { right: parent.right; rightMargin: win.liftRight } y: win.topY
             Rectangle { width: watchRow.width + 20; height: 28; radius: 14; color: "transparent"; anchors.verticalCenter: parent.verticalCenter
                 Row { id: watchRow; anchors.centerIn: parent; spacing: 6
                     Rectangle { width: 8; height: 8; radius: 4; anchors.verticalCenter: parent.verticalCenter; color: Backend.watching ? "#3DDC6E" : Theme.t.text_secondary }

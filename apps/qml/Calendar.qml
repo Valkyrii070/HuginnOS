@@ -14,12 +14,12 @@ GlassWindow {
     readonly property color wash: Qt.rgba(tintColor.r, tintColor.g, tintColor.b, 0.2)
     islands: [
         Island {   // which month
-            anchors.horizontalCenter: parent.horizontalCenter; y: 12
+            anchors.horizontalCenter: parent.horizontalCenter; y: win.topY
             Seg { icon: "back"; tip: win.view === "week" ? "Previous week" : "Previous month"; onClicked: win.view === "week" ? Backend.stepWeek(-1) : Backend.step(-1) }
             Label { text: win.view === "week" ? Backend.weekTitle : Backend.title; font.pixelSize: 13; font.weight: Font.DemiBold; leftPadding: 8; rightPadding: 8; anchors.verticalCenter: parent.verticalCenter }
             Seg { icon: "forward"; tip: win.view === "week" ? "Next week" : "Next month"; onClicked: win.view === "week" ? Backend.stepWeek(1) : Backend.step(1) }
         },
-        Island { anchors { right: parent.right; rightMargin: 12 } y: 12
+        Island { anchors { right: parent.right; rightMargin: win.liftRight } y: win.topY
             Seg { text: "Week"; on: win.view === "week"; onClicked: win.view = "week" }
             Seg { text: "Month"; on: win.view === "month"; onClicked: win.view = "month" }
             IslandGap {}

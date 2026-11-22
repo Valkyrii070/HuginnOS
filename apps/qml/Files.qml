@@ -235,7 +235,7 @@ GlassWindow {
 
     islands: [
         Island {   // where you are: back, forward, up, then the path
-            anchors.horizontalCenter: parent.horizontalCenter; y: 12
+            anchors.horizontalCenter: parent.horizontalCenter; y: win.topY
             Seg { icon: "back"; tip: "Back"; opacity: Backend.canBack ? 1 : 0.4; onClicked: Backend.back() }
             Seg { icon: "forward"; tip: "Forward"; opacity: Backend.canForward ? 1 : 0.4; onClicked: Backend.forward() }
             Seg { icon: "up"; tip: "Up one folder"; opacity: Backend.canUp ? 1 : 0.4; onClicked: Backend.up() }
@@ -251,7 +251,7 @@ GlassWindow {
                 onClicked: { win.inside = !win.inside; Backend.find(search.text, win.inside) } }
         },
         Island {
-            anchors { right: parent.right; rightMargin: 12 } y: 12
+            anchors { right: parent.right; rightMargin: win.liftRight } y: win.topY
             IslandField { id: search; width: 160; onTextChanged: { win.filter = text; if (win.deep && text !== Backend.finding) Backend.find("", false) }
                 placeholder: win.trash ? "Search the Trash" : "Search this folder"
                 onAccepted: { if (text !== "" && !win.trash) Backend.find(text, win.inside); keys.forceActiveFocus() } Keys.onEscapePressed: { text = ""; keys.forceActiveFocus() } }

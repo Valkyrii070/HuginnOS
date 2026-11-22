@@ -22,7 +22,7 @@ import weakref
 from pathlib import Path
 
 from gi.repository import Gio, GLib
-from PySide6.QtCore import QEvent, QKeyCombination, QMetaObject, QObject, Q_ARG, Qt, Slot
+from PySide6.QtCore import Property, QEvent, QFileSystemWatcher, QKeyCombination, QMetaObject, QObject, Q_ARG, Qt, Signal, Slot
 from PySide6.QtGui import QGuiApplication, QKeyEvent, QKeySequence, QWindow
 from PySide6.QtQml import QJSValue
 
@@ -203,6 +203,9 @@ NAMES = {"files": "Files"}
 TEXT_APPS = {"writer", "sheets", "slides", "notes", "mail", "code", "documents", "messages", "translate", "terminal"}
 
 
+BAR_FILE = Path(os.environ.get("XDG_RUNTIME_DIR") or f"/run/user/{os.getuid()}") / "huginn" / "bar.json"
+
+
 class AppMenu(QObject):
     def __init__(self, key: str, title: str, engine, backend):
         super().__init__()
@@ -219,6 +222,18 @@ class AppMenu(QObject):
             print("menu: no session bus:", err.message, file=sys.stderr)
             self._bus = None
         self._bound = None                                    # the menus' own keys, worked out at the first key press
+        # Filled under the island top bar, the window shares the bar's row (GlassWindow.qml: lifted): the shell keeps
+        # where its own islands end in a file, and is told this app can do it.
+        self._bar = {}
+        self._bar_watch = QFileSystemWatcher(self)
+        self._bar_watch.directoryChanged.connect(lambda _p: self._read_bar())
+        self._bar_watch.fileChanged.connect(lambda _p: self._read_bar())
+        try:
+            BAR_FILE.parent.mkdir(parents=True, exist_ok=True)
+            self._bar_watch.addPath(str(BAR_FILE.parent))
+        except OSError:
+            pass
+        self._read_bar()
         QGuiApplication.instance().installEventFilter(self)
 
     # ------------------------------------------------------------------ the keys the menus show, working
@@ -295,6 +310,27 @@ class AppMenu(QObject):
             return False
         self.trigger(act)
         return True
+
+    barChanged = Signal()
+    bar = Property("QVariantMap", lambda self: self._bar, notify=barChanged)
+
+    def _read_bar(self) -> None:
+        try:
+            data = json.loads(BAR_FILE.read_text())
+        except (OSError, ValueError):
+            data = {}
+        if not isinstance(data, dict) or not os.environ.get("HUGINN_COMPOSITOR"):
+            data = {}
+        if str(BAR_FILE) not in self._bar_watch.files() and BAR_FILE.exists():
+            self._bar_watch.addPath(str(BAR_FILE))
+        if data != self._bar:
+            self._bar = data
+            self.barChanged.emit()
+            if data.get("h") and self._bus:                   # (again when the shell came back: it forgot)
+                ident = QGuiApplication.desktopFileName() or ""
+                if ident:
+                    self._bus.call("org.huginn.Shell", "/org/huginn/Shell", "org.huginn.Shell", "Lift", GLib.Variant("(s)", (ident,)), None,
+                                   Gio.DBusCallFlags.NO_AUTO_START, 1500, None, None, None)
 
     @Slot(str)
     def snap(self, layout: str) -> None:

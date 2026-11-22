@@ -47,7 +47,8 @@ QtObject {
             var text = JSON.stringify({ tiles: out, style: Theme.t.openMs > 0 ? Settings.hideStyle : "none", glow: Theme.t.glowA.toString(), gaps: Settings.snapGaps,
                                        dark: Theme.t.dark, frost: !Settings.reduceTransparency && !Settings.contrast,
                                        remember: Settings.rememberPlaces, vrr: Settings.adaptiveSync, x11sharp: Settings.sharpX11, tearing: Settings.allowTearing, gamemode: Settings.gameMode,
-                                       keepSnapped: Settings.keepSnapped, spacesAllScreens: Settings.spacesAllScreens, glass: Settings.glass })
+                                       keepSnapped: Settings.keepSnapped, spacesAllScreens: Settings.spacesAllScreens, glass: Settings.glass,
+                                       liftApps: Settings.barStyle === "islands" ? Status.liftApps : [] })
             if (text !== last) { last = text; Status.dockLayout(text) }
         }
     }
@@ -394,7 +395,9 @@ QtObject {
             LayerShell.Window.layer: LayerShell.Window.LayerTop
             LayerShell.Window.anchors: LayerShell.Window.AnchorTop | LayerShell.Window.AnchorLeft | LayerShell.Window.AnchorRight
             LayerShell.Window.exclusionZone: shell.barH
-            TopBar { width: parent.width; appName: Status.active.name || "Huginn"; solid: Status.active.maximized
+            TopBar { id: moreBar; width: parent.width; appName: Status.active.name || "Huginn"; solid: Status.active.maximized
+                function fit() { if (islands) Status.setInputRects(moreBar.Window.window, rects); else Status.setInputRegion(moreBar.Window.window, 0, 0, 0, 0) }
+                onRectsChanged: fit(); onIslandsChanged: fit(); Component.onCompleted: fit()
                 onWindowAction: function (action) { Status.windowAction(action) }
                 opacity: shell.settled ? 1 : 0; Behavior on opacity { NumberAnimation { duration: 500; easing.type: Easing.OutCubic } }
                 onControlCentre: shell.open = shell.open === "cc" ? "" : "cc"; onLauncher: shell.open = shell.open === "launcher" ? "" : "launcher"
@@ -439,7 +442,13 @@ QtObject {
             onLiveHover: function (inside) { shell.livePointer(inside) }
             onLiveFocus: function (id) { shell.liveFocus = id; shell.liveHide.stop(); shell.liveOpen = true }
             onLiveOpen: function (app) { dock.openApp(app) }
-            onLiveIsland: function (name) { var app = dock.appNamed(name); if (app) dock.islandWanted(app, dock.restWidth / 2) } }
+            onLiveIsland: function (name) { var app = dock.appNamed(name); if (app) dock.islandWanted(app, dock.restWidth / 2) }
+            // islands: only they take the pointer; and a filled app of Huginn's own is told where they end
+            function fit() { if (islands) Status.setInputRects(topBarWin, rects); else Status.setInputRegion(topBarWin, 0, 0, 0, 0) }
+            onRectsChanged: fit(); onIslandsChanged: fit(); Component.onCompleted: fit()
+            readonly property string insets: JSON.stringify({ h: islands ? shell.barH : 0, left: Math.round(leftEnd), right: Math.round(rightStart),
+                screens: Settings.barEverywhere ? Status.screenList.map(function (sc) { return sc.name }) : (shell.mainScreen ? [shell.mainScreen.name] : []) })
+            onInsetsChanged: Status.setBarInsets(insets) }
     },
     Window {   // dock. Wider than the dock, so the live island can grow and shrink without the surface changing size
         id: dockWin

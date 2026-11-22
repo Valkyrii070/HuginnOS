@@ -62,6 +62,7 @@ SHELL_XML = """<node><interface name="org.huginn.Shell">
   <method name="SnapAssist"><arg type="s" name="json" direction="in"/></method>
   <method name="Switcher"><arg type="s" name="json" direction="in"/></method>
   <method name="Snap"><arg type="s" name="layout" direction="in"/></method>
+  <method name="Lift"><arg type="s" name="app" direction="in"/></method>
   <method name="AppMenu"/>
 </interface></node>"""
 HISTORY = Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local/share") / "huginn" / "notifications.jsonl"
@@ -216,6 +217,7 @@ class System(QObject):
         self._night = {"available": False, "on": False}
         self._notes = []
         self._active = {"name": "", "appId": "", "caption": "", "maximized": False}
+        self._lift_apps = []                                  # Huginn's apps that share the bar's row when filled
         self._windows = []                                 # every window (the dock, the Overview): see _read_windows
         self._spaces = {"current": 0, "names": ["Main"]}
         self._menus = {}                                   # the app in front's menus (the top bar's one menu)
@@ -633,6 +635,47 @@ for (var i = 0; i < all.length; i++) {{ var w = all[i]; if (String(w.internalId)
                       f" for (var i = 0; i < all.length; i++) if (String(all[i].internalId) === {json.dumps(a)} && d) all[i].desktops = [d];"}.get(what)
         if js:
             self.kwin(js + "\n" + WINDOWS_JS + "\nreportWindows();")
+
+    # ---- a filled app under the island top bar: it reaches up behind the bar, its top islands beside the shell's.
+    # The apps that can (GlassWindow.qml) say so (Lift); the compositor is told which (DockLayout: liftApps); and
+    # the apps read where the bar's own islands end from a file the shell keeps (apps/huginn_menu.py: barInsets).
+    liftAppsChanged = Signal()
+    BAR_FILE = Path(os.environ.get("XDG_RUNTIME_DIR") or f"/run/user/{os.getuid()}") / "huginn" / "bar.json"
+    liftApps = Property("QVariantList", lambda self: list(self._lift_apps), notify=liftAppsChanged)
+
+    @Slot(str)
+    def setBarInsets(self, text: str) -> None:
+        """{"h": the bar's height (0: no islands), "left": where the shell's left islands end, "right": how far in
+        the right one starts, "screens": [names of the screens with a bar]}"""
+        if self._demo or text == getattr(self, "_bar_text", None):
+            return
+        self._bar_text = text
+        try:
+            self.BAR_FILE.parent.mkdir(parents=True, exist_ok=True)
+            tmp = self.BAR_FILE.with_suffix(".tmp")
+            tmp.write_text(text)
+            tmp.replace(self.BAR_FILE)
+        except OSError:
+            pass
+
+    @Slot(QObject, "QVariantList")
+    def setInputRects(self, window, rects) -> None:
+        """Only these parts of a shell window take the pointer (the top bar's islands: between them, what's under it)."""
+        from PySide6.QtGui import QRegion
+        from PySide6.QtCore import QRect
+        if window is None or not hasattr(window, "setMask"):
+            return
+        if hasattr(rects, "toVariant"):
+            rects = rects.toVariant()
+        region = QRegion()
+        for r in rects or []:
+            try:
+                x, y, w, h = (int(round(float(v))) for v in list(r)[:4])
+            except (TypeError, ValueError):
+                continue
+            if w > 0 and h > 0:
+                region = region.united(QRegion(QRect(x, y, w, h)))
+        window.setMask(region if not region.isEmpty() else QRegion(QRect(0, 0, 1, 1)))
 
     @Slot(str)
     def dockLayout(self, text: str) -> None:
@@ -1473,6 +1516,11 @@ for (var i = 0; i < all.length; i++) {{ var win = all[i]; if (String(win.interna
             self.keyWanted.emit(params.unpack()[0])
         elif method == "Tour":                                   # Welcome in the apps, Help, Huginn's menu
             self.tourWanted.emit()
+        elif method == "Lift":                                   # one of Huginn's apps: filled, it shares the bar's row
+            app = str(params.unpack()[0])[:80]
+            if app and app not in self._lift_apps:
+                self._lift_apps.append(app)
+                self.liftAppsChanged.emit()
         elif method == "Snap":                                   # an app's fill button: the window in front, snapped
             layout = params.unpack()[0]
             QTimer.singleShot(0, lambda: self.snapFront(layout))

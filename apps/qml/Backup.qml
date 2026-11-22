@@ -15,7 +15,7 @@ GlassWindow {
         function onSaid(msg) { toast.say(msg, false) } }
 
     islands: [
-        Island { anchors { right: parent.right; rightMargin: 12 } y: 12
+        Island { anchors { right: parent.right; rightMargin: win.liftRight } y: win.topY
             Seg { icon: "disc"; text: Backend.dest === "" && !demo ? "Choose a drive" : Backend.destName; onClicked: win.sheet = { kind: "drive", why: "" } }
             IslandGap {}
             Label { leftPadding: 6; anchors.verticalCenter: parent.verticalCenter; secondary: true; font.pixelSize: 12; text: "By itself:" }

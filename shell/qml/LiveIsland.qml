@@ -19,6 +19,7 @@ Row {
     property int hoverCount: 0
     property bool on: true                // the host has it here (and not in the other place)
     property bool slim: false             // in the top bar: one line, no buttons
+    property bool tiny: false             // …and just the picture, while a filled app shares the row
     property int h: 64                    // the dock islands' height (Settings › Desktop & Dock › Size)
     onAnyHoverChanged: hovered(anyHover)
     property real now: Date.now()
@@ -106,8 +107,8 @@ Row {
         property var it: ({})
         readonly property string kind: L.kindOf(it)
         readonly property bool priv: L.privacy(it)
-        readonly property real want: kind ? width + (isl.slim ? 20 : 26) : 0
-        x: isl.slim ? 8 : 12; height: isl.h; spacing: isl.slim ? 8 : 12
+        readonly property real want: kind ? width + (isl.tiny ? 8 : isl.slim ? 20 : 26) : 0
+        x: isl.tiny ? 4 : isl.slim ? 8 : 12; height: isl.h; spacing: isl.slim ? 8 : 12
         LiveLead { it: face.it; now: isl.now; size: isl.slim ? Math.max(14, isl.h - 10) : 40; round: isl.slim; bare: isl.slim; anchors.verticalCenter: parent.verticalCenter }
         Column {
             visible: !isl.slim
@@ -118,9 +119,9 @@ Row {
             Label { width: parent.width; text: L.sub(face.it, isl.now); elide: Text.ElideRight; font.pixelSize: 12; secondary: true }
         }
         // slim: the title, then what's under it, on one line
-        Label { visible: isl.slim; width: Math.min(implicitWidth, 170); text: face.it.title || ""; elide: Text.ElideRight; font.pixelSize: 12; font.weight: Font.DemiBold; anchors.verticalCenter: parent.verticalCenter }
-        Label { visible: isl.slim && text !== ""; width: Math.min(implicitWidth, 130); text: L.sub(face.it, isl.now); elide: Text.ElideRight; font.pixelSize: 12; secondary: true; anchors.verticalCenter: parent.verticalCenter }
-        LiveEq { visible: face.kind === "playing"; playing: !!face.it.playing; tone: face.it.tone || Theme.t.accent; anchors.verticalCenter: parent.verticalCenter; scale: isl.slim ? 0.7 : 1 }
+        Label { visible: isl.slim && !isl.tiny; width: Math.min(implicitWidth, 170); text: face.it.title || ""; elide: Text.ElideRight; font.pixelSize: 12; font.weight: Font.DemiBold; anchors.verticalCenter: parent.verticalCenter }
+        Label { visible: isl.slim && !isl.tiny && text !== ""; width: Math.min(implicitWidth, 130); text: L.sub(face.it, isl.now); elide: Text.ElideRight; font.pixelSize: 12; secondary: true; anchors.verticalCenter: parent.verticalCenter }
+        LiveEq { visible: face.kind === "playing" && !isl.tiny; playing: !!face.it.playing; tone: face.it.tone || Theme.t.accent; anchors.verticalCenter: parent.verticalCenter; scale: isl.slim ? 0.7 : 1 }
         Repeater {
             model: isl.slim ? [] : L.quick(face.it)
             RoundButton { required property var modelData; a: modelData; target: face.it; anchors.verticalCenter: parent ? parent.verticalCenter : undefined }

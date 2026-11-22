@@ -16,7 +16,7 @@ GlassWindow {
     Component.onCompleted: adder.focusIn()
 
     islands: [
-        Island { anchors { right: parent.right; rightMargin: 12 } y: 12
+        Island { anchors { right: parent.right; rightMargin: win.liftRight } y: win.topY
             IslandField { id: seek; objectName: "seek"; width: 170; placeholder: "Search"; onTextChanged: Backend.setQuery(text) }
             Seg { icon: "list"; text: "Done · " + Backend.doneCount; on: Backend.view === "done"; onClicked: Backend.setView(Backend.view === "done" ? "today" : "done") }
             Seg { visible: Backend.view === "done" && Backend.doneCount > 0; icon: "trash"; tip: "Clear everything that's done"; danger: true; onClicked: Backend.clearDone() }

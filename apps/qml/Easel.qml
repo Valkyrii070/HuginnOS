@@ -134,7 +134,7 @@ GlassWindow {
 
     islands: [
         // the file island, next to the name
-        Island { id: fileIsland; visible: true; x: 120; y: 12
+        Island { id: fileIsland; visible: true; x: win.lifted ? win.titleEnd + 10 : 120; y: win.topY
             Label { visible: Backend.hasDoc; text: Backend.docName + (Backend.dirty ? "  •" : ""); font.pixelSize: 12; secondary: true; leftPadding: 6; rightPadding: 4
                 width: Math.min(implicitWidth, 200); elide: Text.ElideMiddle; anchors.verticalCenter: parent.verticalCenter }
             Seg { icon: "list"; tip: "Menu"; on: win.menuOpen; onClicked: win.menuOpen = !win.menuOpen }
@@ -148,7 +148,7 @@ GlassWindow {
             Seg { visible: Backend.hasDoc; icon: "history"; tip: "History: every step, to go back to any"; on: win.sheet === "history"; onClicked: win.sheet === "history" ? win.sheet = "" : win.history() }
         },
         // the tool's own settings
-        Island { id: ctx; visible: Backend.hasDoc; x: fileIsland.x + fileIsland.width + 10; y: 12
+        Island { id: ctx; visible: Backend.hasDoc; x: fileIsland.x + fileIsland.width + 10; y: win.topY
             Label { text: ({ move: "Move", select: "Rectangle", ellipsesel: "Ellipse", lasso: "Lasso", wand: "Magic Wand", brush: "Brush", eraser: "Eraser", fill: "Fill",
                              gradient: "Gradient", picker: "Picker", text: "Text", crop: "Crop", hand: "Hand", zoom: "Zoom", pointer: "Select", pen: "Pen",
                              rect: "Rectangle", ellipse: "Ellipse", line: "Line", star: "Star", transform: "Transform", clone: "Clone", heal: "Heal", nodes: "Points",
