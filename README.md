@@ -254,9 +254,14 @@ its job needs it.
   shelf of covers with a floating player; Translate is stacked, with the languages on the fold; Passwords is a
   cabinet of tiles that open into a card; Contacts is a wall of round portraits under their letters. Writer,
   Sheets, Slides, Documents, Archives, Notes and Photos each open on their own drawn start screen.
-- **The browser's Islands look.** Optional, off by default: Settings > Appearance > Window Look in the browser
-  (pull request #4, already in `vendor/huginn`). It gives the browser the same glass-and-islands frame as these apps,
-  with close, minimise and zoom together in a pill like every other toolbar group.
+- **The browser is one of the desktop's apps.** On Huginn OS it starts in its Islands look (Settings > Appearance >
+  Window Look in the browser; Classic is still there), made of the same glass as these apps: their tint, their light
+  from below, their island colours, with close, minimise and zoom together in a pill. With its Appearance on System it
+  follows the desktop's light or dark, and until a realm is picked in the browser it wears the desktop's; both change
+  as you change them in Settings (it reads `~/.config/huginn-shell/settings.json`). Its own menus (File, Edit, View,
+  History, Bookmarks, Window, Help) are in the top bar's menu under its name, answered the way these apps answer
+  (`org.huginn.App.p<pid>`). The browser's pull requests #4 and #6. Checked in the nested session, dark and light,
+  two realms, and a command picked from the bar; not on real hardware.
 
 ## The third set of apps
 
