@@ -816,6 +816,34 @@ Four apps are being taken, round by round, to the level of the professional tool
   this round: 56 of 56, 23 of 23, 40 of 41 (a tolerance in an old check), and one that stops at a check written for an older undo. On screen: the missing tile and Find Missing, picking and
   overwriting, the 2× chip, the Screen layer. Not tested: sound while shuttling (no sound card here).
 
+**Code, pro round five** (`apps/huginn_code.py`, `apps/huginn_code_more.py`, `apps/qml/Code.qml`): a fuzz run first, then
+three things an editor is expected to have.
+- *What the fuzz found, fixed* (`scripts/tests/code_fuzz.py`: awkward files and about seventy random commands, with what's
+  on disk checked after each save). Opening a pipe or a device hung Code for ever; Git output that wasn't UTF-8 crashed
+  staging, branches and commits; Replace Everywhere crashed on a replacement naming a group the pattern lacks, and
+  rewrote CRLF and Latin-1 files as LF and UTF-8; a file with mixed line endings was rewritten by opening and saving it
+  untouched; Rename and Move to Trash took any path at all, not only ones inside the project; a link leading through a
+  file broke the folder list; closing a folder crashed if a language server had failed to start; find-every-use and the
+  signature hint froze for up to a minute on a 400 000-character line. UTF-16 files (as Windows writes them) used to
+  open as "not text": they open and save as UTF-16 now.
+- *Whole lines at a time*: Alt+Up/Down move the line or the selected lines, with Shift they copy; Ctrl+Shift+K
+  deletes, Ctrl+J joins, Ctrl+L selects, Ctrl+Enter and Ctrl+Shift+Enter open a line below or above. Sort Lines, Remove
+  Repeated Lines and Upper, Lower and Title Case are in the command list. Each is one replacement in the editor, so
+  Undo takes it back.
+- *Change marks that follow your typing*: the gutter's marks used to refresh only on save. They now compare the
+  editor's text with the committed text a moment after each change (files up to 20 000 lines; longer ones keep the
+  on-save marks). F7 and Shift+F7 go to the next and previous change; Put This Change Back undoes the one under the
+  cursor.
+- *Nothing unsaved is lost*: Code had no warning at all when its window closed with unsaved tabs. Unsaved text is now
+  put by two seconds after each change (`~/.local/share/huginn/code-unsaved`, readable only by you) and brought back,
+  still unsaved, the next time the file or its folder opens: after a quit, a crash or a power cut. If the file changed
+  on disk meanwhile Code says so and asks before saving over it. Files over 4 MB aren't kept this way.
+- Tests: `scripts/tests/code_round5_test.py` (93 checks). Checked on screen in the nested session: move, copy, delete
+  and new line, the live marks, F7, put back, and work coming back after the app was killed. **The fuzz must not be run
+  as root** (it now refuses): an early run of mine was, with a folder list that included `/`, and its Replace
+  Everywhere reached files outside its own folder. Everything it touched was restored from the last push and the
+  upstream sources and compared file by file.
+
 **Code, pro round four** (`apps/huginn_code.py`, `apps/huginn_code_more.py`, new; `apps/qml/Code.qml`)
 - *More than one cursor*: Ctrl+D adds the next match of the selection (or picks the word), Ctrl+Shift+L puts a
   cursor on every match, Alt+click adds one anywhere, Ctrl+Alt+Up/Down one on the line above or below. Typing,

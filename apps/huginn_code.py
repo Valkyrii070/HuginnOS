@@ -3,6 +3,7 @@ underneath, Git built in, search across the project, and language servers (the s
 completions, live problems and go-to-definition.
 
 Opening a file when Code is already running hands it to the open window (one Code at a time)."""
+import itertools
 import json
 import os
 import re
@@ -74,6 +75,8 @@ RUNNERS = {"Python": 'python3 "{f}"', "Shell": 'bash "{f}"', "JavaScript": 'node
 # Adding a language: what it takes, from Ubuntu's archive (apt, through the system's password prompt) and, for the
 # helpers Ubuntu doesn't package, from npm into the user's own folder (no password). "tools" are what Run and the
 # terminal use (a compiler, an interpreter); a language is ready when its helper (language server) is there.
+UNSAVED = STATE.with_name("code-unsaved")                 # work you hadn't saved, kept through a quit or a crash: one file per document
+STASH_LIMIT = 4 * 1024 * 1024
 TOOLS_HOME = Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local/share") / "huginn" / "code-tools"
 EXTRA_BIN = [str(TOOLS_HOME / "bin"), "/usr/lib/qt6/bin", "/usr/lib/go/bin"]
 LANG_PACKS = {
@@ -417,6 +420,10 @@ class Doc:
         self.encoding, self.bom, self.crlf, self.mtime = "utf-8", False, False, 0.0
         self.read_only, self.why, self.lang, self.version = False, "", "Text", 1
         self.problems, self.marks, self.binary = [], {}, False
+        self.wide = b""                                       # a UTF-16 file's byte-order mark
+        self.head = None                                      # its text at the last commit (None: not committed, or not asked yet)
+        self.stashed = None                                   # the unsaved text last put by in UNSAVED
+        self.found = (None, [])                               # what differs from `head`, for the text it was worked out from
 
     @property
     def dirty(self) -> bool:
@@ -428,23 +435,36 @@ class Doc:
 
     def load(self) -> None:
         p = Path(self.path)
-        with open(p, "rb") as f:
-            head = f.read(8192)
-        if b"\0" in head:
-            self.binary, self.why, self.read_only = True, "This file isn't text, so Code can't show it.", True
+        import stat as _stat
+        if not _stat.S_ISREG(p.stat().st_mode):               # a pipe, a device, a socket: reading one can wait for ever, or never end
+            self.binary, self.why, self.read_only = True, "This isn't an ordinary file, so Code can't open it.", True
             return
-        if p.stat().st_size > TEXT_LIMIT:
+        with open(p, "rb") as f:
+            data = f.read(TEXT_LIMIT + 1)                     # (never more than this, whatever the file says its size is)
+        if len(data) > TEXT_LIMIT:
             self.binary, self.why, self.read_only = True, "This file is too large to edit here (over 8 MB).", True
             return
-        data = p.read_bytes()
+        self.wide = data[:2] if data[:2] in (b"\xff\xfe", b"\xfe\xff") and len(data) % 2 == 0 else b""    # UTF-16, as Windows writes it
+        if self.wide:
+            try:
+                text, self.encoding = data[2:].decode("utf-16-le" if self.wide == b"\xff\xfe" else "utf-16-be"), ("utf-16-le" if self.wide == b"\xff\xfe" else "utf-16-be")
+            except UnicodeDecodeError:
+                self.wide = b""
+        if not self.wide and b"\0" in data[:8192]:
+            self.binary, self.why, self.read_only = True, "This file isn't text, so Code can't show it.", True
+            return
         self.bom = data.startswith(b"\xef\xbb\xbf")
-        try:
-            text = data[3 if self.bom else 0:].decode("utf-8")
-            self.encoding = "utf-8"
-        except UnicodeDecodeError:
-            text, self.encoding = data.decode("latin-1"), "latin-1"
-        self.crlf = "\r\n" in text
-        self.text = self.saved = text.replace("\r\n", "\n") if self.crlf else text
+        if not self.wide:
+            try:
+                text = data[3 if self.bom else 0:].decode("utf-8")
+                self.encoding = "utf-8"
+            except UnicodeDecodeError:
+                text, self.encoding = data.decode("latin-1"), "latin-1"
+        pairs = text.count("\r\n")
+        self.crlf = pairs > 0 and pairs >= text.count("\n") - pairs     # the file's own line endings: what most of its lines have
+        alone = text.count("\r") - pairs                               # a bare carriage return: the editor shows it as a line end too
+        self.mixed = (pairs > 0 and pairs != text.count("\n")) or alone > 0   # (some of each: left as they are until something is changed)
+        self.text = self.saved = text.replace("\r\n", "\n").replace("\r", "\n") if (pairs or alone) else text
         self.mtime = p.stat().st_mtime
         self.lang = language_of(self.path, text[:200])
         if not os.access(p, os.W_OK):
@@ -454,11 +474,15 @@ class Doc:
         target = Path(os.path.realpath(self.path))
         if not force and target.exists() and self.mtime and abs(target.stat().st_mtime - self.mtime) > 0.001:
             return "changed"
+        if (self.text == self.saved and getattr(self, "mixed", False) and target.exists()
+                and self.mtime and abs(target.stat().st_mtime - self.mtime) <= 0.001):
+            return ""                                         # nothing was changed: its mixed line endings stay exactly as they were
+        self.mixed = False
         text = self.text.replace("\n", "\r\n") if self.crlf else self.text
         try:
-            data = (b"\xef\xbb\xbf" if self.bom else b"") + text.encode(self.encoding)
+            data = (self.wide or (b"\xef\xbb\xbf" if self.bom else b"")) + text.encode(self.encoding)
         except UnicodeEncodeError:
-            self.encoding = "utf-8"
+            self.encoding, self.wide = "utf-8", b""
             data = text.encode("utf-8")
         tmp = target.with_name(f".{target.name}.saving")
         try:
@@ -494,7 +518,7 @@ def indent_of(text: str) -> str:
 
 
 def git(root: Path, *args, timeout: int = 20, env=None) -> subprocess.CompletedProcess:
-    return subprocess.run(["git", "-C", str(root), *args], capture_output=True, text=True, timeout=timeout,
+    return subprocess.run(["git", "-C", str(root), *args], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout,
                           env=dict(os.environ, GIT_TERMINAL_PROMPT="0", GIT_OPTIONAL_LOCKS="0", **(env or {})))
 
 
@@ -812,7 +836,7 @@ def search_files(root: Path, query: str, case: bool, regex: bool, word: bool, ca
             args.append("-w")
         args += ["-g", "!.git", "--", query, "."]
         try:
-            proc = subprocess.Popen(args, cwd=root, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+            proc = subprocess.Popen(args, cwd=root, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, encoding="utf-8", errors="replace")
             for raw in proc.stdout:
                 try:
                     msg = json.loads(raw)
@@ -897,6 +921,16 @@ class Code(QObject):
         self._soon.timeout.connect(self._refresh)
         self._lint = QTimer(self, singleShot=True, interval=500)
         self._lint.timeout.connect(self._push_changes)
+        self._live = QTimer(self, singleShot=True, interval=600)      # the gutter's change marks follow your typing
+        self._live.timeout.connect(self._live_marks)
+        self._stash = QTimer(self, singleShot=True, interval=2000)    # and unsaved work is put by, a moment after each change
+        self._stash.timeout.connect(self._stash_now)
+        self._brought = []
+        self._tell = QTimer(self, singleShot=True, interval=1500)
+        self._tell.timeout.connect(self._tell_brought)
+        from PySide6.QtCore import QCoreApplication
+        if QCoreApplication.instance():
+            QCoreApplication.instance().aboutToQuit.connect(self._stash_now)
         self._load_state()
         if demo:
             self._demo_fill()
@@ -909,6 +943,7 @@ class Code(QObject):
                 self.openFile(str(t))
         else:
             self._restore_last()
+        self._bring_back()
 
     # ---------------------------------------------------------------- remembering
     def _load_state(self) -> None:
@@ -1007,6 +1042,8 @@ def advice(sky: Sky) -> str:
             self.changed.emit()
 
     def _open_folder(self, path: str, restore: bool = True) -> None:
+        if not path.strip():                                  # (no path isn't "the folder Code happened to start in")
+            return
         root = Path(path.replace("file://", "")).expanduser().resolve()
         if not root.is_dir():
             self.said.emit("That folder isn't there any more.", True)
@@ -1026,6 +1063,8 @@ def advice(sky: Sky) -> str:
         for p in saved.get("open", []):
             if Path(p).is_file():
                 self.openFile(p, focus=False)
+        if restore:
+            self._bring_back()
         if self._docs:
             self.select(max(0, min(saved.get("at", 0), len(self._docs) - 1)))
         self.refreshGit()
@@ -1033,11 +1072,13 @@ def advice(sky: Sky) -> str:
         self.changed.emit()
 
     def _close_all(self) -> None:
+        self._stash_now()
         for d in self._docs:
             self._lsp_close(d)
         self._docs, self._at = [], -1
         for s in self._servers.values():
-            s.stop()
+            if s:                                             # (None: a language whose server wouldn't start)
+                s.stop()
         self._servers = {}
 
     @Slot()
@@ -1069,7 +1110,10 @@ def advice(sky: Sky) -> str:
                 for e in entries:
                     if e.name == ".git":
                         continue
-                    is_dir = e.is_dir()
+                    try:
+                        is_dir = e.is_dir()
+                    except OSError:                           # a link that leads nowhere sensible (through a file, round in a ring)
+                        is_dir = False
                     rel = os.path.relpath(e.path, self._root)
                     open_ = is_dir and e.path in self._open_dirs
                     rows.append({"path": e.path, "name": e.name, "depth": depth, "dir": is_dir, "open": open_, "rel": rel,
@@ -1128,11 +1172,11 @@ def advice(sky: Sky) -> str:
         name = name.strip()
         if not name:
             return "Type a name."
-        if name in (".", "..") or "\0" in name or ".." in name.split("/"):
+        if name in (".", "..") or "\0" in name or ".." in name.split("/") or any(len(part.encode("utf-8", "replace")) > 255 for part in name.split("/")):
             return "That name can't be used."
         base = Path(folder or self._root or Path.home())
         target = (base / name).resolve()
-        if self._root and not str(target).startswith(str(self._root)):
+        if self._root and not (str(target) + os.sep).startswith(str(self._root) + os.sep):
             return "That would be outside the project."
         if target.exists():
             return "Something with that name is already there."
@@ -1151,14 +1195,34 @@ def advice(sky: Sky) -> str:
             self.openFile(str(target))
         return ""
 
+    def _not_ours(self, path: str) -> str:
+        """Why Code won't rename or remove `path` ("" if it may): only what's inside the open folder (or, with none open,
+        a file open in a tab), never the folder itself, your home folder or anything above them."""
+        if not path or not os.path.lexists(path):
+            return "That isn't there any more."
+        here = os.path.abspath(path)
+        if here in (os.path.abspath(os.sep), str(Path.home())) or (self._root and here == str(self._root)):
+            return "That can't be renamed or removed from here."
+        if self._root:
+            if not here.startswith(str(self._root) + os.sep):
+                return "That's outside this project."
+        elif not any(d.path == here for d in self._docs):
+            return "That's outside what's open here."
+        return ""
+
     @Slot(str, str, result=str)
     def rename(self, path: str, name: str) -> str:
         name = name.strip()
         if not name or "/" in name or name in (".", ".."):
             return "Type a new name (without slashes)."
+        if "\0" in name or len(name.encode("utf-8", "replace")) > 255:
+            return "That name can't be used."
+        why = self._not_ours(path)
+        if why:
+            return why
         src = Path(path)
         dst = src.with_name(name)
-        if dst.exists():
+        if dst.exists() or dst.is_symlink():
             return "Something with that name is already there."
         try:
             src.rename(dst)
@@ -1179,6 +1243,9 @@ def advice(sky: Sky) -> str:
     @Slot(str, result=str)
     def remove(self, path: str) -> str:
         """To the Trash, never deleted outright."""
+        why = self._not_ours(path)
+        if why:
+            return why
         if any(d.dirty and (d.path == path or d.path.startswith(path + os.sep)) for d in self._docs):
             return "It has unsaved changes open; save or close them first."
         try:
@@ -1222,8 +1289,7 @@ def advice(sky: Sky) -> str:
         except OSError as e:
             self.said.emit(f"Couldn't open {Path(path).name}: {e.strerror or e}", True)
             return
-        if self._root is None and not self._demo:
-            pass
+        self._stash_apply(d)
         self._docs.append(d)
         idx = len(self._docs) - 1
         if d.path not in self._watch.files():
@@ -1257,6 +1323,7 @@ def advice(sky: Sky) -> str:
         if d.dirty and not force:
             return "dirty"
         self._lsp_close(d)
+        self._stash_drop(d)                                   # closed without saving: you said to let it go
         del self._docs[i]
         if not self._docs:
             self._at = -1
@@ -1281,6 +1348,8 @@ def advice(sky: Sky) -> str:
         if not 0 <= i < len(self._docs):
             return
         d = self._docs[i]
+        if "\r" in text:                                      # (the editor never holds one; text from elsewhere might)
+            text = text.replace("\r\n", "\n").replace("\r", "\n")
         if text == d.text:                                    # colouring touches the document too: nothing was typed
             return
         delta = text.count("\n") - d.text.count("\n")
@@ -1293,6 +1362,8 @@ def advice(sky: Sky) -> str:
         d.version += 1
         self._pending = getattr(self, "_pending", set()) | {i}
         self._lint.start()
+        self._live.start()
+        self._stash.start()
         if d.dirty != was:
             self.changed.emit()
 
@@ -1423,7 +1494,7 @@ def advice(sky: Sky) -> str:
                 else:
                     try:
                         TOOLS_HOME.mkdir(parents=True, exist_ok=True)
-                        done = subprocess.run([npm, "install", "-g", "--prefix", str(TOOLS_HOME)] + pack["npm"], capture_output=True, text=True, timeout=1800)
+                        done = subprocess.run([npm, "install", "-g", "--prefix", str(TOOLS_HOME)] + pack["npm"], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=1800)
                         if done.returncode != 0:
                             tail = (done.stderr or done.stdout).strip().splitlines()
                             why = "The helper wasn't fetched" + (f" ({tail[-1][:120]})" if tail else "") + "."
@@ -1449,7 +1520,7 @@ def advice(sky: Sky) -> str:
     @staticmethod
     def _installed(package: str) -> bool:
         try:
-            done = subprocess.run(["dpkg-query", "-W", "-f=${Status}", package], capture_output=True, text=True, timeout=20)
+            done = subprocess.run(["dpkg-query", "-W", "-f=${Status}", package], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=20)
             return "install ok installed" in done.stdout
         except (OSError, subprocess.TimeoutExpired):
             return False
@@ -1482,7 +1553,7 @@ def advice(sky: Sky) -> str:
             return {}
         ind = indent_of(d.text)
         server = self._server_note.get(d.lang, "")
-        return {"lang": d.lang, "encoding": ("UTF-8" if d.encoding == "utf-8" else "Latin-1") + (" with BOM" if d.bom else ""),
+        return {"lang": d.lang, "encoding": ("UTF-8" if d.encoding == "utf-8" else "UTF-16" if d.encoding.startswith("utf-16") else "Latin-1") + (" with BOM" if d.bom else ""),
                 "eol": "CRLF" if d.crlf else "LF", "indent": "Tab" if ind == "\t" else f"Spaces: {len(ind)}", "indentText": ind,
                 "server": server, "comment": LANGS.get(d.lang, LANGS["Text"])[1], "block": list(LANGS.get(d.lang, LANGS["Text"])[2] or [])}
 
@@ -1619,25 +1690,34 @@ def advice(sky: Sky) -> str:
             pat = re.compile((r"\b" if word else "") + (query if regex else re.escape(query)) + (r"\b" if word else ""), flags)
         except re.error:
             return 0
-        count = 0
+        count, done = 0, set()
         for rel in sorted({h["path"] for h in self._results if h.get("path")}):
             path = str((self._root / rel).resolve())
+            if path in done:                                  # (the same file reached twice, through a link)
+                continue
+            done.add(path)
             open_at = next((i for i, d in enumerate(self._docs) if d.path == path), -1)
             try:
-                text = self._docs[open_at].text if open_at >= 0 else Path(path).read_text(encoding="utf-8")
-            except (OSError, UnicodeDecodeError):
+                d = self._docs[open_at] if open_at >= 0 else Doc(path)
+                if open_at < 0:
+                    d.load()                                  # in its own encoding and line endings, whatever they are
+            except OSError:
                 continue
-            new, n = pat.subn(replacement if regex else replacement.replace("\\", "\\\\"), text)
+            if d.binary or d.read_only:
+                continue
+            try:
+                new, n = pat.subn(replacement if regex else replacement.replace("\\", "\\\\"), d.text)
+            except (re.error, IndexError):
+                self.said.emit("That replacement names a group the pattern doesn't have.", True)
+                return count
             if not n:
                 continue
             count += n
             if open_at >= 0:
-                self._docs[open_at].text = new
+                d.text = new
                 self.textLoaded.emit(open_at)
             else:
-                d = Doc(path)
                 try:
-                    d.load()
                     d.text = new
                     d.save(True)
                 except OSError:
@@ -1693,18 +1773,195 @@ def advice(sky: Sky) -> str:
         self.changed.emit()
 
     def _marks(self, d: Doc) -> None:
-        d.marks = {}
-        if self._demo or not self._root or not shutil.which("git") or not d.path.startswith(str(self._root)):
+        """The gutter's marks for d: what differs from the last commit. From the committed text when Git has it (so they
+        follow your typing), from `git diff` for a very long file, all "add" for a file Git doesn't know yet."""
+        d.marks, d.head, d.found = {}, None, (None, [])
+        if self._demo or not self._root or not shutil.which("git") or not d.path.startswith(str(self._root)) or d.binary:
             return
+        folder, name = Path(d.path).parent, Path(d.path).name
         try:
-            out = git(Path(d.path).parent, "diff", "-U0", "--no-color", "--no-ext-diff", "HEAD", "--", Path(d.path).name, timeout=10)
+            if not d.wide:
+                was = subprocess.run(["git", "-C", str(folder), "show", "HEAD:./" + name], capture_output=True, timeout=10,
+                                     env=dict(os.environ, GIT_TERMINAL_PROMPT="0", GIT_OPTIONAL_LOCKS="0"))
+                if was.returncode == 0 and len(was.stdout) <= TEXT_LIMIT and b"\0" not in was.stdout[:8192]:
+                    raw = was.stdout[3:] if was.stdout.startswith(b"\xef\xbb\xbf") else was.stdout
+                    d.head = raw.decode(d.encoding, "replace").replace("\r\n", "\n").replace("\r", "\n")
+            if d.head is not None and max(d.head.count("\n"), d.text.count("\n")) < more.CHANGES_LIMIT:
+                d.marks = more.change_marks(self._found(d), d.text.count("\n") + 1)
+                return
+            out = git(folder, "diff", "-U0", "--no-color", "--no-ext-diff", "HEAD", "--", name, timeout=10)
             if out.returncode == 0:
                 d.marks = parse_hunks(out.stdout)
-            tracked = git(Path(d.path).parent, "ls-files", "--error-unmatch", "--", Path(d.path).name, timeout=5)
-            if tracked.returncode != 0 and git(Path(d.path).parent, "rev-parse", timeout=5).returncode == 0:
+            tracked = git(folder, "ls-files", "--error-unmatch", "--", name, timeout=5)
+            if tracked.returncode != 0 and git(folder, "rev-parse", timeout=5).returncode == 0:
                 d.marks = {n: "add" for n in range(d.text.count("\n") + 1)}
         except (OSError, subprocess.SubprocessError):
             pass
+
+    def _found(self, d: Doc) -> list:
+        """What differs between d and its committed text (worked out once per text)."""
+        if d.head is None:
+            return []
+        if d.found[0] is not d.text:
+            d.found = (d.text, more.changes(d.head, d.text))
+        return d.found[1]
+
+    def _live_marks(self) -> None:
+        moved = False
+        for d in self._docs:
+            if d.head is not None and d.found[0] is not d.text and max(d.head.count("\n"), d.text.count("\n")) < more.CHANGES_LIMIT:
+                marks = more.change_marks(self._found(d), d.text.count("\n") + 1)
+                moved, d.marks = moved or marks != d.marks, marks
+        if moved:
+            self.changed.emit()
+
+    @Slot(int, int, int, result=int)
+    def changeNear(self, i: int, line: int, way: int) -> int:
+        """The line of the next (way 1) or previous (-1) change from `line`, going round at the ends; -1 when there are none."""
+        if not 0 <= i < len(self._docs):
+            return -1
+        d = self._docs[i]
+        found = self._found(d)
+        starts = sorted({c["a"] for c in found}) if found else sorted(n for n in d.marks if n - 1 not in d.marks)
+        if not starts:
+            return -1
+        here = next((c["a"] for c in found if c["a"] <= line < max(c["b"], c["a"] + 1)), line)
+        if way >= 0:
+            return next((n for n in starts if n > here), starts[0])
+        return next((n for n in reversed(starts) if n < here), starts[-1])
+
+    @Slot(int, int, result="QVariantMap")
+    def putBack(self, i: int, line: int) -> dict:
+        """The change on `line`, undone: {at, end, text} for the editor to put the committed lines back (so it can be undone
+        there); {} when that line hasn't changed."""
+        if not 0 <= i < len(self._docs):
+            return {}
+        d = self._docs[i]
+        c = more.change_at(self._found(d), line)
+        if not c or d.read_only:
+            return {}
+        s, e, text = more.put_back(d.text, c)
+        return {"at": more.u16(d.text, s), "end": more.u16(d.text, e), "text": text, "line": min(c["a"], d.text.count("\n"))}
+
+    @Slot(int, int, int, str, result="QVariantMap")
+    def lineEdit(self, i: int, a: int, b: int, how: str) -> dict:
+        """A whole-line command (more.LINE_EDITS) on the selection a..b of tab i, as one replacement for the editor to make:
+        {at, end, text, a, b}; {} when there's nothing to do."""
+        if not 0 <= i < len(self._docs):
+            return {}
+        d = self._docs[i]
+        if d.read_only or d.binary:
+            return {}
+        t = d.text
+        got = more.line_edit(t, more.from16(t, a), more.from16(t, b), how)
+        if not got:
+            return {}
+        s, e, new, sa, sb = got
+        after = t[:s] + new + t[e:]
+        return {"at": more.u16(t, s), "end": more.u16(t, e), "text": new, "a": more.u16(after, sa), "b": more.u16(after, sb)}
+
+    # ---------------------------------------------------------------- unsaved work, kept
+    @staticmethod
+    def _stash_file(path: str) -> Path:
+        import hashlib
+        return UNSAVED / (hashlib.sha1(path.encode("utf-8", "surrogateescape")).hexdigest()[:24] + ".json")
+
+    def _stash_now(self) -> None:
+        """Every changed document's text put by (and a saved one's taken away), so a quit, a crash or a power cut loses nothing."""
+        if self._demo:
+            return
+        import hashlib
+        for d in self._docs:
+            if d.dirty and not d.binary and not d.read_only and len(d.text) <= STASH_LIMIT:
+                if d.stashed is d.text:
+                    continue
+                try:
+                    UNSAVED.mkdir(parents=True, exist_ok=True)
+                    os.chmod(UNSAVED, 0o700)
+                    f = self._stash_file(d.path)
+                    tmp = f.with_suffix(".saving")
+                    with open(os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w", encoding="utf-8", errors="surrogatepass") as out:
+                        json.dump({"path": d.path, "text": d.text, "base": hashlib.sha1(d.saved.encode("utf-8", "surrogatepass")).hexdigest(), "at": time.time()}, out)
+                    os.replace(tmp, f)
+                    d.stashed = d.text
+                except (OSError, ValueError):
+                    pass
+            elif d.stashed is not None:
+                self._stash_drop(d)
+
+    def _stash_drop(self, d: Doc) -> None:
+        d.stashed = None
+        try:
+            self._stash_file(d.path).unlink(missing_ok=True)
+        except OSError:
+            pass
+
+    def _stash_apply(self, d: Doc) -> None:
+        """Opening a file whose unsaved changes were put by: they come back, as unsaved changes."""
+        if self._demo:
+            return
+        f = self._stash_file(d.path)
+        try:
+            if not f.is_file():
+                return
+            data = json.loads(f.read_text(encoding="utf-8", errors="surrogatepass"))
+            text, base = data["text"], str(data.get("base", ""))
+            if data.get("path") != d.path or not isinstance(text, str) or len(text) > STASH_LIMIT:
+                raise ValueError
+        except (OSError, ValueError, KeyError, TypeError):
+            try:
+                f.unlink(missing_ok=True)                     # not something Code wrote: it goes
+            except OSError:
+                pass
+            return
+        text = text.replace("\r\n", "\n").replace("\r", "\n")
+        if d.binary or d.read_only:
+            return
+        if text == d.text:
+            self._stash_drop(d)
+            return
+        import hashlib
+        moved = base != hashlib.sha1(d.saved.encode("utf-8", "surrogatepass")).hexdigest()
+        d.text = d.stashed = text
+        if moved:
+            d.mtime = -1.0                                    # the file changed on disk meanwhile: saving asks before replacing it
+        self._brought.append((Path(d.path).name, moved))
+        self._tell.start()
+
+    def _tell_brought(self) -> None:
+        got, self._brought = self._brought, []
+        if not got:
+            return
+        what = f"your unsaved changes to {got[0][0]}" if len(got) == 1 else f"unsaved changes in {len(got)} files"
+        also = " It has also changed on disk since: look before you save." if len(got) == 1 and got[0][1] else \
+               " Some have also changed on disk since: look before you save." if any(m for _n, m in got) else ""
+        self.said.emit(f"Brought back {what}.{also}", False)
+
+    def _bring_back(self) -> None:
+        """At the start, or when a folder opens: files with unsaved work put by that aren't open yet open again
+        (this folder's, or any when no folder is open). Work put by more than a month ago is let go."""
+        if self._demo:
+            return
+        try:
+            files = sorted(UNSAVED.glob("*.json"))[:400]
+        except OSError:
+            return
+        opened = 0
+        for f in files:
+            try:
+                if time.time() - f.stat().st_mtime > 30 * 86400:
+                    f.unlink(missing_ok=True)
+                    continue
+                path = json.loads(f.read_text(encoding="utf-8", errors="surrogatepass")).get("path")
+            except (OSError, ValueError, AttributeError):
+                continue
+            if not isinstance(path, str) or any(d.path == path for d in self._docs) or not os.path.isfile(path):
+                continue
+            if self._root and not path.startswith(str(self._root) + os.sep):
+                continue
+            if opened < 12:
+                opened += 1
+                self.openFile(path, False)
 
     @Slot(str, bool, result="QVariantList")
     def diff(self, rel: str, staged: bool) -> list:
@@ -2220,7 +2477,7 @@ def advice(sky: Sky) -> str:
         d = self._docs[i]
         try:
             r = subprocess.run(["git", "-C", str(self._root), "blame", "--porcelain", "--contents", "-", "--", str(Path(d.path).relative_to(self._root))],
-                               input=d.text, capture_output=True, text=True, timeout=20)
+                               input=d.text, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=20)
         except (OSError, subprocess.SubprocessError, ValueError):
             return []
         if r.returncode != 0:
@@ -2314,16 +2571,16 @@ def advice(sky: Sky) -> str:
             try:
                 if kind == "pytest":
                     r = subprocess.run([sys.executable if self._python_has_pytest() else "python3", "-m", "pytest", "--collect-only", "-q", "-p", "no:cacheprovider"],
-                                       cwd=str(root), capture_output=True, text=True, timeout=120)
+                                       cwd=str(root), capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120)
                     found = parse_pytest_collect(r.stdout, root)
                 elif kind == "cargo":
-                    r = subprocess.run(["cargo", "test", "--", "--list", "--format", "terse"], cwd=str(root), capture_output=True, text=True, timeout=600)
+                    r = subprocess.run(["cargo", "test", "--", "--list", "--format", "terse"], cwd=str(root), capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=600)
                     for line in r.stdout.splitlines():
                         if line.endswith(": test"):
                             name = line[:-6]
                             found.append({"id": name, "name": name.split("::")[-1], "file": "", "line": 0, "group": "::".join(name.split("::")[:-1]) or "crate"})
                 elif kind == "go":
-                    r = subprocess.run(["go", "test", "-list", ".", "./..."], cwd=str(root), capture_output=True, text=True, timeout=600)
+                    r = subprocess.run(["go", "test", "-list", ".", "./..."], cwd=str(root), capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=600)
                     pkg = ""
                     for line in r.stdout.splitlines():
                         if line.startswith(("ok ", "?   ")):
@@ -2428,8 +2685,12 @@ def advice(sky: Sky) -> str:
         lines = d.text.split("\n")
         if line >= len(lines):
             return ""
-        m = next((m for m in re.finditer(r"[A-Za-z_][A-Za-z0-9_]*", lines[line]) if m.start() <= col <= m.end()), None)
-        return m.group() if m else ""
+        if line < 0 or col < 0:
+            return ""
+        near = lines[line][max(0, col - 200):col + 200]      # a name is short: only the text around the cursor is looked at
+        at = min(col, 200)
+        m = next((m for m in re.finditer(r"[A-Za-z_][A-Za-z0-9_]*", near) if m.start() <= at <= m.end()), None)
+        return m.group() if m and len(m.group()) < 200 and m.start() > 0 - (col <= 200) and m.end() < len(near) + (col + 200 >= len(lines[line])) else ""
 
     @Slot(int, int, int, result=str)
     def wordAt(self, i: int, line: int, col: int) -> str:
@@ -2450,12 +2711,17 @@ def advice(sky: Sky) -> str:
             # open files as they are in their tabs (maybe unsaved), the rest of the project as it is on disk
             opened = {x.path for x in self._docs}
             rest = [h for h in (search_files(self._root, name, True, False, True) if self._root else []) if str(self._root / h["path"]) not in opened]
-            hits = []
+            hits, word = [], re.compile(rf"\b{re.escape(name)}\b")
             for x in sorted(self._docs, key=lambda x: x.path != d.path):
-                if x.binary or (self._root and not x.path.startswith(str(self._root)) and x is not d):
+                if x.binary or (self._root and not x.path.startswith(str(self._root)) and x is not d) or name not in x.text:
                     continue
-                hits += [{"path": x.path, "line": n, "col": m.start(), "length": len(name), "text": l[:400]} for n, l in enumerate(x.text.split("\n"))
-                         for m in re.finditer(rf"\b{re.escape(name)}\b", l)]
+                for n, l in enumerate(x.text.split("\n")):
+                    if name in l:
+                        hits += [{"path": x.path, "line": n, "col": m.start(), "length": len(name), "text": l[:400]} for m in itertools.islice(word.finditer(l), 50)]
+                    if len(hits) >= 2000:                     # (plenty to read: a one-letter name in a huge file would be millions)
+                        break
+                if len(hits) >= 2000:
+                    break
             self._show_refs(name, hits + rest, exact=False)
         if c and not c.up:                                         # still starting: ask once it's ready
             self._once_ready(c, lambda: self.references(i, line, col), by_words)
@@ -2667,7 +2933,7 @@ def advice(sky: Sky) -> str:
 
         def by_hand():
             lines = d.text.split("\n")
-            before = "\n".join(lines[max(0, line - 20):line] + [lines[line][:col] if line < len(lines) else ""])
+            before = "\n".join(lines[max(0, line - 20):line] + [lines[line][:col] if line < len(lines) else ""])[-4000:]
             depth, k, arg = 0, len(before) - 1, 0
             while k >= 0:
                 ch = before[k]

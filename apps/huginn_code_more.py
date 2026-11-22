@@ -330,8 +330,9 @@ def edits_to_offsets(text: str, edits: list) -> list:
 
 def u16(text: str, offset: int) -> int:
     """A character offset as Qt counts it (UTF-16: characters past U+FFFF are two)."""
-    head = text[:offset]
-    return offset + sum(1 for ch in head if ord(ch) > 0xFFFF)
+    if text.isascii():
+        return offset
+    return len(text[:offset].encode("utf-16-le", "surrogatepass")) // 2
 
 
 def trim_text(text: str, lang: str) -> str:
@@ -346,3 +347,183 @@ def trim_text(text: str, lang: str) -> str:
         lines.pop()
     out = "\n".join(lines)
     return out if out.endswith("\n") else out + "\n"
+
+
+# ---------------------------------------------------------------- whole lines at a time
+LINE_EDITS = ("up", "down", "copy_up", "copy_down", "delete", "join", "sort", "sort_desc", "unique",
+              "upper", "lower", "title", "above", "below", "select")
+
+
+def from16(text: str, n: int) -> int:
+    """A position the editor counts (UTF-16 units) as a position in the Python string."""
+    n = max(0, int(n))
+    if text.isascii():
+        return min(n, len(text))
+    return len(text.encode("utf-16-le", "surrogatepass")[:2 * n].decode("utf-16-le", "ignore"))
+
+
+def line_span(text: str, a: int, b: int) -> tuple:
+    """The whole lines a selection touches: (start of the first, end of the last, without its line end).
+    A selection that stops at the very start of a line doesn't count that line."""
+    a, b = max(0, min(a, b, len(text))), max(0, min(max(a, b), len(text)))
+    s = text.rfind("\n", 0, a) + 1
+    e = text.find("\n", b - 1 if b > a and text[b - 1] == "\n" else b)
+    return s, len(text) if e < 0 else e
+
+
+def line_edit(text: str, a: int, b: int, how: str):
+    """One whole-line command on the selection a..b (or the cursor's line).
+    -> (start, end, new, sel_a, sel_b): put `new` where text[start:end] was, then select sel_a..sel_b; None when there's nothing to do."""
+    if how not in LINE_EDITS:
+        return None
+    a, b = max(0, min(a, b, len(text))), max(0, min(max(a, b), len(text)))
+    s, e = line_span(text, a, b)
+    block = text[s:e]
+    if how == "select":
+        return (s, s, "", s, min(e + 1, len(text)))
+    if how == "up":
+        if s == 0:
+            return None
+        ps = text.rfind("\n", 0, s - 1) + 1
+        prev = text[ps:s - 1]
+        return (ps, e, block + "\n" + prev, a - len(prev) - 1, b - len(prev) - 1)
+    if how == "down":
+        if e >= len(text):
+            return None
+        ne = text.find("\n", e + 1)
+        ne = len(text) if ne < 0 else ne
+        nxt = text[e + 1:ne]
+        return (s, ne, nxt + "\n" + block, a + len(nxt) + 1, min(b + len(nxt) + 1, ne))
+    if how == "copy_down":
+        return (e, e, "\n" + block, a + len(block) + 1, b + len(block) + 1)
+    if how == "copy_up":
+        return (e, e, "\n" + block, a, b)
+    if how == "delete":
+        if e < len(text):
+            return (s, e + 1, "", s, s)
+        if s > 0:
+            ps = text.rfind("\n", 0, s - 1) + 1
+            return (s - 1, e, "", ps, ps)
+        return (s, e, "", 0, 0) if block else None
+    if how in ("above", "below"):
+        ind = re.match(r"[ \t]*", block).group(0)
+        if how == "above":
+            return (s, s, ind + "\n", s + len(ind), s + len(ind))
+        return (e, e, "\n" + ind, e + 1 + len(ind), e + 1 + len(ind))
+    if how == "join":
+        if "\n" not in block:                                 # one line: the next one comes up to it
+            if e >= len(text):
+                return None
+            ne = text.find("\n", e + 1)
+            e = len(text) if ne < 0 else ne
+            block = text[s:e]
+        parts = block.split("\n")
+        out, at = parts[0].rstrip(), None
+        for part in parts[1:]:
+            part = part.strip()
+            at = len(out)
+            if part:
+                out += (" " if out else "") + part
+        if out == block:
+            return None
+        if len(parts) == 2:
+            return (s, e, out, s + at, s + at)
+        return (s, e, out, s, s + len(out))
+    if how in ("sort", "sort_desc", "unique"):
+        parts = block.split("\n")
+        if len(parts) < 2:
+            return None
+        if how == "unique":
+            seen, now = set(), []
+            for part in parts:
+                if part not in seen:
+                    seen.add(part)
+                    now.append(part)
+        else:
+            now = sorted(parts, key=lambda l: (l.casefold(), l), reverse=how == "sort_desc")
+        if now == parts:
+            return None
+        out = "\n".join(now)
+        return (s, e, out, s, s + len(out))
+    # upper, lower, title: what's selected, or the cursor's line
+    s2, e2 = (a, b) if b > a else (s, e)
+    old = text[s2:e2]
+    now = old.upper() if how == "upper" else old.lower() if how == "lower" else re.sub(r"[^\W\d_]+(?:['’][^\W\d_]+)*", lambda m: m.group(0)[:1].upper() + m.group(0)[1:].lower(), old)
+    if now == old:
+        return None
+    return (s2, e2, now, s2, s2 + len(now)) if b > a else (s2, e2, now, min(a, s2 + len(now)), min(a, s2 + len(now)))
+
+
+# ---------------------------------------------------------------- what changed since the last commit
+CHANGES_LIMIT = 20000         # lines: past this the marks come from Git when the file is saved, not as you type
+
+
+def changes(old: str, new: str) -> list:
+    """What differs between the committed text and the one in the editor, as runs of lines in the new one:
+    [{"a", "b", "kind": add | mod | del, "old": the committed lines it replaced}]. A "del" sits at line a (b == a)."""
+    if old == new:
+        return []
+    was, now = old.split("\n"), new.split("\n")
+    if len(was) > CHANGES_LIMIT or len(now) > CHANGES_LIMIT:
+        return []
+    import difflib
+    head = 0                                                  # (the same start and end are skipped first: typing in a long file stays quick)
+    top = min(len(was), len(now))
+    while head < top and was[head] == now[head]:
+        head += 1
+    tail = 0
+    while tail < top - head and was[len(was) - 1 - tail] == now[len(now) - 1 - tail]:
+        tail += 1
+    out = []
+    mid_was, mid_now = was[head:len(was) - tail], now[head:len(now) - tail]
+    import collections
+    seen = collections.Counter(mid_now)
+    work = sum(seen[l] for l in mid_was)                      # how many pairs of equal lines there are to weigh up
+    if not mid_was or not mid_now or work > 3_000_000:        # one side empty, or thousands of the same line over and over: one change
+        return [{"a": head, "b": head + len(mid_now), "kind": "add" if not mid_was else "del" if not mid_now else "mod", "old": mid_was}]
+    for tag, i1, i2, j1, j2 in difflib.SequenceMatcher(None, mid_was, mid_now, autojunk=False).get_opcodes():
+        if tag == "equal":
+            continue
+        out.append({"a": head + j1, "b": head + j2, "kind": "add" if tag == "insert" else "del" if tag == "delete" else "mod",
+                    "old": mid_was[i1:i2]})
+    return out
+
+
+def change_marks(found: list, lines: int) -> dict:
+    """The gutter's marks from `changes`: {line: add | mod | del}."""
+    marks = {}
+    for c in found:
+        if c["kind"] == "del":
+            marks.setdefault(max(0, min(c["a"], lines - 1)), "del")
+        else:
+            for n in range(c["a"], c["b"]):
+                marks[n] = c["kind"]
+    return marks
+
+
+def change_at(found: list, line: int):
+    """The change the cursor's line belongs to (a removal belongs to the line it sits on, or the one before)."""
+    for c in found:
+        if c["a"] <= line < c["b"] or (c["kind"] == "del" and line in (c["a"], c["a"] - 1)):
+            return c
+    return None
+
+
+def put_back(new: str, c: dict) -> tuple:
+    """Undo one change: -> (start, end, text) to put the committed lines back where the changed ones are."""
+    lines = new.split("\n")
+    starts = [0]
+    for l in lines:
+        starts.append(starts[-1] + len(l) + 1)
+    total = len(new)
+    if c["kind"] == "del":                                    # the lines go back in above line a
+        if c["a"] >= len(lines):
+            return (total, total, "\n" + "\n".join(c["old"]))
+        return (starts[c["a"]], starts[c["a"]], "\n".join(c["old"]) + "\n")
+    s = starts[c["a"]]
+    e = min(starts[c["b"]], total + 1)
+    if c["kind"] == "add":                                 # the added lines go, with one line end
+        if e > total:                                         # (they were the last lines: the line end before them goes instead)
+            return (max(0, s - 1), total, "")
+        return (s, e, "")
+    return (s, e - 1, "\n".join(c["old"]))

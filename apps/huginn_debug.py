@@ -30,7 +30,7 @@ def gdb_has_dap() -> bool:
     if not shutil.which("gdb"):
         return False
     try:
-        out = subprocess.run(["gdb", "--version"], capture_output=True, text=True, timeout=10).stdout
+        out = subprocess.run(["gdb", "--version"], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=10).stdout
         major = int(out.split("\n")[0].rsplit(" ", 1)[-1].split(".")[0])
         return major >= 14
     except (OSError, ValueError, IndexError, subprocess.TimeoutExpired):

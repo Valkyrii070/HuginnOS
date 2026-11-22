@@ -10,6 +10,12 @@ Ctrl+P finds a file as you type part of its name. Start with > for every command
 ## Editing helpers
 Enter keeps the indent (and adds one after a colon or an opening bracket). Brackets and quotes close themselves. Tab and Shift+Tab indent and outdent the lines you've selected. Ctrl+/ comments lines out and back in. Ctrl+= and Ctrl+- change the letter size; Alt+Z wraps long lines.
 
+## Whole lines at a time
+Alt+Up and Alt+Down move the line you're on (or the lines you've selected) up and down; with Shift they leave a copy behind. Ctrl+Shift+K deletes the line, Ctrl+J joins it to the next, Ctrl+L selects it. Ctrl+Enter starts a new line below wherever the cursor is, Ctrl+Shift+Enter one above. In Ctrl+Shift+P you'll also find Sort Lines, Remove Repeated Lines and Upper, Lower and Title Case.
+
+## Nothing unsaved is lost
+If Code closes with changes you hadn't saved (you quit, the power went, something crashed), they're there when you open it again, still marked unsaved, and the file on disk hasn't been touched. If the file changed on disk in the meantime Code says so, and asks before saving over it. Closing a tab and choosing not to save is the one way to let changes go.
+
 ## Find and replace
 Ctrl+F finds in this file, Ctrl+H replaces. Ctrl+Shift+F searches the whole project, and can replace everywhere it found. Aa matches case, W whole words, .* a pattern.
 
@@ -18,6 +24,8 @@ For Python, Code speaks to a language server: suggestions appear as you type (Ct
 
 ## Git
 The branch icon on the left shows what changed. Click a file to see its changes, stage it with +, or throw the changes away. Write what changed and press Commit (if nothing is staged, everything is). The arrows pull and push. If the server wants a password, run the same command in the terminal once.
+
+The coloured marks beside the line numbers show what's different from the last commit as you type: green for new lines, blue for changed ones, red where lines were removed. F7 jumps to the next change and Shift+F7 to the one before. To undo just one of them, put the cursor on it and choose Put This Change Back in Ctrl+Shift+P (Ctrl+Z brings it back).
 
 ## Rename and find every use
 F2 renames the thing under the cursor everywhere it's used, across the project (the language server knows where; open files change but aren't saved until you save them). Shift+F12 lists every place it's used in the Search panel. Without a language server, rename changes whole words in the file and the list is found by name.

@@ -166,6 +166,24 @@ GlassWindow {
         { name: "Merge: Keep Ours Everywhere in This File", key: "", run: function () { if (Backend.current >= 0) Backend.resolveConflict(Backend.current, -1, "ours") } },
         { name: "Merge: Keep Theirs Everywhere in This File", key: "", run: function () { if (Backend.current >= 0) Backend.resolveConflict(Backend.current, -1, "theirs") } },
         { name: "Comment or Uncomment Lines", key: "Ctrl+/", run: function () { var v = win.view(); if (v) v.toggleComment() } },
+        { name: "Move Lines Up", key: "Alt+Up", run: function () { var v = win.view(); if (v) v.lineCmd("up") } },
+        { name: "Move Lines Down", key: "Alt+Down", run: function () { var v = win.view(); if (v) v.lineCmd("down") } },
+        { name: "Copy Lines Up", key: "Alt+Shift+Up", run: function () { var v = win.view(); if (v) v.lineCmd("copy_up") } },
+        { name: "Copy Lines Down", key: "Alt+Shift+Down", run: function () { var v = win.view(); if (v) v.lineCmd("copy_down") } },
+        { name: "Delete Lines", key: "Ctrl+Shift+K", run: function () { var v = win.view(); if (v) v.lineCmd("delete") } },
+        { name: "Join Lines", key: "Ctrl+J", run: function () { var v = win.view(); if (v) v.lineCmd("join") } },
+        { name: "Select the Line", key: "Ctrl+L", run: function () { var v = win.view(); if (v) v.lineCmd("select") } },
+        { name: "New Line Below", key: "Ctrl+Enter", run: function () { var v = win.view(); if (v) v.lineCmd("below") } },
+        { name: "New Line Above", key: "Ctrl+Shift+Enter", run: function () { var v = win.view(); if (v) v.lineCmd("above") } },
+        { name: "Sort Lines", key: "", run: function () { var v = win.view(); if (v) v.lineCmd("sort") } },
+        { name: "Sort Lines, Z to A", key: "", run: function () { var v = win.view(); if (v) v.lineCmd("sort_desc") } },
+        { name: "Remove Repeated Lines", key: "", run: function () { var v = win.view(); if (v) v.lineCmd("unique") } },
+        { name: "Make Upper Case", key: "", run: function () { var v = win.view(); if (v) v.lineCmd("upper") } },
+        { name: "Make Lower Case", key: "", run: function () { var v = win.view(); if (v) v.lineCmd("lower") } },
+        { name: "Make Title Case", key: "", run: function () { var v = win.view(); if (v) v.lineCmd("title") } },
+        { name: "Go to the Next Change", key: "F7", run: function () { var v = win.view(); if (v) v.goChange(1) } },
+        { name: "Go to the Previous Change", key: "Shift+F7", run: function () { var v = win.view(); if (v) v.goChange(-1) } },
+        { name: "Put This Change Back", key: "", run: function () { var v = win.view(); if (v) v.putBack() } },
         { name: "Toggle Word Wrap", key: "Alt+Z", run: function () { Backend.setWrap(!Backend.wrap) } },
         { name: "Bigger Text", key: "Ctrl+=", run: function () { Backend.setSize(Backend.size + 1) } },
         { name: "Smaller Text", key: "Ctrl+-", run: function () { Backend.setSize(Backend.size - 1) } },
@@ -995,6 +1013,25 @@ GlassWindow {
                         if (l.indexOf(win.unit) === 0) return l.substring(win.unit.length)
                         return l.replace(/^(\t| {1,4})/, "") }) })
                 }
+                // whole lines at a time (worked out by the backend, made here so Undo takes them back)
+                function lineCmd(how) {
+                    var r = Backend.lineEdit(v.index, edit.selectionStart, edit.selectionEnd, how)
+                    if (r.at === undefined) return
+                    if (r.end > r.at) edit.remove(r.at, r.end)
+                    if (r.text !== "") edit.insert(r.at, r.text)
+                    if (r.a === r.b) edit.cursorPosition = r.a; else edit.select(r.a, r.b)
+                }
+                function goChange(way) {
+                    var n = Backend.changeNear(v.index, v.lineCol()[0], way)
+                    if (n < 0) toast.say("Nothing in this file has changed since the last commit.", false); else v.goTo(n, 0)
+                }
+                function putBack() {
+                    var r = Backend.putBack(v.index, v.lineCol()[0])
+                    if (r.at === undefined) { toast.say("This line is as it was at the last commit.", false); return }
+                    if (r.end > r.at) edit.remove(r.at, r.end)
+                    if (r.text !== "") edit.insert(r.at, r.text)
+                    v.goTo(r.line, 0)
+                }
                 function toggleComment() {
                     var c = Backend.status.comment
                     if (!c) { var b = Backend.status.block; if (b && b.length === 2 && edit.selectedText) { var a = edit.selectionStart, t = edit.selectedText; edit.remove(a, edit.selectionEnd); edit.insert(a, b[0] + " " + t + " " + b[1]) } return }
@@ -1173,6 +1210,12 @@ GlassWindow {
                             }
                             if (readOnly) return
                             var alt = (e.modifiers & Qt.AltModifier)
+                            if (alt && !ctrl && (e.key === Qt.Key_Up || e.key === Qt.Key_Down)) { v.lineCmd((shift ? "copy_" : "") + (e.key === Qt.Key_Up ? "up" : "down")); e.accepted = true; return }
+                            if (ctrl && shift && e.key === Qt.Key_K) { v.lineCmd("delete"); e.accepted = true; return }
+                            if (ctrl && !shift && !alt && e.key === Qt.Key_J) { v.lineCmd("join"); e.accepted = true; return }
+                            if (ctrl && !shift && !alt && e.key === Qt.Key_L) { v.lineCmd("select"); e.accepted = true; return }
+                            if (ctrl && (e.key === Qt.Key_Return || e.key === Qt.Key_Enter)) { v.lineCmd(shift ? "above" : "below"); e.accepted = true; return }
+                            if (e.key === Qt.Key_F7) { v.goChange(shift ? -1 : 1); e.accepted = true; return }
                             if (ctrl && !shift && e.key === Qt.Key_D) { v.addNext(); e.accepted = true; return }
                             if (ctrl && shift && e.key === Qt.Key_L) { v.selectEvery(); e.accepted = true; return }
                             if (ctrl && alt && (e.key === Qt.Key_Down || e.key === Qt.Key_Up)) { v.addVertical(e.key === Qt.Key_Down ? 1 : -1); e.accepted = true; return }
