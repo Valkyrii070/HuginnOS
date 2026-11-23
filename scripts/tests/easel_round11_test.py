@@ -161,6 +161,38 @@ e.previewRange("reds", 0.4); e.setTool("brush"); e.press(10, 10, 1, 0); e.releas
 bigr, _ = fresh(4000, 3000); photo(bigr); t0 = time.time(); bigr.previewRange("midtones", 0.4); first = time.time() - t0; t0 = time.time(); bigr.selectRange("midtones", 0.4); second = time.time() - t0
 ok("12 megapixels of grain: a preview in about a second, and Select (with its outline) not much more", first < 2.5 and second < 3.0, f"{first:.2f}s then {second:.2f}s")
 
+# ---- the gradient editor's middles and see-through colours
+W = QColor("#FFFFFF"); K = QColor("#000000")
+t = ez.gradient_table([(0, K), (1, W)], 1001)
+ok("plain: half-way along is half-way between", abs(t[500, 0] - 127.5) < 0.5)
+t = ez.gradient_table([(0, K, 0.25), (1, W)], 1001)
+ok("the middle moved to a quarter: half-way there at a quarter of the way, and still black and white at the ends", abs(t[250, 0] - 127.5) < 1.0 and t[0, 0] == 0 and t[1000, 0] == 255 and (np.diff(t[:, 0]) >= 0).all(), float(t[250, 0]))
+t = ez.gradient_table([(0, K, 0.8), (0.5, W, 0.5), (1, K)], 1001)
+ok("each stretch has its own middle", abs(t[400, 0] - 127.5) < 1.5 and abs(t[750, 0] - 127.5) < 1.0, (float(t[400, 0]), float(t[750, 0])))
+back = ez.gradient_table(ez.gradient_turned([(0, K, 0.25), (1, W)]), 1001)
+ok("turned round, it is the same gradient backwards", np.abs(back[::-1, 0] - ez.gradient_table([(0, K, 0.25), (1, W)], 1001)[:, 0]).max() < 0.6)
+pl = ez.gradient_plain([(0, K, 0.25), (1, W)]); ok("the quick picture gets a stop at the middle", len(pl) == 3 and abs(pl[1][0] - 0.25) < 1e-6 and pl[1][1].red() == 127)
+ok("a senseless middle is held to a sensible one", [m for _, _, m in ez.gradient_stops([(0, K, 7), (0.5, W, float("nan")), (1, K, -3)])] == [0.95, 0.5, 0.05])
+e, _ = fresh(400, 40, "#FFFFFF")
+key = e.saveGradient([{"at": 0, "colour": "#FF0000", "mid": 0.2}, {"at": 1, "colour": "#00FF0000"}], "")
+got = e.gradientStops(key); ok("the editor keeps a middle and a see-through colour", abs(got[0]["mid"] - 0.2) < 1e-6 and got[1]["colour"].lower() == "#00ff0000" and got[0]["colour"].lower() == "#ff0000", got)
+e.setTool("gradient"); e.press(0, 20, 1, 0); e.move(400, 20, 0); e.release(400, 20, 0); px = arr(e.doc.flattened())[20]
+ok("drawn over white: red fading out to the white, half gone a fifth of the way along", px[1, 1] < 6 and px[398, 1] > 250 and abs(int(px[80, 1]) - 127) < 8 and px[80, 0] > 250, (px[1], px[80], px[398]))
+e2 = eu.Easel(False, ""); ok("…and they come back next time", abs(e2.gradientStops(key)[0]["mid"] - 0.2) < 1e-6 and e2.gradientStops(key)[1]["colour"].lower() == "#00ff0000")
+e.forgetGradient(key)
+
+# ---- the wash stands out from the picture
+def flat(c): 
+    e, _ = fresh(200, 150, c); return e
+pinkpic = flat("#FF4F7B"); ok("over a pink picture the wash isn't pink", pinkpic.washColour != "#FF3B6B" and pinkpic.washColour in ez.WASHES, pinkpic.washColour)
+ok("over grey, white or blue it stays pink", flat("#808080").washColour == "#FF3B6B" and flat("#FFFFFF").washColour == "#FF3B6B" and flat("#2D6CDF").washColour == "#FF3B6B")
+pinkpic.previewRange("highlights", 1.0); w = pinkpic.overlay()["quick"]; c = w.pixelColor(100, 75)
+def near(c, name): w = QColor(name); return c.alpha() > 0 and max(abs(c.red() - w.red()), abs(c.green() - w.green()), abs(c.blue() - w.blue())) <= 8
+ok("a range being tried is washed in that colour", near(c, pinkpic.washColour), c.name())
+pinkpic.endRange(); pinkpic.quickMask(); pinkpic.press(100, 75, 1, 0); pinkpic.release(100, 75, 0); c = pinkpic.overlay()["quick"].pixelColor(100, 75)
+ok("and so is the Quick Mask", near(c, pinkpic.washColour), c.name())
+ok("an empty picture still gets one", ez.wash_colour(ez.new_image(10, 10)) == "#FF3B6B")
+
 shutil.rmtree(home, ignore_errors=True)
 print(f"{passed} passed, {failed} failed")
 sys.stdout.flush(); os._exit(1 if failed else 0)

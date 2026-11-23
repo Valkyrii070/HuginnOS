@@ -313,7 +313,7 @@ class Easel(QObject):
             try:
                 if not (isinstance(key, str) and re.fullmatch(r"mg[0-9a-f]{8}", key)):    # (no ready-made one has a name like that)
                     continue
-                stops = [(at, c.name(QColor.NameFormat.HexArgb)) for at, c in ez.gradient_stops(g["stops"])]
+                stops = [(at, c.name(QColor.NameFormat.HexArgb), mid) for at, c, mid in ez.gradient_stops(g["stops"])]
                 name = str(g.get("name") or "My Gradient")[:40]
             except (ValueError, TypeError, KeyError, AttributeError):
                 continue
@@ -338,14 +338,15 @@ class Easel(QObject):
             if key == "fgclear":
                 end.setAlpha(0)
             stops = [(0.0, QColor(self.fg)), (1.0, end)]
-        return [{"at": float(at), "colour": QColor(c).name(QColor.NameFormat.HexArgb if QColor(c).alpha() < 255 else QColor.NameFormat.HexRgb)} for at, c in stops]
+        return [{"at": float(at), "colour": c.name(QColor.NameFormat.HexArgb if c.alpha() < 255 else QColor.NameFormat.HexRgb), "mid": float(mid)}
+                for at, c, mid in ez.gradient_stops(stops)]
 
     @Slot("QVariantList", str, result=str)
     def saveGradient(self, stops: list, key: str = "") -> str:
         """Keep a gradient made in the editor (a new one, or one of your own changed) and take it in hand."""
         try:
-            good = [(at, c.name(QColor.NameFormat.HexArgb if c.alpha() < 255 else QColor.NameFormat.HexRgb))
-                    for at, c in ez.gradient_stops([(st.get("at"), st.get("colour")) for st in stops if isinstance(st, dict)])]
+            good = [(at, c.name(QColor.NameFormat.HexArgb if c.alpha() < 255 else QColor.NameFormat.HexRgb), mid)
+                    for at, c, mid in ez.gradient_stops([(st.get("at"), st.get("colour"), st.get("mid")) for st in stops if isinstance(st, dict)])]
         except (ValueError, TypeError, AttributeError):
             self.said.emit("A gradient needs at least two colours.", True)
             return ""
@@ -394,6 +395,16 @@ class Easel(QObject):
         self._range_kept = (key, a)
         return a
 
+    def _wash_colour(self) -> str:
+        """Pink, unless the picture is pink: then whichever of green, blue and yellow shows best against it."""
+        kept = getattr(self, "_wash_kept", None)
+        if kept is None or kept[0] != (id(self.doc), self.doc.version):
+            kept = ((id(self.doc), self.doc.version), ez.wash_colour(self.doc.composite_small(self.mip())))
+            self._wash_kept = kept
+        return kept[1]
+
+    washColour = Property(str, lambda self: self._wash_colour() if self.doc else ez.WASHES[0], notify=changed)
+
     @Slot(str, float)
     def previewRange(self, kind: str, fuzz: float) -> None:
         """Select › Colour Range, while its sheet is open: what would be selected shows as a wash over the picture."""
@@ -403,7 +414,7 @@ class Easel(QObject):
         wash = ez.alpha_image(a)
         q = QPainter(wash)
         q.setCompositionMode(ez.CM.CompositionMode_SourceIn)
-        q.fillRect(wash.rect(), QColor("#FF3B6B"))
+        q.fillRect(wash.rect(), QColor(self._wash_colour()))
         q.end()
         self._range = wash
         self.painted.emit()
@@ -938,7 +949,7 @@ class Easel(QObject):
                 wash = QImage(self._quick["image"])
                 q = QPainter(wash)
                 q.setCompositionMode(ez.CM.CompositionMode_SourceIn)
-                q.fillRect(wash.rect(), QColor("#FF3B6B"))
+                q.fillRect(wash.rect(), QColor(self._wash_colour()))
                 q.end()
                 kept = ((self._quick["v"], id(self._quick["image"])), wash)
                 self._quick_wash = kept
@@ -2184,12 +2195,12 @@ class Easel(QObject):
             c1 = QColor(self.fg)
             c1.setAlpha(0)
         stops = ez.GRADIENTS.get(self.gradient_key, ("", None))[1]
-        stops = [(0.0, c0), (1.0, c1)] if stops is None or self._quick is not None or self._mask_edit else [(at, QColor(c)) for at, c in stops]
+        stops = [(0.0, c0), (1.0, c1)] if stops is None or self._quick is not None or self._mask_edit else stops
         if self.gradient_reverse:
-            stops = [(1.0 - at, c) for at, c in reversed(stops)]
+            stops = ez.gradient_turned(stops)
         if quick and self.doc.w * self.doc.h > 1_500_000:
             g = QRadialGradient(a, max(1.0, math.hypot(b.x() - a.x(), b.y() - a.y()))) if self.gradient_kind == "radial" else QLinearGradient(a, b)
-            for at, c in stops:
+            for at, c in ez.gradient_plain(stops):
                 g.setColorAt(at, c)
             img = ez.new_image(self.doc.w, self.doc.h)
             p = QPainter(img)

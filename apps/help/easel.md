@@ -74,9 +74,10 @@ With the text tool, Spacing on the bar sets the room between letters and Lines t
 ## Choosing by colour or tone
 Select › Colour Range chooses everything of one kind: the front colour (pick it from the picture first with the
 eyedropper), the highlights, midtones or shadows, or all the reds, greens and so on. Range sets how near a colour must
-be. What would be chosen shows in pink while the sheet is open.
+be. What would be chosen shows washed in a colour that stands out from the picture while the sheet is open.
 
 ## Gradients of your own
 With the gradient tool, open the gradient list and choose New from This…. Click the bar to add the front colour at
-that place, drag the markers to move the colours, and press Keep. Your gradients stay in the list; Change and Forget
+that place, drag the markers to move the colours, and press Keep. Opacity makes the ringed colour see-through;
+Middle moves the place where it has half turned into the next colour. Your gradients stay in the list; Change and Forget
 are beside each one.

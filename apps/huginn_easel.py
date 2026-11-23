@@ -2128,25 +2128,61 @@ def _noise(h: int, w: int, y0: int = 0) -> np.ndarray:
 
 
 def gradient_stops(stops: list) -> list:
-    """Stops as [(place 0..1, QColor)], in order, with one at each end. Raises ValueError when they make no sense."""
+    """Stops as [(place 0..1, QColor, middle)], in order, with one at each end. `middle` (0.05..0.95, usually a half)
+    is where, on the way to the next stop, the colour is half-way there. Given as (place, colour) or (place, colour,
+    middle). Raises ValueError when they make no sense."""
     out = []
     for st in stops or []:
         try:
             at, c = float(st[0]), QColor(st[1])
+            mid = float(st[2]) if len(st) > 2 and st[2] is not None else 0.5
         except (TypeError, ValueError, IndexError):
             raise ValueError("a gradient stop is a place and a colour")
         if not (at == at) or not c.isValid():
             raise ValueError("a gradient stop is a place and a colour")
-        out.append((max(0.0, min(1.0, at)), c))
+        out.append((max(0.0, min(1.0, at)), c, max(0.05, min(0.95, mid)) if mid == mid else 0.5))
     if len(out) < 2:
         raise ValueError("a gradient needs two colours at least")
     out.sort(key=lambda st: st[0])
     out = out[:32]
     if out[0][0] > 0:
-        out.insert(0, (0.0, out[0][1]))
+        out.insert(0, (0.0, out[0][1], 0.5))
     if out[-1][0] < 1:
-        out.append((1.0, out[-1][1]))
+        out.append((1.0, out[-1][1], 0.5))
     return out
+
+
+def gradient_turned(stops: list) -> list:
+    """The same gradient running the other way (each middle goes with the stretch it belonged to)."""
+    st = gradient_stops(stops)
+    return [(1.0 - at, c, 1.0 - (st[i - 1][2] if i > 0 else 0.5)) for i, (at, c, _) in reversed(list(enumerate(st)))]
+
+
+def gradient_plain(stops: list) -> list:
+    """The stops as plain (place, QColor) pairs for Qt's own gradients, with a stop put in wherever a middle has
+    been moved (close to the true curve: for the quick picture shown while dragging)."""
+    st = gradient_stops(stops)
+    out = []
+    for i, (at, c, mid) in enumerate(st):
+        out.append((at, c))
+        if i + 1 < len(st) and abs(mid - 0.5) > 0.01 and st[i + 1][0] > at:
+            n = st[i + 1][1]
+            out.append((at + (st[i + 1][0] - at) * mid, QColor((c.red() + n.red()) // 2, (c.green() + n.green()) // 2, (c.blue() + n.blue()) // 2, (c.alpha() + n.alpha()) // 2)))
+    return out
+
+
+def gradient_table(stops: list, n: int = 8192) -> np.ndarray:
+    """n colours along the gradient, as float RGBA 0..255. Between two stops the colour runs evenly unless the middle
+    has been moved: then it is half-way at the middle, and eases either side of it."""
+    st = gradient_stops(stops)
+    ramp = np.linspace(0.0, 1.0, n)
+    at = np.array([s_[0] for s_ in st], np.float64) + np.arange(len(st)) * 1e-9      # (two stops at one place: a hard edge, in the order given)
+    cols = np.array([[c.red(), c.green(), c.blue(), c.alpha()] for _, c, _ in st], np.float64)
+    seg = np.clip(np.searchsorted(at, ramp, side="right") - 1, 0, len(st) - 2)
+    t = np.clip((ramp - at[seg]) / np.maximum(at[seg + 1] - at[seg], 1e-12), 0.0, 1.0)
+    mids = np.array([s_[2] for s_ in st], np.float64)[seg]
+    t = t * (1 - mids) / np.maximum(t * (1 - mids) + (1 - t) * mids, 1e-12)   # (half-way at the middle; and the same curve backwards when the gradient is turned round)
+    return (cols[seg] * (1 - t[:, None]) + cols[seg + 1] * t[:, None]).astype(np.float32)
 
 
 def gradient_image(w: int, h: int, kind: str, a: QPointF, b: QPointF, stops: list, smooth: bool = True) -> QImage:
@@ -2154,13 +2190,8 @@ def gradient_image(w: int, h: int, kind: str, a: QPointF, b: QPointF, stops: lis
     Worked in fine numbers and rounded with a little grain, so a long gentle gradient has no visible steps in it (the
     plain way gives bands a few pixels to a few dozen pixels wide wherever the colours are close). Where the colour
     isn't changing it comes out exactly that colour."""
-    stops = gradient_stops(stops)
     n = 8192
-    at = np.array([s_[0] for s_ in stops], np.float64)
-    at = at + np.arange(len(at)) * 1e-9                            # (two stops at one place: a hard edge, in the order given)
-    cols = np.array([[c.red(), c.green(), c.blue(), c.alpha()] for _, c in stops], np.float64)
-    ramp = np.linspace(0.0, 1.0, n)
-    lut = np.stack([np.interp(ramp, at, cols[:, c]) for c in range(4)], axis=1).astype(np.float32)
+    lut = gradient_table(stops, n)
     ax, ay, bx, by = a.x(), a.y(), b.x(), b.y()
     dx, dy = bx - ax, by - ay
     length2 = max(1e-6, dx * dx + dy * dy)
@@ -2187,6 +2218,25 @@ def gradient_image(w: int, h: int, kind: str, a: QPointF, b: QPointF, stops: lis
 RANGES = {"colour": "The front colour", "highlights": "Highlights", "midtones": "Midtones", "shadows": "Shadows",
           "reds": "Reds", "yellows": "Yellows", "greens": "Greens", "cyans": "Cyans", "blues": "Blues", "magentas": "Magentas"}
 _HUES = {"reds": 0, "yellows": 60, "greens": 120, "cyans": 180, "blues": 240, "magentas": 300}
+
+
+WASHES = ("#FF3B6B", "#12D9A0", "#2D8CFF", "#FFD21F")
+
+
+def wash_colour(picture: QImage) -> str:
+    """The colour to wash a Quick Mask or a range being tried in: the one of four that stands furthest from the
+    picture's own colours, so pink isn't laid over a sunset or green over a lawn."""
+    small = image_to_array(picture.scaled(48, 48, Qt.AspectRatioMode.IgnoreAspectRatio, Qt.TransformationMode.SmoothTransformation))
+    rgb = small[..., :3].reshape(-1, 3).astype(np.float32)[small[..., 3].reshape(-1) > 16]
+    if not len(rgb):
+        return WASHES[0]
+    def away(w: str) -> float:
+        c = QColor(w)
+        d = np.sqrt(((rgb - np.array([c.red(), c.green(), c.blue()], np.float32)) ** 2).sum(axis=1))
+        return float(np.percentile(d, 25))                         # (how far it is from the nearer part of the picture)
+    if away(WASHES[0]) >= 110:                                     # pink shows well enough: keep to it
+        return WASHES[0]
+    return max(WASHES, key=away)
 
 
 def colour_range(rgba: np.ndarray, kind: str, colour_: str, fuzz: float) -> np.ndarray:

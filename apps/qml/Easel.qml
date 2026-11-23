@@ -157,7 +157,7 @@ GlassWindow {
                              rect: "Rectangle", ellipse: "Ellipse", line: "Line", star: "Star", transform: "Transform", clone: "Clone", heal: "Heal", nodes: "Points",
                              dodge: "Tone", smudge: "Smudge", liquify: "Liquify" })[Backend.toolName] || ""
                 font.pixelSize: 12; font.weight: Font.DemiBold; leftPadding: 8; rightPadding: 4; anchors.verticalCenter: parent.verticalCenter }
-            Label { visible: Backend.quickMaskOn; text: "Quick Mask · Q"; font.pixelSize: 11; font.weight: Font.DemiBold; color: "#FF3B6B"; anchors.verticalCenter: parent.verticalCenter; rightPadding: 8 }
+            Label { visible: Backend.quickMaskOn; text: "Quick Mask · Q"; font.pixelSize: 11; font.weight: Font.DemiBold; color: Backend.washColour; anchors.verticalCenter: parent.verticalCenter; rightPadding: 8 }
             IslandGap {}
             // free transform
             Row { visible: Backend.toolName === "transform"; spacing: 6; anchors.verticalCenter: parent.verticalCenter
@@ -545,7 +545,7 @@ GlassWindow {
             readonly property bool browsing: kind === "open" || kind === "save" || kind === "export"
             width: browsing ? 620 : kind === "colour" ? 340 : kind === "new" ? 640 : kind === "styles" ? 460 : ["history", "brushes", "gradients", "blend", "fonts", "adjust", "layer", "arrange", "combine"].indexOf(kind) >= 0 ? 360 : 440
             height: browsing ? Math.min(win.height - 80, 560) : kind === "styles" ? Math.min(win.height - 130, 620) : kind === "history" ? Math.min(win.height - 130, histList.contentHeight + 156) : kind === "colour" ? 400 : kind === "new" ? 300 : kind === "fonts" || kind === "blend" ? Math.min(win.height - 100, 520)
-                  : ["brushes", "gradients", "adjust", "layer", "arrange", "combine"].indexOf(kind) >= 0 ? Math.min(win.height - 70, sheetList.contentHeight + 110) : kind === "canvas" ? 300 : kind === "gradedit" ? 330 : kind === "range" ? 306 : kind === "strokesel" ? 264 : 220
+                  : ["brushes", "gradients", "adjust", "layer", "arrange", "combine"].indexOf(kind) >= 0 ? Math.min(win.height - 70, sheetList.contentHeight + 110) : kind === "canvas" ? 300 : kind === "gradedit" ? 400 : kind === "range" ? 306 : kind === "strokesel" ? 264 : 220
             MouseArea { anchors.fill: parent }
             Label { x: 24; y: 20; font.pixelSize: 17; font.weight: Font.DemiBold
                 text: ({ new: "New picture", custom: "New picture", open: "Open a picture", save: "Save as an Easel picture", export: "Export", colour: ({ fg: "Main colour", bg: "Second colour", fill: "Fill", fill2: "Gradient's second colour", stroke: "Line" })[win.colourFor],
@@ -586,9 +586,27 @@ GlassWindow {
             Btn { visible: card.kind === "gradients"; anchors { left: parent.left; leftMargin: 20; bottom: parent.bottom; bottomMargin: 18 } text: "New from This…"
                 onClicked: win.open("gradedit", { stops: Backend.gradientStops(Backend.gradientKey), sel: 0, key: "" }) }
             // --- making a gradient: a bar of the colours, a marker under it for each; click the bar to add the front colour
-            Item { id: ged; visible: card.kind === "gradedit"; x: 24; y: 62; width: parent.width - 48; height: 190
+            Item { id: ged; visible: card.kind === "gradedit"; x: 24; y: 62; width: parent.width - 48; height: 260
                 readonly property var stops: card.kind === "gradedit" && win.sheetData.stops ? win.sheetData.stops : []
                 readonly property int sel: Math.min(stops.length - 1, win.sheetData.sel || 0)
+                // a colour as [r, g, b, a] and back ("#RRGGBB" or "#AARRGGBB", as Qt writes them)
+                function parts(col) { var h = String(col).replace("#", ""); if (h.length === 3) h = h[0] + h[0] + h[1] + h[1] + h[2] + h[2]
+                    var a = h.length === 8 ? parseInt(h.substr(0, 2), 16) : 255; if (h.length === 8) h = h.substr(2)
+                    return [parseInt(h.substr(0, 2), 16) || 0, parseInt(h.substr(2, 2), 16) || 0, parseInt(h.substr(4, 2), 16) || 0, a] }
+                function hex2(v) { var t = Math.max(0, Math.min(255, Math.round(v))).toString(16); return t.length < 2 ? "0" + t : t }
+                function join(p) { return "#" + (p[3] < 255 ? hex2(p[3]) : "") + hex2(p[0]) + hex2(p[1]) + hex2(p[2]) }
+                function sorted() { return stops.map(function (s, i) { return { at: s.at, colour: s.colour, mid: s.mid === undefined ? 0.5 : s.mid, i: i } }).sort(function (a, b) { return a.at - b.at || a.i - b.i }) }
+                function at(list, x) {                                  // the colour at x along the bar, as the picture will have it
+                    if (!list.length) return "#000000"
+                    if (x <= list[0].at) { var f = parts(list[0].colour); return Qt.rgba(f[0] / 255, f[1] / 255, f[2] / 255, f[3] / 255) }
+                    for (var i = 0; i + 1 < list.length; i++) if (x <= list[i + 1].at) {
+                        var a = parts(list[i].colour), b = parts(list[i + 1].colour), span = list[i + 1].at - list[i].at, t = span > 0 ? (x - list[i].at) / span : 1
+                        var m = list[i].mid; t = t * (1 - m) / Math.max(1e-9, t * (1 - m) + (1 - t) * m)
+                        return Qt.rgba((a[0] + (b[0] - a[0]) * t) / 255, (a[1] + (b[1] - a[1]) * t) / 255, (a[2] + (b[2] - a[2]) * t) / 255, (a[3] + (b[3] - a[3]) * t) / 255) }
+                    var l = parts(list[list.length - 1].colour); return Qt.rgba(l[0] / 255, l[1] / 255, l[2] / 255, l[3] / 255) }
+                readonly property var cur: stops[sel] || ({ at: 0, colour: "#000000", mid: 0.5 })
+                readonly property bool lastOne: stops.length > 0 && stops.every(function (s) { return s.at <= cur.at })
+                function change(k, v) { var list = stops.slice(), s = list[sel]; list[sel] = { at: s.at, colour: k === "colour" ? v : s.colour, mid: k === "mid" ? v : (s.mid === undefined ? 0.5 : s.mid) }; put(list, sel) }
                 function put(list, sel) { win.sheetData = { stops: list, sel: sel, key: win.sheetData.key || "" }; bar.requestPaint() }   // (a new object each time: the same one put back tells nobody)
                 onStopsChanged: bar.requestPaint()
                 Rectangle { width: parent.width; height: 48; radius: 10; color: "#FFFFFF"; clip: true; border.width: 1; border.color: Theme.t.islandLine
@@ -596,25 +614,34 @@ GlassWindow {
                         onPaint: { var c = getContext("2d"); c.clearRect(0, 0, width, height)
                             for (var y = 0; y < height; y += 8) for (var x = 0; x < width; x += 8) { c.fillStyle = ((x + y) / 8) % 2 ? "#D8D8D8" : "#FFFFFF"; c.fillRect(x, y, 8, 8) }
                             if (ged.stops.length < 2) return
-                            var g = c.createLinearGradient(0, 0, width, 0), list = ged.stops.slice().sort(function (a, b) { return a.at - b.at })
-                            for (var i = 0; i < list.length; i++) g.addColorStop(Math.max(0, Math.min(1, list[i].at)), list[i].colour)
-                            c.fillStyle = g; c.fillRect(0, 0, width, height) } }
+                            var list = ged.sorted()
+                            for (var px = 0; px < width; px += 2) { c.fillStyle = ged.at(list, (px + 1) / width); c.fillRect(px, 0, 2, height) } } }
                     MouseArea { anchors.fill: parent; enabled: ged.stops.length < 32
-                        onClicked: function (m) { var list = ged.stops.slice(); list.push({ at: Math.max(0, Math.min(1, m.x / width)), colour: Backend.fgColour }); ged.put(list, list.length - 1) } } }
+                        onClicked: function (m) { var list = ged.stops.slice(); list.push({ at: Math.max(0, Math.min(1, m.x / width)), colour: Backend.fgColour, mid: 0.5 }); ged.put(list, list.length - 1) } } }
                 Repeater { model: ged.stops.length
                     Rectangle { required property int index; readonly property var st: ged.stops[index] || ({ at: 0, colour: "#000000" })
-                        x: st.at * (ged.width - 2) - 9; y: 54; width: 20; height: 20; radius: 10; color: st.colour; border.width: ged.sel === index ? 3 : 1; border.color: ged.sel === index ? Theme.t.accent : Theme.t.text
+                        x: st.at * (ged.width - 2) - 9; y: 54; width: 20; height: 20; radius: 10; color: Qt.rgba(ged.parts(st.colour)[0] / 255, ged.parts(st.colour)[1] / 255, ged.parts(st.colour)[2] / 255, 1); border.width: ged.sel === index ? 3 : 1; border.color: ged.sel === index ? Theme.t.accent : Theme.t.text
                         MouseArea { anchors.fill: parent; anchors.margins: -4; preventStealing: true
                             onPressed: ged.put(ged.stops, index)
                             onPositionChanged: function (m) { if (!pressed) return
                                 var at = Math.max(0, Math.min(1, (parent.x + 9 + m.x - width / 2 + 4) / (ged.width - 2))), list = ged.stops.slice()
-                                list[index] = { at: at, colour: list[index].colour }; ged.put(list, index) } } } }
+                                list[index] = { at: at, colour: list[index].colour, mid: list[index].mid === undefined ? 0.5 : list[index].mid }; ged.put(list, index) } } } }
                 Row { y: 92; spacing: 8
-                    Btn { text: "Use the Front Colour"; onClicked: { var list = ged.stops.slice(); list[ged.sel] = { at: list[ged.sel].at, colour: Backend.fgColour }; ged.put(list, ged.sel) } }
+                    Btn { text: "Use the Front Colour"; onClicked: { var p = ged.parts(Backend.fgColour); p[3] = ged.parts(ged.cur.colour)[3]; ged.change("colour", ged.join(p)) } }
                     Btn { text: "Remove"; enabled: ged.stops.length > 2; opacity: enabled ? 1 : 0.4; onClicked: { var list = ged.stops.slice(); list.splice(ged.sel, 1); ged.put(list, Math.max(0, ged.sel - 1)) } }
-                    Btn { text: "Turn Round"; onClicked: ged.put(ged.stops.map(function (s) { return { at: 1 - s.at, colour: s.colour } }), ged.sel) } }
-                Label { y: 136; width: parent.width; wrapMode: Text.WordWrap; secondary: true; font.pixelSize: 11
-                    text: "Click the bar to add the front colour there. Drag a marker to move it; the ringed one is the one the buttons change." } }
+                    Btn { text: "Turn Round"; onClicked: { var list = ged.sorted(), out = []
+                        for (var i = list.length - 1; i >= 0; i--) out.push({ at: 1 - list[i].at, colour: list[i].colour, mid: i > 0 ? 1 - list[i - 1].mid : 0.5 })
+                        ged.put(out, 0) } } }
+                Row { y: 136; spacing: 10                                   // how see-through the ringed colour is
+                    Label { text: "Opacity"; width: 64; anchors.verticalCenter: parent.verticalCenter }
+                    SetSlider { width: 240; value: ged.parts(ged.cur.colour)[3] / 255; onMoved: function (v) { var p = ged.parts(ged.cur.colour); p[3] = Math.round(v * 255); ged.change("colour", ged.join(p)) } }
+                    Label { text: Math.round(ged.parts(ged.cur.colour)[3] / 2.55) + "%"; font.family: Theme.t.fontMono; anchors.verticalCenter: parent.verticalCenter } }
+                Row { y: 172; spacing: 10; opacity: ged.lastOne ? 0.4 : 1     // where, on the way to the next colour, it is half-way there
+                    Label { text: "Middle"; width: 64; anchors.verticalCenter: parent.verticalCenter }
+                    SetSlider { width: 240; enabled: !ged.lastOne; value: ((ged.cur.mid === undefined ? 0.5 : ged.cur.mid) - 0.05) / 0.9; onMoved: function (v) { ged.change("mid", 0.05 + v * 0.9) } }
+                    Label { text: Math.round((ged.cur.mid === undefined ? 0.5 : ged.cur.mid) * 100) + "%"; font.family: Theme.t.fontMono; anchors.verticalCenter: parent.verticalCenter } }
+                Label { y: 208; width: parent.width; wrapMode: Text.WordWrap; secondary: true; font.pixelSize: 11
+                    text: "Click the bar to add the front colour there. Drag a marker to move it. The ringed one is the one the buttons and sliders change; Middle is where it has half turned into the next colour." } }
             // --- the history: click a step to go back to it (or forward again)
             ListView { id: histList; objectName: "historyList"; visible: card.kind === "history"; x: 12; y: 56; width: parent.width - 24; height: parent.height - 120; clip: true
                 boundsBehavior: Flickable.StopAtBounds; model: card.kind === "history" ? Backend.history : []
@@ -717,7 +744,7 @@ GlassWindow {
                 SetChoice { visible: card.kind === "strokesel"; each: 84; value: win.sheetData.where || "centre"
                     options: [["inside", "Inside"], ["centre", "On the edge"], ["outside", "Outside"]]; onPicked: function (v) { var d = win.sheetData; d.where = v; win.sheetData = d } }
                 Label { visible: card.kind === "range"; width: parent.width; wrapMode: Text.WordWrap; secondary: true; font.pixelSize: 11
-                    text: "What would be selected is washed in pink. For the front colour, pick it from the picture first with the eyedropper." }
+                    text: "What would be selected is washed in colour. For the front colour, pick it from the picture first with the eyedropper." }
                 TextBox { visible: card.kind === "rename"; id: nameBox; width: parent.width; text: win.sheetData.name || ""; onAccepted: okBtn.clicked() } }
             // --- the file browser for open, save and export
             Item { visible: card.browsing; x: 16; y: 54; width: parent.width - 32; height: parent.height - 54 - (card.kind === "open" ? 64 : card.kind === "export" ? 168 : 140)

@@ -882,7 +882,7 @@ three things an editor is expected to have.
   preview.
 
 **Easel, round eleven: liquify, smooth tones, your own gradients, Colour Range**
-(`apps/huginn_easel.py`, `apps/huginn_easel_ui.py`, `apps/qml/Easel.qml`; `scripts/tests/easel_round11_test.py`, 62 checks):
+(`apps/huginn_easel.py`, `apps/huginn_easel_ui.py`, `apps/qml/Easel.qml`; `scripts/tests/easel_round11_test.py`, 76 checks):
 - *Liquify draws a patch at a time*, the last of the retouching tools to do so: under adjustment layers and blend
   modes on a 6-megapixel picture it now keeps up with the pen. Each frame is checked to be the true picture.
 - *Gradients without steps.* A long gentle gradient in 8 bits has only so many levels to use, and drawn the plain way
@@ -894,10 +894,12 @@ three things an editor is expected to have.
   no mask, each channel on its own) carry fine numbers from one to the next and are rounded once. A stack of five
   costs what one did, and darken-then-lighten no longer loses tones twice.
 - *Gradients of your own*: the gradient list has New from This…, which opens an editor (click the bar to add the
-  front colour, drag markers, Remove, Turn Round). Kept in `easel-gradients.json` under the user's data; yours can
+  front colour, drag markers, Remove, Turn Round; Opacity makes a colour see-through, Middle moves the place where
+  it has half turned into the next). Kept in `easel-gradients.json` under the user's data; yours can
   be changed or forgotten, the ready-made ones can't be overwritten.
 - *Select › Colour Range*: the front colour, highlights, midtones, shadows, or a family of hues, with a Range slider
-  and what would be chosen washed over the picture as you move it. Soft where the picture is soft; inside the
+  and what would be chosen washed over the picture as you move it (in pink, or, on a picture that is itself pink
+  or red, whichever of green, blue and yellow shows best; the Quick Mask does the same). Soft where the picture is soft; inside the
   selection if there is one.
 - Also: a selection of specks by the hundred thousand (a colour range over grain) is outlined by the patches the
   specks make up; an outline round every speck took many seconds. What's selected is unchanged.
@@ -981,7 +983,7 @@ round eleven):
   type doesn't stay editable in a Photoshop file.
 - *Photography*: no raw files, no lens corrections, no HDR or panorama merging, no focus stacking.
 - *The rest*: no actions or batch processing, no artboards or slices, no 3D or video, no plug-ins, no generative fill,
-  no channels panel, no pattern fills. The gradient editor has no transparency stops or midpoints.
+  no channels panel, no pattern fills.
 
 **Easel, the deep dives** (`apps/huginn_easel.py`, `apps/huginn_easel_ui.py`): four more ways in, after round six's
 command fuzz. Each has a script in `scripts/tests/` that runs as an ordinary user (they refuse root).
