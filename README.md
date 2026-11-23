@@ -881,6 +881,48 @@ three things an editor is expected to have.
   `def` snippet tabbed through, the outline and sticky lines, a conflict settled and marked resolved, the Markdown
   preview.
 
+**Easel, round eight: toward the big editors** (`apps/huginn_easel.py`, `apps/huginn_easel_ui.py`, `apps/qml/Easel.qml`)
+- *The canvas is put together at the size it's shown.* A big picture fitted to a window is shown at a half, a quarter
+  or an eighth of its size, so that's the size it's now built at, from a smaller copy of each layer kept until that
+  layer changes (pictures of 2 megapixels and up, at 50% zoom or less; zoom in and it's the full picture again;
+  saving and exporting never use the copies). On the 4000 × 3000 test picture with an adjustment layer, a style and a
+  clipped layer, fitted to a window: a change to one layer redraws in 33 ms where the whole picture took 330; dragging
+  an adjustment's slider is 25 ms a step; a brush stroke 2 ms a frame, and 69 ms on letting go where it was 440.
+  Moving and free-transforming a layer preview from small copies too.
+- *Layer versions are never reused.* A layer's version was "the old one plus one", so undoing and then painting
+  something different arrived at a number already used for another picture, and anything kept by version (a style's
+  shadow, a thumbnail) could be stale. Versions now come from one counter, and a pixel layer comes back from Undo with
+  the version it had, so what was kept for it is still good. The fuzz checks every kept copy against a fresh one.
+- *Hue, Saturation, Colour and Luminosity blend modes*, the four Qt doesn't have, worked out by the W3C rules (checked
+  pixel by pixel against a plain reference), in bands on every core, through every path the other modes take:
+  painting live, groups, clipping, Merge Down. Kept in `.easel`, Photoshop and OpenRaster files.
+- *Four more adjustment layers*: Exposure (stops, offset, gamma), Colour Balance (midtones, black and white left
+  alone), Threshold, and Channel Mixer (greys stay grey). Exposure and Colour Balance use the 256-answer table.
+- *Five more filters*: Clarity (midtone contrast without sharpening's halos), High Pass (for an Overlay layer),
+  Reduce Noise (keeps edges), Soft Glow and Vignette.
+- *A tone histogram*: behind the curve in Curves (what the curve is given) and above every other adjustment's sliders
+  (what it makes of it), counted on a small copy and kept until the picture changes.
+- Also from the canvas fuzz: Enter or Escape in the middle of dragging a transform handle raised an error.
+- Tests: `scripts/tests/easel_round8_test.py` (72 checks). On screen: the histogram above an adjustment's slider and the
+  longer blend list. **What this does not make Easel**: see "Where Easel still falls short" below.
+
+**Where Easel still falls short of Photoshop and Affinity Photo** (so nobody is surprised):
+- *Colour depth and management*: 8 bits a channel, sRGB only. No 16- or 32-bit pictures, no ICC profiles, no CMYK, no
+  soft proofing. This is the largest gap for print and for heavy tonal work, and it reaches into every pixel routine.
+- *How pictures are held*: whole layers in memory, drawn on the processor. The big editors hold tiles, keep a pyramid
+  of sizes on disk and draw with the graphics card. Easel is now comfortable at 12 megapixels and usable well past
+  it; a 100-megapixel, 50-layer file is beyond it. Retouching brushes (dodge, smudge, clone, heal, liquify) still
+  redraw the whole picture each frame when an adjustment layer or blend mode is in play.
+- *Selections*: no Select Subject or object selection, no Refine Edge for hair, no Quick Selection brush, no Quick
+  Mask, no selecting by colour range with a preview.
+- *Brushes*: one round tip with hardness, flow, spacing and scatter. No picture tips, textures, dual brushes, tilt or
+  rotation, wet mixing or brush files from other programs.
+- *Type*: one style per text box. No paragraph controls, tracking and leading, OpenType features, or type that stays
+  editable in a Photoshop file.
+- *Photography*: no raw files, no lens corrections, no HDR or panorama merging, no focus stacking.
+- *The rest*: no actions or batch processing, no artboards or slices, no 3D or video, no plug-ins, no generative fill,
+  no channels panel, no pattern fills, gradients with two colours only, no filter previews on the canvas.
+
 **Easel, the deep dives** (`apps/huginn_easel.py`, `apps/huginn_easel_ui.py`): four more ways in, after round six's
 command fuzz. Each has a script in `scripts/tests/` that runs as an ordinary user (they refuse root).
 - *Damaged and hostile files* (`easel_files_fuzz.py`: Easel's own, OpenRaster, Photoshop and plain pictures, bytes

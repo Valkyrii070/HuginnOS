@@ -341,11 +341,16 @@ GlassWindow {
                     Rectangle { width: parent.width; height: Math.min(parent.width, 220); radius: 8; color: Theme.t.dark ? "#22000000" : "#0A141E28"; border.width: 1; border.color: Theme.t.islandLine
                         Canvas { id: curveCanvas; anchors.fill: parent; anchors.margins: 8
                             property var samples: curves.visible ? Backend.curveSamples(curves.ch) : []
-                            Connections { target: Backend; function onChanged() { curveCanvas.samples = curves.visible ? Backend.curveSamples(curves.ch) : []; curveCanvas.requestPaint() } }
+                            property var bars: curves.visible ? Backend.histogram(curves.ch, "in") : []     // what the curve is working on, behind it
+                            Connections { target: Backend; function onChanged() { curveCanvas.samples = curves.visible ? Backend.curveSamples(curves.ch) : []; curveCanvas.bars = curves.visible ? Backend.histogram(curves.ch, "in") : []; curveCanvas.requestPaint() } }
                             onSamplesChanged: requestPaint()
                             onPaint: {
                                 var c = getContext("2d"), w = width, h = height
-                                c.reset(); c.strokeStyle = Theme.t.dark ? "rgba(255,255,255,0.12)" : "rgba(0,0,0,0.12)"; c.lineWidth = 1
+                                c.reset()
+                                if (bars.length) { c.fillStyle = Theme.t.dark ? "rgba(255,255,255,0.13)" : "rgba(0,0,0,0.11)"; c.beginPath(); c.moveTo(0, h)
+                                    for (var b = 0; b < bars.length; b++) { c.lineTo(w * b / bars.length, h * (1 - bars[b] * 0.92)); c.lineTo(w * (b + 1) / bars.length, h * (1 - bars[b] * 0.92)) }
+                                    c.lineTo(w, h); c.closePath(); c.fill() }
+                                c.strokeStyle = Theme.t.dark ? "rgba(255,255,255,0.12)" : "rgba(0,0,0,0.12)"; c.lineWidth = 1
                                 for (var i = 1; i < 4; i++) { c.beginPath(); c.moveTo(w * i / 4, 0); c.lineTo(w * i / 4, h); c.moveTo(0, h * i / 4); c.lineTo(w, h * i / 4); c.stroke() }
                                 c.beginPath(); c.moveTo(0, h); c.lineTo(w, 0); c.stroke()
                                 c.strokeStyle = ({ rgb: Theme.t.text, r: "#FF4D4D", g: "#3DDC6E", b: "#4D8DFF" })[curves.ch]; c.lineWidth = 2; c.beginPath()
@@ -387,6 +392,16 @@ GlassWindow {
                                 MouseArea { anchors.fill: parent; anchors.margins: -4; onClicked: Backend.removeSmartFilter(index) } } } }
                     Timer { id: smartTick; interval: 120; property int k: -1; property real v: 0; onTriggered: Backend.setSmartFilter(k, v) } }
                 Column { visible: Backend.activeLayer.kind === "adjust"; width: parent.width; spacing: 4
+                    // the picture's tones as this adjustment leaves them: where the shadows and highlights have gone, as you drag
+                    Rectangle { objectName: "toneBars"; visible: Backend.activeLayer.adjust !== "curves"; width: parent.width; height: 52; radius: 8; color: Theme.t.dark ? "#22000000" : "#0A141E28"; border.width: 1; border.color: Theme.t.islandLine
+                        Canvas { id: toneCanvas; anchors.fill: parent; anchors.margins: 6
+                            property var bars: parent.visible && Backend.activeLayer.kind === "adjust" ? Backend.histogram("rgb", "out") : []
+                            Connections { target: Backend; function onChanged() { toneCanvas.bars = toneCanvas.parent.visible && Backend.activeLayer.kind === "adjust" ? Backend.histogram("rgb", "out") : []; toneCanvas.requestPaint() } }
+                            onBarsChanged: requestPaint()
+                            onPaint: { var c = getContext("2d"), w = width, h = height; c.reset(); if (!bars.length) return
+                                c.fillStyle = Theme.t.dark ? "rgba(255,255,255,0.55)" : "rgba(0,0,0,0.5)"; c.beginPath(); c.moveTo(0, h)
+                                for (var b = 0; b < bars.length; b++) { c.lineTo(w * b / bars.length, h * (1 - bars[b])); c.lineTo(w * (b + 1) / bars.length, h * (1 - bars[b])) }
+                                c.lineTo(w, h); c.closePath(); c.fill() } } }
                     Repeater { model: Backend.activeLayer.paramList || []
                         Row { required property var modelData; width: parent.width; spacing: 8
                             Label { text: modelData.name; font.pixelSize: 11; width: 80; anchors.verticalCenter: parent.verticalCenter }

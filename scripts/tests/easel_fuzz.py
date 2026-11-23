@@ -6,7 +6,7 @@ if _os.geteuid() == 0:        # it saves, exports and opens at random: never as 
 import faulthandler, hashlib, math, os, random, sys, tempfile, time, traceback
 faulthandler.enable()
 home = tempfile.mkdtemp(prefix="easelfuzz-")
-os.environ.update(HOME=home, XDG_DATA_HOME=home + "/d", XDG_CONFIG_HOME=home + "/c", XDG_CACHE_HOME=home + "/k", QT_QPA_PLATFORM="offscreen")
+os.environ.update(EASEL_CHECK_MIPS="1", HOME=home, XDG_DATA_HOME=home + "/d", XDG_CONFIG_HOME=home + "/c", XDG_CACHE_HOME=home + "/k", QT_QPA_PLATFORM="offscreen")
 SRC = sys.argv[1] if len(sys.argv) > 1 else "/src"
 STEPS = int(sys.argv[2]) if len(sys.argv) > 2 else 1200
 SEED = int(sys.argv[3]) if len(sys.argv) > 3 else 1
@@ -17,6 +17,7 @@ app = QGuiApplication(sys.argv[:1])
 import numpy as np
 import huginn_easel as ez, huginn_easel_ui as eu
 random.seed(SEED)
+eu.MIP_FROM = 0                # (so the smaller copies the canvas uses on big pictures are exercised on these small ones)
 e = eu.Easel(False, "")
 said = []
 e.said.connect(lambda m, bad: said.append(m))
@@ -84,6 +85,8 @@ def stroke():
     e.press(px(), py(), random.choice([1, 1, 1, 2, 4]), random.choice([0, 0, 0, 0x02000000, 0x04000000, 0x08000000]))
     for _ in range(n):
         e.move(px(), py(), random.choice([0, 0, 0x02000000]))
+        if random.random() < 0.5:
+            e.render()                     # (the canvas draws between moves: the brush's patch-at-a-time path)
     if random.random() < 0.95:
         e.release(px(), py(), 0)
 
@@ -181,6 +184,7 @@ OPS = [
     (1, lambda: ("setPathOffset", num(-200, 200))),
     (1, lambda: ("hover", px(), py())),
     (2, lambda: ("doubleClick", px(), py())),
+    (4, lambda: ("ZOOM", random.choice([1.0, 1.0, 0.45, 0.2, 0.1, 0.03]))),
     (10, lambda: ("undo",)),
     (5, lambda: ("redo",)),
     (1, lambda: ("historyTo", whole(0, 30))),
@@ -240,6 +244,18 @@ def check(op):
             problem("the finished picture is the wrong size", op[0])
     except Exception:
         problem(f"drawing the picture after {op[0]}", traceback.format_exc())
+    try:                                   # the canvas's own picture, at whatever zoom it's at
+        k = e.mip()
+        shown = e.render()
+        if not e._drag and (shown.width(), shown.height()) != (d.small_size(k) if k > 1 else (d.w, d.h)):
+            problem("the canvas's picture is the wrong size for its zoom", f"{op[0]}: {shown.width()}x{shown.height()} at 1/{k} of {d.w}x{d.h}")
+        if k > 1 and not e._drag and not e._xform:
+            full = ez.image_to_array(d.composite().scaled(shown.width(), shown.height(), eu.Qt.AspectRatioMode.IgnoreAspectRatio, eu.Qt.TransformationMode.SmoothTransformation)).astype(np.int16)
+            diff = np.abs(full - ez.image_to_array(shown).astype(np.int16))
+            if diff.mean() > 9 or (diff > 80).mean() > 0.12:
+                problem("the canvas's smaller picture isn't the picture", f"{op[0]}: mean {diff.mean():.1f}, {100 * (diff > 80).mean():.0f}% far off, at 1/{k}")
+    except Exception:
+        problem(f"drawing the canvas's picture after {op[0]}", traceback.format_exc())
     for name in ("layers", "history", "transformInfo", "activeLayer"):
         try:
             getattr(e, name)
@@ -261,12 +277,14 @@ for n in range(STEPS):
     try:
         if op[0] == "stroke":
             stroke()
+        elif op[0] == "ZOOM":
+            e.zoom = op[1]
         elif op[0] == "UNDOCHECK":
             # one thing done and undone leaves the picture exactly as it was
             if e.doc and not e._drag and not e._xform and not e._crop and not e._pen and not e.busy:
                 e.doneText(); e.escape(); settle(); before, depth = picture(), len(e._undo)
                 inner = random.choice([("applyFilter", pick(ez.FILTERS), 0.5), ("fillSelection",), ("stroke",), ("addLayer", "pixel"), ("duplicateLayer",), ("mergeDown",), ("flatten",),
-                                       ("transformCanvas", "cw"), ("imageSize", 200, 150), ("canvasSize", 300, 300, "c"), ("deleteLayer",), ("groupLayer",), ("addAdjustment", "bw"),
+                                       ("transformCanvas", "cw"), ("imageSize", 200, 150), ("canvasSize", 300, 300, "c"), ("deleteLayer",), ("groupLayer",), ("addAdjustment", "bw"), ("addAdjustment", "exposure"), ("addAdjustment", "mixer"),
                                        ("clearSelection",), ("layerFromSelection", True), ("clipLayer",), ("lockTransparency",), ("strokeSelection", 6, "centre"), ("convertToSmart",), ("rasterize",), ("trim",), ("addMask", "hide"), ("applyMask",)])
                 log.append("  inner " + repr(inner))
                 stroke() if inner[0] == "stroke" else getattr(e, inner[0])(*inner[1:])

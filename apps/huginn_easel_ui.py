@@ -24,6 +24,7 @@ PREFS = DATA_HOME / "easel.json"
 OPENABLE = (".easel", ".ora", ".psd", ".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff", ".gif", ".svg")
 PRESETS = [("Screen", 1920, 1080), ("4K screen", 3840, 2160), ("Square post", 1080, 1080), ("Story", 1080, 1920), ("A4 at 300 dpi", 2480, 3508),
            ("Letter at 300 dpi", 2550, 3300), ("App icon", 1024, 1024), ("Banner", 1500, 500), ("Phone wallpaper", 1290, 2796)]
+MIP_FROM = 2_000_000           # pictures with at least this many pixels are shown from smaller copies when zoomed out
 PIXEL_TOOLS = ["move", "transform", "select", "ellipsesel", "lasso", "wand", "brush", "eraser", "clone", "heal", "dodge", "smudge", "liquify", "fill", "gradient",
                "picker", "text", "crop", "hand", "zoom"]
 VECTOR_TOOLS = ["pointer", "nodes", "pen", "rect", "ellipse", "line", "star", "text", "fill", "picker", "hand", "zoom"]
@@ -499,7 +500,16 @@ class Easel(QObject):
         d = self._drag
         if d and d.get("kind") == "brush" and d.get("which") == "image" and self._live is not None:
             return self._brush_frame(d)
-        return self.doc.composite(self._live)
+        return self.doc.composite_small(self.mip(), self._live)
+
+    def mip(self) -> int:
+        """How many times smaller than life the canvas's picture can be without anyone seeing: a big picture shown
+        at half size or less is put together at half, a quarter or an eighth (see Document.composite_small)."""
+        doc = self.doc
+        z = self.zoom if isinstance(self.zoom, (int, float)) and self.zoom > 0 else 1.0
+        if not doc or doc.w * doc.h < MIP_FROM or z > 0.5:
+            return 1
+        return 2 if z > 0.25 else 4 if z > 0.125 else 8
 
     # While a brush stroke goes on, the canvas isn't put together from every layer for each step of the pointer (on a
     # big picture with styles that took long enough to freeze Easel): what's under the layer and what's over it are
@@ -560,11 +570,13 @@ class Easel(QObject):
             # layer, or on a group it's in, are the one thing that can't)
             d["patchy"] = d["parts"] is None and layer["kind"] == "pixel" and not more.has_fx(layer) \
                 and not any(more.has_fx(doc.layer(g)) for g in more.ancestors(doc.layers, layer))
-            d["frame"] = doc.composite(self._live)
+            d["mip"] = self.mip()                                  # (the frame is kept at the size the canvas shows it)
+            d["frame"] = doc.composite_small(d["mip"], self._live)
             d["new"] = None
             return d["frame"]
         if d["parts"] is None and not d.get("patchy"):
-            return doc.composite(self._live)
+            return doc.composite_small(self.mip(), self._live)
+        k = d.get("mip", 1)
         patch = d.get("new")
         d["new"] = None
         if patch is None:
@@ -572,6 +584,9 @@ class Easel(QObject):
         r = patch.toAlignedRect().intersected(QRect(0, 0, doc.w, doc.h))
         if r.isEmpty():
             return d["frame"]
+        if k > 1:                                                      # out to the small frame's own pixels, so the patch shrinks cleanly
+            x0, y0 = r.x() // k * k, r.y() // k * k
+            r = QRect(x0, y0, min(doc.w, -(-(r.right() + 1) // k) * k) - x0, min(doc.h, -(-(r.bottom() + 1) // k) * k) - y0)
         if d["parts"] is None:
             piece = doc.composite_patch(r, (layer["id"], None, lambda rr: self._stroke_patch(d, rr)))
         else:
@@ -583,11 +598,9 @@ class Easel(QObject):
                 p.drawImage(0, 0, layer["mask"].copy(r))
                 p.end()
             piece = below.copy(r)
-            p = QPainter(piece)
             if layer["visible"]:
-                p.setOpacity(layer["opacity"])
-                p.setCompositionMode(ez.BLENDS.get(layer["blend"], ez.CM.CompositionMode_SourceOver))
-                p.drawImage(0, 0, mine)
+                ez.blend_onto(piece, mine, layer["blend"], layer["opacity"])
+            p = QPainter(piece)
             if above is not None:
                 p.setOpacity(1.0)
                 p.setCompositionMode(ez.CM.CompositionMode_SourceOver)
@@ -595,7 +608,11 @@ class Easel(QObject):
             p.end()
         p = QPainter(d["frame"])
         p.setCompositionMode(ez.CM.CompositionMode_Source)
-        p.drawImage(r.topLeft(), piece)
+        if k > 1:
+            small = piece.scaled(max(1, -(-r.width() // k)), max(1, -(-r.height() // k)), Qt.AspectRatioMode.IgnoreAspectRatio, Qt.TransformationMode.SmoothTransformation)
+            p.drawImage(r.x() // k, r.y() // k, small)
+        else:
+            p.drawImage(r.topLeft(), piece)
         p.end()
         return d["frame"]
 
@@ -1184,11 +1201,7 @@ class Easel(QObject):
             p.end()
             base = faded
         if top["visible"]:
-            p = QPainter(base)
-            p.setOpacity(top["opacity"])
-            p.setCompositionMode(ez.BLENDS.get(top["blend"], ez.CM.CompositionMode_SourceOver))
-            p.drawImage(0, 0, self.doc.styled_image(top))
-            p.end()
+            ez.blend_onto(base, self.doc.styled_image(top), top["blend"], top["opacity"])
         below.update(kind="pixel", image=base, mask=None, opacity=1.0, blend=below["blend"] if below["kind"] == "pixel" else "normal")
         for key in ("shapes", "source", "place", "sfilters", "fx"):
             below.pop(key, None)
@@ -1859,7 +1872,7 @@ class Easel(QObject):
                 self.doc.touch(x)
             return
         if l["kind"] == "pixel":
-            self._live = (l["id"], lambda img, d=d: self._shifted(d))
+            self._live = (l["id"], lambda img, d=d: self._shifted(d), None, lambda k, d=d: self._shifted_small(d, k))
         else:
             if "shapes0" not in d:
                 d["shapes0"] = json.loads(json.dumps(l["shapes"]))
@@ -1888,6 +1901,26 @@ class Easel(QObject):
         out = (d["rest"] if "rest" in d else ez.new_image(self.doc.w, self.doc.h)).copy()
         p = QPainter(out)
         p.drawImage(QPointF(d["dx"], d["dy"]), d.get("floating", l["image"]))
+        p.end()
+        return out
+
+    def _small_of(self, d: dict, name: str, img: QImage, k: int) -> QImage:
+        """A 1/k-size copy of a picture a drag keeps using (made once for the drag)."""
+        kept = d.setdefault("small", {})
+        if (name, k) not in kept:
+            w, h = max(1, -(-img.width() // k)), max(1, -(-img.height() // k))
+            kept[(name, k)] = img.scaled(w, h, Qt.AspectRatioMode.IgnoreAspectRatio, Qt.TransformationMode.SmoothTransformation).convertToFormat(ez.FMT)
+        return kept[(name, k)]
+
+    def _shifted_small(self, d: dict, k: int) -> QImage:
+        """_shifted at 1/k size, for the canvas when it shows the picture smaller than life: the layer's small copy is
+        slid across, instead of the whole layer being moved and then shrunk for every step of the pointer."""
+        l = d["layer"]
+        sw, sh = self.doc.small_size(k)
+        out = self._small_of(d, "rest", d["rest"], k).copy() if "rest" in d else ez.new_image(sw, sh)
+        p = QPainter(out)
+        p.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+        p.drawImage(QPointF(d["dx"] / k, d["dy"] / k), self._small_of(d, "floating", d.get("floating", l["image"]), k))
         p.end()
         return out
 
@@ -1964,7 +1997,7 @@ class Easel(QObject):
                 ez.move_shape(s, -rect.x(), -rect.y())
             if l.get("place"):
                 l["place"] = more.place_moved(l["place"], lambda a, b: (a - rect.x(), b - rect.y()))
-            l["v"] = l.get("v", 0) + 1
+            l["v"] = ez.next_v()
         for g in self.doc.guides:
             g["at"] -= rect.x() if g["axis"] == "x" else rect.y()
         self.doc.w, self.doc.h = w, h
@@ -2008,7 +2041,7 @@ class Easel(QObject):
                 pl.update(cx=pl["cx"] * sx, cy=pl["cy"] * sy, sx=pl["sx"] * sx, sy=pl["sy"] * sy)
                 if pl.get("quad"):
                     pl["quad"] = [[a * sx, b * sy] for a, b in pl["quad"]]
-            l["v"] = l.get("v", 0) + 1
+            l["v"] = ez.next_v()
         for g in self.doc.guides:
             g["at"] *= sx if g["axis"] == "x" else sy
         self.doc.w, self.doc.h = int(w), int(h)
@@ -2065,7 +2098,7 @@ class Easel(QObject):
                 else:
                     pl["flipx" if how == "fliph" else "flipy"] = not pl.get("flipx" if how == "fliph" else "flipy")
                     pl["rot"] = -pl.get("rot", 0) % 360
-            l["v"] = l.get("v", 0) + 1
+            l["v"] = ez.next_v()
         self.doc.guides = []
         self.doc.w, self.doc.h = nw, nh
         self.doc.selection = None
@@ -2794,6 +2827,18 @@ class Easel(QObject):
         p.end()
         return out
 
+    def _xform_small(self, k: int) -> QImage:
+        """_xform_image at 1/k size: the same picture drawn through the same matrix, straight onto a small canvas."""
+        x = self._xform
+        out = self._small_of(x, "rest", x["rest"], k).copy()
+        p = QPainter(out)
+        p.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        p.setTransform(self._xform_matrix() * QTransform.fromScale(1.0 / k, 1.0 / k))
+        p.drawImage(0, 0, x["floating"])
+        p.end()
+        return out
+
     def _begin_transform(self) -> bool:
         l = self.doc.layer()
         if l["kind"] == "smart" and not l["locked"]:
@@ -2803,7 +2848,7 @@ class Easel(QObject):
                            "cx": pl["cx"], "cy": pl["cy"], "sx": pl["sx"], "sy": pl["sy"], "rot": pl.get("rot", 0.0),
                            "flipx": bool(pl.get("flipx")), "flipy": bool(pl.get("flipy")),
                            "quad": [list(c) for c in pl["quad"]] if pl.get("quad") else None}
-            self._live = (l["id"], lambda img: self._xform_image())
+            self._live = (l["id"], lambda img: self._xform_image(), None, lambda k: self._xform_small(k))
             self.changed.emit()
             return True
         if l["kind"] != "pixel" or l["locked"]:
@@ -2828,7 +2873,7 @@ class Easel(QObject):
         p.end()
         self._xform = {"layer": l, "floating": floating.copy(box), "rest": rest, "cx": box.x() + box.width() / 2, "cy": box.y() + box.height() / 2,
                        "sx": 1.0, "sy": 1.0, "rot": 0.0, "flipx": False, "flipy": False, "sel": QImage(sel).copy(box) if sel is not None else None}
-        self._live = (l["id"], lambda img: self._xform_image())
+        self._live = (l["id"], lambda img: self._xform_image(), None, lambda k: self._xform_small(k))
         self.changed.emit()
         return True
 
@@ -2930,6 +2975,9 @@ class Easel(QObject):
                       "quad": [list(c) for c in x["quad"]] if x.get("quad") is not None else None}
 
     def _move_xform(self, pt: QPointF, mods: int) -> None:
+        if self._xform is None:                                       # (applied or cancelled from the keyboard in mid-drag)
+            self._drop_drag()
+            return
         d, x = self._drag, self._xform
         o = d["orig"]
         w, h = x["floating"].width(), x["floating"].height()
@@ -2969,6 +3017,9 @@ class Easel(QObject):
         self.changed.emit()
 
     def _release_xform(self, pt: QPointF, mods: int) -> None:
+        if self._xform is None:                                       # (applied or cancelled from the keyboard in mid-drag)
+            self._drop_drag()
+            return
         pass
 
     # ------------------------------------------------------------------ clone and heal
@@ -3269,6 +3320,25 @@ class Easel(QObject):
         curves[channel] = pts
         self.doc.touch(l)
         self._refresh()
+
+    @Slot(str, str, result="QVariantList")
+    def histogram(self, channel: str, stage: str):
+        """64 bars for the tone histogram behind Curves and above an adjustment's sliders. channel: "rgb" (lightness),
+        "r", "g" or "b". stage "in": what the active adjustment layer is given (the layers below it); "out": the picture
+        as it now is. Kept until the picture changes, so a slider being dragged asks as often as it likes."""
+        if not self.doc:
+            return []
+        l = self.doc.layer()
+        upto = self.doc.index(l["id"]) if stage == "in" and l and l["kind"] == "adjust" else None
+        key = (id(self.doc), self.doc.version, upto)
+        kept = getattr(self, "_hist", None)
+        if kept is None or kept[0] != key:
+            try:
+                kept = (key, self.doc.histogram(upto))
+            except Exception:                                          # noqa: BLE001  (a picture mid-change: no bars this time)
+                return []
+            self._hist = kept
+        return kept[1].get({"rgb": "l"}.get(channel, channel), kept[1]["l"])
 
     @Slot(str, result="QVariantList")
     def curveSamples(self, channel: str):
@@ -3988,7 +4058,10 @@ class EaselView(QQuickPaintedItem):
         self._zoom = z
         self._keep()
         if self._easel:
+            was = self._easel.mip()
             self._easel.zoom = z
+            if self._easel.mip() != was:                              # zoomed far enough to need a sharper (or coarser) picture
+                self._stale = True
         self.zoomChanged.emit()
         self._all()
 

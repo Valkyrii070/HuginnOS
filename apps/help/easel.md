@@ -14,7 +14,7 @@ Pick a brush (round, soft, pencil, ink, airbrush, chalk, marker) and set its siz
 Rectangle, ellipse, lasso and the magic wand choose an area; painting, filters and fills then stay inside it. Shift adds to the selection, Alt takes away. Feather softens its edge; Grow or Shrink moves it. Select › Outline… draws a line of the front colour along the selection's edge: inside it, outside it or centred on it, as wide as you like.
 
 ## Layers
-Add pixel layers, vector layers and adjustment layers (brightness and contrast, hue and saturation, levels, black and white and more, which change everything below without touching it). Each layer has a blend mode and opacity. Drag the arrows to reorder, click the eye to hide, the lock to protect.
+Add pixel layers, vector layers and adjustment layers (brightness and contrast, hue and saturation, levels, black and white and more, which change everything below without touching it). Each layer has a blend mode and opacity. Drag the arrows to reorder, click the eye to hide, the lock to protect. Besides the usual blend modes there are Hue, Saturation, Colour and Luminosity: a Colour layer tints what's under it and keeps its light and dark, which is how a black and white photograph is coloured by hand. Adjustment layers also include Exposure, Colour Balance, Threshold and Channel Mixer, and each shows the picture's tones as bars above its sliders, so you can see shadows and highlights move as you drag.
 
 ## Clipping and locked transparency
 Clip a layer to the one below it (Ctrl+Alt+G, or Layer › Clip to the Layer Below) and it shows only where that layer has something: paint shading over a shape without going over its edge, or put a photo inside some lettering. Clipped layers step in under a small arrow in Layers, several can share one layer, and an adjustment clipped this way changes only that layer. The same command lets it go again.
@@ -35,7 +35,7 @@ A mask hides parts of a layer without erasing them: white shows, black hides. Ad
 Draw shapes with Shift for squares and circles and Alt to draw from the middle. With Select, drag a shape, pull its handles to resize (Shift keeps its proportions) or the round handle to turn it. The bar sets fill, line, width, corner rounding, star points and opacity. Combine unites, subtracts, intersects or excludes picked shapes. The pen: click for corners, drag for curves, click the first point to close. Text: click and type.
 
 ## Filters and the Image menu
-The menu (≡) has Image (canvas size, image size, rotate, flip, trim, crop to selection), Select, Layer, and Filters: blur, motion blur, sharpen, noise, pixelate, emboss, find edges, posterize, auto levels and more.
+The menu (≡) has Image (canvas size, image size, rotate, flip, trim, crop to selection), Select, Layer, and Filters: blur, motion blur, sharpen, noise, pixelate, emboss, find edges, posterize, auto levels and more. Clarity lifts contrast in the midtones without the halos sharpening leaves; High Pass makes the grey layer you set to Overlay to sharpen; Reduce Noise smooths grain and keeps edges; Soft Glow and Vignette finish a photograph.
 
 ## Gradients and editing points
 Shapes can be filled with a gradient: turn on Gradient in the shape bar, choose its second colour and its direction (down, across, corner to corner or round from the middle).

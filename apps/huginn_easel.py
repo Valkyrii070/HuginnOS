@@ -39,21 +39,41 @@ BLENDS = {"normal": CM.CompositionMode_SourceOver, "multiply": CM.CompositionMod
           "overlay": CM.CompositionMode_Overlay, "darken": CM.CompositionMode_Darken, "lighten": CM.CompositionMode_Lighten,
           "dodge": CM.CompositionMode_ColorDodge, "burn": CM.CompositionMode_ColorBurn, "hard": CM.CompositionMode_HardLight,
           "soft": CM.CompositionMode_SoftLight, "difference": CM.CompositionMode_Difference, "exclusion": CM.CompositionMode_Exclusion,
-          "add": CM.CompositionMode_Plus}
+          "add": CM.CompositionMode_Plus,
+          # the four that take hue, saturation or lightness from one layer and the rest from the other: Qt has none of
+          # them, so they're worked out here (HSL_BLENDS); anything that only knows Qt's modes draws them as Normal
+          "hue": CM.CompositionMode_SourceOver, "saturation": CM.CompositionMode_SourceOver, "color": CM.CompositionMode_SourceOver,
+          "luminosity": CM.CompositionMode_SourceOver}
+HSL_BLENDS = ("hue", "saturation", "color", "luminosity")
 BLEND_NAMES = [("normal", "Normal"), ("multiply", "Multiply"), ("screen", "Screen"), ("overlay", "Overlay"), ("darken", "Darken"),
                ("lighten", "Lighten"), ("dodge", "Colour Dodge"), ("burn", "Colour Burn"), ("hard", "Hard Light"), ("soft", "Soft Light"),
-               ("difference", "Difference"), ("exclusion", "Exclusion"), ("add", "Add")]
+               ("difference", "Difference"), ("exclusion", "Exclusion"), ("add", "Add"),
+               ("hue", "Hue"), ("saturation", "Saturation"), ("color", "Colour"), ("luminosity", "Luminosity")]
 ORA_OPS = {"normal": "svg:src-over", "multiply": "svg:multiply", "screen": "svg:screen", "overlay": "svg:overlay", "darken": "svg:darken",
            "lighten": "svg:lighten", "dodge": "svg:color-dodge", "burn": "svg:color-burn", "hard": "svg:hard-light", "soft": "svg:soft-light",
-           "difference": "svg:difference", "exclusion": "svg:exclusion", "add": "svg:plus"}
+           "difference": "svg:difference", "exclusion": "svg:exclusion", "add": "svg:plus",
+           "hue": "svg:hue", "saturation": "svg:saturation", "color": "svg:color", "luminosity": "svg:luminosity"}
 ADJUSTMENTS = {"light": "Brightness & Contrast", "curves": "Curves", "colour": "Hue & Saturation", "levels": "Levels", "bw": "Black & White",
-               "invert": "Invert", "warmth": "Warmth", "posterize": "Posterize", "vibrance": "Vibrance", "gradmap": "Gradient Map"}
+               "invert": "Invert", "warmth": "Warmth", "posterize": "Posterize", "vibrance": "Vibrance", "gradmap": "Gradient Map",
+               "exposure": "Exposure", "balance": "Colour Balance", "threshold": "Threshold", "mixer": "Channel Mixer"}
 PICTURES = (".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff", ".gif")
 
 
 SIDE_LIMIT = 16384            # the longest side a picture may have (as New Picture allows)
 LOAD_LIMIT = 3 << 30          # bytes of pixels a file may ask for when it opens (every layer at the picture's size)
 KINDS = ("pixel", "vector", "adjust", "group", "smart")
+
+
+_VERSIONS = iter(range(1, 1 << 62))
+CHECK_MIPS = bool(os.environ.get("EASEL_CHECK_MIPS"))        # (for the tests: every kept smaller copy is checked against a fresh one)
+
+
+def next_v() -> int:
+    """A layer's version: a number no layer has had before. Two layers with the same id and version hold the same
+    picture, which is what lets a kept copy (a thumbnail, a style's shadow, a smaller copy for the canvas) be trusted,
+    through any amount of Undo and Redo. (It used to be the old number plus one, so undoing and then painting
+    something else arrived at a number already used for a different picture.)"""
+    return next(_VERSIONS)
 
 
 def checked_size(w, h, layers: int = 1) -> tuple:
@@ -637,6 +657,24 @@ def adjust_array(rgb: np.ndarray, kind: str, p: dict) -> np.ndarray:
         v = p.get("vibrance", 0)
         k = 1 + v * (1 - sat) * 1.5 if v > 0 else 1 + v * (1 - sat * 0.5)
         x = lum + (x - lum) * k * (1 + p.get("saturation", 0))
+    elif kind == "exposure":
+        # exposure in stops (-1..1 is three stops either way), then offset lifts or sinks the shadows, then gamma
+        x = x * (2.0 ** (p.get("exposure", 0) * 3.0)) + p.get("offset", 0) * 0.25
+        x = np.clip(x, 0, 1) ** (2.0 ** (-p.get("gamma", 0) * 1.5))
+    elif kind == "balance":
+        # each slider moves one channel, most in the midtones and not at all at black or white, so the picture
+        # keeps its darkest and lightest points: toward red (away from cyan), green (magenta), blue (yellow)
+        mid = 4 * x * (1 - x)
+        x = x + mid * np.array([p.get("red", 0), p.get("green", 0), p.get("blue", 0)], np.float32) * 0.3
+    elif kind == "threshold":
+        lum = x @ np.array([0.2126, 0.7152, 0.0722], np.float32)
+        x = np.repeat((lum >= (p.get("level", 0) + 1) / 2).astype(np.float32)[..., None], 3, axis=2)
+    elif kind == "mixer":
+        # how much of each channel goes into the others: red from green, green from blue, blue from red (the three
+        # swaps that between them reach any mix), keeping each channel's total at one so greys stay grey
+        a, b, c = p.get("red_green", 0), p.get("green_blue", 0), p.get("blue_red", 0)
+        m = np.array([[1 - abs(a), a, 0], [0, 1 - abs(b), b], [c, 0, 1 - abs(c)]], np.float32)
+        x = x @ m.T
     elif kind == "gradmap":
         # each pixel's lightness picks its colour on a gradient: shadows → highlights (balance moves the middle)
         lum = np.clip(x @ np.array([0.2126, 0.7152, 0.0722], np.float32), 0, 1)
@@ -654,14 +692,80 @@ def adjust_array(rgb: np.ndarray, kind: str, p: dict) -> np.ndarray:
 ADJUST_PARAMS = {"light": [("brightness", "Brightness"), ("contrast", "Contrast")], "colour": [("hue", "Hue"), ("saturation", "Saturation"), ("lightness", "Lightness")],
                  "levels": [("black", "Black point"), ("gamma", "Midtones"), ("white", "White point")], "bw": [("reds", "Reds"), ("greens", "Greens"), ("blues", "Blues")],
                  "invert": [], "warmth": [("warmth", "Warmth")], "posterize": [("levels", "Levels")], "curves": [],
-                 "vibrance": [("vibrance", "Vibrance"), ("saturation", "Saturation")], "gradmap": [("balance", "Balance"), ("strength", "Strength")]}
+                 "vibrance": [("vibrance", "Vibrance"), ("saturation", "Saturation")], "gradmap": [("balance", "Balance"), ("strength", "Strength")],
+                 "exposure": [("exposure", "Exposure"), ("offset", "Offset"), ("gamma", "Gamma")],
+                 "balance": [("red", "Cyan · Red"), ("green", "Magenta · Green"), ("blue", "Yellow · Blue")],
+                 "threshold": [("level", "Level")], "mixer": [("red_green", "Red ← Green"), ("green_blue", "Green ← Blue"), ("blue_red", "Blue ← Red")]}
 ADJUST_DEFAULTS = {"levels": {"black": 0.0, "white": 1.0, "gamma": 0.0}, "posterize": {"levels": -0.4}, "vibrance": {"vibrance": 0.4},
                    "gradmap": {"balance": 0.0, "strength": 1.0},
                    "curves": {"curves": {"rgb": [[0, 0], [0.25, 0.2], [0.75, 0.82], [1, 1]]}}}
 
 
+def _lum(c: np.ndarray) -> np.ndarray:
+    return c[..., 0:1] * 0.3 + c[..., 1:2] * 0.59 + c[..., 2:3] * 0.11
+
+
+def _set_lum(c: np.ndarray, l: np.ndarray) -> np.ndarray:
+    """A colour moved to lightness l, kept inside 0..1 by pulling it toward grey (the W3C compositing rules)."""
+    c = c + (l - _lum(c))
+    l2, lo, hi = _lum(c), c.min(axis=2, keepdims=True), c.max(axis=2, keepdims=True)
+    c = np.where(lo < 0, l2 + (c - l2) * l2 / np.maximum(l2 - lo, 1e-6), c)
+    return np.where(hi > 1, l2 + (c - l2) * (1 - l2) / np.maximum(hi - l2, 1e-6), c)
+
+
+def _set_sat(c: np.ndarray, s: np.ndarray) -> np.ndarray:
+    lo, hi = c.min(axis=2, keepdims=True), c.max(axis=2, keepdims=True)
+    return np.where(hi > lo, (c - lo) * s / np.maximum(hi - lo, 1e-6), 0.0)
+
+
+def hsl_blend(under: np.ndarray, top: np.ndarray, mode: str, opacity: float) -> np.ndarray:
+    """One of the four blend modes Qt lacks, on straight RGBA bytes: `top` over `under`.
+    hue: the top layer's hue with what's under it for saturation and lightness; saturation: its saturation only;
+    color: its hue and saturation (tinting a photograph); luminosity: its lightness only."""
+    b, s = under.astype(np.float32) / 255.0, top.astype(np.float32) / 255.0
+    cb, ab, cs, as_ = b[..., :3], b[..., 3:4], s[..., :3], s[..., 3:4] * opacity
+    sat = lambda c: c.max(axis=2, keepdims=True) - c.min(axis=2, keepdims=True)
+    if mode == "hue":
+        mix = _set_lum(_set_sat(cs, sat(cb)), _lum(cb))
+    elif mode == "saturation":
+        mix = _set_lum(_set_sat(cb, sat(cs)), _lum(cb))
+    elif mode == "color":
+        mix = _set_lum(cs, _lum(cb))
+    else:
+        mix = _set_lum(cb, _lum(cs))
+    ao = as_ + ab * (1 - as_)
+    co = as_ * (1 - ab) * cs + as_ * ab * mix + (1 - as_) * ab * cb          # (premultiplied by the new alpha)
+    out = np.empty_like(under)
+    out[..., :3] = (np.clip(np.where(ao > 0, co / np.maximum(ao, 1e-6), 0), 0, 1) * 255 + 0.5).astype(np.uint8)
+    out[..., 3:4] = (np.clip(ao, 0, 1) * 255 + 0.5).astype(np.uint8)
+    return out
+
+
+def blend_onto(out: QImage, img: QImage, mode: str, opacity: float) -> None:
+    """Put a layer's picture onto what's under it, with its blend mode and opacity. Every place that stacks layers
+    goes through here, so the modes Qt doesn't have work everywhere the others do."""
+    if mode in HSL_BLENDS and opacity > 0:
+        under, top = image_to_array(out), image_to_array(img)
+        h, w = under.shape[:2]
+        if h * w < 400_000:
+            mixed = hsl_blend(under, top, mode, opacity)
+        else:                                                      # in bands, on every core (as the adjustments are)
+            step = max(16, min(96, 400_000 // max(1, w)))
+            mixed = np.concatenate(list(pool().map(lambda y: hsl_blend(under[y:y + step], top[y:y + step], mode, opacity), range(0, h, step))))
+        p = QPainter(out)
+        p.setCompositionMode(CM.CompositionMode_Source)
+        p.drawImage(0, 0, array_to_image(mixed))
+        p.end()
+        return
+    p = QPainter(out)
+    p.setOpacity(opacity)
+    p.setCompositionMode(BLENDS.get(mode, CM.CompositionMode_SourceOver))
+    p.drawImage(0, 0, img)
+    p.end()
+
+
 _POOL = None
-PER_CHANNEL = ("light", "levels", "invert", "curves", "warmth", "posterize")
+PER_CHANNEL = ("light", "levels", "invert", "curves", "warmth", "posterize", "exposure", "balance")
 
 
 def pool():
@@ -704,7 +808,8 @@ def apply_adjust_image(below: QImage, kind: str, params: dict) -> QImage:
 
 
 FILTERS = {"blur": "Blur", "sharpen": "Sharpen", "noise": "Add Noise", "pixelate": "Pixelate", "emboss": "Emboss", "edges": "Find Edges",
-           "invert": "Invert", "desaturate": "Desaturate", "posterize": "Posterize", "autolevels": "Auto Levels", "motion": "Motion Blur"}
+           "invert": "Invert", "desaturate": "Desaturate", "posterize": "Posterize", "autolevels": "Auto Levels", "motion": "Motion Blur",
+           "clarity": "Clarity", "highpass": "High Pass", "denoise": "Reduce Noise", "glow": "Soft Glow", "vignette": "Vignette"}
 
 
 def filter_array(rgba: np.ndarray, name: str, amount: float) -> np.ndarray:
@@ -744,6 +849,42 @@ def filter_array(rgba: np.ndarray, name: str, amount: float) -> np.ndarray:
         a = img.getchannel("A")
         img = ImageOps.invert(img.convert("RGB").filter(ImageFilter.FIND_EDGES)).convert("RGBA")
         img.putalpha(a)
+    elif name in ("clarity", "highpass", "glow"):
+        # all three compare the picture with a blurred copy of itself. Clarity adds the difference back at a wide
+        # radius (contrast in the midtones, without the halos of sharpening); High Pass keeps only the difference
+        # on grey (for a layer set to Overlay); Soft Glow screens the blur over the picture.
+        arr = np.asarray(img).astype(np.float32)
+        radius = {"clarity": 20 + amount * 60, "highpass": 1 + amount * 30, "glow": 4 + amount * 40}[name]
+        soft = np.asarray(img.convert("RGB").filter(ImageFilter.GaussianBlur(radius=radius))).astype(np.float32)
+        rgb = arr[..., :3]
+        if name == "clarity":
+            mid = 1 - np.abs(rgb / 255 - 0.5) * 2                      # least at black and white, so nothing clips
+            rgb = rgb + (rgb - soft) * (0.3 + amount * 0.9) * mid
+        elif name == "highpass":
+            rgb = (rgb - soft) + 127.5
+        else:
+            k = 0.25 + amount * 0.6
+            rgb = rgb + (255 - (255 - rgb) * (255 - soft) / 255 - rgb) * k
+        arr[..., :3] = rgb
+        return np.clip(arr + 0.5, 0, 255).astype(np.uint8)
+    elif name == "denoise":
+        a = img.getchannel("A")
+        if cv2 is not None:                                          # smooths the grain, keeps the edges
+            rgb = np.ascontiguousarray(np.asarray(img.convert("RGB")))
+            d = 5 if amount < 0.5 else 7
+            out = cv2.bilateralFilter(rgb, d, 12 + amount * 70, 3 + amount * 6)
+            img = Image.fromarray(out, "RGB").convert("RGBA")
+        else:
+            img = img.convert("RGB").filter(ImageFilter.MedianFilter(3 if amount < 0.5 else 5)).convert("RGBA")
+        img.putalpha(a)
+    elif name == "vignette":
+        arr = np.asarray(img).astype(np.float32)
+        h, w = arr.shape[:2]
+        yy, xx = np.ogrid[0:h, 0:w]
+        d = np.sqrt(((xx - (w - 1) / 2) / max(1.0, w / 2)) ** 2 + ((yy - (h - 1) / 2) / max(1.0, h / 2)) ** 2) / math.sqrt(2)
+        fall = np.clip((d - 0.35) / 0.65, 0, 1) ** 2                 # nothing in the middle, deepening to the corners
+        arr[..., :3] *= (1 - fall * (0.2 + amount * 0.75))[..., None]
+        return np.clip(arr + 0.5, 0, 255).astype(np.uint8)
     elif name in ("invert", "desaturate", "posterize", "autolevels"):
         arr = np.asarray(img).astype(np.float32) / 255
         rgb = arr[..., :3]
@@ -855,6 +996,8 @@ class Document:
         self._mask_cache = {}
         self._fx_cache = {}
         self._win = None                                        # while one patch of the picture is being put together: its rectangle
+        self._mip = 0                                           # while a smaller copy is being put together: how many times smaller
+        self._mip_cache = {}                                    # each layer's smaller copies, kept until the layer changes
         self.export_note = ""                                   # after an export: what had to be merged to keep the look, in words
 
     def tidy(self) -> "Document":
@@ -1013,7 +1156,7 @@ class Document:
     def touch(self, layer: dict = None) -> None:
         self.version += 1
         if layer is not None:
-            layer["v"] = layer.get("v", 0) + 1
+            layer["v"] = next_v()
 
     # -------------------------------------------------------------- drawing it all
     def layer_image(self, layer: dict, extra=None) -> QImage:
@@ -1109,7 +1252,9 @@ class Document:
         if layer.get("mask") is None or not layer.get("maskOn", True):
             return img
         mask = layer["mask"]
-        if self._win is not None and img.size() != mask.size():
+        if self._mip and img.size() != mask.size():
+            mask = self._shrunk(mask, ("mask", layer["id"]), (layer.get("v", 0), self._mip, self.w, self.h))
+        elif self._win is not None and img.size() != mask.size():
             mask = mask.copy(self._win)
         out = img.copy()
         p = QPainter(out)
@@ -1117,6 +1262,66 @@ class Document:
         p.drawImage(0, 0, mask)
         p.end()
         return out
+
+    def small_size(self, k: int) -> tuple:
+        return max(1, -(-self.w // k)), max(1, -(-self.h // k))
+
+    def _shrunk(self, img: QImage, name=None, key=None) -> QImage:
+        """A picture at 1/k of its size (k = self._mip), kept under `name` for as long as `key` stays the same."""
+        if name is not None:
+            got = self._mip_cache.get((name, self._mip))
+            if got is not None and got[0] == key:
+                return got[1]
+        w, h = self.small_size(self._mip)
+        out = img.scaled(w, h, Qt.AspectRatioMode.IgnoreAspectRatio, Qt.TransformationMode.SmoothTransformation)
+        if out.format() != FMT:
+            out = out.convertToFormat(FMT)
+        if name is not None:
+            if len(self._mip_cache) > 6 * len(self.layers) + 24:   # (layers long gone: let their copies go)
+                self._mip_cache.clear()
+            self._mip_cache[(name, self._mip)] = (key, out)
+        return out
+
+    def histogram(self, upto: int = None) -> dict:
+        """How the picture's tones are spread: 64 bars each for lightness, red, green and blue, each 0..1 (square-rooted,
+        so a few very full bars don't flatten the rest). Counted on a small copy: the shape is the same and it's instant.
+        `upto`: only the layers below that place in the stack (what an adjustment layer there is given to work on)."""
+        import huginn_easel_more as more
+        k = 1
+        while (self.w // k) * (self.h // k) > 600_000 and k < 8:
+            k *= 2
+        layers = self.layers if upto is None else self.layers[:max(0, upto)]
+        if k > 1:
+            self._mip = k
+        try:
+            img = self._stack(more.tree(layers))
+        finally:
+            self._mip = 0
+        a = image_to_array(img)
+        seen = a[a[..., 3] > 12]
+        out = {}
+        if not len(seen):
+            return {key: [0.0] * 64 for key in ("l", "r", "g", "b")}
+        lum = (seen[:, 0] * 0.2126 + seen[:, 1] * 0.7152 + seen[:, 2] * 0.0722).astype(np.uint8)
+        for key, vals in (("l", lum), ("r", seen[:, 0]), ("g", seen[:, 1]), ("b", seen[:, 2])):
+            bars = np.sqrt(np.bincount(vals >> 2, minlength=64)[:64].astype(np.float64))
+            out[key] = [float(v) for v in bars / max(1.0, bars.max())]
+        return out
+
+    def composite_small(self, k: int, live=None) -> QImage:
+        """The whole picture at 1/k of its size, put together from 1/k-size copies of the layers (each kept until its
+        layer changes). When the picture is shown smaller than life this is all the screen can show anyway, and it
+        costs 1/k² as much: on a 12-megapixel picture at "fit to window", moving a layer or dragging an adjustment's
+        slider redraws in a few hundredths of a second instead of most of one. Not for saving or exporting: the
+        layers are shrunk before they're blended, so it can differ from the true picture by a shade at hard edges."""
+        import huginn_easel_more as more
+        if k <= 1:
+            return self.composite(live)
+        self._mip = int(k)
+        try:
+            return self._stack(more.tree(self.layers), live)
+        finally:
+            self._mip = 0
 
     def composite_patch(self, r: QRect, live=None) -> QImage:
         """One rectangle of the finished picture, put together from that rectangle of every layer: blends, adjustment
@@ -1143,6 +1348,33 @@ class Document:
         """One thing in a stack (a layer, or a group as a tuple) as a picture, before its own opacity and blend:
         (image, header). None for what isn't a picture of its own (an adjustment layer)."""
         import huginn_easel_more as more
+        if self._mip:                                              # a smaller copy is wanted
+            k = self._mip
+            if isinstance(it, tuple):
+                header, inside = it[1], it[2]
+                if more.has_fx(header):                            # (styles are worked out at full size, then shrunk and kept)
+                    self._mip = 0
+                    try:
+                        full, _ = self._item_image(it, live)
+                    finally:
+                        self._mip = k
+                    busy = live is not None and any(l["id"] == live[0] for l in more.flatten_tree(inside))
+                    key = (header.get("v", 0), k, self.w, self.h, more.dumps(header.get("fx")), self._inside_key(header))
+                    return (self._shrunk(full) if busy else self._shrunk(full, ("group", header["id"]), key)), header
+                return self._masked(header, self._stack(inside, live)), header
+            if it["kind"] == "adjust":
+                return None
+            if live and live[0] == it["id"]:
+                if len(live) > 3 and live[3] is not None:          # (the caller can make the small picture itself)
+                    return live[3](k), it
+                return self._shrunk(self.styled_image(it, live[1])), it
+            key = (it.get("v", 0), k, self.w, self.h, more.dumps(it.get("fx")), it.get("maskOn", True))
+            got = self._mip_cache.get((it["id"], k))
+            if got is not None and got[0] == key:
+                if CHECK_MIPS and image_to_array(self._shrunk(self.styled_image(it))).tobytes() != image_to_array(got[1]).tobytes():
+                    raise AssertionError(f"a kept smaller copy of layer {it['name']!r} is out of date (version {it.get('v')})")
+                return got[1], it
+            return self._shrunk(self.styled_image(it), it["id"], key), it
         win = self._win
         if win is not None:                                        # only a patch is wanted
             if isinstance(it, tuple) and more.has_fx(it[1]):       # (styles reach past a patch: from the group's kept picture)
@@ -1155,7 +1387,7 @@ class Document:
             if not isinstance(it, tuple):
                 if it["kind"] == "adjust":
                     return None
-                if live and live[0] == it["id"] and len(live) > 2:
+                if live and live[0] == it["id"] and len(live) > 2 and live[2] is not None:
                     return self._masked(it, live[2](win)), it
                 if it["kind"] == "pixel" and not more.has_fx(it):
                     return self._masked(it, it["image"].copy(win)), it
@@ -1193,11 +1425,7 @@ class Document:
             p.end()
             return
         img, _ = self._item_image(it, live)
-        p = QPainter(out)
-        p.setOpacity(head["opacity"])
-        p.setCompositionMode(BLENDS.get(head["blend"], CM.CompositionMode_SourceOver))
-        p.drawImage(0, 0, img)
-        p.end()
+        blend_onto(out, img, head["blend"], head["opacity"])
 
     def _clipped_image(self, base, clipped: list, live=None) -> QImage:
         """A layer (or group) with the layers clipped to it, as one picture in the lower one's shape."""
@@ -1285,7 +1513,7 @@ class Document:
         """A list of layers and groups put together, bottom up. A layer marked "clip" shows only where the layer (or
         group) under it has something: the two (and any more clipped layers above) are put together first, keeping
         the lower one's shape, and then go onto the picture with the lower one's opacity and blend."""
-        out = new_image(self.w, self.h) if self._win is None else new_image(self._win.width(), self._win.height())
+        out = new_image(*self.small_size(self._mip)) if self._mip else new_image(self.w, self.h) if self._win is None else new_image(self._win.width(), self._win.height())
         k = 0
         while k < len(items):
             base = items[k]
@@ -1299,12 +1527,7 @@ class Document:
                 k += 1
                 continue
             if head["visible"]:                                    # (hidden: what's clipped to it has nothing to show in)
-                both = self._clipped_image(base, clipped, live)
-                p = QPainter(out)
-                p.setOpacity(head["opacity"])
-                p.setCompositionMode(BLENDS.get(head["blend"], CM.CompositionMode_SourceOver))
-                p.drawImage(0, 0, both)
-                p.end()
+                blend_onto(out, self._clipped_image(base, clipped, live), head["blend"], head["opacity"])
             k = n
         return out
 
@@ -1327,7 +1550,9 @@ class Document:
         self.w, self.h = snap["w"], snap["h"]
         self.layers = [copy_layer(l) for l in snap["layers"]]
         for l in self.layers:
-            l["v"] = l.get("v", 0) + 1000                        # vector pictures are drawn afresh
+            if l["kind"] != "pixel":                                 # shapes and smart objects are drawn afresh (cheap, and their
+                l["v"] = next_v()                                    # insides are changed in place); a pixel layer comes back with the
+                                                                     # version it had, so what was kept for that picture is still good
         self.active = snap["active"] if any(l["id"] == snap["active"] for l in self.layers) else self.layers[-1]["id"]
         self.selection = QImage(snap["selection"]) if snap["selection"] is not None else None
         self.guides = [dict(g) for g in snap.get("guides", self.guides)]
@@ -1805,7 +2030,8 @@ def best_spot_source(rgba: np.ndarray, cx: float, cy: float, size: float) -> tup
 
 # ------------------------------------------------------------------------------------------- Photoshop files
 PSD_BLENDS = {"norm": "normal", "mul ": "multiply", "scrn": "screen", "over": "overlay", "dark": "darken", "lite": "lighten", "div ": "dodge",
-              "idiv": "burn", "hLit": "hard", "sLit": "soft", "diff": "difference", "smud": "exclusion", "lddg": "add", "pass": "normal"}
+              "idiv": "burn", "hLit": "hard", "sLit": "soft", "diff": "difference", "smud": "exclusion", "lddg": "add", "pass": "normal",
+              "hue ": "hue", "sat ": "saturation", "colr": "color", "lum ": "luminosity"}
 PSD_KEYS = {v: k for k, v in PSD_BLENDS.items() if k != "pass"}
 
 
