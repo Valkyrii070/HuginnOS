@@ -48,3 +48,15 @@ The history of the folder, or of the file you're in, with the branches drawn as 
 
 ## Tests
 The Tests panel finds the project's tests (pytest, Go and Rust) and runs them all, a file, or one. Failures show what was expected and what came instead; click to go to the test. Ctrl+Shift+T runs them again.
+
+## Back and forward
+Alt+Left goes back to where you were before a jump (go to definition, a search result, a click far away) and
+Alt+Right goes forward again. Ctrl+Alt+W opens the tab you closed last. Files open where you left the cursor.
+
+## The word under the cursor, and indent guides
+Every other use in view of the word the cursor is on is lightly highlighted. Faint lines run down each level of
+indentation. Both can be switched off in the command list (Ctrl+Shift+P).
+
+## A project's own rules (.editorconfig)
+If the project has an .editorconfig, Code follows it: tabs or spaces and how many, whether line ends are tidied and
+a last newline added when saving, and the line endings of new files. The status bar says when one is in force.

@@ -57,6 +57,8 @@ FILES = {
 for rel, text in FILES.items():
     (P / rel).parent.mkdir(parents=True, exist_ok=True)
     (P / rel).write_bytes(text.encode("utf-8"))
+(P / ".editorconfig").write_bytes(random.choice([b"root = true\n[*]\nindent_style = tab\ntrim_trailing_whitespace = false\ninsert_final_newline = false\n",
+    b"[*.{py,txt}]\nindent_size = 3\nend_of_line = crlf\n[**]\ntab_width = 99999999999999999999\n", b"\xff\xfe[[[{{{,,\n=\n[" + b"*" * 300 + b"]\nindent_size = -1\n", b"[" + b"{a," * 120 + b"]\nx=y\n"]))
 (P / "latin1.txt").write_bytes("caf\xe9 na\xefve \xa3\n".encode("latin-1"))
 (P / "utf16.txt").write_bytes("﻿wide text\nline two\n".encode("utf-16-le"))
 (P / "binary.bin").write_bytes(bytes(range(256)) * 20)
@@ -196,7 +198,11 @@ OPS = [
     (1, lambda: ("deleteBranch", random.choice(["feature", "main", "nope", ""]))),
     (2, lambda: ("toggleBreakpoint", ri(), random.randrange(-3, 400))),
     (1, lambda: ("breakpointsOf", ri())),
-    (1, lambda: ("setOption", random.choice(["formatOnSave", "trimOnSave", "nope", ""]), random.random() < 0.5)),
+    (1, lambda: ("setOption", random.choice(["formatOnSave", "trimOnSave", "guides", "occurrences", "nope", ""]), random.random() < 0.5)),
+    (2, lambda: ("reopenClosed",)),
+    (2, lambda: ("placeOf", random.randint(-2, 12))),
+    (2, lambda: ("setPlace", random.randint(-2, 12), random.choice([0, 5, -1, 10 ** 9, 400])),),
+    (1, lambda: ("fileThere", random.choice(["", "/", "\0", str(P / "latin1.txt"), "x" * 5000]))),
     (1, lambda: ("setSize", random.choice([13, 0, -5, 500]))),
     (1, lambda: ("setWrap", random.random() < 0.5)),
     (1, lambda: ("setMinimap", random.random() < 0.5)),

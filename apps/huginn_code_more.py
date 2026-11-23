@@ -335,18 +335,157 @@ def u16(text: str, offset: int) -> int:
     return len(text[:offset].encode("utf-16-le", "surrogatepass")) // 2
 
 
-def trim_text(text: str, lang: str) -> str:
-    """Spaces at the ends of lines taken away (not Markdown's two-space line breaks) and one newline at the end."""
+def trim_text(text: str, lang: str, trim: bool = True, final: bool = True) -> str:
+    """Spaces at the ends of lines taken away (not Markdown's two-space line breaks) and one newline at the end.
+    `trim` and `final` turn each half off (a project's .editorconfig may ask for that)."""
     if not text:
         return text
-    if lang == "Markdown":
-        lines = [l.rstrip() + "  " if l.endswith("  ") and l.strip() else l.rstrip() for l in text.split("\n")]
-    else:
-        lines = [l.rstrip() for l in text.split("\n")]
-    while len(lines) > 1 and lines[-1] == "" and lines[-2] == "":
-        lines.pop()
+    lines = text.split("\n")
+    if trim:
+        if lang == "Markdown":
+            lines = [l.rstrip() + "  " if l.endswith("  ") and l.strip() else l.rstrip() for l in lines]
+        else:
+            lines = [l.rstrip() for l in lines]
+    if final:
+        while len(lines) > 1 and lines[-1] == "" and lines[-2] == "":
+            lines.pop()
     out = "\n".join(lines)
-    return out if out.endswith("\n") else out + "\n"
+    return out if out.endswith("\n") or not final else out + "\n"
+
+
+# ---------------------------------------------------------------- .editorconfig
+def _glob_regex(glob: str) -> str:
+    """An .editorconfig section name as a regular expression over a path with forward slashes."""
+    out, i, depth = "", 0, 0
+    while i < len(glob):
+        c = glob[i]
+        if c == "\\" and i + 1 < len(glob):
+            out += re.escape(glob[i + 1])
+            i += 2
+            continue
+        if c == "*":
+            if glob[i:i + 2] == "**":
+                out += ".*"
+                i += 2
+                continue
+            out += "[^/]*"
+        elif c == "?":
+            out += "[^/]"
+        elif c == "[":
+            j = glob.find("]", i + 1)
+            if j < 0 or "/" in glob[i:j]:
+                out += re.escape(c)
+            else:
+                body = glob[i + 1:j]
+                out += "[" + ("^" + re.escape(body[1:]) if body[:1] in "!^" else re.escape(body)).replace("\\-", "-") + "]"
+                i = j
+        elif c == "{":
+            j = glob.find("}", i + 1)
+            m = re.fullmatch(r"(-?\d+)\.\.(-?\d+)", glob[i + 1:j]) if j > 0 else None
+            if m and abs(int(m.group(2)) - int(m.group(1))) <= 200:
+                a, b = sorted((int(m.group(1)), int(m.group(2))))
+                out += "(?:" + "|".join(str(k) for k in range(a, b + 1)) + ")"
+                i = j
+            elif j > 0 and "," in glob[i + 1:j]:
+                out += "(?:"
+                depth += 1
+            else:
+                out += re.escape(c)
+        elif c == "," and depth:
+            out += "|"
+        elif c == "}" and depth:
+            out += ")"
+            depth -= 1
+        else:
+            out += re.escape(c)
+        i += 1
+    return out + ")" * depth
+
+
+def editorconfig_parse(text: str) -> tuple:
+    """(is this the top one, [(section glob, {key: value})]) from an .editorconfig's text. Keys and values lower-cased."""
+    top, sections, cur = False, [], None
+    for raw in text.split("\n")[:2000]:
+        line = raw.strip()
+        if not line or line[0] in "#;":
+            continue
+        if line.startswith("[") and line.endswith("]") and len(line) <= 400:
+            cur = {}
+            sections.append((line[1:-1], cur))
+            continue
+        if "=" not in line:
+            continue
+        k, v = (x.strip().lower() for x in line.split("=", 1))
+        if cur is None:
+            top = top or (k == "root" and v == "true")
+        elif len(k) <= 50 and len(v) <= 255:
+            cur[k] = v
+    return top, sections
+
+
+def editorconfig_match(glob: str, rel: str) -> bool:
+    """Does a section's glob take in this file (`rel`: its path below the .editorconfig's folder, forward slashes)?"""
+    try:
+        if "/" in glob.lstrip("/") or glob.startswith("/"):
+            return re.fullmatch(_glob_regex(glob.lstrip("/")), rel) is not None
+        return re.fullmatch(_glob_regex(glob), rel.rsplit("/", 1)[-1]) is not None
+    except re.error:
+        return False
+
+
+_EC_CACHE = {}
+
+
+def editorconfig_for(path: str) -> dict:
+    """What the .editorconfig files above a file ask for it: {} when there are none. Nearer files and later sections
+    win; looking stops at one marked root = true. Understood: indent_style, indent_size, tab_width, end_of_line,
+    trim_trailing_whitespace, insert_final_newline (anything else is carried but unused)."""
+    import os
+    found, folder = [], os.path.dirname(os.path.abspath(path))
+    for _ in range(40):
+        f = os.path.join(folder, ".editorconfig")
+        try:
+            st = os.stat(f)
+            key = (f, st.st_mtime_ns, st.st_size)
+            if _EC_CACHE.get(f, (None,))[0] != key:
+                if st.st_size > 200_000 or not os.path.isfile(f):
+                    raise OSError
+                with open(f, "r", encoding="utf-8", errors="replace") as fh:
+                    _EC_CACHE[f] = (key, editorconfig_parse(fh.read()))
+                if len(_EC_CACHE) > 200:
+                    _EC_CACHE.pop(next(iter(_EC_CACHE)))
+            top, sections = _EC_CACHE[f][1]
+            found.append((folder, sections))
+            if top:
+                break
+        except OSError:
+            pass
+        up = os.path.dirname(folder)
+        if up == folder:
+            break
+        folder = up
+    out = {}
+    for folder, sections in reversed(found):                      # furthest first, so nearer ones win
+        rel = os.path.relpath(os.path.abspath(path), folder).replace(os.sep, "/")
+        for glob, props in sections:
+            if editorconfig_match(glob, rel):
+                out.update(props)
+    return {k: v for k, v in out.items() if v != "unset"}
+
+
+def editorconfig_unit(cfg: dict):
+    """The indentation an .editorconfig asks for ("\t" or some spaces), or None when it doesn't say."""
+    style, size = cfg.get("indent_style"), cfg.get("indent_size")
+    if style == "tab" or (style is None and size == "tab"):
+        return "\t"
+    if size == "tab":
+        size = cfg.get("tab_width")
+    if style == "space" or (style is None and size):
+        try:
+            return " " * int(size) if size and 1 <= int(size) <= 16 else None
+        except ValueError:
+            return None
+    return None
 
 
 # ---------------------------------------------------------------- whole lines at a time

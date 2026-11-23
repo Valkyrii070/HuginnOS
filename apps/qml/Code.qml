@@ -123,6 +123,11 @@ GlassWindow {
         { name: "Close Tab", key: "Ctrl+W", run: function () { if (Backend.current >= 0) win.closeTab(Backend.current) } },
         { name: "Quick Open a File", key: "Ctrl+P", run: function () { win.openPalette("") } },
         { name: "Go to Line…", key: "Ctrl+G", run: function () { win.openPalette(":") } },
+        { name: "Go Back", key: "Alt+Left", run: function () { win.travel(-1) } },
+        { name: "Go Forward", key: "Alt+Right", run: function () { win.travel(1) } },
+        { name: "Reopen Closed File", key: "Ctrl+Alt+W", run: function () { Backend.reopenClosed() } },
+        { name: (Backend.options.guides ? "Hide Indent Guides" : "Show Indent Guides"), key: "", run: function () { Backend.setOption("guides", !Backend.options.guides) } },
+        { name: (Backend.options.occurrences ? "Stop Highlighting the Word Under the Cursor" : "Highlight the Word Under the Cursor"), key: "", run: function () { Backend.setOption("occurrences", !Backend.options.occurrences) } },
         { name: "Go to Symbol…", key: "Ctrl+Shift+O", run: function () { win.openPalette("@") } },
         { name: "Go to Definition", key: "F12", run: function () { var v = win.view(); if (v) v.definition() } },
         { name: "Show Information Here", key: "Ctrl+I", run: function () { var v = win.view(); if (v) v.hover() } },
@@ -216,6 +221,25 @@ GlassWindow {
     function toggleTerm() { term = !term; if (term) Qt.callLater(function () { termKeys.forceActiveFocus() }); else { var v = view(); if (v) v.focusEditor() } }
     function runIt() { bottom = "terminal"; term = true; Backend.run(""); Qt.callLater(function () { termKeys.forceActiveFocus() }) }
     function debugIt() { if (dbg.active) { dbg.resume(); return } bottom = "debug"; term = true; Backend.startDebug("") }
+    // ---- back and forward through the places you've been (a jump of more than a few lines, or to another file, is a place)
+    property var trail: []
+    property int trailAt: -1
+    property bool trailBusy: false
+    readonly property int tabW: Backend.status.tabWidth || 4
+    function noteMove(path, line, col) {
+        if (trailBusy || !path) return
+        var cur = trailAt >= 0 ? trail[trailAt] : null
+        if (cur && cur.path === path && Math.abs(cur.line - line) <= 8) { cur.line = line; cur.col = col; return }
+        var t = trail.slice(0, trailAt + 1); t.push({ path: path, line: line, col: col })
+        if (t.length > 80) t.shift()
+        trail = t; trailAt = t.length - 1 }
+    function travel(d) {
+        var k = trailAt + d
+        while (k >= 0 && k < trail.length && !Backend.fileThere(trail[k].path)) k += d      // (a file since deleted is stepped over)
+        if (k < 0 || k >= trail.length) { toast.say(d < 0 ? "That's as far back as it goes." : "That's as far forward as it goes.", false); return }
+        trailBusy = true; trailAt = k; trailRest.restart()
+        Backend.openRel(trail[k].path, trail[k].line, trail[k].col) }
+    Timer { id: trailRest; interval: 220; onTriggered: win.trailBusy = false }
     function toggleSplit() {
         if (split) { split = false; return }
         if (Backend.tabs.length < 2) { toast.say("Open another file to see two side by side.", false); return }
@@ -333,6 +357,9 @@ GlassWindow {
     Shortcut { sequence: "Ctrl+P"; onActivated: win.openPalette("") }
     Shortcut { sequence: "Ctrl+Shift+P"; onActivated: win.openPalette(">") }
     Shortcut { sequence: "Ctrl+G"; onActivated: win.openPalette(":") }
+    Shortcut { sequence: "Alt+Left"; onActivated: win.travel(-1) }
+    Shortcut { sequence: "Alt+Right"; onActivated: win.travel(1) }
+    Shortcut { sequence: "Ctrl+Alt+W"; onActivated: Backend.reopenClosed() }
     Shortcut { sequence: "Ctrl+Shift+O"; onActivated: win.openPalette("@") }
     Shortcut { sequence: "Ctrl+F"; onActivated: win.startFind(false) }
     Shortcut { sequence: "Ctrl+H"; onActivated: win.startFind(true) }
@@ -990,7 +1017,7 @@ GlassWindow {
                 // ---- sticky scroll: the lines that open the scopes at the top of the view
                 property var sticky: []
                 readonly property int topLine: Math.max(0, Math.floor((scroll.contentY - edit.y + 2) / Math.max(1, edit.cursorRectangle.height)))
-                onContentYChanged: stickyTick.restart()
+                onContentYChanged: { stickyTick.restart(); decoTick.restart() }
                 readonly property real contentY: scroll.contentY
                 onTopLineChanged: stickyTick.restart()
                 Timer { id: stickyTick; interval: 60
@@ -1044,7 +1071,50 @@ GlassWindow {
                             if (all) return l.replace(new RegExp("^([ \\t]*)" + c.replace(/[.*+?^${}()|[\]\\\/]/g, "\\$&") + " ?"), "$1")
                             return l.substring(0, ind) + c + " " + l.substring(ind) }) })
                 }
-                Component.onCompleted: { reload(); conflictTick.start() }
+                Component.onCompleted: { reload(); conflictTick.start()
+                    var at = Backend.placeOf(index)                   // back to where the cursor was the last time this file was open
+                    if (at > 0 && at <= edit.length) { edit.cursorPosition = at; Qt.callLater(function () { scroll.centreOn(edit.cursorRectangle) }) }
+                    decoTick.restart() }
+                // ---- the word under the cursor wherever else it is in view, and a faint line down each level of indentation
+                property var occ: ({ len: 0, at: [] })
+                property var guides: []
+                Timer { id: placeTick; interval: 900; onTriggered: Backend.setPlace(v.index, edit.cursorPosition) }
+                Timer { id: decoTick; interval: 90; onTriggered: v.decorate() }
+                onVisibleChanged: if (visible) decoTick.restart()
+                onHeightChanged: decoTick.restart()
+                Connections { target: Backend; function onChanged() { if (v.visible && (!Backend.options.guides && v.guides.length || !Backend.options.occurrences && v.occ.at.length || Backend.options.guides && !v.guides.length)) decoTick.restart() } }
+                function decorate() {
+                    if (!visible || info.binary) return
+                    var lh = Math.max(1, edit.cursorRectangle.height), top = Math.max(0, scroll.contentY - edit.y)
+                    var a = edit.positionAt(0, top), b = edit.positionAt(100000, top + scroll.height + lh)
+                    if (b - a > 60000) b = a + 60000                   // (a screenful of very long lines: enough is enough)
+                    var t = edit.getText(a, b), found = [], word = ""
+                    if (Backend.options.occurrences && !extra.length) {
+                        var sel = edit.selectedText
+                        if (sel.length) { if (/^\w{2,64}$/.test(sel)) word = sel }
+                        else { var c = edit.cursorPosition, near = edit.getText(Math.max(0, c - 64), Math.min(edit.length, c + 64)), k = Math.min(64, c)
+                            var l = /\w*$/.exec(near.slice(0, k))[0], r = /^\w*/.exec(near.slice(k))[0]
+                            if (l.length + r.length >= 2 && l.length + r.length <= 64) word = l + r }
+                        if (word && !/^\d+$/.test(word)) { var re = new RegExp("\\b" + word + "\\b", "g"), m
+                            while ((m = re.exec(t)) !== null && found.length < 300) found.push(a + m.index) }
+                        if (found.length < 2) found = [] }
+                    occ = { len: word.length, at: found }
+                    var out = []
+                    if (Backend.options.guides && !Backend.wrap) {
+                        var lines = t.split("\n"), first = Math.round(edit.positionToRectangle(a).y / lh), tw = win.tabW
+                        var unit = win.unit === "\t" ? tw : Math.max(1, win.unit.length), ind = [], i, j
+                        for (i = 0; i < lines.length; i++) { var s = lines[i], col = 0, blank = true
+                            for (j = 0; j < s.length; j++) { var ch = s.charAt(j); if (ch === " ") col++; else if (ch === "\t") col += tw - col % tw; else { blank = false; break } }
+                            ind.push(blank ? -1 : col) }
+                        for (i = 0; i < ind.length; i++) if (ind[i] < 0) {      // an empty line carries on the lines either side of it
+                            var p = i - 1, n = i + 1; while (n < ind.length && ind[n] < 0) n++
+                            var before = p >= 0 ? ind[p] : 0, after = n < ind.length ? ind[n] : 0, both = Math.min(before, after)
+                            for (j = i; j < n; j++) ind[j] = both; i = n - 1 }
+                        var open = {}
+                        for (i = 0; i <= ind.length; i++) { var depth = i < ind.length ? Math.ceil(ind[i] / unit) : 0
+                            for (var key in open) if (Number(key) >= depth) { out.push({ col: Number(key) * unit, from: first + open[key], to: first + i - 1 }); delete open[key] }
+                            for (j = 0; j < depth && j < 24; j++) if (open[j] === undefined) open[j] = i } }
+                    guides = out }
                 Connections { target: Backend; function onChanged() { if (!v.loading) { v.marks = Backend.marksOf(v.index); v.probs = Backend.problemsOf(v.index); v.bps = Backend.breakpointsOf(v.index) } } }
                 Connections { target: win.dbg; function onChanged() { v.bps = Backend.breakpointsOf(v.index) } }
 
@@ -1102,6 +1172,14 @@ GlassWindow {
                                     MouseArea { id: ma; anchors.fill: parent; anchors.margins: -3; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
                                         onClicked: Backend.resolveConflict(v.index, parent.parent.which, parent.modelData[0]) } } } } }
 
+                    // a faint line down each level of indentation
+                    Repeater { model: v.guides
+                        Rectangle { required property var modelData; x: edit.x + modelData.col * widest.advanceWidth; y: edit.y + modelData.from * edit.cursorRectangle.height
+                            width: 1; height: (modelData.to - modelData.from + 1) * edit.cursorRectangle.height; color: Qt.alpha(Theme.t.text, 0.09) } }
+                    // the word under the cursor, wherever else it is in view
+                    Repeater { model: v.occ.at
+                        Rectangle { required property var modelData; readonly property rect r: edit.positionToRectangle(modelData)
+                            x: edit.x + r.x - 1; y: edit.y + r.y; width: v.occ.len * widest.advanceWidth + 2; height: r.height; radius: 3; color: Qt.alpha(Theme.t.text, 0.10) } }
                     // the matching bracket pair
                     Repeater { model: v.index === Backend.current && edit.activeFocus ? v.pair : []
                         Rectangle { required property var modelData; readonly property rect r: edit.positionToRectangle(modelData); readonly property rect r2: edit.positionToRectangle(modelData + 1)
@@ -1158,7 +1236,7 @@ GlassWindow {
                         width: Backend.wrap ? scroll.width - 40 : Math.max(contentWidth + 20, scroll.width - x - 10)
                         color: Theme.t.text; selectionColor: Qt.alpha(Theme.t.accent, 0.45); selectedTextColor: Theme.t.text
                         font.family: win.mono; font.pixelSize: Backend.size; wrapMode: Backend.wrap ? TextEdit.Wrap : TextEdit.NoWrap; textFormat: TextEdit.PlainText
-                        readOnly: !!v.info.readOnly; selectByMouse: true; persistentSelection: true; tabStopDistance: 4 * widest.advanceWidth; focus: v.index === Backend.current
+                        readOnly: !!v.info.readOnly; selectByMouse: true; persistentSelection: true; tabStopDistance: win.tabW * widest.advanceWidth; focus: v.index === Backend.current
                         onActiveFocusChanged: if (activeFocus && win.split && v.index !== Backend.current) { var side = v.side; Backend.select(v.index); win.pane = side }
                         TextMetrics { id: widest; font: edit.font; text: " " }
                         Row { visible: v.ghost !== "" && edit.cursorPosition === v.ghostAt; x: edit.cursorRectangle.x; y: edit.cursorRectangle.y; spacing: 8
@@ -1170,7 +1248,7 @@ GlassWindow {
                             if (v.loading || text === v.known) return      // colouring touches the text too: only real typing counts
                             if (v.snip && !v.multiBusy) v.snipShift(length - v.snip.len)
                             if (!v.multiBusy && v.extra.length) v.extra = []
-                            conflictTick.restart(); stickyTick.restart()
+                            conflictTick.restart(); stickyTick.restart(); decoTick.restart()
                             v.known = text
                             mmTick.restart()
                             Backend.edit(v.index, text); v.lineStarts()
@@ -1183,7 +1261,8 @@ GlassWindow {
                         onCursorPositionChanged: { if (v.visible) { var lc = v.lineCol(); win.curLine = lc[0] + 1; win.curCol = lc[1] + 1 } if (win.tip) win.tip = ""
                             if ((v.ghost !== "" || v.ghostJob >= 0) && cursorPosition !== v.ghostAt) v.dropGhost()
                             if (win.sig && v.visible && !v.inCall()) win.sig = null
-                            if (v.visible) pairTick.restart()
+                            if (v.visible) { pairTick.restart(); decoTick.restart(); placeTick.restart()
+                                if (v.index === Backend.current && !v.loading) win.noteMove(v.info.path, win.curLine - 1, win.curCol - 1) }
                             if (v.snip && !v.multiBusy) Qt.callLater(v.checkSnip)    // after the text has caught up (the cursor moves first)
                             if (win.fixMenu) win.fixMenu = null }
                         TapHandler { acceptedModifiers: Qt.AltModifier; onTapped: function (p) { var at = edit.positionAt(p.position.x, p.position.y); if (!v.taken(at, at)) v.extra = v.extra.concat([{ a: at, p: at }]) } }
@@ -1475,7 +1554,7 @@ GlassWindow {
             Label { visible: Backend.busy !== ""; anchors.verticalCenter: parent.verticalCenter; text: Backend.busy + "…"; font.pixelSize: 11; secondary: true } }
         Row { visible: !!win.tab; anchors { right: parent.right; rightMargin: 6; verticalCenter: parent.verticalCenter } spacing: 16
             Label { text: "Ln " + win.curLine + ", Col " + win.curCol; font.pixelSize: 11; secondary: true }
-            Label { text: Backend.status.indent || ""; font.pixelSize: 11; secondary: true }
+            Label { text: (Backend.status.indent || "") + (Backend.status.config ? " · .editorconfig" : ""); font.pixelSize: 11; secondary: true }
             Label { text: Backend.status.encoding || ""; font.pixelSize: 11; secondary: true }
             Label { text: Backend.status.eol || ""; font.pixelSize: 11; secondary: true }
             Pressable { width: wrapL.width + 10; height: 22; radius: 11; color: hovered ? Theme.t.hover : "transparent"; onClicked: Backend.setWrap(!Backend.wrap)

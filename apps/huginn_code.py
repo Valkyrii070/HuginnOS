@@ -905,6 +905,7 @@ class Code(QObject):
         self._root, self._docs, self._at = None, [], -1
         self._open_dirs, self._tree, self._files_cache = set(), [], None
         self._recent, self._size, self._wrap = [], 14, False
+        self._places, self._closed = {}, []                      # where the cursor was in each file; the tabs closed, latest last
         self._results, self._searching, self._query = [], False, ""
         self._branch, self._changes, self._git = "", [], False
         self._servers, self._server_note = {}, {}
@@ -931,6 +932,7 @@ class Code(QObject):
         from PySide6.QtCore import QCoreApplication
         if QCoreApplication.instance():
             QCoreApplication.instance().aboutToQuit.connect(self._stash_now)
+            QCoreApplication.instance().aboutToQuit.connect(self._keep)        # (where the cursor was in each file goes with it)
         self._load_state()
         if demo:
             self._demo_fill()
@@ -962,6 +964,7 @@ class Code(QObject):
             return
         if self._root:
             self._state.setdefault("projects", {})[str(self._root)] = {"open": [d.path for d in self._docs], "at": self._at, "dirs": sorted(self._open_dirs)[:200],
+                                                                    "places": {p: a for p, a in self._places.items() if p.startswith(str(self._root))},
                                                                     "breakpoints": {k: v for k, v in self._dbg.all_breakpoints().items() if k.startswith(str(self._root))}}
         self._state.update(recent=self._recent, size=self._size, wrap=self._wrap, minimap=self._minimap, last=str(self._root) if self._root else "")
         try:
@@ -1052,11 +1055,15 @@ def advice(sky: Sky) -> str:
             if any(d.dirty for d in self._docs):
                 self.said.emit("Save or close your changed files first.", True)
                 return
+            self._keep()                                           # (the folder being left: its tabs and where the cursor was in each)
             self._close_all()
         self._root = root
         self._recent = [str(root)] + [r for r in self._recent if r != str(root)]
         del self._recent[10:]
         saved = self._state.get("projects", {}).get(str(root), {}) if restore else {}
+        places = saved.get("places") if isinstance(saved.get("places"), dict) else {}
+        self._places = {p: a for p, a in list(places.items())[-400:] if isinstance(p, str) and isinstance(a, int) and a >= 0}
+        self._closed = []
         self._open_dirs = {d for d in saved.get("dirs", []) if Path(d).is_dir()}
         self._files_cache = None
         self._build_tree()
@@ -1289,6 +1296,10 @@ def advice(sky: Sky) -> str:
         except OSError as e:
             self.said.emit(f"Couldn't open {Path(path).name}: {e.strerror or e}", True)
             return
+        if not d.text and not d.binary:                        # an empty file has no line endings of its own yet: the project's
+            eol = self._config(d).get("end_of_line")
+            if eol in ("crlf", "lf"):
+                d.crlf = eol == "crlf"
         self._stash_apply(d)
         self._docs.append(d)
         idx = len(self._docs) - 1
@@ -1324,6 +1335,8 @@ def advice(sky: Sky) -> str:
             return "dirty"
         self._lsp_close(d)
         self._stash_drop(d)                                   # closed without saving: you said to let it go
+        if not d.path.startswith("untitled:"):
+            self._closed = [p for p in self._closed if p != d.path][-19:] + [d.path]
         del self._docs[i]
         if not self._docs:
             self._at = -1
@@ -1334,6 +1347,42 @@ def advice(sky: Sky) -> str:
         self.changed.emit()
         self._keep()
         return ""
+
+    canReopen = Property(bool, lambda self: bool(self._closed), notify=changed)
+
+    @Slot(str, result=bool)
+    def fileThere(self, path: str) -> bool:
+        try:
+            return any(d.path == path for d in self._docs) or Path(path).is_file()
+        except (OSError, ValueError):
+            return False
+
+    @Slot()
+    def reopenClosed(self) -> None:
+        """Open the tab closed last again (and the one before it, asked again), where the cursor was."""
+        while self._closed:
+            p = self._closed.pop()
+            if Path(p).is_file() and not any(d.path == p for d in self._docs):
+                self.openFile(p)
+                return
+        self.said.emit("No closed file to open again.", False)
+        self.changed.emit()
+
+    @Slot(int, result=int)
+    def placeOf(self, i: int) -> int:
+        """Where the cursor was in this file the last time it was open (0: never, or not known)."""
+        if not 0 <= i < len(self._docs):
+            return 0
+        at = self._places.get(self._docs[i].path, 0)
+        return at if isinstance(at, int) and 0 <= at <= len(self._docs[i].text) else 0
+
+    @Slot(int, int)
+    def setPlace(self, i: int, at: int) -> None:
+        if 0 <= i < len(self._docs) and isinstance(at, int) and 0 <= at <= 50_000_000 and not self._docs[i].path.startswith("untitled:"):
+            self._places.pop(self._docs[i].path, None)         # (the latest goes to the end: the oldest are the ones dropped)
+            self._places[self._docs[i].path] = at
+            while len(self._places) > 400:
+                self._places.pop(next(iter(self._places)))
 
     @Slot(int, int)
     def move(self, i: int, to: int) -> None:
@@ -1551,10 +1600,11 @@ def advice(sky: Sky) -> str:
         d = self._docs[self._at] if 0 <= self._at < len(self._docs) else None
         if not d:
             return {}
-        ind = indent_of(d.text)
+        ind, cfg = self._unit(d), self._config(d)
         server = self._server_note.get(d.lang, "")
         return {"lang": d.lang, "encoding": ("UTF-8" if d.encoding == "utf-8" else "UTF-16" if d.encoding.startswith("utf-16") else "Latin-1") + (" with BOM" if d.bom else ""),
                 "eol": "CRLF" if d.crlf else "LF", "indent": "Tab" if ind == "\t" else f"Spaces: {len(ind)}", "indentText": ind,
+                "tabWidth": self._tab_width(d), "config": bool(cfg),
                 "server": server, "comment": LANGS.get(d.lang, LANGS["Text"])[1], "block": list(LANGS.get(d.lang, LANGS["Text"])[2] or [])}
 
     def _get_problems(self) -> list:
@@ -2463,7 +2513,7 @@ def advice(sky: Sky) -> str:
                 self._edit_text(self._docs.index(d), [[at(e["range"]["start"]), at(e["range"]["end"]), e["newText"]] for e in result])
             if then:
                 then()
-        c.request("textDocument/formatting", {"textDocument": {"uri": d.uri}, "options": {"tabSize": len(indent_of(d.text).replace("\t", "    ")), "insertSpaces": indent_of(d.text) != "\t"}}, got)
+        c.request("textDocument/formatting", {"textDocument": {"uri": d.uri}, "options": {"tabSize": len(self._unit(d).replace("\t", " " * self._tab_width(d))), "insertSpaces": self._unit(d) != "\t"}}, got)
 
 
 
@@ -2909,7 +2959,7 @@ def advice(sky: Sky) -> str:
     # ---------------------------------------------------------------- snippets
     @Slot(int, str, str, result="QVariantMap")
     def expandSnippet(self, i: int, body: str, indent: str) -> dict:
-        unit = indent_of(self._docs[i].text) if 0 <= i < len(self._docs) else "    "
+        unit = self._unit(self._docs[i]) if 0 <= i < len(self._docs) else "    "
         return more.snippet_parse(body, unit, indent)
 
     def _with_snippets(self, d: Doc, line: int, col: int, items: list) -> list:
@@ -3140,11 +3190,34 @@ def advice(sky: Sky) -> str:
                 keep.append(sc)
         return [{"line": sc["line"], "text": lines[sc["line"]].rstrip()} for sc in keep][-4:]
 
+    # ---------------------------------------------------------------- the project's own rules (.editorconfig)
+    def _config(self, d: Doc) -> dict:
+        try:
+            return more.editorconfig_for(d.path) if not d.path.startswith("untitled:") else {}
+        except (OSError, ValueError, RecursionError):
+            return {}
+
+    def _unit(self, d: Doc) -> str:
+        """What one level of indentation is in this file: what the project's .editorconfig says, else what the file
+        already does, else four spaces."""
+        return more.editorconfig_unit(self._config(d)) or indent_of(d.text) or "    "
+
+    def _tab_width(self, d: Doc) -> int:
+        cfg = self._config(d)
+        try:
+            w = int(cfg.get("tab_width") or (cfg.get("indent_size") if cfg.get("indent_size") != "tab" else 0) or 4)
+            return w if 1 <= w <= 16 else 4
+        except ValueError:
+            return 4
+
     # ---------------------------------------------------------------- tidy when saving
     def _tidy_before_save(self, i: int) -> None:
         d = self._docs[i]
-        if self._state.get("trimOnSave", True) and not d.read_only and not d.binary:
-            tidy = more.trim_text(d.text, d.lang)
+        cfg = self._config(d)
+        trim = cfg.get("trim_trailing_whitespace") != "false" and (self._state.get("trimOnSave", True) or cfg.get("trim_trailing_whitespace") == "true")
+        final = cfg.get("insert_final_newline") != "false" and (self._state.get("trimOnSave", True) or cfg.get("insert_final_newline") == "true")
+        if (trim or final) and not d.read_only and not d.binary:
+            tidy = more.trim_text(d.text, d.lang, trim, final)
             if tidy != d.text:
                 # the smallest change: only the lines that differ, so the cursor and undo stay where they are
                 old, new = d.text.split("\n"), tidy.split("\n")
@@ -3162,12 +3235,13 @@ def advice(sky: Sky) -> str:
 
     @Slot(str, bool)
     def setOption(self, key: str, on: bool) -> None:
-        if key in ("formatOnSave", "trimOnSave"):
+        if key in ("formatOnSave", "trimOnSave", "guides", "occurrences"):
             self._state[key] = bool(on)
             self._keep()
             self.changed.emit()
 
-    options = Property("QVariantMap", lambda self: {"formatOnSave": bool(self._state.get("formatOnSave", False)), "trimOnSave": bool(self._state.get("trimOnSave", True))},
+    options = Property("QVariantMap", lambda self: {"formatOnSave": bool(self._state.get("formatOnSave", False)), "trimOnSave": bool(self._state.get("trimOnSave", True)),
+                                                    "guides": bool(self._state.get("guides", True)), "occurrences": bool(self._state.get("occurrences", True))},
                        notify=changed)
 
     # ---------------------------------------------------------------- the minimap

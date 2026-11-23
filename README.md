@@ -816,6 +816,29 @@ Four apps are being taken, round by round, to the level of the professional tool
   this round: 56 of 56, 23 of 23, 40 of 41 (a tolerance in an old check), and one that stops at a check written for an older undo. On screen: the missing tile and Find Missing, picking and
   overwriting, the 2× chip, the Screen layer. Not tested: sound while shuttling (no sound card here).
 
+**Code, pro round six: finding your way round** (`apps/huginn_code.py`, `apps/huginn_code_more.py`, `apps/qml/Code.qml`;
+`scripts/tests/code_round6_test.py`, 49 checks):
+- *Back and forward* (Alt+Left, Alt+Right): a jump of more than a few lines, or to another file, is remembered as a
+  place (go to definition, a search result, a symbol, a click far away). Back returns through them, forward goes
+  again; a file since deleted is stepped over.
+- *The word under the cursor is highlighted* wherever else it is in view (or the selected word), so every use of a
+  name shows at a glance. Off with more than one cursor; can be switched off in the command list.
+- *Indent guides*: a faint line down each level of indentation, carried through empty lines. Follows the file's own
+  indentation; can be switched off.
+- *The cursor's place in each file is kept*: closing a file and opening it again, or opening the folder next week,
+  puts the cursor back where it was (400 places a project).
+- *Reopen Closed File* (Ctrl+Alt+W): the tab closed last comes back, then the one before, twenty deep.
+- *.editorconfig*: a project's own rules are followed. Indentation (`indent_style`, `indent_size`, `tab_width`) sets
+  what Tab, snippets, formatting and the guides use, and shows in the status bar; `trim_trailing_whitespace` and
+  `insert_final_newline` decide the tidying on save in either direction, whatever Code's own setting; `end_of_line`
+  is taken by new, empty files (a file that already has line endings keeps its own: Code doesn't rewrite a whole
+  file's endings behind your back). Nearer files win, sections in order, looking stops at `root = true`; globs
+  with `*`, `**`, `?`, `[…]`, `{a,b}` and `{1..9}`. Not used: `charset`, `max_line_length`.
+- The fuzz gained these commands and four awkward `.editorconfig` files; three seeds of 1,500 steps, no problems.
+  pytest joins the image (`48-huginn-code.list`): the Tests panel found no Python tests on a fresh install without it.
+  Checked on screen in the nested session. One thing found there: the reopen key was first Ctrl+Alt+T, which is the
+  desktop's own key for the Terminal.
+
 **Code, pro round five** (`apps/huginn_code.py`, `apps/huginn_code_more.py`, `apps/qml/Code.qml`): a fuzz run first, then
 three things an editor is expected to have.
 - *What the fuzz found, fixed* (`scripts/tests/code_fuzz.py`: awkward files and about seventy random commands, with what's

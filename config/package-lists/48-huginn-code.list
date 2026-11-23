@@ -9,3 +9,5 @@ python3-autopep8
 # Debugging: debugpy for Python, GDB (14 and later speak the Debug Adapter Protocol) for C, C++, Rust and Go.
 python3-debugpy
 gdb
+# The Tests panel runs a Python project's tests with pytest; without it the panel finds none.
+python3-pytest
