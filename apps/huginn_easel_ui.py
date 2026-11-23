@@ -36,6 +36,16 @@ SHIFT, ALT, CTRL = 1, 2, 4
 HANDLES = ["tl", "t", "tr", "r", "br", "b", "bl", "l"]
 
 
+def _f(value, lo: float, hi: float):
+    """A number from the window, made safe: between lo and hi, or None when it isn't a number at all (nothing, text,
+    not-a-number, infinity). Every setting that takes a number goes through this."""
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return None
+    return max(lo, min(hi, v)) if math.isfinite(v) else None
+
+
 def _hex(c: QColor) -> str:
     return c.name(QColor.NameFormat.HexArgb) if c.alpha() < 255 else c.name()
 
@@ -80,6 +90,7 @@ class Easel(QObject):
         self._sel_path = QPainterPath()
         self._xform = None                                       # a free transform in progress
         self._clone_src, self._clone_off, self.heal_spot = None, None, True
+        self.smoothing = 0.0                                     # steadies the hand: the brush trails the pointer and evens out wobble
         self.symmetry = ""                                       # mirror painting: "", "x" (left-right), "y" (top-bottom) or "xy"
         self._node_sel = None                                    # (shape id, subpath, node) being edited
         self.retouch, self.retouch_range, self.retouch_strength = "dodge", "mid", 0.35   # round four's brushes
@@ -117,6 +128,7 @@ class Easel(QObject):
     brushKey = Property(str, lambda self: self.brush_key, notify=changed)
     brushSize = Property(float, lambda self: self.brush["size"], notify=changed)
     brushHardness = Property(float, lambda self: self.brush["hardness"], notify=changed)
+    brushSmoothing = Property(float, lambda self: self.smoothing, notify=changed)
     brushFlow = Property(float, lambda self: self.brush["flow"], notify=changed)
     strokeOpacity = Property(float, lambda self: self.opacity, notify=changed)
     wandTolerance = Property(float, lambda self: self.tolerance, notify=changed)
@@ -170,7 +182,8 @@ class Easel(QObject):
                         "blend": l["blend"], "hasMask": l.get("mask") is not None, "maskOn": l.get("maskOn", True), "active": l["id"] == self.doc.active,
                         "adjust": l.get("adjust", ""), "v": l.get("v", 0) + (sum(x.get("v", 0) for x in self._subtree(l)) if l["kind"] == "group" else 0),
                         "shapes": len(l.get("shapes", [])), "depth": len(anc), "open": l.get("open", True), "fx": more.has_fx(l),
-                        "count": len(self._subtree(l)) - 1 if l["kind"] == "group" else 0, "filters": len(l.get("sfilters") or [])})
+                        "count": len(self._subtree(l)) - 1 if l["kind"] == "group" else 0, "filters": len(l.get("sfilters") or []),
+                        "clip": bool(l.get("clip")), "lockAlpha": bool(l.get("lockAlpha"))})
         return out
 
     @Property("QVariantMap", notify=changed)
@@ -185,7 +198,7 @@ class Easel(QObject):
         return {"id": l["id"], "name": l["name"], "kind": l["kind"], "opacity": l["opacity"], "blend": l["blend"], "locked": l["locked"],
                 "hasMask": l.get("mask") is not None, "adjust": l.get("adjust", ""), "params": params,
                 "paramList": [{"id": k, "name": n} for k, n in ez.ADJUST_PARAMS.get(l.get("adjust", ""), [])],
-                "fx": more.has_fx(l), "inGroup": bool(l.get("group")),
+                "fx": more.has_fx(l), "inGroup": bool(l.get("group")), "clip": bool(l.get("clip")), "lockAlpha": bool(l.get("lockAlpha")),
                 "sfilters": [{"name": ez.FILTERS.get(f["name"], f["name"]), "on": f.get("on", True), "amount": f.get("amount", 0.4)} for f in l.get("sfilters") or []]}
 
     @Property("QVariantMap", notify=changed)
@@ -269,6 +282,7 @@ class Easel(QObject):
             pass
 
     def _fresh(self) -> None:
+        self._drop_drag()
         self._undo, self._redo, self._picked, self._crop, self._pen, self._mask_edit, self._drag = [], [], [], None, None, "", None
         self._saved_at = None
         self._selection_changed()
@@ -361,6 +375,9 @@ class Easel(QObject):
 
     @Slot(str, int)
     def exportAs(self, path: str, quality: int) -> None:
+        if not self.doc:
+            return
+        quality = max(1, min(100, int(quality)))
         path = path.replace("file://", "")
         if Path(path).suffix.lower() not in (".png", ".jpg", ".jpeg", ".webp", ".svg", ".pdf", ".ora", ".psd", ".tif", ".tiff", ".bmp"):
             path += ".png"
@@ -379,11 +396,17 @@ class Easel(QObject):
 
     @Slot()
     def closeDoc(self) -> None:
+        self._drop_drag()
         self.doc = None
         self._fresh()
 
     # ------------------------------------------------------------------ history
     def _push(self, name: str) -> None:
+        if self._drag is not None and not getattr(self, "_pointing", False):
+            self._settle()                                            # (a command from the keyboard in the middle of a stroke)
+        if self._xform is not None:
+            self.applyTransform()                                     # a free transform still open is applied first: the next
+                                                                      # command (a resize, a merge) must not leave it holding the old picture
         self._undo.append((name, self.doc.snapshot()))
         per = self.doc.w * self.doc.h * 4                             # roughly what one step keeps: one changed layer
         while len(self._undo) > 60 or (len(self._undo) * per > 900_000_000 and len(self._undo) > 8):
@@ -407,6 +430,7 @@ class Easel(QObject):
         """Go back (or forward again) to just after step k of the history (0: where it began)."""
         if not self.doc:
             return
+        self._settle()
         if self._xform is not None:
             self.cancelTransform()
         now = len(self._undo)
@@ -426,6 +450,8 @@ class Easel(QObject):
 
     @Slot()
     def undo(self) -> None:
+        if self.doc and self._drag is not None:
+            self._settle()
         if not self._undo or not self.doc:
             return
         if self._pen is not None:
@@ -440,6 +466,8 @@ class Easel(QObject):
 
     @Slot()
     def redo(self) -> None:
+        if self.doc and self._drag is not None:
+            self._settle()
         if not self._redo or not self.doc:
             return
         name, snap = self._redo.pop()
@@ -474,6 +502,8 @@ class Easel(QObject):
         doc = self.doc
         if layer["kind"] != "pixel" or more.has_fx(layer) or more.ancestors(doc.layers, layer):
             return None
+        if layer.get("lockAlpha") or any(x.get("clip") for x in doc.layers):
+            return None                                           # (clipped layers and locked transparency: put together the long way)
         items = more.tree(doc.layers)
         at = next((i for i, it in enumerate(items) if not isinstance(it, tuple) and it["id"] == layer["id"]), -1)
         if at < 0:
@@ -653,6 +683,9 @@ class Easel(QObject):
 
     @Slot(str, float)
     def setBrush(self, key: str, value: float) -> None:
+        value = _f(value, 0.0, 1000.0)
+        if value is None:
+            return
         if key == "size":
             self.brush["size"] = max(1.0, min(1000.0, value))
         elif key in ("hardness", "flow"):
@@ -661,12 +694,16 @@ class Easel(QObject):
             self.opacity = max(0.01, min(1.0, value))
         elif key == "tolerance":
             self.tolerance = max(0.0, min(1.0, value))
+        elif key == "smoothing":
+            self.smoothing = max(0.0, min(1.0, value))
         self.changed.emit()
         self.painted.emit()
 
     @Slot(float)
     def setPressure(self, p: float) -> None:
         """How hard the pen presses, 0..1 (from a drawing tablet). A mouse never calls this."""
+        if _f(p, 0.0, 1.0) is None:
+            return
         self._pressure = max(0.02, min(1.0, float(p)))
         if not self._stylus:
             self._stylus = True
@@ -701,13 +738,21 @@ class Easel(QObject):
     def setStyle(self, key: str, value) -> None:
         """A shape setting: changes the picked shapes, and is what the next shape gets."""
         if key in ("fill", "stroke", "fill2"):
-            value = "" if not value else _hex(QColor(value))
+            value = "" if not value or not isinstance(value, str) or not QColor(value).isValid() else _hex(QColor(value))
         elif key in ("width", "radius", "opacity", "inner", "rot", "gangle"):
-            value = float(value)
-        elif key == "gkind" and value not in ("linear", "radial"):
-            return
+            value = _f(value, *{"width": (0, 2000), "radius": (0, 20000), "opacity": (0, 1), "inner": (0.02, 1)}.get(key, (-36000, 36000)))
+            if value is None:
+                return
+        elif key == "gkind":
+            if value not in ("linear", "radial"):
+                return
         elif key == "points":
-            value = max(3, int(value))
+            value = _f(value, 3, 200)
+            if value is None:
+                return
+            value = int(value)
+        else:
+            return
         if key != "rot":
             self.style[key] = value
         shapes = self._picked_shapes()
@@ -735,6 +780,19 @@ class Easel(QObject):
     @Slot(str, "QVariant")
     def setTextStyle(self, key: str, value) -> None:
         if key not in self.text:
+            return
+        if key == "font":
+            if not isinstance(value, str) or not value.strip():
+                return
+            value = value[:200]
+        elif key in ("size", "weight"):
+            value = _f(value, *((1, 4000) if key == "size" else (100, 900)))
+            if value is None:
+                return
+            value = int(value) if key == "weight" else value
+        elif key == "italic":
+            value = bool(value)
+        elif key == "align" and value not in ("left", "center", "right"):
             return
         self.text[key] = value
         shapes = [s for s in self._picked_shapes() if s["type"] == "text"]
@@ -797,7 +855,10 @@ class Easel(QObject):
         l = self.doc.layer() if self.doc else None
         if not l or l["kind"] != "adjust":
             return
-        l.setdefault("params", {})[key] = float(value)
+        value = _f(value, -100.0, 100.0)
+        if value is None or not isinstance(key, str) or not key or len(key) > 40:
+            return
+        l.setdefault("params", {})[key] = value
         self.doc.touch(l)
         self._refresh()
 
@@ -836,14 +897,21 @@ class Easel(QObject):
     @Slot(str, str, "QVariant")
     def setLayer(self, ident: str, key: str, value) -> None:
         l = self.doc.layer(ident) if self.doc else None
-        if not l or key not in ("name", "visible", "locked", "opacity", "blend", "maskOn"):
+        if not l or key not in ("name", "visible", "locked", "opacity", "blend", "maskOn", "clip", "lockAlpha"):
             return
-        if key in ("name", "visible", "locked", "blend", "maskOn"):
+        if key in ("name", "visible", "locked", "blend", "maskOn", "clip", "lockAlpha"):
             self._push("Layer change")
         if key == "opacity":
-            value = max(0.0, min(1.0, float(value)))
-        elif key == "blend" and value not in ez.BLENDS:
-            return
+            value = _f(value, 0.0, 1.0)
+            if value is None:
+                return
+        elif key == "blend":
+            if not isinstance(value, str) or value not in ez.BLENDS:
+                return
+        elif key in ("visible", "locked", "maskOn", "clip", "lockAlpha"):
+            value = bool(value)
+            if key == "clip" and l["kind"] == "group" or key == "lockAlpha" and l["kind"] != "pixel":
+                return
         elif key == "name":
             value = str(value).strip()[:80] or l["name"]
         l[key] = value
@@ -857,8 +925,13 @@ class Easel(QObject):
         l = self.doc.layer(ident) if self.doc else None
         if not l or self.doc.index(ident) < 0:
             return
+        delta = 1 if delta > 0 else -1 if delta < 0 else 0
+        if not delta:
+            return
         sibs = self._siblings(l)
-        k = next(i for i, x in enumerate(sibs) if x is l)
+        k = next((i for i, x in enumerate(sibs) if x is l), -1)
+        if k < 0:
+            return
         items = self._subtree(l)
         if 0 <= k + delta < len(sibs):
             nb = sibs[k + delta]
@@ -896,7 +969,8 @@ class Easel(QObject):
         self._push("Move layer")
         items = self._subtree(l)
         if t["kind"] == "group":
-            inside = self._siblings_of_group(t["id"])
+            moving = {x["id"] for x in items}                      # (dropped on its own group: it isn't its own neighbour)
+            inside = [x for x in self._siblings_of_group(t["id"]) if x["id"] not in moving]
             if inside:
                 self._place_above(items, inside[-1], t["id"])
             else:
@@ -906,6 +980,69 @@ class Easel(QObject):
         else:
             (self._place_above if self.doc.index(ident) < self.doc.index(onto) else self._place_below)(items, t, t.get("group"))
         self.doc.touch()
+        self._refresh()
+
+    @Slot()
+    def clipLayer(self) -> None:
+        """Ctrl+Alt+G: clip the active layer to the one below it (it shows only where that one has something), or let it go."""
+        l = self.doc.layer() if self.doc else None
+        if not l or l["kind"] == "group":
+            return
+        if not l.get("clip"):
+            sibs = self._siblings(l)
+            k = next((i for i, x in enumerate(sibs) if x is l), 0)
+            if k == 0 or sibs[k - 1]["kind"] == "adjust" and not sibs[k - 1].get("clip"):
+                self.said.emit("There's no layer just below this one to clip it to.", True)
+                return
+        self.setLayer(l["id"], "clip", not l.get("clip"))
+
+    @Slot()
+    def lockTransparency(self) -> None:
+        """Lock Transparency: paint only where the active layer already has paint (its see-through parts stay see-through)."""
+        l = self.doc.layer() if self.doc else None
+        if not l or l["kind"] != "pixel":
+            if l:
+                self.said.emit("Only pixel layers have see-through parts to lock.", True)
+            return
+        self.setLayer(l["id"], "lockAlpha", not l.get("lockAlpha"))
+
+    @Slot(float, str)
+    def strokeSelection(self, width: float, where: str) -> None:
+        """Edit › Outline the Selection: a line of the front colour along the selection's edge, `width` pixels wide,
+        "inside", "outside" or centred on it."""
+        width = _f(width, 1.0, 200.0)
+        target = self._target() if self.doc else None
+        if target is None or width is None or self.doc.selection is None:
+            if self.doc and self.doc.selection is None:
+                self.said.emit("Choose a part of the picture first: the line goes round it.", True)
+            return
+        layer, which = target
+        a = self.doc.selection_alpha().astype(np.float32) / 255.0
+        # how far each pixel is from the selection's edge: outside it (positive) and inside it
+        out_d, in_d = more.distance_outside(a), more.distance_inside(a)
+        if where == "inside":
+            cover = np.clip(width - in_d + 1.0, 0.0, 1.0) * (in_d > 0)
+        elif where == "outside":
+            cover = np.clip(width - out_d + 1.0, 0.0, 1.0) * (out_d > 0)
+        else:
+            half = width / 2
+            cover = np.maximum(np.clip(half - in_d + 1.0, 0.0, 1.0) * (in_d > 0), np.clip(half - out_d + 1.0, 0.0, 1.0) * (out_d > 0))
+        if not cover.any():
+            return
+        self._push("Outline selection")
+        c = QColor("#FFFFFF" if which == "mask" else self.fg)
+        paint = np.zeros((self.doc.h, self.doc.w, 4), np.uint8)
+        paint[..., 0], paint[..., 1], paint[..., 2] = c.red(), c.green(), c.blue()
+        paint[..., 3] = (cover * 255 + 0.5).astype(np.uint8)
+        img = layer[which].copy()
+        p = QPainter(img)
+        p.setOpacity(self.opacity)
+        if which == "image" and layer.get("lockAlpha"):
+            p.setCompositionMode(ez.CM.CompositionMode_SourceAtop)
+        p.drawImage(0, 0, ez.array_to_image(paint))
+        p.end()
+        layer[which] = img
+        self.doc.touch(layer)
         self._refresh()
 
     @Slot()
@@ -1145,7 +1282,8 @@ class Easel(QObject):
 
     @Slot(float)
     def feather(self, radius: float) -> None:
-        if not self.doc or self.doc.selection is None:
+        radius = _f(radius, 0.0, 250.0)
+        if not self.doc or self.doc.selection is None or radius is None:
             return
         from PIL import Image, ImageFilter
         self._push("Feather")
@@ -1159,6 +1297,7 @@ class Easel(QObject):
         """Grow (or with a negative number, shrink) the selection by some pixels."""
         if not self.doc or self.doc.selection is None or not px:
             return
+        px = max(-25, min(25, int(px)))
         from PIL import Image, ImageFilter
         self._push("Grow selection" if px > 0 else "Shrink selection")
         a = Image.fromarray(self.doc.selection_alpha())
@@ -1202,6 +1341,20 @@ class Easel(QObject):
         p.setOpacity(opacity)
         if mask_mode:                                                # on a mask, light colours show and dark ones hide
             erase = QColor(self.fg).lightness() < 128 if not erase else True
+        l = self.doc.layer() if self.doc else None
+        if l and l.get("lockAlpha") and not mask_mode and not self._mask_edit:
+            # transparency locked: paint lands only on what's already there, and rubbing out paints the back colour
+            src = self._clip(stroke)
+            if erase:
+                src = src.copy()
+                q = QPainter(src)
+                q.setCompositionMode(ez.CM.CompositionMode_SourceIn)
+                q.fillRect(src.rect(), QColor(self.bg))
+                q.end()
+            p.setCompositionMode(ez.CM.CompositionMode_SourceAtop)
+            p.drawImage(0, 0, src)
+            p.end()
+            return out
         p.setCompositionMode(ez.CM.CompositionMode_DestinationOut if erase else ez.CM.CompositionMode_SourceOver)
         p.drawImage(0, 0, self._clip(stroke))
         p.end()
@@ -1285,10 +1438,41 @@ class Easel(QObject):
         d["p_last"] = p1
 
     # ------------------------------------------------------------------ the pointer: press, move, release
+    def _drop_drag(self) -> None:
+        """Let go of a drag without finishing it (its painter is closed first: a picture can't go while it's being painted)."""
+        d, self._drag = self._drag, None
+        if d and isinstance(d.get("painter"), QPainter) and d["painter"].isActive():
+            d["painter"].end()
+
+    def _settle(self) -> None:
+        """Something else is about to happen while a drag is still going (a second press with no release between, Undo
+        in the middle of a stroke): the drag is finished where the pointer last was, so nothing is left half-painted."""
+        if self._drag is None or getattr(self, "_pointing", False):
+            return
+        x, y = getattr(self, "_last_at", (0.0, 0.0))
+        try:
+            self.release(x, y, 0)
+        except Exception:
+            pass
+        if self._drag is not None:
+            self._drop_drag()
+
+    def _where(self, x: float, y: float) -> tuple:
+        """A pointer position made safe to draw to: a number, and no further off the picture than a few screens (a stroke
+        to "infinity" would stamp for ever)."""
+        far = 4.0 * max(self.doc.w, self.doc.h) + 4000.0 if self.doc else 4000.0
+        x = float(x) if isinstance(x, (int, float)) and math.isfinite(x) else 0.0
+        y = float(y) if isinstance(y, (int, float)) and math.isfinite(y) else 0.0
+        return max(-far, min(far, x)), max(-far, min(far, y))
+
     @Slot(float, float, int, int)
     def press(self, x: float, y: float, button: int, mods: int) -> None:
         if not self.doc:
             return
+        x, y = self._where(x, y)
+        if self._drag is not None:
+            self._settle()
+        self._last_at = (x, y)
         tool = self.tool
         pt = QPointF(x, y)
         if button == 2 and tool in ("brush", "eraser", "fill", "gradient"):     # a right click picks the colour, like a dropper
@@ -1297,7 +1481,11 @@ class Easel(QObject):
         if handler:
             if tool in ("select", "ellipsesel", "rect", "ellipse", "line", "star", "crop", "gradient"):
                 pt = self._snap_point(pt)
-            handler(pt, mods)
+            self._pointing = True
+            try:
+                handler(pt, mods)
+            finally:
+                self._pointing = False
         self.painted.emit()
 
     SNAPPING = ("select", "ellipsesel", "shape", "crop", "gradient")
@@ -1306,24 +1494,35 @@ class Easel(QObject):
     def move(self, x: float, y: float, mods: int) -> None:
         if not self.doc or not self._drag:
             return
+        x, y = self._where(x, y)
+        self._last_at = (x, y)
         handler = getattr(self, f"_move_{self._drag['kind']}", None)
         if handler:
             pt = QPointF(x, y)
             if self._drag["kind"] in self.SNAPPING:
                 pt = self._snap_point(pt)
-            handler(pt, mods)
+            self._pointing = True
+            try:
+                handler(pt, mods)
+            finally:
+                self._pointing = False
             self.painted.emit()
 
     @Slot(float, float, int)
     def release(self, x: float, y: float, mods: int) -> None:
         if not self.doc or not self._drag:
             return
+        x, y = self._where(x, y)
         handler = getattr(self, f"_release_{self._drag['kind']}", None)
         d = self._drag
         if handler:
-            handler(QPointF(x, y), mods)
+            self._pointing = True
+            try:
+                handler(QPointF(x, y), mods)
+            finally:
+                self._pointing = False
         if self._drag is d:
-            self._drag = None
+            self._drop_drag()
         if self._xform is None:                                      # a transform keeps showing until it's applied
             self._live = None
         self._refresh()
@@ -1332,6 +1531,7 @@ class Easel(QObject):
     def hover(self, x: float, y: float) -> None:
         if not self.doc:
             return
+        x, y = self._where(x, y) if math.isfinite(x) and math.isfinite(y) and x >= -9999 else (-10000.0, -10000.0)
         self._hover = QPointF(x, y) if x >= -9999 else None
         inside = 0 <= x < self.doc.w and 0 <= y < self.doc.h
         text = f"{int(x)}, {int(y)} px" if inside else ""
@@ -1343,6 +1543,7 @@ class Easel(QObject):
 
     @Slot(float, float)
     def doubleClick(self, x: float, y: float) -> None:
+        x, y = self._where(x, y)
         if self._xform is not None:
             self.applyTransform()
             return
@@ -1391,8 +1592,15 @@ class Easel(QObject):
         self._press_brush(pt, mods, erase=True)
 
     def _move_brush(self, pt: QPointF, mods: int) -> None:
-        self._stroke_to(self._drag, pt.x(), pt.y())
         d = self._drag
+        if self.smoothing > 0.01:                                      # the brush follows a point that trails the pointer
+            sx, sy = d.get("steady", d["last"])
+            k = 1.0 - 0.93 * self.smoothing
+            sx, sy = sx + (pt.x() - sx) * k, sy + (pt.y() - sy) * k
+            d["steady"] = (sx, sy)
+            self._stroke_to(d, sx, sy)
+        else:
+            self._stroke_to(d, pt.x(), pt.y())
         if d["which"] == "mask":                                       # show the mask as it is being painted
             d["layer"]["mask"] = self._merge(d.setdefault("mask0", d["layer"]["mask"]), d["stroke"], d["erase"], self.opacity, True)
             self.doc.touch(d["layer"])
@@ -1738,6 +1946,8 @@ class Easel(QObject):
         """anchor: one of tl t tr l c r bl b br: where the old picture sits on the new canvas."""
         if not self.doc or w < 1 or h < 1:
             return
+        w, h = min(int(w), ez.SIDE_LIMIT), min(int(h), ez.SIDE_LIMIT)
+        anchor = anchor if anchor in ("tl", "t", "tr", "l", "c", "r", "bl", "b", "br") else "c"
         ax = {"l": 0, "c": 0.5, "r": 1}[anchor[-1] if anchor[-1] in "lr" else "c"] if anchor != "c" else 0.5
         ay = {"t": 0, "b": 1}.get(anchor[0], 0.5) if anchor not in ("l", "r", "c") else 0.5
         x, y = int(round((self.doc.w - w) * ax)), int(round((self.doc.h - h) * ay))
@@ -1747,6 +1957,9 @@ class Easel(QObject):
     def imageSize(self, w: int, h: int) -> None:
         """Scale everything: pixels are resampled, shapes simply grow."""
         if not self.doc or w < 1 or h < 1:
+            return
+        w, h = min(int(w), ez.SIDE_LIMIT), min(int(h), ez.SIDE_LIMIT)
+        if (w, h) == (self.doc.w, self.doc.h):
             return
         self._push("Image size")
         sx, sy = w / self.doc.w, h / self.doc.h
@@ -1937,6 +2150,8 @@ class Easel(QObject):
 
     @Slot(float)
     def setPathOffset(self, v: float) -> None:
+        if _f(v, 0.0, 1.0) is None:
+            return
         picked = [s for s in self._picked_shapes() if s["type"] == "text" and s.get("along")]
         for s_ in picked:
             s_["pathOffset"] = max(0.0, min(1.0, float(v)))
@@ -1980,6 +2195,9 @@ class Easel(QObject):
 
     @Slot(str, float)
     def applyFilter(self, name: str, amount: float) -> None:
+        amount = _f(amount, 0.0, 1.0)
+        if amount is None:
+            return
         l = self.doc.layer() if self.doc else None
         if l and l["kind"] == "smart" and name in ez.FILTERS and not l["locked"]:
             self._push(ez.FILTERS[name])                               # a smart filter: kept, and can be changed or taken away
@@ -2479,7 +2697,8 @@ class Easel(QObject):
     @Slot(float, float)
     def nudge(self, dx: float, dy: float) -> None:
         """Arrow keys: move the picked shapes (or the layer) a pixel; with Shift, ten."""
-        if not self.doc:
+        dx, dy = _f(dx, -10000.0, 10000.0), _f(dy, -10000.0, 10000.0)
+        if not self.doc or dx is None or dy is None or (not dx and not dy):
             return
         shapes = self._picked_shapes()
         self._push("Nudge")
@@ -2489,7 +2708,9 @@ class Easel(QObject):
             self._touch_shapes(shapes)
         else:
             self._drag = None
-            self._press_move(QPointF(0, 0), 0)
+            self._press_move(QPointF(-1e7, -1e7), 0)            # (far from any guide: this moves the layer, never a guide)
+            if self._drag and self._drag.get("kind") != "move":
+                self._drop_drag()
             if self._drag:
                 self._undo.pop()
                 self._drag["dx"], self._drag["dy"] = dx, dy
@@ -2643,7 +2864,8 @@ class Easel(QObject):
 
     @Slot(float, float, float)
     def setTransform(self, wpercent: float, hpercent: float, angle: float) -> None:
-        if self._xform is not None:
+        wpercent, hpercent, angle = _f(wpercent, 1.0, 10000.0), _f(hpercent, 1.0, 10000.0), _f(angle, -36000.0, 36000.0)
+        if self._xform is not None and None not in (wpercent, hpercent, angle):
             self._xform.update(sx=max(0.01, wpercent / 100), sy=max(0.01, hpercent / 100), rot=angle % 360, quad=None)
             self._refresh()
 
@@ -3074,6 +3296,9 @@ class Easel(QObject):
         l = self.doc.layer() if self.doc else None
         if not l or l["kind"] != "group":
             return
+        if len(self.doc.layers) <= 1:                              # an empty group that is all there is
+            self.said.emit("A picture needs at least one layer.", True)
+            return
         self._push("Ungroup")
         for x in self.doc.layers:
             if x.get("group") == l["id"]:
@@ -3109,13 +3334,17 @@ class Easel(QObject):
         if prop not in cur or prop == "name":
             return
         if prop == "colour":
+            if not isinstance(value, str) or not QColor(value).isValid():
+                return
             value = _hex(QColor(value))
         elif prop == "on":
             value = bool(value)
         elif prop == "where":
             value = value if value in ("outside", "inside", "centre") else "outside"
         else:
-            value = float(value)
+            value = _f(value, -3600.0, 3600.0)
+            if value is None:
+                return
         import time as _time
         mark = (l["id"], key, prop)
         last = getattr(self, "_fx_mark", None)
@@ -3212,7 +3441,7 @@ class Easel(QObject):
     @Slot(int, float)
     def setSmartFilter(self, k: int, amount: float) -> None:
         l = self.doc.layer() if self.doc else None
-        if l and l["kind"] == "smart" and 0 <= k < len(l.get("sfilters") or []):
+        if l and l["kind"] == "smart" and 0 <= k < len(l.get("sfilters") or []) and _f(amount, 0.0, 1.0) is not None:
             l["sfilters"][k]["amount"] = max(0.0, min(1.0, float(amount)))
             self.doc.touch(l)
             self._refresh()
@@ -3220,6 +3449,12 @@ class Easel(QObject):
     # ------------------------------------------------------------------ the effect brushes and liquify
     @Slot(str, "QVariant")
     def setRetouch(self, key: str, value) -> None:
+        if key in ("strength", "liquifyStrength", "smudge"):
+            value = _f(value, 0.0, 1.0)
+            if value is None:
+                return
+        elif not isinstance(value, str):
+            return
         if key == "mode" and value in ("dodge", "burn", "sponge", "soften", "sharpen"):
             self.retouch = value
         elif key == "range" and value in ("shadows", "mid", "highlights"):
@@ -3373,7 +3608,8 @@ class Easel(QObject):
     # ------------------------------------------------------------------ guides, rulers and snapping
     @Slot(str, float)
     def addGuide(self, axis: str, at: float) -> None:
-        if not self.doc or axis not in ("x", "y"):
+        at = _f(at, -100000.0, 100000.0)
+        if not self.doc or axis not in ("x", "y") or at is None:
             return
         self._push("Guide")
         self.doc.guides.append({"axis": axis, "at": round(float(at), 1)})
@@ -3382,7 +3618,8 @@ class Easel(QObject):
 
     @Slot(int, float)
     def moveGuide(self, k: int, at: float) -> None:
-        if self.doc and 0 <= k < len(self.doc.guides):
+        at = _f(at, -100000.0, 100000.0)
+        if self.doc and 0 <= k < len(self.doc.guides) and at is not None:
             self._push("Move guide")
             self.doc.guides[k]["at"] = round(float(at), 1)
             self._guide_live = None
@@ -3564,7 +3801,7 @@ class EaselView(QQuickPaintedItem):
             easel.painted.connect(self._repaint)
             easel.overlaid.connect(self._outline_moved)
             easel.changed.connect(self._changed)
-            easel.rulersToggled.connect(lambda: self.fit() if not getattr(self, "_user_zoom", False) else self.update())
+            easel.rulersToggled.connect(lambda: self.fit() if not getattr(self, "_user_zoom", False) else self._all())
         self._fitted = False
         self._repaint()
         self.backendChanged.emit()
@@ -3597,7 +3834,7 @@ class EaselView(QQuickPaintedItem):
 
     def _march(self):
         self._ants = (self._ants + 1) % 8
-        self.update()
+        self._all()
 
     def _repaint(self):
         """The picture changed. It's made again when the canvas is next drawn, once a frame however many times it
@@ -3613,7 +3850,13 @@ class EaselView(QQuickPaintedItem):
         if d and d.get("kind") == "brush" and d.get("parts") is not None and d.get("new") is not None and self._fitted:
             self.update(self._on_canvas(d["new"]).united(self._outline_rect()))
             return
-        self.update()
+        self._all()
+
+    def _all(self) -> None:
+        """Draw the whole canvas again. Said with its rectangle: a bare update() only asks for the item to be looked
+        at, and after a part of it was drawn (the brush's outline following the pointer) the rest was left as it was,
+        so Undo from the keyboard showed nothing until the pointer crossed the picture."""
+        self.update(QRect(0, 0, max(1, int(math.ceil(self.width()))), max(1, int(math.ceil(self.height())))))
 
     def _on_canvas(self, r: QRectF) -> QRect:
         """A rectangle of the picture (its pixels) where it shows on the canvas, with a pixel's slack."""
@@ -3636,7 +3879,7 @@ class EaselView(QQuickPaintedItem):
         self._outline_was = now
         area = now.united(was) if not was.isEmpty() else now
         if area.isEmpty():
-            self.update()
+            self._all()
         else:
             self.update(area)
 
@@ -3666,7 +3909,7 @@ class EaselView(QQuickPaintedItem):
         self._set_zoom(max(0.02, z), center=False)
         self._ox = l + 20 + (room_w - doc.w * self._zoom) / 2
         self._oy = t + 20 + (room_h - doc.h * self._zoom) / 2
-        self.update()
+        self._all()
         self._fitted = True
         self._user_zoom = False
 
@@ -3692,7 +3935,7 @@ class EaselView(QQuickPaintedItem):
         if self._easel:
             self._easel.zoom = z
         self.zoomChanged.emit()
-        self.update()
+        self._all()
 
     def _doc_point(self, pos) -> QPointF:
         return QPointF((pos.x() - self._ox) / self._zoom, (pos.y() - self._oy) / self._zoom)
@@ -3760,7 +4003,7 @@ class EaselView(QQuickPaintedItem):
         if self._pan is not None:
             start, ox, oy = self._pan
             self._ox, self._oy = ox + event.position().x() - start.x(), oy + event.position().y() - start.y()
-            self.update()
+            self._all()
             return
         if self._easel:
             pt = self._doc_point(event.position())
@@ -3810,7 +4053,7 @@ class EaselView(QQuickPaintedItem):
             dx, dy = (d.y(), d.x()) if event.modifiers() & Qt.KeyboardModifier.ShiftModifier else (d.x(), d.y())
             self._ox += dx / 2
             self._oy += dy / 2
-            self.update()
+            self._all()
 
     KEYS = {Qt.Key.Key_B: "brush", Qt.Key.Key_E: "eraser", Qt.Key.Key_M: "select", Qt.Key.Key_L: "lasso", Qt.Key.Key_W: "wand", Qt.Key.Key_G: "gradient",
             Qt.Key.Key_K: "fill", Qt.Key.Key_I: "picker", Qt.Key.Key_T: "text", Qt.Key.Key_C: "crop", Qt.Key.Key_H: "hand", Qt.Key.Key_Z: "zoom",

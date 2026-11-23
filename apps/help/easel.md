@@ -8,13 +8,18 @@ Pick a size (screen, square post, A4 for printing and more) or open a picture. E
 The two buttons at the top of the tools switch benches. Pixel has the brush, eraser, fill, gradient, selections, move and crop: for painting and photos. Vector has the pen, rectangles, ellipses, lines, stars and type: shapes that stay sharp at any size.
 
 ## Painting
-Pick a brush (round, soft, pencil, ink, airbrush, chalk, marker) and set its size, hardness, flow and opacity in the bar at the top. Shift-click draws a straight line from the last stroke. [ and ] change the size; number keys set the opacity. A right-click picks a colour from the picture.
+Pick a brush (round, soft, pencil, ink, airbrush, chalk, marker) and set its size, hardness, flow and opacity in the bar at the top. Shift-click draws a straight line from the last stroke. [ and ] change the size; number keys set the opacity. A right-click picks a colour from the picture. If your hand wobbles, turn up Steady in the bar above: the brush trails the pointer a little and evens the line out, and still ends where you let go.
 
 ## Choosing part of the picture
-Rectangle, ellipse, lasso and the magic wand choose an area; painting, filters and fills then stay inside it. Shift adds to the selection, Alt takes away. Feather softens its edge; Grow or Shrink moves it.
+Rectangle, ellipse, lasso and the magic wand choose an area; painting, filters and fills then stay inside it. Shift adds to the selection, Alt takes away. Feather softens its edge; Grow or Shrink moves it. Select › Outline… draws a line of the front colour along the selection's edge: inside it, outside it or centred on it, as wide as you like.
 
 ## Layers
 Add pixel layers, vector layers and adjustment layers (brightness and contrast, hue and saturation, levels, black and white and more, which change everything below without touching it). Each layer has a blend mode and opacity. Drag the arrows to reorder, click the eye to hide, the lock to protect.
+
+## Clipping and locked transparency
+Clip a layer to the one below it (Ctrl+Alt+G, or Layer › Clip to the Layer Below) and it shows only where that layer has something: paint shading over a shape without going over its edge, or put a photo inside some lettering. Clipped layers step in under a small arrow in Layers, several can share one layer, and an adjustment clipped this way changes only that layer. The same command lets it go again.
+
+Lock Transparency (Layer menu, or Mask and more) keeps a layer's shape as it is: brushes, Fill and gradients colour only what's already painted, and the eraser paints the back colour instead of making holes. A small grid mark shows beside the layer's name.
 
 ## Transform, clone and heal
 Ctrl+T puts a box around the layer (or the selection): drag inside to move it, pull a corner to resize (Shift keeps its shape), drag outside it to turn it, and flip it from the bar. Enter applies it, Escape puts it back.

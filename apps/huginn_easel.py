@@ -46,6 +46,9 @@ ADJUSTMENTS = {"light": "Brightness & Contrast", "curves": "Curves", "colour": "
 PICTURES = (".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff", ".gif")
 
 
+SIDE_LIMIT = 16384            # the longest side a picture may have (as New Picture allows)
+
+
 def new_image(w: int, h: int, fill=None) -> QImage:
     img = QImage(max(1, int(w)), max(1, int(h)), FMT)
     img.fill(QColor(fill) if fill else Qt.GlobalColor.transparent)
@@ -902,50 +905,81 @@ class Document:
         layers = self.layers if upto is None else self.layers[:upto]
         return self._stack(more.tree(layers), live)
 
-    def _stack(self, items: list, live=None) -> QImage:
-        out = new_image(self.w, self.h)
-        for it in items:
-            if isinstance(it, tuple):
-                header, inside = it[1], it[2]
-                if not header["visible"]:
-                    continue
-                img = self._masked(header, self._stack(inside, live))
-                import huginn_easel_more as more
-                if more.has_fx(header):
-                    key = (header.get("v", 0), self.w, self.h, more.dumps(header.get("fx")), self._inside_key(header))
-                    got = self._fx_cache.get(header["id"])
-                    if live is not None and any(l["id"] == live[0] for l in more.flatten_tree(inside)):
-                        img = more.render_fx(img, header)
-                    else:
-                        if got is None or got[0] != key:
-                            got = (key, more.render_fx(img, header))
-                            self._fx_cache[header["id"]] = got
-                        img = got[1]
-                p = QPainter(out)
-                p.setOpacity(header["opacity"])
-                p.setCompositionMode(BLENDS.get(header["blend"], CM.CompositionMode_SourceOver))
-                p.drawImage(0, 0, img)
-                p.end()
-                continue
-            layer = it
-            if not layer["visible"]:
-                continue
-            extra = live[1] if live and live[0] == layer["id"] else None
-            if layer["kind"] == "adjust":
-                adjusted = apply_adjust_image(out, layer["adjust"], layer.get("params") or {})
-                if layer.get("mask") is not None and layer.get("maskOn", True):
-                    adjusted = self._masked(layer, adjusted)
-                p = QPainter(out)
-                p.setOpacity(layer["opacity"])
-                p.drawImage(0, 0, adjusted)
-                p.end()
-                continue
-            img = self.styled_image(layer, extra)
+    def _item_image(self, it, live=None):
+        """One thing in a stack (a layer, or a group as a tuple) as a picture, before its own opacity and blend:
+        (image, header). None for what isn't a picture of its own (an adjustment layer)."""
+        import huginn_easel_more as more
+        if isinstance(it, tuple):
+            header, inside = it[1], it[2]
+            img = self._masked(header, self._stack(inside, live))
+            if more.has_fx(header):
+                key = (header.get("v", 0), self.w, self.h, more.dumps(header.get("fx")), self._inside_key(header))
+                got = self._fx_cache.get(header["id"])
+                if live is not None and any(l["id"] == live[0] for l in more.flatten_tree(inside)):
+                    img = more.render_fx(img, header)
+                else:
+                    if got is None or got[0] != key:
+                        got = (key, more.render_fx(img, header))
+                        self._fx_cache[header["id"]] = got
+                    img = got[1]
+            return img, header
+        if it["kind"] == "adjust":
+            return None
+        return self.styled_image(it, live[1] if live and live[0] == it["id"] else None), it
+
+    def _lay(self, out: QImage, it, live=None) -> None:
+        """Put one layer, group or adjustment onto what's been put together so far."""
+        head = it[1] if isinstance(it, tuple) else it
+        if not head["visible"]:
+            return
+        if head["kind"] == "adjust":
+            adjusted = apply_adjust_image(out, head["adjust"], head.get("params") or {})
+            if head.get("mask") is not None and head.get("maskOn", True):
+                adjusted = self._masked(head, adjusted)
             p = QPainter(out)
-            p.setOpacity(layer["opacity"])
-            p.setCompositionMode(BLENDS.get(layer["blend"], CM.CompositionMode_SourceOver))
-            p.drawImage(0, 0, img)
+            p.setOpacity(head["opacity"])
+            p.drawImage(0, 0, adjusted)
             p.end()
+            return
+        img, _ = self._item_image(it, live)
+        p = QPainter(out)
+        p.setOpacity(head["opacity"])
+        p.setCompositionMode(BLENDS.get(head["blend"], CM.CompositionMode_SourceOver))
+        p.drawImage(0, 0, img)
+        p.end()
+
+    def _stack(self, items: list, live=None) -> QImage:
+        """A list of layers and groups put together, bottom up. A layer marked "clip" shows only where the layer (or
+        group) under it has something: the two (and any more clipped layers above) are put together first, keeping
+        the lower one's shape, and then go onto the picture with the lower one's opacity and blend."""
+        out = new_image(self.w, self.h)
+        k = 0
+        while k < len(items):
+            base = items[k]
+            head = base[1] if isinstance(base, tuple) else base
+            n = k + 1
+            while n < len(items) and not isinstance(items[n], tuple) and items[n].get("clip"):
+                n += 1
+            clipped = items[k + 1:n]
+            if not clipped or head["kind"] == "adjust" or (head.get("clip") and not isinstance(base, tuple) and k == 0):
+                self._lay(out, base, live)                         # nothing clipped to it (or nothing it could be clipped to)
+                k += 1
+                continue
+            if head["visible"]:                                    # (hidden: what's clipped to it has nothing to show in)
+                shape, _ = self._item_image(base, live)
+                both = shape.copy()
+                for c in clipped:
+                    self._lay(both, c, live)
+                p = QPainter(both)
+                p.setCompositionMode(CM.CompositionMode_DestinationIn)
+                p.drawImage(0, 0, shape)                           # only where the lower layer is
+                p.end()
+                p = QPainter(out)
+                p.setOpacity(head["opacity"])
+                p.setCompositionMode(BLENDS.get(head["blend"], CM.CompositionMode_SourceOver))
+                p.drawImage(0, 0, both)
+                p.end()
+            k = n
         return out
 
     def flattened(self, background=None) -> QImage:
@@ -1016,6 +1050,9 @@ class Document:
             for k in ("group", "open", "fx", "place", "sfilters"):
                 if l.get(k) is not None:
                     entry[k] = l[k]
+            for k in ("clip", "lockAlpha"):                         # (only written when on: older Easels read the file as before)
+                if l.get(k):
+                    entry[k] = True
             if l["kind"] == "vector":
                 entry["shapes"] = l["shapes"]
             if l["kind"] == "adjust":
@@ -1053,6 +1090,9 @@ class Document:
             for e in m["layers"]:
                 layer = new_layer(e["kind"], e.get("name", "Layer"), doc.w, doc.h)
                 layer.update({k: e[k] for k in ("id", "visible", "locked", "opacity", "blend", "maskOn", "group", "open", "fx", "place", "sfilters") if k in e})
+                for k in ("clip", "lockAlpha"):
+                    if e.get(k) is True:
+                        layer[k] = True
                 if e["kind"] == "smart":
                     layer["source"] = image_from_bytes(z.read(f"smart/{e['id']}.png")) if f"smart/{e['id']}.png" in names else new_image(1, 1)
                     layer.setdefault("place", {"cx": 0.5, "cy": 0.5, "sx": 1, "sy": 1, "rot": 0})
@@ -1462,7 +1502,8 @@ def read_psd(path: str) -> "Document":
                         divider = int.from_bytes(body[:4], "big")
                     ex += 12 + ln + (ln % 2)
                 records.append({"rect": (top, left, bottom, right), "chans": chans, "blend": PSD_BLENDS.get(key, "normal"), "opacity": opacity / 255,
-                                "visible": not (flags & 2), "name": name or "Layer", "divider": divider})
+                                "visible": not (flags & 2), "name": name or "Layer", "divider": divider,
+                                "clip": data[q + 9] == 1, "lockAlpha": bool(flags & 1)})
                 q = ex_end
             for rec in records:                                      # then each layer's pictures, channel by channel
                 top, left, bottom, right = rec["rect"]
@@ -1488,6 +1529,9 @@ def read_psd(path: str) -> "Document":
                 p.drawImage(left, top, array_to_image(rgba))
                 p.end()
                 layer.update(opacity=rec["opacity"], visible=rec["visible"], blend=rec["blend"])
+                for key in ("clip", "lockAlpha"):
+                    if rec.get(key):
+                        layer[key] = True
                 doc.layers.append(layer)
     if not doc.layers:                                               # no layers: the merged picture at the end of the file
         q = lm_end
@@ -1562,7 +1606,8 @@ def write_psd(doc: "Document", path: str) -> None:
         records += struct.pack(">iiiiH", top, left, bottom, right, len(chans))
         for cid, body in chans:
             records += struct.pack(">hI", cid, len(body))
-        records += b"8BIM" + PSD_KEYS.get(l["blend"], "norm").encode("latin-1") + bytes([int(round(doc.opacity_in_place(l) * 255)), 0, 0 if doc.visible_in_place(l) else 2, 0])
+        records += b"8BIM" + PSD_KEYS.get(l["blend"], "norm").encode("latin-1") + bytes([int(round(doc.opacity_in_place(l) * 255)), 1 if l.get("clip") else 0,
+                                                                                            (0 if doc.visible_in_place(l) else 2) | (1 if l.get("lockAlpha") else 0), 0])
         records += struct.pack(">I", len(extra)) + extra
         for _, body in chans:
             pictures += body

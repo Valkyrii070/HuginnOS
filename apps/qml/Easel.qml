@@ -50,6 +50,7 @@ GlassWindow {
     Shortcut { sequence: "Ctrl+Shift+N"; onActivated: Backend.addLayer("pixel") }
     Shortcut { sequence: "Ctrl+G"; onActivated: Backend.groupLayer() }
     Shortcut { sequence: "Ctrl+Shift+G"; onActivated: Backend.ungroup() }
+    Shortcut { sequence: "Ctrl+Alt+G"; onActivated: Backend.clipLayer() }
     Shortcut { sequence: "Ctrl+R"; onActivated: Backend.setRulers(!Backend.rulersOn) }
     Shortcut { sequence: "Ctrl+;"; onActivated: Backend.setSnap(!Backend.snapOn) }
     Shortcut { sequence: "Ctrl+0"; onActivated: view.fit() }
@@ -205,6 +206,7 @@ GlassWindow {
                 Slide { label: "Size"; value: Backend.brushSize; from: 1; to: 400; scale: 1; unit: ""; w: 96; onMoved: function (v) { Backend.setBrush("size", v) } }
                 Slide { label: "Hard"; value: Backend.brushHardness; w: 60; onMoved: function (v) { Backend.setBrush("hardness", v) } }
                 Slide { label: "Flow"; value: Backend.brushFlow; w: 60; onMoved: function (v) { Backend.setBrush("flow", v) } }
+                Slide { label: "Steady"; value: Backend.brushSmoothing; w: 60; onMoved: function (v) { Backend.setBrush("smoothing", v) } }
                 Slide { label: "Opacity"; value: Backend.strokeOpacity; w: 60; onMoved: function (v) { Backend.setBrush("opacity", v) } }
                 SetChoice { visible: Backend.penSeen; anchors.verticalCenter: parent.verticalCenter; each: 62; value: Backend.pressureMode
                     options: [["size", "Size"], ["opacity", "Opacity"], ["both", "Both"], ["off", "Off"]]; onPicked: function (v) { Backend.setOption("pressure", v) } }
@@ -403,11 +405,12 @@ GlassWindow {
             ListView { id: layerList; x: 8; y: sideTop.y + sideTop.height + 8; width: parent.width - 16; height: parent.height - y - 10; clip: true; spacing: 2
                 boundsBehavior: Flickable.StopAtBounds; model: Backend.layers
                 delegate: Pressable { id: row; required property var modelData; required property int index; width: layerList.width; height: modelData.kind === "group" ? 40 : 50; radius: 11
-                    readonly property real indent: Math.min(4, modelData.depth || 0) * 14
+                    readonly property real indent: Math.min(4, modelData.depth || 0) * 14 + (modelData.clip ? 12 : 0)
                     color: modelData.active ? Qt.alpha(Theme.t.accent, 0.2) : (hovered ? Theme.t.hover : "transparent")
                     onClicked: Backend.selectLayer(modelData.id)
                     onDoubleClicked: modelData.kind === "group" ? Backend.toggleOpen(modelData.id) : win.open("rename", { id: modelData.id, name: modelData.name })
-                    Rectangle { visible: row.indent > 0; x: row.indent - 4; y: 4; width: 2; height: parent.height - 8; radius: 1; color: Theme.t.islandLine }
+                    Rectangle { visible: row.indent > 0 && !modelData.clip; x: row.indent - 4; y: 4; width: 2; height: parent.height - 8; radius: 1; color: Theme.t.islandLine }
+                    Text { visible: !!modelData.clip; x: row.indent - 11; anchors.verticalCenter: parent.verticalCenter; text: "↳"; font.pixelSize: 13; color: Theme.t.accent }
                     Glyph { x: 8 + row.indent; anchors.verticalCenter: parent.verticalCenter; name: "eye"; size: 15; ink: modelData.visible ? Theme.t.icon : Theme.t.text_tertiary; opacity: modelData.visible ? 1 : 0.4
                         MouseArea { anchors.fill: parent; anchors.margins: -5; onClicked: Backend.setLayer(modelData.id, "visible", !modelData.visible) } }
                     Rectangle { id: thumb; x: 32 + row.indent; width: modelData.kind === "group" ? 36 : 48; height: modelData.kind === "group" ? 28 : 36; radius: 6; anchors.verticalCenter: parent.verticalCenter; clip: true
@@ -424,9 +427,10 @@ GlassWindow {
                         Row { width: parent.width; spacing: 4
                             Text { visible: modelData.kind === "group"; text: modelData.open ? "▾" : "▸"; color: Theme.t.text_secondary; font.pixelSize: 12
                                 MouseArea { anchors.fill: parent; anchors.margins: -6; onClicked: Backend.toggleOpen(modelData.id) } }
-                            Label { width: parent.width - (modelData.fx ? 20 : 0) - (modelData.kind === "group" ? 14 : 0); text: modelData.name; elide: Text.ElideRight; font.pixelSize: 12
+                            Label { width: parent.width - (modelData.fx ? 20 : 0) - (modelData.lockAlpha ? 16 : 0) - (modelData.kind === "group" ? 14 : 0); text: modelData.name; elide: Text.ElideRight; font.pixelSize: 12
                                 font.weight: modelData.active || modelData.kind === "group" ? Font.DemiBold : Font.Normal }
-                            Text { visible: modelData.fx; text: "fx"; font.pixelSize: 10; font.italic: true; font.bold: true; color: Theme.t.accent } }
+                            Text { visible: modelData.fx; text: "fx"; font.pixelSize: 10; font.italic: true; font.bold: true; color: Theme.t.accent }
+                            Text { visible: !!modelData.lockAlpha; text: "▦"; font.pixelSize: 10; color: Theme.t.accent } }
                         Label { width: parent.width; elide: Text.ElideRight; font.pixelSize: 10; secondary: true
                             text: (modelData.kind === "vector" ? modelData.shapes + (modelData.shapes === 1 ? " shape" : " shapes") : modelData.kind === "adjust" ? "Adjustment"
                                    : modelData.kind === "group" ? (modelData.count === 1 ? "1 layer" : modelData.count + " layers") : modelData.kind === "smart" ? "Smart object" + (modelData.filters ? " · " + modelData.filters + (modelData.filters === 1 ? " filter" : " filters") : "") : "Pixels")
@@ -465,9 +469,10 @@ GlassWindow {
             Repeater {
                 model: [
                     { title: "Image", items: [["Canvas Size…", "canvas"], ["Image Size…", "imagesize"], ["Crop to Selection", "cropsel"], ["Trim Edges", "trim"], ["Rotate Right", "cw"], ["Rotate Left", "ccw"], ["Rotate 180°", "180"], ["Flip Across", "fliph"], ["Flip Upside Down", "flipv"]] },
-                    { title: "Select", items: [["Select All", "all"], ["Deselect", "none"], ["Invert", "invert"], ["Feather…", "feather"], ["Grow or Shrink…", "grow"], ["Copy to New Layer", "copylayer"], ["Cut to New Layer", "cutlayer"], ["Fill with Colour", "fill"], ["Fill with Surroundings", "aware"], ["Delete Inside", "clear"]] },
+                    { title: "Select", items: [["Select All", "all"], ["Deselect", "none"], ["Invert", "invert"], ["Feather…", "feather"], ["Grow or Shrink…", "grow"], ["Copy to New Layer", "copylayer"], ["Cut to New Layer", "cutlayer"], ["Fill with Colour", "fill"], ["Fill with Surroundings", "aware"], ["Outline…", "strokesel"], ["Delete Inside", "clear"]] },
                     { title: "Layer", items: [["New Pixel Layer", "newpixel"], ["New Vector Layer", "newvector"], ["New Adjustment…", "adjust"], ["Place a Picture…", "place"], ["Layer Style…", "styles"],
-                                              ["Group", "group"], ["Ungroup", "ungroup"], ["Convert to Smart Object", "smart"], ["Duplicate", "duplicate"], ["Merge Down", "merge"], ["Flatten", "flatten"], ["Rasterise", "rasterise"], ["Delete Layer", "delete"]] },
+                                              ["Group", "group"], ["Ungroup", "ungroup"], [Backend.activeLayer.clip ? "Release from the Layer Below" : "Clip to the Layer Below", "clip"],
+                                              [Backend.activeLayer.lockAlpha ? "Unlock Transparency" : "Lock Transparency", "lockalpha"], ["Convert to Smart Object", "smart"], ["Duplicate", "duplicate"], ["Merge Down", "merge"], ["Flatten", "flatten"], ["Rasterise", "rasterise"], ["Delete Layer", "delete"]] },
                     { title: "View", items: [[(Backend.rulersOn ? "Hide" : "Show") + " Rulers", "rulers"], [(Backend.snapOn ? "Stop Snapping" : "Snap to Guides"), "snap"], ["Clear Guides", "noguides"],
                                              ["Fit on Screen", "fit"], ["Actual Size", "actual"]] },
                     { title: "Filters", items: Backend.filters.map(function (f) { return [f.name + ([ "invert", "desaturate", "autolevels"].indexOf(f.id) < 0 ? "…" : ""), "f:" + f.id] }) } ]
@@ -483,7 +488,7 @@ GlassWindow {
         if (what.indexOf("f:") === 0) { var id = what.slice(2); if (["invert", "desaturate", "autolevels"].indexOf(id) >= 0) Backend.applyFilter(id, 1); else open("filter", { id: id, v: 0.4 }); return }
         var direct = { cropsel: Backend.applyCrop, trim: Backend.trim, all: Backend.selectAll, none: Backend.deselect, invert: Backend.invertSelection, fill: Backend.fillSelection, aware: Backend.fillAware,
                        clear: Backend.clearSelection, duplicate: Backend.duplicateLayer, merge: Backend.mergeDown, flatten: Backend.flatten, rasterise: Backend.rasterize, delete: Backend.deleteLayer,
-                       group: Backend.groupLayer, ungroup: Backend.ungroup, smart: Backend.convertToSmart, noguides: Backend.clearGuides, fit: view.fit, actual: view.actualSize,
+                       group: Backend.groupLayer, ungroup: Backend.ungroup, clip: Backend.clipLayer, lockalpha: Backend.lockTransparency, smart: Backend.convertToSmart, noguides: Backend.clearGuides, fit: view.fit, actual: view.actualSize,
                        rulers: function () { Backend.setRulers(!Backend.rulersOn) }, snap: function () { Backend.setSnap(!Backend.snapOn) } }
         if (direct[what]) { direct[what](); return }
         if (["cw", "ccw", "180", "fliph", "flipv"].indexOf(what) >= 0) { Backend.transformCanvas(what); view.fit(); return }
@@ -493,6 +498,7 @@ GlassWindow {
         else if (what === "imagesize") open("imagesize", { w: String(Backend.docW), h: String(Backend.docH), keep: true })
         else if (what === "feather") open("feather", { v: 0.2 })
         else if (what === "grow") open("grow", { v: 0.5 })
+        else if (what === "strokesel") open("strokesel", { v: 0.1, where: "centre" })
         else if (what === "adjust") open("adjust")
         else if (what === "styles") open("styles")
         else if (what === "place") { startBrowse(""); open("open", { place: true }) }
@@ -508,11 +514,11 @@ GlassWindow {
             readonly property bool browsing: kind === "open" || kind === "save" || kind === "export"
             width: browsing ? 620 : kind === "colour" ? 340 : kind === "new" ? 640 : kind === "styles" ? 460 : ["history", "brushes", "blend", "fonts", "adjust", "layer", "arrange", "combine"].indexOf(kind) >= 0 ? 360 : 440
             height: browsing ? Math.min(win.height - 80, 560) : kind === "styles" ? Math.min(win.height - 130, 620) : kind === "history" ? Math.min(win.height - 130, histList.contentHeight + 156) : kind === "colour" ? 400 : kind === "new" ? 300 : kind === "fonts" || kind === "blend" ? Math.min(win.height - 100, 520)
-                  : ["brushes", "adjust", "layer", "arrange", "combine"].indexOf(kind) >= 0 ? sheetList.contentHeight + 110 : kind === "canvas" ? 300 : 220
+                  : ["brushes", "adjust", "layer", "arrange", "combine"].indexOf(kind) >= 0 ? Math.min(win.height - 70, sheetList.contentHeight + 110) : kind === "canvas" ? 300 : kind === "strokesel" ? 264 : 220
             MouseArea { anchors.fill: parent }
             Label { x: 24; y: 20; font.pixelSize: 17; font.weight: Font.DemiBold
                 text: ({ new: "New picture", custom: "New picture", open: "Open a picture", save: "Save as an Easel picture", export: "Export", colour: ({ fg: "Main colour", bg: "Second colour", fill: "Fill", fill2: "Gradient's second colour", stroke: "Line" })[win.colourFor],
-                         canvas: "Canvas size", imagesize: "Image size", filter: (Backend.filters.filter(function (f) { return f.id === win.sheetData.id })[0] || { name: "" }).name, feather: "Feather the selection",
+                         canvas: "Canvas size", imagesize: "Image size", filter: (Backend.filters.filter(function (f) { return f.id === win.sheetData.id })[0] || { name: "" }).name, feather: "Feather the selection", strokesel: "Outline the selection",
                          grow: "Grow or shrink the selection", rename: "Rename the layer", brushes: "Brushes", blend: "Blend mode", fonts: "Font", adjust: "New adjustment layer",
                          layer: "Layer", arrange: "Arrange", combine: "Combine shapes", history: "History", styles: "Layer style · " + (Backend.activeLayer.name || "") })[card.kind] || "" }
             // --- lists: brushes, blend modes, fonts, adjustments, layer actions, arranging, combining
@@ -525,6 +531,8 @@ GlassWindow {
                      : card.kind === "layer" ? [{ id: "mask:reveal", label: "Add a mask (shows all)" }, { id: "mask:hide", label: "Add a mask (hides all)" }, { id: "mask:selection", label: "Add a mask from the selection" },
                                                 { id: "editmask", label: "Paint on the mask" }, { id: "applymask", label: "Apply the mask" }, { id: "deletemask", label: "Delete the mask" },
                                                 { id: "styles", label: "Layer style: shadow, glow, outline…" }, { id: "group", label: "Put in a group (Ctrl+G)" }, { id: "ungroup", label: "Ungroup (Ctrl+Shift+G)" },
+                                                { id: "clip", label: Backend.activeLayer.clip ? "Release from the layer below (Ctrl+Alt+G)" : "Clip to the layer below (Ctrl+Alt+G)" },
+                                                { id: "lockalpha", label: Backend.activeLayer.lockAlpha ? "Unlock transparency" : "Lock transparency: paint only where there's paint" },
                                                 { id: "smart", label: "Convert to a smart object" },
                                                 { id: "duplicate", label: "Duplicate the layer" }, { id: "merge", label: "Merge down (a group: into one layer)" }, { id: "rasterise", label: "Rasterise (shapes, smart objects to pixels)" }, { id: "delete", label: "Delete the layer" }]
                      : card.kind === "arrange" ? [{ id: "front", label: "Bring to front" }, { id: "forward", label: "Bring forward" }, { id: "backward", label: "Send backward" }, { id: "back", label: "Send to back" },
@@ -612,7 +620,7 @@ GlassWindow {
                     TextBox { id: hex; width: 120; mono: true; onAccepted: { if (win.colourFor === "fg" || win.colourFor === "bg") Backend.setColour(win.colourFor, text); else Backend.setStyle(win.colourFor, text) } }
                     Btn { visible: win.colourFor === "fill" || win.colourFor === "stroke"; text: "None"; onClicked: Backend.setStyle(win.colourFor, "") } } }
             // --- a size, an amount, a name
-            Column { visible: ["custom", "canvas", "imagesize", "filter", "feather", "grow", "rename"].indexOf(card.kind) >= 0; x: 24; y: 58; width: parent.width - 48; spacing: 12
+            Column { visible: ["custom", "canvas", "imagesize", "filter", "feather", "grow", "strokesel", "rename"].indexOf(card.kind) >= 0; x: 24; y: 58; width: parent.width - 48; spacing: 12
                 Row { visible: ["custom", "canvas", "imagesize"].indexOf(card.kind) >= 0; spacing: 10
                     Column { spacing: 4; Label { text: "Width (px)"; secondary: true; font.pixelSize: 11 } TextBox { id: wBox; width: 120; text: win.sheetData.w || ""
                         onEdited: if (card.kind === "imagesize" && win.sheetData.keep && Number(text) > 0) hBox.text = String(Math.round(Number(text) * Backend.docH / Backend.docW)) } }
@@ -624,10 +632,12 @@ GlassWindow {
                         Rectangle { required property string modelData; width: 26; height: 26; radius: 6; color: win.sheetData.anchor === modelData ? Theme.t.accent : Theme.t.group; border.width: 1; border.color: Theme.t.islandLine
                             MouseArea { anchors.fill: parent; onClicked: { var d = win.sheetData; d.anchor = modelData; win.sheetData = d } } } } }
                 Label { visible: card.kind === "canvas"; text: "Where the picture sits on the new canvas"; secondary: true; font.pixelSize: 11 }
-                Row { visible: ["filter", "feather", "grow"].indexOf(card.kind) >= 0; spacing: 10
-                    Label { text: card.kind === "feather" ? "Softness" : card.kind === "grow" ? "Shrink · Grow" : "Amount"; anchors.verticalCenter: parent.verticalCenter }
+                Row { visible: ["filter", "feather", "grow", "strokesel"].indexOf(card.kind) >= 0; spacing: 10
+                    Label { text: card.kind === "feather" ? "Softness" : card.kind === "grow" ? "Shrink · Grow" : card.kind === "strokesel" ? "Width" : "Amount"; anchors.verticalCenter: parent.verticalCenter }
                     SetSlider { id: amount; width: 240; value: win.sheetData.v !== undefined ? win.sheetData.v : 0.4; onMoved: function (v) { var d = win.sheetData; d.v = v; win.sheetData = d } }
-                    Label { text: card.kind === "feather" ? Math.round(amount.live * 50) + " px" : card.kind === "grow" ? Math.round((amount.live - 0.5) * 60) + " px" : Math.round(amount.live * 100) + "%"; font.family: Theme.t.fontMono; anchors.verticalCenter: parent.verticalCenter } }
+                    Label { text: card.kind === "strokesel" ? Math.max(1, Math.round(amount.live * 40)) + " px" : card.kind === "feather" ? Math.round(amount.live * 50) + " px" : card.kind === "grow" ? Math.round((amount.live - 0.5) * 60) + " px" : Math.round(amount.live * 100) + "%"; font.family: Theme.t.fontMono; anchors.verticalCenter: parent.verticalCenter } }
+                SetChoice { visible: card.kind === "strokesel"; each: 84; value: win.sheetData.where || "centre"
+                    options: [["inside", "Inside"], ["centre", "On the edge"], ["outside", "Outside"]]; onPicked: function (v) { var d = win.sheetData; d.where = v; win.sheetData = d } }
                 TextBox { visible: card.kind === "rename"; id: nameBox; width: parent.width; text: win.sheetData.name || ""; onAccepted: okBtn.clicked() } }
             // --- the file browser for open, save and export
             Item { visible: card.browsing; x: 16; y: 54; width: parent.width - 32; height: parent.height - 54 - (card.kind === "open" ? 64 : card.kind === "export" ? 168 : 140)
@@ -659,8 +669,8 @@ GlassWindow {
                 Label { visible: card.kind === "save"; secondary: true; font.pixelSize: 11; text: "An .easel file keeps every layer, group, style, smart object, mask and shape, ready to change later." } }
             Row { anchors { right: parent.right; rightMargin: 20; bottom: parent.bottom; bottomMargin: 18 } spacing: 8
                 Btn { text: card.kind === "history" ? "Done" : "Cancel"; visible: card.kind !== "new" || Backend.hasDoc; onClicked: win.sheet = "" }
-                Btn { id: okBtn; primary: true; visible: ["custom", "canvas", "imagesize", "filter", "feather", "grow", "rename", "save", "export"].indexOf(card.kind) >= 0
-                    text: ({ custom: "Make", canvas: "Change", imagesize: "Resize", filter: "Apply", feather: "Feather", grow: "Change", rename: "Rename", save: "Save", export: "Export" })[card.kind] || "OK"
+                Btn { id: okBtn; primary: true; visible: ["custom", "canvas", "imagesize", "filter", "feather", "grow", "strokesel", "rename", "save", "export"].indexOf(card.kind) >= 0
+                    text: ({ custom: "Make", canvas: "Change", imagesize: "Resize", filter: "Apply", feather: "Feather", grow: "Change", strokesel: "Draw", rename: "Rename", save: "Save", export: "Export" })[card.kind] || "OK"
                     onClicked: win.finishSheet() }
                 Btn { visible: card.kind === "styles"; text: "Clear All"; onClicked: Backend.clearFx() }
                 Btn { visible: card.kind === "colour" || card.kind === "styles"; text: "Done"; primary: true; onClicked: win.sheet = "" } }
@@ -686,7 +696,7 @@ GlassWindow {
         else if (kind === "layer") {
             if (id.indexOf("mask:") === 0) Backend.addMask(id.slice(5))
             else if (id === "styles") open("styles")
-            else ({ editmask: function () { Backend.editMask(true) }, applymask: Backend.applyMask, deletemask: Backend.deleteMask, duplicate: Backend.duplicateLayer,
+            else ({ clip: Backend.clipLayer, lockalpha: Backend.lockTransparency, editmask: function () { Backend.editMask(true) }, applymask: Backend.applyMask, deletemask: Backend.deleteMask, duplicate: Backend.duplicateLayer,
                     merge: Backend.mergeDown, rasterise: Backend.rasterize, delete: Backend.deleteLayer, group: Backend.groupLayer, ungroup: Backend.ungroup,
                     smart: Backend.convertToSmart })[id]()
         }
@@ -698,6 +708,7 @@ GlassWindow {
         else if (k === "imagesize") { sheet = ""; Backend.imageSize(Number(wBox.text), Number(hBox.text)); view.fit() }
         else if (k === "filter") { sheet = ""; Backend.applyFilter(d.id, d.v !== undefined ? d.v : 0.4) }
         else if (k === "feather") { sheet = ""; Backend.feather((d.v !== undefined ? d.v : 0.2) * 50) }
+        else if (k === "strokesel") { sheet = ""; Backend.strokeSelection(Math.max(1, Math.round((d.v !== undefined ? d.v : 0.1) * 40)), d.where || "centre") }
         else if (k === "grow") { sheet = ""; Backend.growSelection(Math.round(((d.v !== undefined ? d.v : 0.5) - 0.5) * 60)) }
         else if (k === "rename") { sheet = ""; Backend.setLayer(d.id, "name", nameBox.text) }
         else if (k === "save") { if (!saveName.text.trim()) return; sheet = ""; Backend.saveAs(browseAt + "/" + saveName.text.trim()) }

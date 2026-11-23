@@ -881,6 +881,33 @@ three things an editor is expected to have.
   `def` snippet tabbed through, the outline and sticky lines, a conflict settled and marked resolved, the Markdown
   preview.
 
+**Easel, pro round six** (`apps/huginn_easel.py`, `apps/huginn_easel_ui.py`, `apps/qml/Easel.qml`): a fuzz run first, then four
+things a painter expects.
+- *What the fuzz found, fixed* (`scripts/tests/easel_fuzz.py`: about 110 commands at random with sensible and senseless
+  values; after one in a few it checks every layer, mask and the selection are the picture's size, that one command
+  undone gives back the very same pixels, and that a picture saved and opened is the same). A second press with no
+  release between, or Undo or a resize in the middle of a stroke, crashed Easel outright (the stroke's painter was
+  still open on a picture being thrown away): a drag in progress is now finished or closed first. A resize or a canvas
+  turn with a free transform open left a layer the old size: the transform is applied first. A pointer position that
+  wasn't a number hung the brush for ever. Image Size and Canvas Size had no upper limit (New Picture's 16 384 a side
+  now holds for both). Dropping a layer on its own group, moving a layer by nothing, ungrouping the only thing left,
+  nudging with a guide at the corner, an export quality out of range and about a dozen settings handed nothing or
+  not-a-number each raised an error; a layer's Visible could be set to a fraction.
+- *Undo from the keyboard showed nothing* until the pointer crossed the picture (found checking this round on screen;
+  it was there before). The canvas asked for a bare `update()`, which after a part-redraw (the brush outline following
+  the pointer) left the rest as it was. It now always names the whole rectangle.
+- *Clipping to the layer below* (Ctrl+Alt+G): the layer shows only where the one under it has something. Several layers
+  can share one; an adjustment can be clipped; the pair takes the lower layer's opacity and blend. Kept in `.easel`
+  files and read from and written to Photoshop files.
+- *Lock Transparency*: brushes, Fill, gradients and Outline colour only what's already painted; the eraser paints
+  the back colour.
+- *A steadier brush*: the Steady slider makes the brush trail the pointer and evens out wobble; the stroke still ends
+  where you let go.
+- *Outline the selection* (Select › Outline…): a line of the front colour inside, outside or on the selection's edge.
+- Tests: `scripts/tests/easel_round6_test.py` (65 checks); the three older Easel tests still pass (89, 34, 18). Checked on
+  screen in the nested session: clipping by key and from the sheet, the layer list's marks, Steady in the bar. Not
+  checked with a real pen tablet.
+
 **Easel, pro round four** (`apps/huginn_easel_more.py`, new; `apps/huginn_easel.py`, `apps/huginn_easel_ui.py`, `apps/qml/Easel.qml`)
 - *Layer styles* (the sparkle in Layers, or Layer › Layer Style): drop shadow (light angle, distance, softness,
   spread), outer glow, outline (outside, centre or inside, any width), inner shadow and colour overlay, on any
