@@ -881,6 +881,24 @@ three things an editor is expected to have.
   `def` snippet tabbed through, the outline and sticky lines, a conflict settled and marked resolved, the Markdown
   preview.
 
+**Easel, round ten: retouching speed, filter previews, Refine Edge, your own brushes, type spacing**
+(`apps/huginn_easel.py`, `apps/huginn_easel_ui.py`, `apps/qml/Easel.qml`; `scripts/tests/easel_round10_test.py`, 43 checks):
+- *Retouching brushes draw a patch at a time.* Dodge, burn, sponge, soften, sharpen, smudge, clone and heal used to
+  put the whole picture together again for every movement of the pen whenever an adjustment layer, blend mode or
+  clipping was in play. Now only the part under the brush is redrawn, as painting already did: on a 6-megapixel
+  picture under an adjustment layer a frame takes a few hundredths of a second instead of most of one. Each frame is
+  checked to be exactly the true picture.
+- *Filters are tried on the canvas.* Open a filter and the picture shows it as the slider moves, inside the selection
+  if there is one, with the sheet moved out of the way and nothing dimmed. Cancel puts it back; Apply is one step of
+  undo and gives exactly what was shown. Starting anything else puts the preview away first.
+- *Select › Refine Edge*: fits a rough selection's edge to the picture itself within a chosen reach (a guided
+  filter, in a band along the edge only, so 3 megapixels take well under a second). Loose selections snap to the
+  thing; fine strands come out partly selected instead of cut straight across.
+- *Select › Make a Brush from It*: what's selected becomes a brush tip (dark marks, or a cut-out's shape), trimmed,
+  brought down to 256 across, kept as a PNG under the user's data and there next time. It can be forgotten again.
+- *Type*: Spacing (between letters) and Lines (between lines) on the text bar, kept in saved pictures.
+- Also: the menu no longer runs under the panel on the right in a narrow window.
+
 **Easel, round nine: brushes, gradients, selections** (`apps/huginn_easel.py`, `apps/huginn_easel_ui.py`, `apps/qml/Easel.qml`):
 three of the gaps listed under round eight, narrowed.
 - *Brush tips and dynamics.* A brush's mark can be a picture instead of a disc (bristle, grain, flat, spray, splatter,
@@ -926,22 +944,21 @@ three of the gaps listed under round eight, narrowed.
 - Tests: `scripts/tests/easel_round8_test.py` (72 checks). On screen: the histogram above an adjustment's slider and the
   longer blend list. **What this does not make Easel**: see "Where Easel still falls short" below.
 
-**Where Easel still falls short of Photoshop and Affinity Photo** (so nobody is surprised):
+**Where Easel still falls short of Photoshop and Affinity Photo** (so nobody is surprised; kept up to date, last after
+round ten):
 - *Colour depth and management*: 8 bits a channel, sRGB only. No 16- or 32-bit pictures, no ICC profiles, no CMYK, no
   soft proofing. This is the largest gap for print and for heavy tonal work, and it reaches into every pixel routine.
 - *How pictures are held*: whole layers in memory, drawn on the processor. The big editors hold tiles, keep a pyramid
-  of sizes on disk and draw with the graphics card. Easel is now comfortable at 12 megapixels and usable well past
-  it; a 100-megapixel, 50-layer file is beyond it. Retouching brushes (dodge, smudge, clone, heal, liquify) still
-  redraw the whole picture each frame when an adjustment layer or blend mode is in play.
-- *Selections*: no Select Subject or object selection, no Refine Edge for hair, no Quick Selection brush, no Quick
-  Mask, no selecting by colour range with a preview.
-- *Brushes*: one round tip with hardness, flow, spacing and scatter. No picture tips, textures, dual brushes, tilt or
-  rotation, wet mixing or brush files from other programs.
-- *Type*: one style per text box. No paragraph controls, tracking and leading, OpenType features, or type that stays
-  editable in a Photoshop file.
+  of sizes on disk and draw with the graphics card. Easel is comfortable at 12 megapixels and usable well past it; a
+  100-megapixel, 50-layer file is beyond it. Liquify still redraws the whole picture each frame.
+- *Selections*: no Select Subject or object selection (those need a trained model), no selecting by colour range
+  with a preview. Refine Edge has one control, not Photoshop's whole workspace.
+- *Brushes*: no textures, dual brushes, tilt, wet mixing or brush files from other programs (.abr).
+- *Type*: one style per text box. No paragraph controls (justify, indents, hyphenation), no OpenType features, and
+  type doesn't stay editable in a Photoshop file.
 - *Photography*: no raw files, no lens corrections, no HDR or panorama merging, no focus stacking.
 - *The rest*: no actions or batch processing, no artboards or slices, no 3D or video, no plug-ins, no generative fill,
-  no channels panel, no pattern fills, gradients with two colours only, no filter previews on the canvas.
+  no channels panel, no pattern fills, no editor for your own gradients.
 
 **Easel, the deep dives** (`apps/huginn_easel.py`, `apps/huginn_easel_ui.py`): four more ways in, after round six's
 command fuzz. Each has a script in `scripts/tests/` that runs as an ordinary user (they refuse root).

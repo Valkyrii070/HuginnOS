@@ -158,6 +158,12 @@ OPS = [
     (1, lambda: ("outline",)),
     (2, lambda: ("setCurve", random.choice(["rgb", "r", "g", "b", "nope"]), random.choice([[[0, 0], [1, 1]], [[0, 1], [1, 0]], [], [[0.5, 0.5]], "junk", None, [[float("nan"), 2], [1, 1]], [[0, 0], [0, 1], [0, 0.5]]]))),
     (1, lambda: ("curveSamples", random.choice(["rgb", "r", "nope"]))),
+    (3, lambda: ("previewFilter", pick(ez.FILTERS), num(0, 1))),
+    (2, lambda: ("endPreview",)),
+    (2, lambda: ("refineSelection", num(0, 40))),
+    (0.4, lambda: ("brushFromSelection",)),
+    (0.3, lambda: ("forgetBrush", pick(ez.CUSTOM_TIPS))),
+    (2, lambda: ("setTextStyle", random.choice(["tracking", "leading"]), num(-30, 120))),
     (3, lambda: ("quickMask",)),
     (2, lambda: ("smoothSelection", num(0, 40))),
     (2, lambda: ("borderSelection", num(0, 60))),
@@ -261,7 +267,7 @@ def check(op):
         #  eighth-size picture can honestly differ by a few percent: only gross differences count here. That a kept
         #  copy is never out of date is checked exactly, by EASEL_CHECK_MIPS, on every use.)
         if k > 1 and k <= 4 and min(d.w, d.h) >= 64 and not e._drag and not e._xform:
-            full = ez.image_to_array(d.composite().scaled(shown.width(), shown.height(), eu.Qt.AspectRatioMode.IgnoreAspectRatio, eu.Qt.TransformationMode.SmoothTransformation)).astype(np.int16)
+            full = ez.image_to_array(d.composite(e._live if e._fprev is not None else None).scaled(shown.width(), shown.height(), eu.Qt.AspectRatioMode.IgnoreAspectRatio, eu.Qt.TransformationMode.SmoothTransformation)).astype(np.int16)
             diff = np.abs(full - ez.image_to_array(shown).astype(np.int16))
             if diff.mean() > 16 or (diff > 80).mean() > 0.15:
                 problem("the canvas's smaller picture isn't the picture", f"{op[0]}: mean {diff.mean():.1f}, {100 * (diff > 80).mean():.0f}% far off, at 1/{k}; {d.w}x{d.h}: " +

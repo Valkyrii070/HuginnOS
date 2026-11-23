@@ -55,3 +55,18 @@ Pick a line or a curve drawn with the pen, and a piece of text, then Arrange →
 
 ## Pen pressure
 With a drawing tablet, the brush gets bigger or stronger the harder you press: choose Size, Strength, Both or Neither in the brush bar.
+
+## Trying a filter before applying it
+Open any filter from the menu and the picture shows what it would do while you move its slider; nothing is changed
+until you press Apply. Cancel puts the picture back.
+
+## Refine Edge
+Select › Refine Edge fits a rough selection to the edge of the thing you selected. Reach says how far either side of
+your edge it may look: small for a tidy outline, larger for hair and fur.
+
+## Brushes of your own
+Select something dark on a light ground (a stamp, a leaf, a scribble) and choose Select › Make a Brush from It. It
+joins the brush list as My Brush and is there next time you open Easel.
+
+## Letter and line spacing
+With the text tool, Spacing on the bar sets the room between letters and Lines the room between lines.

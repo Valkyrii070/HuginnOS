@@ -182,6 +182,9 @@ def text_font(s: dict) -> QFont:
     f.setPixelSize(max(1, int(s.get("size", 48))))
     f.setWeight(QFont.Weight(int(s.get("weight", 400))))
     f.setItalic(bool(s.get("italic")))
+    track = _number(s.get("tracking"), -50.0, 300.0, 0.0)             # letters set tighter (below 0) or wider, in percent of their width
+    if track:
+        f.setLetterSpacing(QFont.SpacingType.PercentageSpacing, 100.0 + track)
     return f
 
 
@@ -222,7 +225,7 @@ def raw_path(s: dict) -> QPainterPath:
         box = max(widths or [0])
         for i, line in enumerate(lines):
             dx = {"center": (box - widths[i]) / 2, "right": box - widths[i]}.get(s.get("align", "left"), 0)
-            path.addText(s["x"] + dx, s["y"] + fm.ascent() + i * fm.lineSpacing(), f, line)
+            path.addText(s["x"] + dx, s["y"] + fm.ascent() + i * fm.lineSpacing() * _number(s.get("leading"), 0.4, 5.0, 1.0), f, line)
     return path
 
 
@@ -902,6 +905,30 @@ def filter_array(rgba: np.ndarray, name: str, amount: float) -> np.ndarray:
         arr[..., :3] = rgb
         return (np.clip(arr, 0, 1) * 255 + 0.5).astype(np.uint8)
     return np.asarray(img).copy()
+
+
+def refine_edge(alpha: np.ndarray, rgba: np.ndarray, radius: float) -> np.ndarray:
+    """A selection's edge fitted to the picture under it. Within `radius` pixels of the edge, how selected each pixel
+    is gets worked out again from the picture itself (a guided filter: where the picture has an edge the selection
+    gets one, where it has wisps of hair or fur the selection goes partly through them), and further in or out it's
+    left as it was. alpha: 0..255 bytes; rgba: the picture, straight RGBA bytes. Returns bytes."""
+    r = max(1, int(round(radius)))
+    p = alpha.astype(np.float32) / 255.0
+    guide = (rgba[..., 0] * 0.2126 + rgba[..., 1] * 0.7152 + rgba[..., 2] * 0.0722).astype(np.float32) / 255.0
+    if cv2 is not None:
+        box = lambda x: cv2.boxFilter(x, -1, (2 * r + 1, 2 * r + 1), borderType=cv2.BORDER_REFLECT)
+    else:
+        from PIL import Image, ImageFilter
+        box = lambda x: np.asarray(Image.fromarray(x, "F").filter(ImageFilter.BoxBlur(r)), np.float32)
+    mean_i, mean_p = box(guide), box(p)
+    var_i = box(guide * guide) - mean_i * mean_i
+    cov = box(guide * p) - mean_i * mean_p
+    a = cov / (var_i + 1e-4)
+    b = mean_p - a * mean_i
+    q = np.clip(box(a) * guide + box(b), 0.0, 1.0)
+    q = np.clip((q - 0.06) / 0.88, 0.0, 1.0)                        # (a little contrast: nearly-in is in, nearly-out is out)
+    near = (box((p > 0.5).astype(np.float32)) > 0.002) & (box((p > 0.5).astype(np.float32)) < 0.998)     # the band along the edge
+    return (np.where(near, q, p) * 255 + 0.5).astype(np.uint8)
 
 
 # ------------------------------------------------------------------------------------------- filling and choosing by colour
@@ -1957,10 +1984,43 @@ BRUSHES = {"round": {"name": "Round", "size": 24, "hardness": 0.8, "flow": 1.0, 
 TIPS = ("round", "bristle", "grain", "flat", "spray", "splatter", "leaf")
 
 
+CUSTOM_TIPS = {}               # brushes made from your own pictures: name -> how solid each pixel is (0..1), up to 256 across
+
+
+def tip_from_picture(rgba: np.ndarray) -> np.ndarray:
+    """A brush tip from a piece of a picture: where it's solid and dark the brush paints, where it's light or
+    see-through it doesn't (a black mark on white paper, or a cut-out on nothing, both work). Trimmed to the mark and
+    fitted into a square of at most 256 pixels."""
+    a = rgba.astype(np.float32) / 255.0
+    lum = a[..., 0] * 0.2126 + a[..., 1] * 0.7152 + a[..., 2] * 0.0722
+    solid = a[..., 3]
+    ink = solid * (1.0 - lum) if (solid > 0.98).mean() > 0.9 else solid * np.maximum(1.0 - lum, 0.35)   # (a cut-out keeps its light parts, fainter)
+    if ink.max() <= 0.02:
+        raise ValueError("There's nothing dark or solid there to make a brush from.")
+    ink = ink / ink.max()
+    ys, xs = np.nonzero(ink > 0.04)
+    ink = ink[ys.min():ys.max() + 1, xs.min():xs.max() + 1]
+    side = max(ink.shape)
+    square = np.zeros((side, side), np.float32)
+    y0, x0 = (side - ink.shape[0]) // 2, (side - ink.shape[1]) // 2
+    square[y0:y0 + ink.shape[0], x0:x0 + ink.shape[1]] = ink
+    if side > 256:
+        from PIL import Image
+        square = np.asarray(Image.fromarray((square * 255).astype(np.uint8)).resize((256, 256), Image.Resampling.LANCZOS)).astype(np.float32) / 255.0
+    return square
+
+
 def tip_alpha(tip: str, size: float, hardness: float) -> np.ndarray:
     """A brush tip's mark as how solid each pixel is (0..1), `size` pixels across. Made from numbers, the same every
     time for the same size, so a stroke looks the same when it's redrawn."""
     side = max(3, int(math.ceil(size)) + 2)
+    if tip in CUSTOM_TIPS:                                         # your own mark, fitted to the brush's size
+        from PIL import Image
+        inner = max(1, side - 2)
+        small = np.asarray(Image.fromarray((CUSTOM_TIPS[tip] * 255).astype(np.uint8)).resize((inner, inner), Image.Resampling.LANCZOS if inner < CUSTOM_TIPS[tip].shape[0] else Image.Resampling.BILINEAR))
+        out = np.zeros((side, side), np.float32)
+        out[1:1 + inner, 1:1 + inner] = small.astype(np.float32) / 255.0
+        return out
     yy, xx = np.mgrid[0:side, 0:side].astype(np.float32)
     c = (side - 1) / 2
     x, y = (xx - c) / max(1.0, size / 2), (yy - c) / max(1.0, size / 2)      # -1..1 across the tip

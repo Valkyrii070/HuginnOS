@@ -77,7 +77,8 @@ class Easel(QObject):
         self._filled.connect(self._took_fill)
         self.opacity = 1.0                                       # the stroke's own opacity
         self.style = {"fill": "#5B8CFF", "stroke": "#14171C", "width": 0.0, "radius": 0.0, "points": 5, "inner": 0.5, "opacity": 1.0}
-        self.text = {"font": "Inter", "size": 72, "weight": 700, "italic": False, "align": "left"}
+        self.text = {"font": "Inter", "size": 72, "weight": 700, "italic": False, "align": "left", "tracking": 0.0, "leading": 1.0}
+        self._fprev = None                                       # a filter being tried on the canvas before it's applied
         self.tolerance, self.contiguous, self.gradient_kind, self.gradient_clear = 0.12, True, "linear", False
         self.zoom = 1.0                                          # the view tells Easel, so handles and slack match the screen
         self._undo, self._redo = [], []
@@ -109,6 +110,7 @@ class Easel(QObject):
         self._recent = [r for r in prefs.get("recent", []) if isinstance(r, str)][:12]
         self.fg, self.bg = prefs.get("fg", self.fg), prefs.get("bg", self.bg)
         self.snap, self.rulers = bool(prefs.get("snap", True)), bool(prefs.get("rulers", False))
+        self._load_brushes()
         self._swatches = prefs.get("swatches") or ["#14171C", "#FFFFFF", "#E5484D", "#F76B15", "#FFC53D", "#30A46C", "#12A594", "#0090FF", "#3E63DD", "#8E4EC6", "#D6409F", "#8D8D8D"]
         if demo:
             self._demo_doc()
@@ -127,7 +129,7 @@ class Easel(QObject):
     fgColour = Property(str, lambda self: self.fg, notify=changed)
     bgColour = Property(str, lambda self: self.bg, notify=changed)
     swatches = Property("QVariantList", lambda self: self._swatches, notify=changed)
-    brushes = Property("QVariantList", lambda self: [{"id": k, "name": v["name"]} for k, v in ez.BRUSHES.items()], constant=True)
+    brushes = Property("QVariantList", lambda self: [{"id": k, "name": v["name"]} for k, v in ez.BRUSHES.items()], notify=changed)
     gradients = Property("QVariantList", lambda self: [{"id": k, "name": v[0]} for k, v in ez.GRADIENTS.items()], constant=True)
     gradientKey = Property(str, lambda self: "fgclear" if self.gradient_clear and self.gradient_key == "fgbg" else self.gradient_key, notify=changed)
     gradientReversed = Property(bool, lambda self: self.gradient_reverse, notify=changed)
@@ -278,6 +280,117 @@ class Easel(QObject):
         self._recent = [path] + [r for r in self._recent if r != path][:11]
         self._save_prefs()
 
+    # ------------------------------------------------------------------ brushes of your own
+    def _load_brushes(self) -> None:
+        """Brushes made from pictures are kept as small PNGs beside Easel's settings, and come back each time."""
+        if self._demo:
+            return
+        try:
+            files = sorted((PREFS.parent / "easel-brushes").glob("*.png"))[:60]
+        except OSError:
+            return
+        for f in files:
+            img = QImage(str(f))
+            if img.isNull() or max(img.width(), img.height()) > 256:
+                continue
+            self._add_brush(ez.alpha_of(img.convertToFormat(ez.FMT)).astype(np.float32) / 255.0, f.stem)
+
+    def _add_brush(self, tip: np.ndarray, key: str) -> str:
+        ez.CUSTOM_TIPS[key] = tip
+        n = sum(1 for b in ez.BRUSHES.values() if b.get("tip") in ez.CUSTOM_TIPS and b.get("tip") != key) + 1
+        ez.BRUSHES[key] = {"name": f"My Brush {n}", "size": float(min(200, max(12, tip.shape[0]))), "hardness": 1.0, "flow": 1.0, "spacing": 0.25, "scatter": 0.0, "tip": key}
+        return key
+
+    @Slot()
+    def brushFromSelection(self) -> None:
+        """Edit › Make a Brush from the Selection: what's selected (or the whole layer) becomes a brush tip. Dark and
+        solid paints; light and see-through doesn't."""
+        if not self.doc:
+            return
+        l = self.doc.layer()
+        src = l["image"] if l["kind"] == "pixel" else self.doc.composite()
+        box = self.doc.selection_box() if self.doc.selection is not None else QRect(0, 0, self.doc.w, self.doc.h)
+        box = QRect(box).intersected(QRect(0, 0, self.doc.w, self.doc.h))
+        if box.width() < 2 or box.height() < 2:
+            self.said.emit("Choose the mark to make a brush from first.", True)
+            return
+        part = ez.image_to_array(self._clip(src).copy(box) if self.doc.selection is not None else src.copy(box))
+        try:
+            tip = ez.tip_from_picture(part)
+        except ValueError as err:
+            self.said.emit(str(err), True)
+            return
+        key = "my" + os.urandom(4).hex()
+        self._add_brush(tip, key)
+        if not self._demo:
+            try:
+                folder = PREFS.parent / "easel-brushes"
+                folder.mkdir(parents=True, exist_ok=True)
+                ez.alpha_image((tip * 255 + 0.5).astype(np.uint8)).save(str(folder / f"{key}.png"), "PNG")
+            except OSError:
+                pass
+        self.tool = "brush"
+        self.setBrushPreset(key)
+        self.said.emit(f"“{ez.BRUSHES[key]['name']}” is in Brushes, and in your hand. It's kept for next time.", False)
+
+    @Slot(str)
+    def forgetBrush(self, key: str) -> None:
+        if key in ez.CUSTOM_TIPS:
+            ez.CUSTOM_TIPS.pop(key, None)
+            ez.BRUSHES.pop(key, None)
+            try:
+                (PREFS.parent / "easel-brushes" / f"{key}.png").unlink(missing_ok=True)
+            except OSError:
+                pass
+            if self.brush_key == key:
+                self.setBrushPreset("round")
+            self._dabs.clear()
+            self.changed.emit()
+
+    # ------------------------------------------------------------------ a filter tried on the canvas first
+    @Slot(str, float)
+    def previewFilter(self, name: str, amount: float) -> None:
+        """Show what a filter would do, on the canvas, without doing it: as its slider is dragged."""
+        amount = _f(amount, 0.0, 1.0)
+        l = self.doc.layer() if self.doc else None
+        if amount is None or not l or name not in ez.FILTERS or self._drag is not None or self._xform is not None or self._quick is not None:
+            return
+        if l["kind"] != "pixel" or l["locked"] or self._mask_edit:
+            return
+        key = (l["id"], l.get("v", 0), name, round(amount, 3), self.doc.version if self.doc.selection is not None else 0)
+        if self._fprev is None or self._fprev[0] != key:
+            rgba = ez.image_to_array(l["image"])
+            out = ez.filter_array(rgba, name, amount)
+            if self.doc.selection is not None:
+                a = (self.doc.selection_alpha().astype(np.float32) / 255)[..., None]
+                out = (rgba * (1 - a) + out * a + 0.5).astype(np.uint8)
+            self._fprev = (key, ez.array_to_image(out))
+        img = self._fprev[1]
+        self._live = (l["id"], lambda _img, img=img: img)
+        self.painted.emit()
+
+    @Slot()
+    def endPreview(self) -> None:
+        if self._fprev is not None:
+            self._fprev = None
+            if self._drag is None and self._xform is None:
+                self._live = None
+            self.painted.emit()
+
+    @Slot(float)
+    def refineSelection(self, radius: float) -> None:
+        """Select › Refine Edge: fit the selection's edge to the picture, `radius` pixels either side of where it is."""
+        radius = _f(radius, 1.0, 120.0)
+        if not self.doc or self.doc.selection is None or radius is None:
+            return
+        l = self.doc.layer()
+        src = l["image"] if l["kind"] == "pixel" else self.doc.composite()
+        self._push("Refine edge")
+        a = ez.refine_edge(self.doc.selection_alpha(), ez.image_to_array(src), radius)
+        self.doc.selection = ez.alpha_image(a) if a.any() else None
+        self._selection_changed()
+        self._refresh()
+
     def _save_prefs(self) -> None:
         if self._demo:
             return
@@ -296,6 +409,7 @@ class Easel(QObject):
         self._xform, self._live, self._clone_src, self._clone_off, self._node_sel, self._hover, self._guide_live = None, None, None, None, None, None, None
         self._last_point = None
         self._quick, self._quick_undo = None, []
+        self._fprev = None
         self._saved_at = None
         self._selection_changed()
         self.changed.emit()
@@ -420,6 +534,8 @@ class Easel(QObject):
 
     # ------------------------------------------------------------------ history
     def _push(self, name: str) -> None:
+        if self._fprev is not None:                                   # (a filter being tried is put away before anything is really done)
+            self._fprev, self._live = None, None
         if self._quick is not None:                                   # anything else that changes the picture finishes the Quick Mask first
             self.quickMask()
         if self._drag is not None and not getattr(self, "_pointing", False):
@@ -513,7 +629,7 @@ class Easel(QObject):
         if not self.doc:
             return QImage()
         d = self._drag
-        if d and d.get("kind") == "brush" and d.get("which") == "image" and self._live is not None:
+        if d and self._live is not None and d.get("which", "image") == "image" and (d.get("kind") == "brush" or d.get("patch") is not None):
             return self._brush_frame(d)
         return self.doc.composite_small(self.mip(), self._live)
 
@@ -575,6 +691,49 @@ class Easel(QObject):
         p.end()
         return mine
 
+    def _layer_patch(self, d: dict, r: QRect) -> QImage:
+        """The layer being worked on, inside r, as the tool in hand has left it so far. The brush knows how
+        (_stroke_patch); the retouching tools say how for themselves (d["patch"]). With that, every one of them draws
+        only the patch it touched, through whatever blends and adjustments lie over the layer."""
+        fn = d.get("patch")
+        return fn(r) if fn is not None else self._stroke_patch(d, r)
+
+    def _clipped_patch(self, stroke: QImage, r: QRect) -> QImage:
+        out = stroke.copy(r)
+        if self.doc.selection is not None:
+            p = QPainter(out)
+            p.setCompositionMode(ez.CM.CompositionMode_DestinationIn)
+            p.drawImage(0, 0, self.doc.selection.copy(r))
+            p.end()
+        return out
+
+    def _dodge_patch(self, d: dict, r: QRect) -> QImage:
+        out, top = d["base"].copy(r), d["effect"].copy(r)
+        p = QPainter(top)
+        p.setCompositionMode(ez.CM.CompositionMode_DestinationIn)
+        p.drawImage(0, 0, self._clipped_patch(d["stroke"], r))
+        p.end()
+        p = QPainter(out)
+        p.setCompositionMode(ez.CM.CompositionMode_SourceAtop)
+        p.drawImage(0, 0, top)
+        p.end()
+        return out
+
+    def _clone_patch(self, d: dict, r: QRect) -> QImage:
+        ox, oy = int(round(d["off"][0])), int(round(d["off"][1]))
+        src = d["base"].copy(r.translated(ox, oy))                    # what's being copied from, slid under the brush
+        p = QPainter(src)
+        p.setCompositionMode(ez.CM.CompositionMode_DestinationIn)
+        p.drawImage(0, 0, self._clipped_patch(d["stroke"], r))
+        p.end()
+        out = d["base"].copy(r)
+        p = QPainter(out)
+        p.setOpacity(self.opacity)
+        p.setCompositionMode(ez.CM.CompositionMode_SourceAtop if d["layer"].get("lockAlpha") else ez.CM.CompositionMode_SourceOver)
+        p.drawImage(0, 0, src)
+        p.end()
+        return out
+
     def _brush_frame(self, d: dict) -> QImage:
         doc = self.doc
         layer = d["layer"]
@@ -603,10 +762,10 @@ class Easel(QObject):
             x0, y0 = r.x() // k * k, r.y() // k * k
             r = QRect(x0, y0, min(doc.w, -(-(r.right() + 1) // k) * k) - x0, min(doc.h, -(-(r.bottom() + 1) // k) * k) - y0)
         if d["parts"] is None:
-            piece = doc.composite_patch(r, (layer["id"], None, lambda rr: self._stroke_patch(d, rr)))
+            piece = doc.composite_patch(r, (layer["id"], None, lambda rr: self._layer_patch(d, rr)))
         else:
             below, above = d["parts"]
-            mine = self._stroke_patch(d, r)
+            mine = self._layer_patch(d, r)
             if layer.get("mask") is not None and layer.get("maskOn", True):
                 p = QPainter(mine)
                 p.setCompositionMode(ez.CM.CompositionMode_DestinationIn)
@@ -875,6 +1034,10 @@ class Easel(QObject):
             value = bool(value)
         elif key == "align" and value not in ("left", "center", "right"):
             return
+        elif key in ("tracking", "leading"):
+            value = _f(value, *((-50.0, 300.0) if key == "tracking" else (0.4, 5.0)))
+            if value is None:
+                return
         self.text[key] = value
         shapes = [s for s in self._picked_shapes() if s["type"] == "text"]
         if shapes:
@@ -3234,6 +3397,8 @@ class Easel(QObject):
         painter.setOpacity(self.brush["flow"])
         d = {"kind": "clone", "heal": heal, "spot": spot, "layer": layer, "which": which, "base": QImage(layer[which]), "off": off,
              "stroke": stroke, "painter": painter, "dab": self._dab_image(True), "last": (pt.x(), pt.y()), "carry": 0.0, "erase": False}
+        if which == "image" and all(float(v).is_integer() for v in off):
+            d["patch"] = lambda r, d=d: self._clone_patch(d, r)
         self._stamp(d, pt.x(), pt.y())
         self._drag = d
         self._live = (layer["id"], lambda img, d=d: self._clone_result(d, False))
@@ -3776,6 +3941,7 @@ class Easel(QObject):
         effect = more.effect_of(base, self.retouch, self.retouch_strength, self.retouch_range)
         d = {"kind": "dodge", "layer": layer, "which": "image", "stroke": stroke, "painter": painter, "erase": False, "dab": self._dab_image(True),
              "last": (pt.x(), pt.y()), "carry": 0.0, "base": base, "effect": effect}
+        d["patch"] = lambda r, d=d: self._dodge_patch(d, r)
         self._stamp(d, pt.x(), pt.y())
         self._drag = d
         self._live = (layer["id"], lambda img, d=d: self._retouched(d))
@@ -3813,8 +3979,11 @@ class Easel(QObject):
         d = {"kind": "smudge", "layer": layer, "arr": arr, "spot": more.soft_spot(self.brush["size"] / 2, self.brush["hardness"]), "carried": None,
              "last": (pt.x(), pt.y()), "sel": sel, "img": layer["image"]}
         d["carried"] = more.smudge_dab(arr, None, pt.x(), pt.y(), d["spot"], self.smudge_strength, sel)
+        d["which"] = "image"
+        d["patch"] = lambda r, d=d: more._img(d["arr"][r.y():r.y() + r.height(), r.x():r.x() + r.width()])
+        d["new"] = QRectF(pt.x(), pt.y(), 0, 0).adjusted(-self.brush["size"], -self.brush["size"], self.brush["size"], self.brush["size"])
         self._drag = d
-        self._live = (layer["id"], lambda img, d=d: d["img"])
+        self._live = (layer["id"], lambda img, d=d: more._img(d["arr"]))    # (the whole layer, only when the whole picture is asked for)
 
     def _move_smudge(self, pt: QPointF, mods: int) -> None:
         d = self._drag
@@ -3826,8 +3995,11 @@ class Easel(QObject):
             t = i * step / dist
             d["carried"] = more.smudge_dab(d["arr"], d["carried"], lx + (pt.x() - lx) * t, ly + (pt.y() - ly) * t, d["spot"], self.smudge_strength, d["sel"])
         if n:
+            pad = self.brush["size"] / 2 + 3
+            touched = QRectF(QPointF(lx, ly), QPointF(pt.x(), pt.y())).normalized().adjusted(-pad, -pad, pad, pad)
+            d["new"] = d["new"].united(touched) if d.get("new") is not None else touched
             d["last"] = (lx + (pt.x() - lx) * n * step / dist, ly + (pt.y() - ly) * n * step / dist)
-            d["img"] = more._img(d["arr"])
+
 
     def _release_smudge(self, pt: QPointF, mods: int) -> None:
         self._move_smudge(pt, mods)
@@ -4134,7 +4306,7 @@ class EaselView(QQuickPaintedItem):
         # a brush stroke: only the patch its new dabs touched is drawn again (with the brush's outline), not the
         # whole canvas, so painting on a big picture keeps up with the pointer
         d = self._easel._drag if self._easel else None
-        if d and d.get("kind") == "brush" and (d.get("parts") is not None or d.get("patchy")) and d.get("new") is not None and self._fitted:
+        if d and (d.get("kind") == "brush" or d.get("patch") is not None) and (d.get("parts") is not None or d.get("patchy")) and d.get("new") is not None and self._fitted:
             self.update(self._on_canvas(d["new"]).united(self._outline_rect()))
             return
         self._all()
