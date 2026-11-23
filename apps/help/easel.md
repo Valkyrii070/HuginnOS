@@ -42,7 +42,7 @@ Shapes can be filled with a gradient: turn on Gradient in the shape bar, choose 
 Points (A) edits a vector shape's outline: drag a point or its handles, click the outline to add a point, Delete takes the picked one away, and Corner ⇄ Smooth in the bar switches it between a sharp corner and a smooth curve. Convert to Outlines (in Arrange) turns type and simple shapes into editable outlines.
 
 ## Saving and exporting
-Save keeps an .easel file with every layer, mask and shape. Export makes PNG, JPEG or WebP; SVG and PDF keep shapes and type as vectors; ORA keeps layers for Krita and GIMP; PSD keeps layers for Photoshop, and Easel opens PSD files too (their pixel layers, names, opacity, blend modes and hidden layers).
+Save keeps an .easel file with every layer, mask and shape. Export makes PNG, JPEG or WebP; SVG and PDF keep shapes and type as vectors; ORA keeps layers for Krita and GIMP; PSD keeps layers for Photoshop, and Easel opens PSD files too (their pixel layers, names, opacity, blend modes and hidden layers). Whatever you export looks like the picture on screen. Where the other format can't say what Easel did (an adjustment layer, a blend mode in a PDF or SVG, clipping in OpenRaster), those layers are merged in the exported file, and Easel tells you so; your own picture keeps its layers.
 
 ## Keys
 B brush, E eraser, S clone stamp, J healing brush, A points, V move or select, M rectangle selection, L lasso, W wand, K fill, G gradient, I picker, T text, C crop, P pen, U rectangle, O ellipse, H hand (or hold Space), Z zoom. X swaps colours, D resets them. Ctrl+Z undo, Ctrl+Shift+Z redo, Ctrl+J duplicates the layer, Ctrl+T transforms, Ctrl+0 fits the picture, Ctrl+1 shows it at full size.

@@ -28,6 +28,11 @@ from PySide6.QtCore import QBuffer, QByteArray, QIODevice, QPointF, QRect, QRect
 from PySide6.QtGui import (QBrush, QColor, QFont, QImage, QLinearGradient, QPageSize, QPainter, QPainterPath, QPainterPathStroker,
                            QPdfWriter, QPen, QPolygonF, QRadialGradient, QRegion, QBitmap, QTransform)
 
+try:
+    import cv2
+except Exception:                                                # noqa: BLE001  (Easel works without it, more slowly)
+    cv2 = None
+
 FMT = QImage.Format.Format_ARGB32_Premultiplied
 CM = QPainter.CompositionMode
 BLENDS = {"normal": CM.CompositionMode_SourceOver, "multiply": CM.CompositionMode_Multiply, "screen": CM.CompositionMode_Screen,
@@ -47,6 +52,32 @@ PICTURES = (".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff", ".gif")
 
 
 SIDE_LIMIT = 16384            # the longest side a picture may have (as New Picture allows)
+LOAD_LIMIT = 3 << 30          # bytes of pixels a file may ask for when it opens (every layer at the picture's size)
+KINDS = ("pixel", "vector", "adjust", "group", "smart")
+
+
+def checked_size(w, h, layers: int = 1) -> tuple:
+    """A picture's size as a file gives it, made sure of before anything is set aside for it: whole numbers, at least
+    one pixel, within Easel's limit, and not more layers of that size than a computer has room for."""
+    try:
+        w, h = int(w), int(h)
+    except (TypeError, ValueError, OverflowError):
+        raise ValueError("This file doesn't say how big its picture is.") from None
+    if w < 1 or h < 1:
+        raise ValueError("This file's picture has no size.")
+    if w > SIDE_LIMIT or h > SIDE_LIMIT:
+        raise ValueError(f"This picture is {w:,} × {h:,} pixels. Easel works with up to {SIDE_LIMIT:,} a side.")
+    if w * h * 4 * max(1, int(layers)) > LOAD_LIMIT:
+        raise ValueError(f"This picture is {w:,} × {h:,} pixels with {layers} layers: more than Easel can open at once.")
+    return w, h
+
+
+def _number(v, lo: float, hi: float, default: float) -> float:
+    try:
+        v = float(v)
+    except (TypeError, ValueError):
+        return default
+    return max(lo, min(hi, v)) if math.isfinite(v) and not isinstance(v, bool) or isinstance(v, bool) else default
 
 
 def new_image(w: int, h: int, fill=None) -> QImage:
@@ -88,11 +119,13 @@ def alpha_image(a: np.ndarray) -> QImage:
     return array_to_image(rgba)
 
 
-def png_bytes(img: QImage) -> bytes:
+def png_bytes(img: QImage, quick: bool = False) -> bytes:
+    """`quick`: packed a little less tightly and many times faster (a 12-megapixel photo: under a second instead of
+    eight, for a file a sixth bigger). For the layers inside Easel's own files, which are saved again and again."""
     data = QByteArray()
     buf = QBuffer(data)
     buf.open(QIODevice.OpenModeFlag.WriteOnly)
-    img.save(buf, "PNG")
+    img.save(buf, "PNG", 70 if quick else -1)
     buf.close()
     return bytes(data)
 
@@ -627,13 +660,47 @@ ADJUST_DEFAULTS = {"levels": {"black": 0.0, "white": 1.0, "gamma": 0.0}, "poster
                    "curves": {"curves": {"rgb": [[0, 0], [0.25, 0.2], [0.75, 0.82], [1, 1]]}}}
 
 
+_POOL = None
+PER_CHANNEL = ("light", "levels", "invert", "curves", "warmth", "posterize")
+
+
+def pool():
+    """A few threads for work that splits into rows or into layers (numpy and Qt's picture code let other threads run)."""
+    global _POOL
+    if _POOL is None:
+        from concurrent.futures import ThreadPoolExecutor
+        _POOL = ThreadPoolExecutor(max(1, min(8, os.cpu_count() or 2)), thread_name_prefix="easel")
+    return _POOL
+
+
 def apply_adjust_image(below: QImage, kind: str, params: dict) -> QImage:
-    arr = image_to_array(below).astype(np.float32) / 255.0
-    rgb, a = arr[..., :3], arr[..., 3:4]
-    safe = np.where(a > 0, rgb, 0)
-    out = adjust_array(safe, kind, params)
-    res = np.concatenate([out, a], axis=2)
-    return array_to_image((res * 255 + 0.5).astype(np.uint8))
+    """An adjustment layer's doing: every pixel under it changed, each on its own. Worked a band of rows at a time
+    (the numbers for a band fit in the processor's cache, where the whole picture's don't) and the bands side by side
+    on every core: about four times quicker on a big picture, and the same answer to the last bit."""
+    src = image_to_array(below)
+    h = src.shape[0]
+    if kind in PER_CHANNEL:
+        # each channel's new value depends only on its old one: work the 256 possible answers out once (with the very
+        # same sums, so nothing changes) and look every pixel up. A 12-megapixel picture in a few hundredths of a second.
+        ramp = np.repeat((np.arange(256, dtype=np.float32) / 255.0)[:, None, None], 3, axis=2)
+        table = (adjust_array(ramp, kind, params) * 255 + 0.5).astype(np.uint8)[:, 0, :]
+        out = np.empty_like(src)
+        clear = src[..., 3] == 0
+        for c in range(3):
+            out[..., c] = table[:, c][src[..., c]]
+            out[..., c][clear] = table[0, c]                       # (see-through pixels count as black, as before)
+        out[..., 3] = src[..., 3]
+        return array_to_image(out)
+
+    def band(rows: slice) -> np.ndarray:
+        arr = src[rows].astype(np.float32) / 255.0
+        rgb, a = arr[..., :3], arr[..., 3:4]
+        out = adjust_array(np.where(a > 0, rgb, 0), kind, params)
+        return (np.concatenate([out, a], axis=2) * 255 + 0.5).astype(np.uint8)
+    if h * src.shape[1] < 400_000:
+        return array_to_image(band(slice(0, h)))
+    step = max(16, min(96, 400_000 // max(1, src.shape[1])))
+    return array_to_image(np.concatenate(list(pool().map(band, [slice(y, min(h, y + step)) for y in range(0, h, step)]))))
 
 
 FILTERS = {"blur": "Blur", "sharpen": "Sharpen", "noise": "Add Noise", "pixelate": "Pixelate", "emboss": "Emboss", "edges": "Find Edges",
@@ -727,8 +794,12 @@ def flood(ok: np.ndarray, x: int, y: int) -> np.ndarray:
 def similar(rgba: np.ndarray, x: int, y: int, tolerance: float) -> np.ndarray:
     """Pixels close in colour (and transparency) to the one at (x, y). tolerance 0..1."""
     ref = rgba[y, x].astype(np.int16)
+    t = int(tolerance * 255)
+    if cv2 is not None:                                              # the same test, in one pass over the picture
+        lo, hi = np.clip(ref - t, 0, 255).astype(np.uint8), np.clip(ref + t, 0, 255).astype(np.uint8)
+        return cv2.inRange(np.ascontiguousarray(rgba), lo, hi) > 0
     diff = np.abs(rgba.astype(np.int16) - ref).max(axis=2)
-    return diff <= int(tolerance * 255)
+    return diff <= t
 
 
 # ------------------------------------------------------------------------------------------- the document
@@ -768,7 +839,7 @@ def copy_layer(layer: dict) -> dict:
 
 class Document:
     def __init__(self, w: int, h: int, background="#FFFFFF"):
-        self.w, self.h = int(w), int(h)
+        self.w, self.h = checked_size(w, h)
         self.layers = []
         if background is not None:
             self.layers.append(new_layer("pixel", "Background", w, h, background))
@@ -783,6 +854,153 @@ class Document:
         self._vector_cache = {}
         self._mask_cache = {}
         self._fx_cache = {}
+        self._win = None                                        # while one patch of the picture is being put together: its rectangle
+        self.export_note = ""                                   # after an export: what had to be merged to keep the look, in words
+
+    def tidy(self) -> "Document":
+        """After a file is read: every layer made sound, whatever the file said. A setting of the wrong kind goes back
+        to its usual value, a picture of the wrong size is fitted, a shape or style that can't be drawn is dropped,
+        and a picture that still can't be put together is refused (ValueError), so nothing half-read gets on screen."""
+        import huginn_easel_more as more
+        good, seen = [], set()
+        for l in self.layers if isinstance(self.layers, list) else []:
+            if not isinstance(l, dict) or l.get("kind") not in KINDS:
+                continue
+            if not isinstance(l.get("id"), str) or not l["id"] or len(l["id"]) > 64 or l["id"] in seen:
+                l["id"] = uuid.uuid4().hex[:10]
+            seen.add(l["id"])
+            l["name"] = (l["name"].replace("\0", "")[:80] or "Layer") if isinstance(l.get("name"), str) else "Layer"
+            for key, usual in (("visible", True), ("locked", False), ("maskOn", True)):
+                l[key] = l[key] if isinstance(l.get(key), bool) else usual
+            for key in ("clip", "lockAlpha", "open"):
+                if key in l and not isinstance(l[key], bool):
+                    del l[key]
+            l["opacity"] = _number(l.get("opacity"), 0.0, 1.0, 1.0)
+            l["blend"] = l["blend"] if isinstance(l.get("blend"), str) and l["blend"] in BLENDS else "normal"
+            l["v"] = 0
+            if not isinstance(l.get("group"), str):
+                l.pop("group", None)
+            if l["kind"] == "pixel":
+                img = l.get("image")
+                if not isinstance(img, QImage) or img.isNull():
+                    l["image"] = new_image(self.w, self.h)
+                elif img.width() != self.w or img.height() != self.h or img.format() != FMT:
+                    l["image"] = _fit(img.convertToFormat(FMT), self.w, self.h)
+            elif l["kind"] == "vector":
+                shapes = []
+                for sh in l["shapes"] if isinstance(l.get("shapes"), list) else []:
+                    try:                                       # a shape stays only if it can be measured and drawn
+                        if not isinstance(sh, dict) or sh.get("type") not in ("rect", "ellipse", "line", "star", "path", "text"):
+                            continue
+                        if sh["type"] == "path" and not isinstance(sh.get("subs"), list):
+                            continue
+                        if any(isinstance(v, float) and not math.isfinite(v) or isinstance(v, (int, float)) and not isinstance(v, bool) and abs(v) > 1e7 for v in sh.values()):
+                            continue
+                        if "points" in sh:                     # (a star with a billion points would never finish drawing)
+                            sh["points"] = int(_number(sh["points"], 3, 200, 5))
+                        if sh["type"] == "text":
+                            sh["size"] = _number(sh.get("size"), 1, 4000, 72)
+                            sh["text"] = sh["text"][:20000] if isinstance(sh.get("text"), str) else ""
+                        if not isinstance(sh.get("id"), str):
+                            sh["id"] = uuid.uuid4().hex[:8]
+                        box = shape_bounds(sh)
+                        if not all(math.isfinite(v) for v in (box.x(), box.y(), box.width(), box.height())) or max(abs(box.x()), abs(box.y()), box.width(), box.height()) > 1e7:
+                            continue
+                        probe = new_image(8, 8)
+                        pp = QPainter(probe)
+                        try:
+                            paint_shape(pp, sh)
+                        finally:
+                            pp.end()
+                        shapes.append(sh)
+                    except Exception:                          # noqa: BLE001  (whatever is wrong with it, it can't be kept)
+                        continue
+                l["shapes"] = shapes[:20000]
+            elif l["kind"] == "adjust":
+                l["adjust"] = l["adjust"] if isinstance(l.get("adjust"), str) and l["adjust"] in ADJUSTMENTS else "light"
+                params = {}
+                for key, v in (l["params"] if isinstance(l.get("params"), dict) else {}).items():
+                    if not isinstance(key, str) or len(key) > 40:
+                        continue
+                    if isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v):
+                        params[key] = max(-100.0, min(100.0, float(v)))
+                    elif isinstance(v, str) and len(v) < 40 and QColor(v).isValid():
+                        params[key] = v
+                    elif key == "curves" and isinstance(v, dict):
+                        curves = {}
+                        for ch, pts in v.items():
+                            if ch in ("rgb", "r", "g", "b") and isinstance(pts, list):
+                                ok = [[_number(pt[0], 0, 1, 0), _number(pt[1], 0, 1, 0)] for pt in pts[:32]
+                                      if isinstance(pt, (list, tuple)) and len(pt) == 2 and all(isinstance(c, (int, float)) and not isinstance(c, bool) for c in pt)]
+                                if len(ok) >= 2:
+                                    curves[ch] = ok
+                        params[key] = curves
+                l["params"] = params
+            elif l["kind"] == "smart":
+                src = l.get("source")
+                if not isinstance(src, QImage) or src.isNull():
+                    continue
+                pl = l["place"] if isinstance(l.get("place"), dict) else {}
+                place = {"cx": _number(pl.get("cx"), -1e6, 1e6, self.w / 2), "cy": _number(pl.get("cy"), -1e6, 1e6, self.h / 2),
+                         "sx": _number(pl.get("sx"), 0.001, 1000, 1.0), "sy": _number(pl.get("sy"), 0.001, 1000, 1.0), "rot": _number(pl.get("rot"), -36000, 36000, 0.0)}
+                for key in ("flipx", "flipy"):
+                    if isinstance(pl.get(key), bool):
+                        place[key] = pl[key]
+                quad = pl.get("quad")
+                if isinstance(quad, list) and len(quad) == 4 and all(isinstance(c, (list, tuple)) and len(c) == 2 and all(isinstance(n, (int, float)) and not isinstance(n, bool) and math.isfinite(n) and abs(n) < 1e6 for n in c) for c in quad):
+                    place["quad"] = [[float(c[0]), float(c[1])] for c in quad]
+                l["place"] = place
+                l["sfilters"] = [{"name": f["name"], "amount": _number(f.get("amount"), 0.0, 1.0, 0.4), "on": f.get("on") is not False}
+                                 for f in (l["sfilters"] if isinstance(l.get("sfilters"), list) else [])[:32]
+                                 if isinstance(f, dict) and isinstance(f.get("name"), str) and f["name"] in FILTERS]
+            mask = l.get("mask")
+            if mask is not None:
+                if not isinstance(mask, QImage) or mask.isNull():
+                    l["mask"] = None
+                elif mask.width() != self.w or mask.height() != self.h or mask.format() != FMT:
+                    l["mask"] = _fit(mask.convertToFormat(FMT), self.w, self.h)
+            if "fx" in l:
+                fx = l["fx"]
+                sound = isinstance(fx, dict) and all(isinstance(k, str) and k in more.STYLES and isinstance(st, dict) for k, st in fx.items())
+                if sound:
+                    clean = {}
+                    for k, st in fx.items():
+                        usual, one = more.STYLES[k], {}
+                        for prop, v in st.items():
+                            if prop not in usual:
+                                continue
+                            want = usual[prop]
+                            if isinstance(want, bool):
+                                one[prop] = v if isinstance(v, bool) else want
+                            elif isinstance(want, (int, float)):
+                                one[prop] = _number(v, -3600.0, 3600.0, float(want))
+                            elif isinstance(want, str):
+                                one[prop] = v if isinstance(v, str) and len(v) < 40 and (prop != "colour" or QColor(v).isValid()) else want
+                        clean[k] = one
+                    l["fx"] = clean
+                else:
+                    del l["fx"]
+            good.append(l)
+        ids = {l["id"] for l in good}
+        for l in good:
+            if l.get("group") not in ids or l.get("group") == l["id"]:
+                l.pop("group", None)
+        if not any(l["kind"] != "group" for l in good):
+            good.append(new_layer("pixel", "Layer 1", self.w, self.h))
+        self.layers = more.normalize(good)
+        self.active = self.active if isinstance(self.active, str) and any(l["id"] == self.active for l in self.layers) else self.layers[-1]["id"]
+        self.guides = [{"axis": g["axis"], "at": round(_number(g.get("at"), -1e5, 1e5, 0.0), 1)} for g in (self.guides if isinstance(self.guides, list) else [])[:200]
+                       if isinstance(g, dict) and g.get("axis") in ("x", "y")]
+        self.dpi = int(_number(self.dpi, 1, 10000, 72))
+        self.selection = None
+        self._vector_cache, self._mask_cache, self._fx_cache = {}, {}, {}
+        try:
+            flat = self.flattened()
+            if flat.isNull():
+                raise ValueError
+        except Exception:                                      # noqa: BLE001
+            raise ValueError("This file is damaged in a way Easel can't mend.") from None
+        return self
 
     # -------------------------------------------------------------- finding layers
     def layer(self, ident: str = None) -> dict:
@@ -890,12 +1108,28 @@ class Document:
     def _masked(self, layer: dict, img: QImage) -> QImage:
         if layer.get("mask") is None or not layer.get("maskOn", True):
             return img
+        mask = layer["mask"]
+        if self._win is not None and img.size() != mask.size():
+            mask = mask.copy(self._win)
         out = img.copy()
         p = QPainter(out)
         p.setCompositionMode(CM.CompositionMode_DestinationIn)
-        p.drawImage(0, 0, layer["mask"])
+        p.drawImage(0, 0, mask)
         p.end()
         return out
+
+    def composite_patch(self, r: QRect, live=None) -> QImage:
+        """One rectangle of the finished picture, put together from that rectangle of every layer: blends, adjustment
+        layers, masks, groups and clipping all as in the whole picture, at a cost that goes with the patch's size and
+        not the picture's. `live` = (layer id, None, function(rect) -> that layer's patch with the stroke in progress).
+        Styles spread past a patch, so a layer or group with styles is taken from its kept picture: the caller must
+        not ask for this while the layer being painted has styles, or is in a group that has."""
+        import huginn_easel_more as more
+        self._win = QRect(r)
+        try:
+            return self._stack(more.tree(self.layers), live)
+        finally:
+            self._win = None
 
     def composite(self, live=None, upto: int = None) -> QImage:
         """Every visible layer, bottom up. `live` = (layer id, function(image) → image) shows a stroke in progress.
@@ -909,6 +1143,23 @@ class Document:
         """One thing in a stack (a layer, or a group as a tuple) as a picture, before its own opacity and blend:
         (image, header). None for what isn't a picture of its own (an adjustment layer)."""
         import huginn_easel_more as more
+        win = self._win
+        if win is not None:                                        # only a patch is wanted
+            if isinstance(it, tuple) and more.has_fx(it[1]):       # (styles reach past a patch: from the group's kept picture)
+                self._win = None
+                try:
+                    full, header = self._item_image(it, None)
+                finally:
+                    self._win = win
+                return full.copy(win), header
+            if not isinstance(it, tuple):
+                if it["kind"] == "adjust":
+                    return None
+                if live and live[0] == it["id"] and len(live) > 2:
+                    return self._masked(it, live[2](win)), it
+                if it["kind"] == "pixel" and not more.has_fx(it):
+                    return self._masked(it, it["image"].copy(win)), it
+                return self.styled_image(it).copy(win), it         # shapes, smart objects, styled layers: kept pictures
         if isinstance(it, tuple):
             header, inside = it[1], it[2]
             img = self._masked(header, self._stack(inside, live))
@@ -948,11 +1199,93 @@ class Document:
         p.drawImage(0, 0, img)
         p.end()
 
+    def _clipped_image(self, base, clipped: list, live=None) -> QImage:
+        """A layer (or group) with the layers clipped to it, as one picture in the lower one's shape."""
+        shape, _ = self._item_image(base, live)
+        both = shape.copy()
+        for c in clipped:
+            self._lay(both, c, live)
+        p = QPainter(both)
+        p.setCompositionMode(CM.CompositionMode_DestinationIn)
+        p.drawImage(0, 0, shape)                                   # only where the lower layer is
+        p.end()
+        return both
+
+    def export_layers(self, groups: bool, clipping: bool) -> list:
+        """The picture as plain layers another program can stack up to get the same picture: bottom first, each
+        {"name", "image", "opacity", "blend", "visible", "clip", "lockAlpha"}, or (with `groups`) {"stack": [...]} for
+        a group. What the other format can't say is baked in, and only that: an adjustment layer and everything it
+        changes become one picture; a group with a mask, styles, or (without `groups`) a blend mode or anything else
+        that depends on its being drawn on its own becomes one picture; a clipped layer keeps its flag when the
+        format has one (`clipping`), and otherwise is cut to shape with the layer under it."""
+        import huginn_easel_more as more
+        self.export_note = ""
+        baked = set()
+
+        def entry(head: dict, image: QImage, clip: bool = False, **over) -> dict:
+            e = {"name": head["name"], "image": image, "opacity": head["opacity"], "blend": head["blend"], "visible": head["visible"],
+                 "clip": clip, "lockAlpha": bool(head.get("lockAlpha")) and head["kind"] == "pixel"}
+            e.update(over)
+            return e
+
+        def deep(items: list, test) -> bool:
+            return any(deep(it[2], test) or test(it[1]) if isinstance(it, tuple) else test(it) for it in items)
+
+        def walk(items: list) -> list:
+            out, k = [], 0
+            while k < len(items):
+                it = items[k]
+                head = it[1] if isinstance(it, tuple) else it
+                if head["kind"] == "adjust":
+                    if head["visible"]:                            # all it changes, and it, as one picture
+                        baked.add("adjustment layers (with what's under them)")
+                        out = [e for e in out if not e.get("visible", True)] + \
+                              [{"name": head["name"], "image": self._stack(items[:k + 1]), "opacity": 1.0, "blend": "normal", "visible": True, "clip": False, "lockAlpha": False}]
+                    k += 1
+                    continue
+                n = k + 1
+                while n < len(items) and not isinstance(items[n], tuple) and items[n].get("clip"):
+                    n += 1
+                clipped = items[k + 1:n]
+                if clipped and (not clipping or any(c["kind"] == "adjust" for c in clipped)):
+                    if any(c["visible"] for c in clipped):
+                        baked.add("clipped layers")
+                    out.append(entry(head, self._clipped_image(it, clipped)))
+                    k = n
+                    continue
+                if isinstance(it, tuple):
+                    inside = it[2]
+                    shown = [x for x in more.flatten_tree(inside) if x["kind"] != "group" and x["visible"]]
+                    one = more.has_fx(head) or (head.get("mask") is not None and head.get("maskOn", True))
+                    if not groups:
+                        one = one or head["blend"] != "normal" or bool(clipped) or (head["opacity"] < 1 and len(shown) > 1) \
+                              or deep(inside, lambda x: x["visible"] and (x["kind"] == "adjust" or x["blend"] != "normal" and x["kind"] != "group"))
+                    if one:
+                        if head["visible"] and len(shown) > 1:
+                            baked.add("some groups")
+                        out.append(entry(head, self._item_image(it)[0]))
+                    elif groups:
+                        out.append({"name": head["name"], "opacity": head["opacity"], "blend": head["blend"], "visible": head["visible"], "stack": walk(inside)})
+                    else:                                          # its layers, each carrying the group's opacity and whether it shows
+                        for e in walk(inside):
+                            e["opacity"], e["visible"] = e["opacity"] * head["opacity"], e["visible"] and head["visible"]
+                            out.append(e)
+                else:
+                    out.append(entry(head, self.styled_image(it)))
+                for c in clipped:
+                    out.append(entry(c, self.styled_image(c), clip=True))
+                k = n
+            return out
+        got = walk(more.tree(self.layers))
+        if baked:
+            self.export_note = "To look the same there, " + ", ".join(sorted(baked)) + (" were" if len(baked) > 1 or not sorted(baked)[0].startswith("some") or True else " was") + " merged in the file."
+        return got
+
     def _stack(self, items: list, live=None) -> QImage:
         """A list of layers and groups put together, bottom up. A layer marked "clip" shows only where the layer (or
         group) under it has something: the two (and any more clipped layers above) are put together first, keeping
         the lower one's shape, and then go onto the picture with the lower one's opacity and blend."""
-        out = new_image(self.w, self.h)
+        out = new_image(self.w, self.h) if self._win is None else new_image(self._win.width(), self._win.height())
         k = 0
         while k < len(items):
             base = items[k]
@@ -966,14 +1299,7 @@ class Document:
                 k += 1
                 continue
             if head["visible"]:                                    # (hidden: what's clipped to it has nothing to show in)
-                shape, _ = self._item_image(base, live)
-                both = shape.copy()
-                for c in clipped:
-                    self._lay(both, c, live)
-                p = QPainter(both)
-                p.setCompositionMode(CM.CompositionMode_DestinationIn)
-                p.drawImage(0, 0, shape)                           # only where the lower layer is
-                p.end()
+                both = self._clipped_image(base, clipped, live)
                 p = QPainter(out)
                 p.setOpacity(head["opacity"])
                 p.setCompositionMode(BLENDS.get(head["blend"], CM.CompositionMode_SourceOver))
@@ -1035,11 +1361,29 @@ class Document:
         buf = np.zeros((self.h, stride), np.uint8)
         buf[:, :bpl] = packed
         mono = QImage(buf.tobytes(), self.w, self.h, stride, QImage.Format.Format_MonoLSB)
-        mono.setColorTable([0xFF000000, 0xFFFFFFFF])
-        region = QRegion(QBitmap.fromImage(mono.copy()))
+        mono.setColorTable([0xFFFFFFFF, 0xFF000000])                 # a bitmap's "set" bits are its dark ones: the selected pixels
+        region = QRegion(QBitmap.fromImage(mono.copy()))              # (the other way round this was the part NOT selected: the outline
+                                                                      #  also ran round the canvas, and Select All had none at all)
+        if cv2 is None or region.rectCount() <= 2500:                # a plain shape: its exact outline, along the pixels' edges
+            path = QPainterPath()
+            path.addRegion(region)
+            return path.simplified()
+        # A ragged selection (the magic wand on a photograph is thousands of specks): joining its rows up exactly took
+        # 13 seconds for a 12-megapixel picture, and minutes for worse. Its edges are traced instead, on a grid twice
+        # as fine so one-pixel specks and gaps keep their shape; the line runs a quarter of a pixel inside the edge.
+        k = 2 if self.w * self.h <= 30_000_000 else 1
+        grid = np.zeros((self.h * k + 2, self.w * k + 2), np.uint8)
+        grid[1:-1, 1:-1] = np.repeat(np.repeat(a, k, axis=0), k, axis=1) if k > 1 else a
+        found, _ = cv2.findContours(grid, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
         path = QPainterPath()
-        path.addRegion(region)
-        return path.simplified()
+        path.setFillRule(Qt.FillRule.OddEvenFill)
+        for c in found:
+            pts = (c[:, 0, :].astype(np.float64) - 0.5) / k
+            if len(pts) < 2:
+                continue
+            path.addPolygon(QPolygonF([QPointF(x, y) for x, y in pts.tolist()]))
+            path.closeSubpath()
+        return path
 
     # -------------------------------------------------------------- reading and writing
     def manifest(self) -> dict:
@@ -1066,13 +1410,16 @@ class Document:
         with zipfile.ZipFile(part, "w", zipfile.ZIP_DEFLATED) as z:
             z.writestr("mimetype", "application/x-huginn-easel", compress_type=zipfile.ZIP_STORED)
             z.writestr("manifest.json", json.dumps(self.manifest(), indent=1))
+            todo = []
             for l in self.layers:
                 if l["kind"] == "pixel":
-                    z.writestr(f"layers/{l['id']}.png", png_bytes(l["image"]), compress_type=zipfile.ZIP_STORED)
+                    todo.append((f"layers/{l['id']}.png", l["image"]))
                 if l["kind"] == "smart":
-                    z.writestr(f"smart/{l['id']}.png", png_bytes(l["source"]), compress_type=zipfile.ZIP_STORED)
+                    todo.append((f"smart/{l['id']}.png", l["source"]))
                 if l.get("mask") is not None:
-                    z.writestr(f"masks/{l['id']}.png", png_bytes(l["mask"]), compress_type=zipfile.ZIP_STORED)
+                    todo.append((f"masks/{l['id']}.png", l["mask"]))
+            for (name, _), data in zip(todo, pool().map(lambda t: png_bytes(t[1], True), todo)):     # each layer packed on its own core
+                z.writestr(name, data, compress_type=zipfile.ZIP_STORED)
             thumb = self.flattened().scaled(512, 512, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
             z.writestr("Thumbnails/thumbnail.png", png_bytes(thumb), compress_type=zipfile.ZIP_STORED)
         os.replace(part, path)
@@ -1084,8 +1431,14 @@ class Document:
             m = json.loads(z.read("manifest.json"))
             if m.get("format") != "huginn-easel":
                 raise ValueError("That isn't an Easel picture.")
-            doc = cls(m["w"], m["h"], None)
-            doc.layers, doc.dpi = [], int(m.get("dpi", 72))
+            if not isinstance(m, dict) or not isinstance(m.get("layers"), list):
+                raise ValueError("That isn't an Easel picture.")
+            w, h = checked_size(m.get("w"), m.get("h"), sum(1 for e in m["layers"] if isinstance(e, dict) and e.get("kind") == "pixel") + 1)
+            if sum(i.file_size for i in z.infolist()) > 4 << 30:
+                raise ValueError("That file unpacks to more than Easel can open.")
+            m["layers"] = [e for e in m["layers"] if isinstance(e, dict) and e.get("kind") in KINDS and isinstance(e.get("id"), str)][:2000]
+            doc = cls(w, h, None)
+            doc.layers, doc.dpi = [], m.get("dpi", 72)
             names = set(z.namelist())
             for e in m["layers"]:
                 layer = new_layer(e["kind"], e.get("name", "Layer"), doc.w, doc.h)
@@ -1109,7 +1462,7 @@ class Document:
             if not doc.layers:
                 doc.layers.append(new_layer("pixel", "Layer 1", doc.w, doc.h))
             doc.active = m.get("active") if any(l["id"] == m.get("active") for l in doc.layers) else doc.layers[-1]["id"]
-            doc.guides = [g for g in m.get("guides") or [] if g.get("axis") in ("x", "y")]
+            doc.guides = [g for g in (m.get("guides") if isinstance(m.get("guides"), list) else []) if isinstance(g, dict) and g.get("axis") in ("x", "y")]
             import huginn_easel_more as more
             doc.layers = more.normalize(doc.layers)
         doc.path = path
@@ -1125,27 +1478,20 @@ class Document:
             z.writestr("mimetype", "image/openraster", compress_type=zipfile.ZIP_STORED)
             count = [0]
 
-            def put(items, parent):                                 # OpenRaster lists the top layer first; a group is a stack
-                for it in reversed(items):
-                    if isinstance(it, tuple) and more.has_fx(it[1]):    # a group with styles: drawn as one picture
-                        it = it[1]
-                    if isinstance(it, tuple):
-                        h = it[1]
-                        sub = ET.SubElement(parent, "stack", {"name": h["name"], "opacity": f"{h['opacity']:.3f}",
-                                                              "visibility": "visible" if h["visible"] else "hidden",
-                                                              "composite-op": ORA_OPS.get(h["blend"], "svg:src-over"), "isolation": "isolate"})
-                        put(it[2], sub)
-                        continue
-                    l = it
-                    img = self.styled_image(l) if l["kind"] != "adjust" else None
-                    if img is None:
+            def put(entries, parent):                               # OpenRaster lists the top layer first; a group is a stack
+                for e in reversed(entries):
+                    if "stack" in e:
+                        sub = ET.SubElement(parent, "stack", {"name": e["name"], "opacity": f"{e['opacity']:.3f}",
+                                                              "visibility": "visible" if e["visible"] else "hidden",
+                                                              "composite-op": ORA_OPS.get(e["blend"], "svg:src-over"), "isolation": "isolate"})
+                        put(e["stack"], sub)
                         continue
                     name = f"data/layer{count[0]}.png"
                     count[0] += 1
-                    z.writestr(name, png_bytes(img), compress_type=zipfile.ZIP_STORED)
-                    ET.SubElement(parent, "layer", {"name": l["name"], "src": name, "x": "0", "y": "0", "opacity": f"{l['opacity']:.3f}",
-                                                    "visibility": "visible" if l["visible"] else "hidden", "composite-op": ORA_OPS.get(l["blend"], "svg:src-over")})
-            put(more.tree(self.layers), top)
+                    z.writestr(name, png_bytes(e["image"], True), compress_type=zipfile.ZIP_STORED)
+                    ET.SubElement(parent, "layer", {"name": e["name"], "src": name, "x": "0", "y": "0", "opacity": f"{e['opacity']:.3f}",
+                                                    "visibility": "visible" if e["visible"] else "hidden", "composite-op": ORA_OPS.get(e["blend"], "svg:src-over")})
+            put(self.export_layers(groups=True, clipping=False), top)
             z.writestr("stack.xml", ET.tostring(stack, encoding="unicode"))
             flat = self.flattened()
             z.writestr("mergedimage.png", png_bytes(flat), compress_type=zipfile.ZIP_STORED)
@@ -1157,8 +1503,10 @@ class Document:
     def load_ora(cls, path: str) -> "Document":
         ops = {v: k for k, v in ORA_OPS.items()}
         with zipfile.ZipFile(path) as z:
+            if sum(i.file_size for i in z.infolist()) > 4 << 30:
+                raise ValueError("That file unpacks to more than Easel can open.")
             root = ET.fromstring(z.read("stack.xml"))
-            w, h = int(root.get("w")), int(root.get("h"))
+            w, h = checked_size(root.get("w"), root.get("h"), sum(1 for _ in root.iter("layer")) + 1)
             doc = cls(w, h, None)
             doc.layers = []
 
@@ -1166,7 +1514,7 @@ class Document:
                 for el in stack:
                     if el.tag == "stack":
                         g = new_layer("group", el.get("name", "Group"))
-                        g.update(opacity=float(el.get("opacity", 1)), visible=el.get("visibility", "visible") != "hidden",
+                        g.update(opacity=_number(el.get("opacity", 1), 0.0, 1.0, 1.0), visible=el.get("visibility", "visible") != "hidden",
                                  blend=ops.get(el.get("composite-op", "svg:src-over"), "normal"), group=group)
                         doc.layers.insert(0, g)
                         walk(el, False, g["id"])
@@ -1174,9 +1522,9 @@ class Document:
                         img = image_from_bytes(z.read(el.get("src")))
                         layer = new_layer("pixel", el.get("name", "Layer"), w, h)
                         p = QPainter(layer["image"])
-                        p.drawImage(int(float(el.get("x", 0))), int(float(el.get("y", 0))), img)
+                        p.drawImage(int(_number(el.get("x", 0), -1e6, 1e6, 0)), int(_number(el.get("y", 0), -1e6, 1e6, 0)), img)
                         p.end()
-                        layer["opacity"] = float(el.get("opacity", 1))
+                        layer["opacity"] = _number(el.get("opacity", 1), 0.0, 1.0, 1.0)
                         layer["visible"] = el.get("visibility", "visible") != "hidden" and not hidden
                         layer["blend"] = ops.get(el.get("composite-op", "svg:src-over"), "normal")
                         layer["group"] = group
@@ -1200,7 +1548,10 @@ class Document:
             w, h = max(1, size.width()), max(1, size.height())
             if max(w, h) < 1024:                                     # draw small drawings bigger, so they stay sharp
                 k = 2048 / max(w, h)
-                w, h = int(w * k), int(h * k)
+                w, h = max(1, int(w * k)), max(1, int(h * k))
+            if max(w, h) > SIDE_LIMIT:                               # and enormous ones smaller: a drawing has no pixels to lose
+                k = SIDE_LIMIT / max(w, h)
+                w, h = max(1, int(w * k)), max(1, int(h * k))
             doc = cls(w, h, None)
             p = QPainter(doc.layers[0]["image"])
             p.setRenderHint(QPainter.RenderHint.Antialiasing)
@@ -1211,6 +1562,8 @@ class Document:
         from PySide6.QtGui import QImageReader
         reader = QImageReader(path)
         reader.setAutoTransform(True)
+        if reader.size().isValid():                                  # (said before it's read, when the file says its size)
+            checked_size(reader.size().width(), reader.size().height())
         img = reader.read()
         if img.isNull():
             raise ValueError(reader.errorString() or "That picture couldn't be read.")
@@ -1244,23 +1597,52 @@ class Document:
         os.replace(part, path)
 
     def _paint_vectors(self, p: QPainter) -> None:
-        """Each layer in turn: shapes as shapes, pictures as pictures (for SVG and PDF)."""
+        """For SVG and PDF: shapes as shapes and pictures as pictures, wherever that gives the same picture. Those
+        formats only know "this, over that", so everything up to the last layer that needs more than that (a blend
+        mode, an adjustment, clipping, a group drawn on its own) goes in as one picture, and what's above it as before."""
         import huginn_easel_more as more
-        for layer in self.layers:
-            if layer["kind"] in ("adjust", "group") or not self.visible_in_place(layer):
-                continue
-            p.save()
-            p.setOpacity(self.opacity_in_place(layer))
-            if layer["kind"] == "group" or more.has_fx(layer) or any(more.has_fx(self.layer(g)) for g in more.ancestors(self.layers, layer)):
-                p.drawImage(0, 0, self.styled_image(layer))
-            elif layer["kind"] == "vector" and (layer.get("mask") is None or not layer.get("maskOn", True)) and layer["blend"] == "normal":
-                p.setRenderHint(QPainter.RenderHint.Antialiasing)
-                for s in layer["shapes"]:
-                    if not s.get("hidden"):
-                        paint_shape(p, s)
-            else:
-                p.drawImage(0, 0, self.layer_image(layer))
-            p.restore()
+        items = more.tree(self.layers)
+
+        def plain(it) -> bool:
+            if isinstance(it, tuple):
+                h, kids = it[1], [x for x in it[2] if (x[1] if isinstance(x, tuple) else x)["visible"]]
+                return h["blend"] == "normal" and not more.has_fx(h) and not (h.get("mask") is not None and h.get("maskOn", True)) \
+                    and (h["opacity"] >= 1 or len(kids) <= 1) and all(plain(x) for x in it[2])
+            return it["kind"] != "adjust" and it["blend"] == "normal" and not it.get("clip")
+        last = -1
+        for k, it in enumerate(items):
+            head = it[1] if isinstance(it, tuple) else it
+            if head["visible"] and not plain(it):
+                last = k
+            if not isinstance(it, tuple) and it.get("clip") and it["visible"] and k > 0:
+                last = max(last, k)                                # (and the layer it's clipped to is under it, so inside the picture)
+        self.export_note = ""
+        if last >= 0:
+            p.drawImage(0, 0, self._stack(items[:last + 1]))
+            under = more.flatten_tree(items[:last + 1])
+            if any(l["kind"] == "vector" and l["visible"] and l.get("shapes") for l in under):
+                self.export_note = "Shapes under a blend mode, an adjustment or a clipped layer went in as a picture, so the file looks the same."
+
+        def draw(seq, opacity: float) -> None:
+            for it in seq:
+                if isinstance(it, tuple):
+                    if it[1]["visible"]:
+                        draw(it[2], opacity * it[1]["opacity"])
+                    continue
+                layer = it
+                if not layer["visible"] or layer["kind"] == "adjust":
+                    continue
+                p.save()
+                p.setOpacity(opacity * layer["opacity"])
+                if layer["kind"] == "vector" and not more.has_fx(layer) and (layer.get("mask") is None or not layer.get("maskOn", True)):
+                    p.setRenderHint(QPainter.RenderHint.Antialiasing)
+                    for s in layer["shapes"]:
+                        if not s.get("hidden"):
+                            paint_shape(p, s)
+                else:
+                    p.drawImage(0, 0, self.styled_image(layer))
+                p.restore()
+        draw(items[last + 1:], 1.0)
 
     def export_svg(self, path: str) -> None:
         from PySide6.QtSvg import QSvgGenerator
@@ -1300,20 +1682,34 @@ def _fit(img: QImage, w: int, h: int) -> QImage:
 
 
 def open_any(path: str) -> Document:
+    """Open any file Easel reads. Whatever is wrong with the file, the answer is a sound picture or a ValueError (or
+    OSError) that says why not: a damaged or hostile file must never get further than this."""
+    import stat as _stat
+    st = os.stat(path)
+    if not _stat.S_ISREG(st.st_mode):
+        raise ValueError("That isn't a file Easel can open.")
+    if st.st_size > 2 << 30:
+        raise ValueError("That file is over 2 GB: too big for Easel to open.")
     low = path.lower()
-    if low.endswith(".psd"):
-        doc = read_psd(path)
-        doc.path = ""
-        return doc
-    if low.endswith(".easel"):
-        return Document.load_easel(path)
-    if low.endswith(".ora"):
-        doc = Document.load_ora(path)
-        doc.path = ""
-        return doc
-    doc = Document.from_picture(path)
-    doc.path = ""
-    return doc
+    try:
+        if low.endswith(".psd"):
+            doc = read_psd(path)
+            doc.path = ""
+        elif low.endswith(".easel"):
+            doc = Document.load_easel(path)
+        elif low.endswith(".ora"):
+            doc = Document.load_ora(path)
+            doc.path = ""
+        else:
+            doc = Document.from_picture(path)
+            doc.path = ""
+        return doc.tidy()
+    except (ValueError, OSError):
+        raise
+    except MemoryError:
+        raise ValueError("There isn't enough memory to open that picture.") from None
+    except Exception as err:                                   # noqa: BLE001  (a damaged file can fail in any way at all)
+        raise ValueError("The file is damaged or isn't what its name says.") from err
 
 
 # ------------------------------------------------------------------------------------------- brushes
@@ -1459,6 +1855,9 @@ def read_psd(path: str) -> "Document":
     depth, mode = int.from_bytes(data[22:24], "big"), int.from_bytes(data[24:26], "big")
     if depth != 8 or mode not in (1, 3):
         raise ValueError("Easel reads 8-bit RGB and greyscale Photoshop files; this one is " + ({16: "16-bit", 32: "32-bit"}.get(depth, f"{depth}-bit")) + " or another colour mode.")
+    w, h = checked_size(w, h)
+    if not 1 <= channels <= 56:
+        raise ValueError("That Photoshop file is damaged (it says it has no colour channels).")
     pos = 26
     pos += 4 + int.from_bytes(data[pos:pos + 4], "big")              # colour mode data
     pos += 4 + int.from_bytes(data[pos:pos + 4], "big")              # image resources
@@ -1471,6 +1870,7 @@ def read_psd(path: str) -> "Document":
         q = pos + 8
         if li_len:
             count = abs(int.from_bytes(data[q:q + 2], "big", signed=True))
+            checked_size(w, h, count + 1)
             q += 2
             records = []
             for _ in range(count):
@@ -1572,19 +1972,10 @@ def write_psd(doc: "Document", path: str) -> None:
     out += struct.pack(">I", len(res)) + res                          # the resolution, so print sizes come across
     import huginn_easel_more as more
 
-    def pick(items):                                                  # a group with styles goes as one picture
-        out = []
-        for it in items:
-            if isinstance(it, tuple):
-                out += [it[1]] if more.has_fx(it[1]) else pick(it[2])
-            elif it["kind"] != "adjust":
-                out.append(it)
-        return out
-    layers = pick(more.tree(doc.layers))
+    layers = doc.export_layers(groups=False, clipping=True)
     records, pictures = bytearray(), bytearray()
     for l in layers:
-        img = doc.styled_image(l)
-        rgba = image_to_array(img)
+        rgba = image_to_array(l["image"])
         ys, xs = np.nonzero(rgba[..., 3])
         if len(xs):
             top, left, bottom, right = int(ys.min()), int(xs.min()), int(ys.max()) + 1, int(xs.max()) + 1
@@ -1606,8 +1997,8 @@ def write_psd(doc: "Document", path: str) -> None:
         records += struct.pack(">iiiiH", top, left, bottom, right, len(chans))
         for cid, body in chans:
             records += struct.pack(">hI", cid, len(body))
-        records += b"8BIM" + PSD_KEYS.get(l["blend"], "norm").encode("latin-1") + bytes([int(round(doc.opacity_in_place(l) * 255)), 1 if l.get("clip") else 0,
-                                                                                            (0 if doc.visible_in_place(l) else 2) | (1 if l.get("lockAlpha") else 0), 0])
+        records += b"8BIM" + PSD_KEYS.get(l["blend"], "norm").encode("latin-1") + bytes([int(round(max(0.0, min(1.0, l["opacity"])) * 255)), 1 if l["clip"] else 0,
+                                                                                            (0 if l["visible"] else 2) | (1 if l["lockAlpha"] else 0), 0])
         records += struct.pack(">I", len(extra)) + extra
         for _, body in chans:
             pictures += body

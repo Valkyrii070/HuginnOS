@@ -284,6 +284,10 @@ class Easel(QObject):
     def _fresh(self) -> None:
         self._drop_drag()
         self._undo, self._redo, self._picked, self._crop, self._pen, self._mask_edit, self._drag = [], [], [], None, None, "", None
+        # nothing of the last picture carries into this one: a transform left open, a stroke's preview, the clone
+        # source and the point being edited all pointed at its layers (and kept them, and their memory, alive)
+        self._xform, self._live, self._clone_src, self._clone_off, self._node_sel, self._hover, self._guide_live = None, None, None, None, None, None, None
+        self._last_point = None
         self._saved_at = None
         self._selection_changed()
         self.changed.emit()
@@ -301,7 +305,7 @@ class Easel(QObject):
         try:
             doc = ez.open_any(path)
         except (OSError, ValueError, KeyError, zipfile_error()) as err:
-            self.said.emit(f"Couldn't open “{Path(path).name}”: {err}", True)
+            self.said.emit(f"Couldn't open “{Path(path).name}”: {getattr(err, 'strerror', None) or err}", True)
             return
         self.doc = doc
         self._fresh()
@@ -382,6 +386,7 @@ class Easel(QObject):
         if Path(path).suffix.lower() not in (".png", ".jpg", ".jpeg", ".webp", ".svg", ".pdf", ".ora", ".psd", ".tif", ".tiff", ".bmp"):
             path += ".png"
         try:
+            self.doc.export_note = ""
             if path.lower().endswith(".ora"):
                 self.doc.save_ora(path)
             else:
@@ -392,6 +397,11 @@ class Easel(QObject):
         kind = Path(path).suffix.upper().lstrip(".")
         extra = (" Shapes stay shapes in it." if kind in ("SVG", "PDF") else " Krita and GIMP open it with its layers." if kind == "ORA"
                  else " Photoshop opens it with its layers (shapes and type as pictures)." if kind == "PSD" else "")
+        note = getattr(self.doc, "export_note", "")
+        if note and kind in ("SVG", "PDF"):
+            extra = " " + note
+        elif note and kind in ("ORA", "PSD"):
+            extra += " " + note
         self.said.emit(f"Exported “{Path(path).name}”.{extra}", False)
 
     @Slot()
@@ -515,25 +525,10 @@ class Easel(QObject):
                 return None
         return doc._stack(items[:at]), (doc._stack(above) if above else None)
 
-    def _brush_frame(self, d: dict) -> QImage:
-        doc = self.doc
-        if "parts" not in d:
-            d["parts"] = self._stroke_parts(d["layer"])
-            d["frame"] = doc.composite(self._live)
-            d["new"] = None
-            return d["frame"]
-        if d["parts"] is None:
-            return doc.composite(self._live)
-        patch = d.get("new")
-        d["new"] = None
-        if patch is None:
-            return d["frame"]
-        r = patch.toAlignedRect().intersected(QRect(0, 0, doc.w, doc.h))
-        if r.isEmpty():
-            return d["frame"]
-        below, above = d["parts"]
-        layer = d["layer"]
-        mine = layer["image"].copy(r)                                  # the layer with the stroke so far, in the patch
+    def _stroke_patch(self, d: dict, r: QRect) -> QImage:
+        """The painted layer inside r, with the stroke so far (before its mask)."""
+        doc, layer = self.doc, d["layer"]
+        mine = layer["image"].copy(r)
         stroke = d["stroke"].copy(r)
         if doc.selection is not None:
             p = QPainter(stroke)
@@ -542,25 +537,62 @@ class Easel(QObject):
             p.end()
         p = QPainter(mine)
         p.setOpacity(self.opacity)
-        p.setCompositionMode(ez.CM.CompositionMode_DestinationOut if d["erase"] else ez.CM.CompositionMode_SourceOver)
+        if layer.get("lockAlpha"):                                     # (as _merge does it: only on what's there; the eraser paints the back colour)
+            if d["erase"]:
+                q = QPainter(stroke)
+                q.setCompositionMode(ez.CM.CompositionMode_SourceIn)
+                q.fillRect(stroke.rect(), QColor(self.bg))
+                q.end()
+            p.setCompositionMode(ez.CM.CompositionMode_SourceAtop)
+        else:
+            p.setCompositionMode(ez.CM.CompositionMode_DestinationOut if d["erase"] else ez.CM.CompositionMode_SourceOver)
         p.drawImage(0, 0, stroke)
         p.end()
-        if layer.get("mask") is not None and layer.get("maskOn", True):
-            p = QPainter(mine)
-            p.setCompositionMode(ez.CM.CompositionMode_DestinationIn)
-            p.drawImage(0, 0, layer["mask"].copy(r))
+        return mine
+
+    def _brush_frame(self, d: dict) -> QImage:
+        doc = self.doc
+        layer = d["layer"]
+        if "parts" not in d:
+            d["parts"] = self._stroke_parts(layer)
+            # with blend modes, adjustment layers, clipping or locked transparency in play the two-halves short cut
+            # doesn't hold, but a patch of the picture can still be put together on its own (styles on the painted
+            # layer, or on a group it's in, are the one thing that can't)
+            d["patchy"] = d["parts"] is None and layer["kind"] == "pixel" and not more.has_fx(layer) \
+                and not any(more.has_fx(doc.layer(g)) for g in more.ancestors(doc.layers, layer))
+            d["frame"] = doc.composite(self._live)
+            d["new"] = None
+            return d["frame"]
+        if d["parts"] is None and not d.get("patchy"):
+            return doc.composite(self._live)
+        patch = d.get("new")
+        d["new"] = None
+        if patch is None:
+            return d["frame"]
+        r = patch.toAlignedRect().intersected(QRect(0, 0, doc.w, doc.h))
+        if r.isEmpty():
+            return d["frame"]
+        if d["parts"] is None:
+            piece = doc.composite_patch(r, (layer["id"], None, lambda rr: self._stroke_patch(d, rr)))
+        else:
+            below, above = d["parts"]
+            mine = self._stroke_patch(d, r)
+            if layer.get("mask") is not None and layer.get("maskOn", True):
+                p = QPainter(mine)
+                p.setCompositionMode(ez.CM.CompositionMode_DestinationIn)
+                p.drawImage(0, 0, layer["mask"].copy(r))
+                p.end()
+            piece = below.copy(r)
+            p = QPainter(piece)
+            if layer["visible"]:
+                p.setOpacity(layer["opacity"])
+                p.setCompositionMode(ez.BLENDS.get(layer["blend"], ez.CM.CompositionMode_SourceOver))
+                p.drawImage(0, 0, mine)
+            if above is not None:
+                p.setOpacity(1.0)
+                p.setCompositionMode(ez.CM.CompositionMode_SourceOver)
+                p.drawImage(0, 0, above.copy(r))
             p.end()
-        piece = below.copy(r)
-        p = QPainter(piece)
-        if layer["visible"]:
-            p.setOpacity(layer["opacity"])
-            p.setCompositionMode(ez.BLENDS.get(layer["blend"], ez.CM.CompositionMode_SourceOver))
-            p.drawImage(0, 0, mine)
-        if above is not None:
-            p.setOpacity(1.0)
-            p.setCompositionMode(ez.CM.CompositionMode_SourceOver)
-            p.drawImage(0, 0, above.copy(r))
-        p.end()
         p = QPainter(d["frame"])
         p.setCompositionMode(ez.CM.CompositionMode_Source)
         p.drawImage(r.topLeft(), piece)
@@ -2614,6 +2646,9 @@ class Easel(QObject):
 
     def _move_pen(self, pt: QPointF, mods: int) -> None:
         """Dragging after a click pulls out the curve's handles (mirrored either side of the point)."""
+        if self._pen is None:                                         # (the path was finished from the keyboard in mid-drag)
+            self._drop_drag()
+            return
         nd = self._drag["node"]
         dx, dy = pt.x() - nd["x"], pt.y() - nd["y"]
         if math.hypot(dx, dy) < 1:
@@ -3405,9 +3440,10 @@ class Easel(QObject):
         """Bring a picture in as a smart object, fitted inside the canvas."""
         if not self.doc:
             return
-        img = QImage(path)
-        if img.isNull():
-            self.said.emit("That picture couldn't be read.", True)
+        try:                                                         # read as Open reads it: any file Easel opens, checked the same way
+            img = ez.open_any(path.replace("file://", "")).flattened()
+        except (OSError, ValueError) as err:
+            self.said.emit(f"Couldn't place “{Path(path).name}”: {getattr(err, 'strerror', None) or err}", True)
             return
         img = img.convertToFormat(ez.FMT)
         self._push("Place")
@@ -3811,6 +3847,7 @@ class EaselView(QQuickPaintedItem):
     @Slot(float, float, float, float)
     def setPads(self, left: float, top: float, right: float, bottom: float):
         """Where the islands sit, so fitting the picture keeps it clear of them."""
+        left, top, right, bottom = (max(0.0, min(4000.0, float(v))) if isinstance(v, (int, float)) and math.isfinite(v) else 0.0 for v in (left, top, right, bottom))
         if (left, top, right, bottom) != self._pads:
             self._pads = (left, top, right, bottom)
             if not getattr(self, "_user_zoom", False):
@@ -3847,7 +3884,7 @@ class EaselView(QQuickPaintedItem):
         # a brush stroke: only the patch its new dabs touched is drawn again (with the brush's outline), not the
         # whole canvas, so painting on a big picture keeps up with the pointer
         d = self._easel._drag if self._easel else None
-        if d and d.get("kind") == "brush" and d.get("parts") is not None and d.get("new") is not None and self._fitted:
+        if d and d.get("kind") == "brush" and (d.get("parts") is not None or d.get("patchy")) and d.get("new") is not None and self._fitted:
             self.update(self._on_canvas(d["new"]).united(self._outline_rect()))
             return
         self._all()
@@ -3922,8 +3959,25 @@ class EaselView(QQuickPaintedItem):
     def actualSize(self):
         self.setZoom(1.0)
 
+    def _keep(self) -> None:
+        """The picture never leaves the canvas altogether: however far it's scrolled or dragged, a strip of it stays
+        in sight (it could be wheeled away into nowhere, with only Fit to bring it back)."""
+        doc = self._easel.doc if self._easel else None
+        if doc is None:
+            return
+        z, w, h = self._zoom, max(1.0, self.width()), max(1.0, self.height())
+        strip = 48.0
+        if not (math.isfinite(self._ox) and math.isfinite(self._oy)):
+            self._ox, self._oy = (w - doc.w * z) / 2, (h - doc.h * z) / 2
+        self._ox = max(min(strip, w / 2) - doc.w * z, min(w - min(strip, w / 2), self._ox))
+        self._oy = max(min(strip, h / 2) - doc.h * z, min(h - min(strip, h / 2), self._oy))
+
     def _set_zoom(self, z: float, center: bool = False, around: QPointF = None):
-        z = max(0.02, min(64.0, z))
+        if not isinstance(z, (int, float)) or not math.isfinite(z) or not self._easel or not self._easel.doc:
+            return
+        if around is not None and not (math.isfinite(around.x()) and math.isfinite(around.y())):
+            around = QPointF(self.width() / 2, self.height() / 2)
+        z = max(0.02, min(64.0, float(z)))
         doc = self._easel.doc
         if center:
             self._ox = (self.width() - doc.w * z) / 2
@@ -3932,6 +3986,7 @@ class EaselView(QQuickPaintedItem):
             dx, dy = (around.x() - self._ox) / self._zoom, (around.y() - self._oy) / self._zoom
             self._ox, self._oy = around.x() - dx * z, around.y() - dy * z
         self._zoom = z
+        self._keep()
         if self._easel:
             self._easel.zoom = z
         self.zoomChanged.emit()
@@ -4003,6 +4058,7 @@ class EaselView(QQuickPaintedItem):
         if self._pan is not None:
             start, ox, oy = self._pan
             self._ox, self._oy = ox + event.position().x() - start.x(), oy + event.position().y() - start.y()
+            self._keep()
             self._all()
             return
         if self._easel:
@@ -4051,8 +4107,9 @@ class EaselView(QQuickPaintedItem):
             self._set_zoom(self._zoom * (1.15 if d.y() > 0 else 1 / 1.15), around=event.position())
         else:
             dx, dy = (d.y(), d.x()) if event.modifiers() & Qt.KeyboardModifier.ShiftModifier else (d.x(), d.y())
-            self._ox += dx / 2
-            self._oy += dy / 2
+            self._ox += max(-4000, min(4000, dx)) / 2
+            self._oy += max(-4000, min(4000, dy)) / 2
+            self._keep()
             self._all()
 
     KEYS = {Qt.Key.Key_B: "brush", Qt.Key.Key_E: "eraser", Qt.Key.Key_M: "select", Qt.Key.Key_L: "lasso", Qt.Key.Key_W: "wand", Qt.Key.Key_G: "gradient",
@@ -4119,6 +4176,7 @@ class EaselView(QQuickPaintedItem):
         if not e or not e.doc or self._img.isNull():
             return
         doc = e.doc
+        self._keep()                                                  # (the canvas may have been resized since)
         z = self._zoom
         target = QRectF(self._ox, self._oy, doc.w * z, doc.h * z)
         p.save()

@@ -881,6 +881,44 @@ three things an editor is expected to have.
   `def` snippet tabbed through, the outline and sticky lines, a conflict settled and marked resolved, the Markdown
   preview.
 
+**Easel, the deep dives** (`apps/huginn_easel.py`, `apps/huginn_easel_ui.py`): four more ways in, after round six's
+command fuzz. Each has a script in `scripts/tests/` that runs as an ordinary user (they refuse root).
+- *Damaged and hostile files* (`easel_files_fuzz.py`: Easel's own, OpenRaster, Photoshop and plain pictures, bytes
+  flipped, cut short, manifests with values of the wrong kind, headers promising enormous pictures). **A Photoshop
+  file whose header claimed 300 000 pixels a side made Easel ask for all of that memory and the system killed it.**
+  Every reader now checks the size (and the size times the number of layers) before setting anything aside, and
+  says the size in the refusal. Whatever else a file gets wrong, opening it gives a sound picture or a message: layer
+  settings of the wrong kind go back to their usual value, pictures of the wrong size are fitted, shapes and styles
+  that can't be drawn are dropped (a star with a billion points would never have finished drawing), and a pipe, a
+  folder or a file over 2 GB is refused without being read. Place a Picture goes through the same door, and so can
+  now place a Photoshop or Easel file. 4 500 damaged files: none crashed, hung or opened into nonsense.
+- *What each format keeps* (`easel_formats_check.py`: one feature at a time, saved and opened again, compared pixel
+  for pixel). Easel's own files, PNG, TIFF, WebP and BMP were already exact. **PDF and SVG ignored blend modes,
+  adjustment layers and clipping** (a Multiply layer came out as Normal: off by up to 190 of 255); Photoshop and
+  OpenRaster export dropped adjustment layers outright, OpenRaster lost clipping, and Photoshop got a group's blend
+  mode wrong. All four now give the same picture: what the format can't say is merged, and only that (an adjustment
+  with what's under it; in SVG and PDF everything up to the last layer that needs more than "this over that", with
+  shapes above it still shapes), and the export message says when that happened.
+- *A big picture* (`easel_speed_check.py`, 4000 × 3000). **Painting under an adjustment layer redrew the whole
+  picture for every step of the brush: about a second a frame.** A stroke now puts together only the patch it
+  touched, through blends, adjustments, masks, groups and clipping alike (1044 ms a frame to 11), and every frame is
+  checked in the tests to be the true picture. Adjustments work in bands on every core, and the six that treat each
+  channel alone use a table of 256 answers: same output to the last bit, 1.1 s to 0.37 s for Hue & Saturation here on
+  two cores. **A ragged selection (the magic wand on a photograph) froze Easel for 13 seconds** joining its outline up;
+  it's traced instead (0.04 s). Saving a 12-megapixel photo layer took 8 seconds of PNG packing: 0.8 now, for a file a
+  sixth bigger, with layers packed side by side. A closed picture's memory wasn't given back (a transform or a
+  stroke preview still pointed at it): 564 MB kept after closing became 311.
+- *The canvas itself* (`easel_view_fuzz.py`: presses, drags, the wheel, keys and resizes on the item that draws the
+  picture, drawn after each and compared with the picture Easel holds). The wheel could scroll the picture away
+  into nowhere with only Fit to bring it back: a strip always stays in sight now. Enter in the middle of pulling a
+  pen handle raised an error.
+- *Selection outlines were of the wrong part*: the marching ants traced what was NOT selected, so they also ran round
+  the canvas edge, and Select All showed none. Found by a test of the new outline code; it was there from the start.
+- Tests: `scripts/tests/easel_round7_test.py` (93 checks). Checked on screen: a stroke under the demo picture's
+  adjustment layer looks the same while painting as after, the magic wand's outline, and Select All's. Two checks in
+  an older test now fail on purpose: with an adjustment layer on top, SVG and OpenRaster export one merged picture
+  where they used to export layers that looked different from the picture.
+
 **Easel, pro round six** (`apps/huginn_easel.py`, `apps/huginn_easel_ui.py`, `apps/qml/Easel.qml`): a fuzz run first, then four
 things a painter expects.
 - *What the fuzz found, fixed* (`scripts/tests/easel_fuzz.py`: about 110 commands at random with sensible and senseless
