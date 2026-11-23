@@ -881,6 +881,26 @@ three things an editor is expected to have.
   `def` snippet tabbed through, the outline and sticky lines, a conflict settled and marked resolved, the Markdown
   preview.
 
+**Easel, round nine: brushes, gradients, selections** (`apps/huginn_easel.py`, `apps/huginn_easel_ui.py`, `apps/qml/Easel.qml`):
+three of the gaps listed under round eight, narrowed.
+- *Brush tips and dynamics.* A brush's mark can be a picture instead of a disc (bristle, grain, flat, spray, splatter,
+  leaf: each made from numbers, the same every time), and can change as it goes: turn along the stroke, hold one
+  angle like a nib, or have each dab turned, sized and faded by chance. Seven new brushes use them: Dry Bristle,
+  Charcoal, Calligraphy Pen (thick across its nib, a hairline along it), Ribbon, Spray Can, Splatter, Leaves. The
+  eraser uses them too. Still missing: tips from your own pictures, textures, tilt, wet mixing.
+- *Gradients of several colours*: seven ready-made (Sunset, Sky, Fire, Chrome, Gold, Spectrum, Aurora) beside the two
+  from the colours in hand, straight or round, with Reverse. Still missing: an editor for your own.
+- *Quick Selection brush*: drag over a thing and the selection spreads to its edges, a little way from the brush at a
+  time; Alt takes away. Spread sets how alike a colour must be.
+- *Quick Mask* (Q): the selection becomes something you paint. The brush adds, the eraser takes away, any tip, soft
+  or hard, shown as a wash of colour; Undo works on the mask; Q again and what's painted is the selection (a soft
+  brush gives a soft edge). Any other command finishes it first.
+- *Select › Smooth* (closes the pinholes and drops the specks the magic wand leaves) and *Select › Border* (a band
+  along the edge).
+- Still missing from selections: Select Subject, and Refine Edge for hair.
+- Tests: `scripts/tests/easel_round9_test.py` (63 checks). On screen: a calligraphy stroke, the Quick Mask wash and the
+  selection it leaves, the brush and gradient lists.
+
 **Easel, round eight: toward the big editors** (`apps/huginn_easel.py`, `apps/huginn_easel_ui.py`, `apps/qml/Easel.qml`)
 - *The canvas is put together at the size it's shown.* A big picture fitted to a window is shown at a half, a quarter
   or an eighth of its size, so that's the size it's now built at, from a smaller copy of each layer kept until that

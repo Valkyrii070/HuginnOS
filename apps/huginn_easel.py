@@ -1944,7 +1944,71 @@ BRUSHES = {"round": {"name": "Round", "size": 24, "hardness": 0.8, "flow": 1.0, 
            "ink": {"name": "Ink", "size": 8, "hardness": 0.95, "flow": 1.0, "spacing": 0.06, "scatter": 0.0},
            "airbrush": {"name": "Airbrush", "size": 120, "hardness": 0.0, "flow": 0.08, "spacing": 0.06, "scatter": 0.0},
            "chalk": {"name": "Chalk", "size": 30, "hardness": 0.6, "flow": 0.5, "spacing": 0.2, "scatter": 0.35},
-           "marker": {"name": "Marker", "size": 40, "hardness": 0.9, "flow": 0.35, "spacing": 0.05, "scatter": 0.0}}
+           "marker": {"name": "Marker", "size": 40, "hardness": 0.9, "flow": 0.35, "spacing": 0.05, "scatter": 0.0},
+           # brushes whose mark is a picture, not a disc (TIPS), and that change as they go: "follow" turns the tip
+           # along the stroke, "angle" fixes it (a pen held one way), and the jitters vary each dab's size, turn and strength
+           "bristle": {"name": "Dry Bristle", "size": 46, "hardness": 0.9, "flow": 0.7, "spacing": 0.07, "scatter": 0.0, "tip": "bristle", "follow": True},
+           "charcoal": {"name": "Charcoal", "size": 34, "hardness": 0.5, "flow": 0.45, "spacing": 0.12, "scatter": 0.06, "tip": "grain", "turn": 1.0, "vary": 0.15},
+           "calligraphy": {"name": "Calligraphy Pen", "size": 30, "hardness": 1.0, "flow": 1.0, "spacing": 0.03, "scatter": 0.0, "tip": "flat", "angle": 40.0},
+           "ribbon": {"name": "Ribbon", "size": 36, "hardness": 1.0, "flow": 1.0, "spacing": 0.03, "scatter": 0.0, "tip": "flat", "follow": True},
+           "spray": {"name": "Spray Can", "size": 110, "hardness": 0.0, "flow": 0.5, "spacing": 0.1, "scatter": 0.05, "tip": "spray", "turn": 1.0},
+           "splatter": {"name": "Splatter", "size": 90, "hardness": 1.0, "flow": 0.9, "spacing": 0.55, "scatter": 0.5, "tip": "splatter", "turn": 1.0, "vary": 0.5, "fade": 0.4},
+           "leaves": {"name": "Leaves", "size": 44, "hardness": 1.0, "flow": 1.0, "spacing": 0.8, "scatter": 0.7, "tip": "leaf", "turn": 1.0, "vary": 0.45, "fade": 0.3}}
+TIPS = ("round", "bristle", "grain", "flat", "spray", "splatter", "leaf")
+
+
+def tip_alpha(tip: str, size: float, hardness: float) -> np.ndarray:
+    """A brush tip's mark as how solid each pixel is (0..1), `size` pixels across. Made from numbers, the same every
+    time for the same size, so a stroke looks the same when it's redrawn."""
+    side = max(3, int(math.ceil(size)) + 2)
+    yy, xx = np.mgrid[0:side, 0:side].astype(np.float32)
+    c = (side - 1) / 2
+    x, y = (xx - c) / max(1.0, size / 2), (yy - c) / max(1.0, size / 2)      # -1..1 across the tip
+    r = np.sqrt(x * x + y * y)
+    rng = np.random.default_rng(7 + {t: k for k, t in enumerate(TIPS)}.get(tip, 0))
+    edge = lambda d, soft: np.clip((1 - d) / max(soft, 1.5 / max(2.0, size / 2)), 0, 1)
+    if tip == "flat":                                              # a chisel: long one way, thin the other
+        a = edge(np.maximum(np.abs(x), np.abs(y) / 0.16), 0.08)
+    elif tip == "bristle":                                         # a row of hairs across the stroke, some missing
+        hairs = rng.random(64) > 0.28
+        strength = 0.55 + 0.45 * rng.random(64)
+        k = np.clip(((y + 1) / 2 * 63).astype(np.int32), 0, 63)
+        a = edge(np.maximum(np.abs(x) / 0.22, np.abs(y)), 0.1) * hairs[k] * strength[k]
+    elif tip == "grain":                                           # a soft disc eaten into by paper grain
+        grain = rng.random((side, side)).astype(np.float32)
+        a = np.clip(edge(r, max(0.05, 1 - hardness)) * 1.6 - grain * 0.9, 0, 1)
+    elif tip == "spray":                                           # fine dots, thick in the middle and thin at the edge
+        a = (rng.random((side, side)) < np.exp(-(r * 2.2) ** 2) * 0.22).astype(np.float32) * (r < 1)
+    elif tip == "splatter":                                        # a few blots of different sizes
+        a = np.zeros((side, side), np.float32)
+        for _ in range(9):
+            bx, by, br = rng.uniform(-0.7, 0.7), rng.uniform(-0.7, 0.7), rng.uniform(0.05, 0.3) ** 1.0
+            a = np.maximum(a, np.clip((br - np.sqrt((x - bx) ** 2 + (y - by) ** 2)) * max(2.0, size / 2), 0, 1))
+    elif tip == "leaf":                                            # two arcs meeting in points, with a vein
+        a = edge(np.abs(y) / np.maximum(0.02, 0.42 * (1 - x * x)), 0.12) * (np.abs(x) < 1)
+        a = a * (1 - 0.55 * np.clip(1 - np.abs(y) * max(3.0, size / 3), 0, 1))
+    else:
+        a = edge(r, max(0.0, 1 - hardness)) if hardness < 0.98 else np.clip((1 - r) * max(1.0, size / 2), 0, 1)
+    return np.clip(a, 0, 1).astype(np.float32)
+
+
+def tip_image(tip: str, size: float, hardness: float, colour_: QColor) -> QImage:
+    a = tip_alpha(tip, size, hardness)
+    out = np.empty(a.shape + (4,), np.uint8)
+    out[..., 0], out[..., 1], out[..., 2] = colour_.red(), colour_.green(), colour_.blue()
+    out[..., 3] = (a * colour_.alpha() + 0.5).astype(np.uint8)
+    return array_to_image(out)
+
+
+# gradients with more than two colours: (place along the line, colour). "fgbg" and "fgclear" use the colours in hand.
+GRADIENTS = {"fgbg": ("Front to Back Colour", None), "fgclear": ("Front Colour to Clear", None),
+             "sunset": ("Sunset", [(0, "#1B1464"), (0.35, "#8E2A8B"), (0.62, "#E8505B"), (0.82, "#F9A03F"), (1, "#FFE9A8")]),
+             "sky": ("Sky", [(0, "#0B3C7D"), (0.5, "#3F8FE0"), (0.85, "#BFE1FF"), (1, "#FFFFFF")]),
+             "fire": ("Fire", [(0, "#000000"), (0.3, "#7A0A00"), (0.55, "#E8450A"), (0.8, "#FFC21A"), (1, "#FFFFE0")]),
+             "chrome": ("Chrome", [(0, "#F4F7FA"), (0.42, "#8D99A6"), (0.5, "#2B3138"), (0.58, "#B9C3CC"), (1, "#FFFFFF")]),
+             "gold": ("Gold", [(0, "#5B3A00"), (0.3, "#D9A521"), (0.5, "#FFF3B0"), (0.7, "#D9A521"), (1, "#6B4500")]),
+             "spectrum": ("Spectrum", [(0, "#FF0000"), (0.17, "#FFFF00"), (0.33, "#00FF00"), (0.5, "#00FFFF"), (0.67, "#0000FF"), (0.83, "#FF00FF"), (1, "#FF0000")]),
+             "aurora": ("Aurora", [(0, "#05101F"), (0.4, "#0E6B5C"), (0.65, "#3DDC97"), (0.85, "#9B5DE5"), (1, "#0B1026")])}
 
 
 def dab(size: float, hardness: float, colour_: QColor) -> QImage:

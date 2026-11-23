@@ -25,10 +25,10 @@ OPENABLE = (".easel", ".ora", ".psd", ".png", ".jpg", ".jpeg", ".webp", ".bmp", 
 PRESETS = [("Screen", 1920, 1080), ("4K screen", 3840, 2160), ("Square post", 1080, 1080), ("Story", 1080, 1920), ("A4 at 300 dpi", 2480, 3508),
            ("Letter at 300 dpi", 2550, 3300), ("App icon", 1024, 1024), ("Banner", 1500, 500), ("Phone wallpaper", 1290, 2796)]
 MIP_FROM = 2_000_000           # pictures with at least this many pixels are shown from smaller copies when zoomed out
-PIXEL_TOOLS = ["move", "transform", "select", "ellipsesel", "lasso", "wand", "brush", "eraser", "clone", "heal", "dodge", "smudge", "liquify", "fill", "gradient",
+PIXEL_TOOLS = ["move", "transform", "select", "ellipsesel", "lasso", "wand", "quick", "brush", "eraser", "clone", "heal", "dodge", "smudge", "liquify", "fill", "gradient",
                "picker", "text", "crop", "hand", "zoom"]
 VECTOR_TOOLS = ["pointer", "nodes", "pen", "rect", "ellipse", "line", "star", "text", "fill", "picker", "hand", "zoom"]
-TOOL_NAMES = {"move": "Move", "select": "Rectangle selection", "ellipsesel": "Ellipse selection", "lasso": "Lasso", "wand": "Magic wand",
+TOOL_NAMES = {"move": "Move", "select": "Rectangle selection", "ellipsesel": "Ellipse selection", "lasso": "Lasso", "wand": "Magic wand", "quick": "Quick selection",
               "brush": "Brush", "eraser": "Eraser", "fill": "Fill", "gradient": "Gradient", "picker": "Colour picker", "text": "Text", "crop": "Crop",
               "hand": "Hand", "zoom": "Zoom", "pointer": "Select", "pen": "Pen", "rect": "Rectangle", "ellipse": "Ellipse", "line": "Line", "star": "Star",
               "transform": "Free transform", "clone": "Clone", "heal": "Heal", "nodes": "Edit points", "dodge": "Dodge and burn", "smudge": "Smudge",
@@ -91,6 +91,8 @@ class Easel(QObject):
         self._sel_path = QPainterPath()
         self._xform = None                                       # a free transform in progress
         self._clone_src, self._clone_off, self.heal_spot = None, None, True
+        self.gradient_key, self.gradient_reverse = "fgbg", False    # which gradient (ez.GRADIENTS), and whether it runs the other way
+        self._quick, self._quick_undo = None, []                 # Quick Mask: the selection as a layer to paint on, and its own undo
         self.smoothing = 0.0                                     # steadies the hand: the brush trails the pointer and evens out wobble
         self.symmetry = ""                                       # mirror painting: "", "x" (left-right), "y" (top-bottom) or "xy"
         self._node_sel = None                                    # (shape id, subpath, node) being edited
@@ -126,6 +128,10 @@ class Easel(QObject):
     bgColour = Property(str, lambda self: self.bg, notify=changed)
     swatches = Property("QVariantList", lambda self: self._swatches, notify=changed)
     brushes = Property("QVariantList", lambda self: [{"id": k, "name": v["name"]} for k, v in ez.BRUSHES.items()], constant=True)
+    gradients = Property("QVariantList", lambda self: [{"id": k, "name": v[0]} for k, v in ez.GRADIENTS.items()], constant=True)
+    gradientKey = Property(str, lambda self: "fgclear" if self.gradient_clear and self.gradient_key == "fgbg" else self.gradient_key, notify=changed)
+    gradientReversed = Property(bool, lambda self: self.gradient_reverse, notify=changed)
+    quickMaskOn = Property(bool, lambda self: self._quick is not None, notify=changed)
     brushKey = Property(str, lambda self: self.brush_key, notify=changed)
     brushSize = Property(float, lambda self: self.brush["size"], notify=changed)
     brushHardness = Property(float, lambda self: self.brush["hardness"], notify=changed)
@@ -289,6 +295,7 @@ class Easel(QObject):
         # source and the point being edited all pointed at its layers (and kept them, and their memory, alive)
         self._xform, self._live, self._clone_src, self._clone_off, self._node_sel, self._hover, self._guide_live = None, None, None, None, None, None, None
         self._last_point = None
+        self._quick, self._quick_undo = None, []
         self._saved_at = None
         self._selection_changed()
         self.changed.emit()
@@ -413,6 +420,8 @@ class Easel(QObject):
 
     # ------------------------------------------------------------------ history
     def _push(self, name: str) -> None:
+        if self._quick is not None:                                   # anything else that changes the picture finishes the Quick Mask first
+            self.quickMask()
         if self._drag is not None and not getattr(self, "_pointing", False):
             self._settle()                                            # (a command from the keyboard in the middle of a stroke)
         if self._xform is not None:
@@ -463,6 +472,12 @@ class Easel(QObject):
     def undo(self) -> None:
         if self.doc and self._drag is not None:
             self._settle()
+        if self.doc and self._quick is not None:                      # in Quick Mask, Undo takes back the last thing painted on it
+            if self._quick_undo:
+                self._quick["image"] = self._quick_undo.pop()
+                self._quick["v"] = ez.next_v()
+                self._refresh()
+            return
         if not self._undo or not self.doc:
             return
         if self._pen is not None:
@@ -620,6 +635,17 @@ class Easel(QObject):
         """What the canvas draws over the picture, in document pixels."""
         out = {"selection": self._sel_path, "boxes": [], "handles": None, "pen": None, "crop": self._crop, "line": None, "rect": None, "lasso": None,
                "brush": None, "nodes": []}
+        if self._quick is not None:                                    # the mask shows as a wash of colour over what's selected
+            kept = getattr(self, "_quick_wash", None)
+            if kept is None or kept[0] != (self._quick["v"], id(self._quick["image"])):
+                wash = QImage(self._quick["image"])
+                q = QPainter(wash)
+                q.setCompositionMode(ez.CM.CompositionMode_SourceIn)
+                q.fillRect(wash.rect(), QColor("#FF3B6B"))
+                q.end()
+                kept = ((self._quick["v"], id(self._quick["image"])), wash)
+                self._quick_wash = kept
+            out["quick"], out["selection"] = kept[1], QPainterPath()
         d = self._drag or {}
         if d.get("kind") in ("select", "ellipsesel") and d.get("rect") is not None:
             out["rect"] = (d["kind"], d["rect"])
@@ -781,6 +807,12 @@ class Easel(QObject):
             self.gradient_kind = value
         elif key == "gradientClear":
             self.gradient_clear = bool(value)
+            if self.gradient_clear and self.gradient_key != "fgbg":
+                self.gradient_key = "fgbg"
+        elif key == "gradient" and isinstance(value, str) and value in ez.GRADIENTS:
+            self.gradient_key, self.gradient_clear = ("fgbg", True) if value == "fgclear" else (value, False)
+        elif key == "gradientReverse":
+            self.gradient_reverse = bool(value)
         self.changed.emit()
 
     @Slot(str, "QVariant")
@@ -1337,6 +1369,116 @@ class Easel(QObject):
         self._selection_changed()
         self._refresh()
 
+    @Slot()
+    def quickMask(self) -> None:
+        """Q: turn the selection into something you paint. The brush adds to it, the eraser takes away (any brush, any
+        size, soft or hard), shown as a wash of colour over the picture. Q again and what's painted is the selection."""
+        if not self.doc:
+            return
+        self._settle()
+        if self._quick is None:
+            if self._xform is not None:
+                self.applyTransform()
+            img = QImage(self.doc.selection) if self.doc.selection is not None else ez.new_image(self.doc.w, self.doc.h)
+            self._quick = {"id": "quickmask", "name": "Quick Mask", "kind": "pixel", "image": img, "locked": False, "visible": True, "opacity": 1.0,
+                           "blend": "normal", "mask": None, "maskOn": True, "v": ez.next_v()}
+            self._quick_undo = []
+            if self.tool not in ("brush", "eraser", "fill", "gradient"):
+                self.tool = "brush"
+            self.said.emit("Quick Mask: paint over what you want selected (the eraser takes away). Press Q when you're done.", False)
+        else:
+            a = ez.alpha_of(self._quick["image"])
+            self._quick, self._quick_undo = None, []
+            self._push("Quick Mask")
+            self.doc.selection = ez.alpha_image(a) if a.any() else None
+            self._selection_changed()
+        self._refresh()
+
+    @Slot(float)
+    def smoothSelection(self, px: float) -> None:
+        """Round off the selection's corners and close its pinholes (what the magic wand leaves on a photograph)."""
+        px = _f(px, 1.0, 100.0)
+        if not self.doc or self.doc.selection is None or px is None:
+            return
+        from PIL import Image, ImageFilter
+        self._push("Smooth selection")
+        a = np.asarray(Image.fromarray(self.doc.selection_alpha()).filter(ImageFilter.GaussianBlur(px)))
+        a = np.where(a > 127, 255, 0).astype(np.uint8)
+        self.doc.selection = ez.alpha_image(a) if a.any() else None
+        self._selection_changed()
+        self._refresh()
+
+    @Slot(float)
+    def borderSelection(self, px: float) -> None:
+        """Select a band along the selection's edge instead of its inside, `px` wide (half each side of the edge)."""
+        px = _f(px, 1.0, 400.0)
+        if not self.doc or self.doc.selection is None or px is None:
+            return
+        a = self.doc.selection_alpha().astype(np.float32) / 255.0
+        band = (more.distance_outside(a) <= px / 2) & (more.distance_inside(a) <= px / 2)
+        if not band.any():
+            return
+        self._push("Border selection")
+        self.doc.selection = ez.alpha_image(band.astype(np.uint8) * 255)
+        self._selection_changed()
+        self._refresh()
+
+    # --- the quick selection brush: drag over a thing and the selection spreads to its edges
+    def _press_quick(self, pt: QPointF, mods: int) -> None:
+        l = self.doc.layer()
+        source = l["image"] if l["kind"] == "pixel" else self.doc.composite()
+        self._push("Quick selection")
+        old = ez.alpha_of(self.doc.selection).copy() if self.doc.selection is not None else np.zeros((self.doc.h, self.doc.w), np.uint8)
+        self._drag = {"kind": "quick", "rgba": ez.image_to_array(source), "sel": old, "take": bool(mods & ALT), "last": None, "shown": 0.0, "changed": False}
+        self._quick_dab(self._drag, pt)
+        self._quick_show(self._drag, True)
+
+    def _quick_dab(self, d: dict, pt: QPointF) -> None:
+        size = max(6.0, self.brush["size"])
+        cx, cy = int(round(pt.x())), int(round(pt.y()))
+        if d["last"] is not None and math.hypot(cx - d["last"][0], cy - d["last"][1]) < size / 4:
+            return
+        d["last"] = (cx, cy)
+        h, w = d["sel"].shape
+        reach = int(size * 2.5)                                        # how far one dab may spread from where the brush is
+        x0, y0, x1, y1 = max(0, cx - reach), max(0, cy - reach), min(w, cx + reach + 1), min(h, cy + reach + 1)
+        if x1 <= x0 or y1 <= y0:
+            return
+        sub = d["rgba"][y0:y1, x0:x1]
+        yy, xx = np.ogrid[y0:y1, x0:x1]
+        far = (xx - cx) ** 2 + (yy - cy) ** 2
+        disc = far <= (size / 2) ** 2
+        if not disc.any():
+            return
+        ref = sub[disc].astype(np.float32).mean(axis=0)                # the colour under the brush
+        alike = np.abs(sub.astype(np.float32) - ref).max(axis=2) <= self.tolerance * 255 + 6
+        sx, sy = min(max(cx, x0), x1 - 1) - x0, min(max(cy, y0), y1 - 1) - y0
+        region = (ez.flood(alike | disc, sx, sy) | disc) & (far <= reach ** 2)
+        d["sel"][y0:y1, x0:x1][region] = 0 if d["take"] else 255
+        d["changed"] = True
+
+    def _quick_show(self, d: dict, now: bool = False) -> None:
+        import time as _time
+        if not d["changed"] or (not now and _time.monotonic() - d["shown"] < 0.1):
+            return                                                     # (the outline is drawn again ten times a second at most)
+        d["shown"], d["changed"] = _time.monotonic(), False
+        self.doc.selection = ez.alpha_image(d["sel"]) if d["sel"].any() else None
+        self._selection_changed()
+
+    def _move_quick(self, pt: QPointF, mods: int) -> None:
+        d = self._drag
+        lx, ly = d["last"] or (pt.x(), pt.y())
+        steps = max(1, int(math.hypot(pt.x() - lx, pt.y() - ly) / max(2.0, self.brush["size"] / 3)))
+        for k in range(1, min(steps, 40) + 1):                        # (a fast drag still touches everything it passed over)
+            self._quick_dab(d, QPointF(lx + (pt.x() - lx) * k / steps, ly + (pt.y() - ly) * k / steps))
+        self._quick_show(d)
+
+    def _release_quick(self, pt: QPointF, mods: int) -> None:
+        d = self._drag
+        self._quick_dab(d, pt)
+        d["changed"] = True
+        self._quick_show(d, True)
+
     @Slot(int)
     def growSelection(self, px: int) -> None:
         """Grow (or with a negative number, shrink) the selection by some pixels."""
@@ -1356,6 +1498,8 @@ class Easel(QObject):
     # ------------------------------------------------------------------ pixel targets
     def _target(self):
         """(layer, image to paint on, is it the mask). None when the active layer can't be painted."""
+        if self._quick is not None and self.tool in ("brush", "eraser"):   # Quick Mask: the brush and eraser paint the selection
+            return self._quick, "image"
         l = self.doc.layer()
         if l["locked"]:
             self.said.emit(f"“{l['name']}” is locked.", True)
@@ -1371,7 +1515,7 @@ class Easel(QObject):
 
     def _clip(self, img: QImage) -> QImage:
         """Keep only the part inside the selection."""
-        if self.doc.selection is None:
+        if self.doc.selection is None or self._quick is not None:
             return img
         out = img.copy()
         p = QPainter(out)
@@ -1387,7 +1531,7 @@ class Easel(QObject):
         if mask_mode:                                                # on a mask, light colours show and dark ones hide
             erase = QColor(self.fg).lightness() < 128 if not erase else True
         l = self.doc.layer() if self.doc else None
-        if l and l.get("lockAlpha") and not mask_mode and not self._mask_edit:
+        if l and l.get("lockAlpha") and not mask_mode and not self._mask_edit and self._quick is None:
             # transparency locked: paint lands only on what's already there, and rubbing out paints the back colour
             src = self._clip(stroke)
             if erase:
@@ -1406,13 +1550,14 @@ class Easel(QObject):
         return out
 
     def _dab_image(self, erase: bool) -> QImage:
-        c = QColor("#FFFFFF") if (erase or self._mask_edit) else QColor(self.fg)
-        key = (round(self.brush["size"], 1), round(self.brush["hardness"], 2), c.rgba())
+        c = QColor("#FFFFFF") if (erase or self._mask_edit or self._quick is not None) else QColor(self.fg)
+        tip = self.brush.get("tip", "round")
+        key = (round(self.brush["size"], 1), round(self.brush["hardness"], 2), c.rgba(), tip)
         img = self._dabs.get(key)
         if img is None:
             if len(self._dabs) > 40:
                 self._dabs.clear()
-            img = ez.dab(self.brush["size"], self.brush["hardness"], c)
+            img = ez.dab(self.brush["size"], self.brush["hardness"], c) if tip == "round" else ez.tip_image(tip, self.brush["size"], self.brush["hardness"], c)
             self._dabs[key] = img
         return img
 
@@ -1448,17 +1593,37 @@ class Easel(QObject):
         jy = (random.random() - 0.5) * size * scatter * 2 if scatter else 0
         pr = self._pressure if pressure is None else pressure
         mode = self.pressure_mode if self._stylus else "off"
+        b = self.brush
+        k = a = 1.0
         if mode != "off" and pr < 0.999:                     # a pen: lighter pressure, a smaller or fainter dab
             k = max(0.08, pr) if mode in ("size", "both") else 1.0
             a = max(0.05, pr) if mode in ("opacity", "both") else 1.0
+        turn = None
+        if b.get("follow"):                                  # the tip turns to lie along the stroke
+            turn = d.get("heading", 0.0)
+        elif "angle" in b:                                   # or is held at one angle, like a pen's nib
+            turn = float(b["angle"])
+        if b.get("turn"):                                    # each dab turned its own way
+            turn = (turn or 0.0) + (random.random() - 0.5) * 360.0 * float(b["turn"])
+        if b.get("vary"):                                    # each dab a different size
+            k *= 1.0 + (random.random() * 2 - 1) * float(b["vary"])
+        if b.get("fade"):                                    # and a different strength
+            a *= 1.0 - random.random() * float(b["fade"])
+        if turn is not None or k != 1.0 or a != 1.0:
             w, h = img.width() * k, img.height() * k
             p.save()
             p.setOpacity(p.opacity() * a)
-            p.drawImage(QRectF(x + jx - w / 2, y + jy - h / 2, w, h), img)
+            if turn is not None:
+                p.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+                p.translate(x + jx, y + jy)
+                p.rotate(turn)
+                p.drawImage(QRectF(-w / 2, -h / 2, w, h), img)
+            else:
+                p.drawImage(QRectF(x + jx - w / 2, y + jy - h / 2, w, h), img)
             p.restore()
         else:
             p.drawImage(QPointF(x + jx - img.width() / 2, y + jy - img.height() / 2), img)
-        r = size / 2 + size * scatter + 2
+        r = (size / 2 + 2) * (1.0 + float(b.get("vary", 0))) * (1.45 if turn is not None else 1.0) + size * scatter + 2
         dab = QRectF(x - r, y - r, r * 2, r * 2)
         d["box"] = d["box"].united(dab) if d.get("box") else dab
         d["new"] = d["new"].united(dab) if d.get("new") else dab        # drawn since the canvas last showed it
@@ -1473,6 +1638,8 @@ class Easel(QObject):
             return
         dx, dy = (x - lx), (y - ly)
         length = math.hypot(dx, dy) or 1
+        if length > 1.5:
+            d["heading"] = math.degrees(math.atan2(dy, dx))     # (which way the stroke is going, for tips that follow it)
         start = step - d.get("carry", 0)
         p0, p1 = d.get("p_last", self._pressure), self._pressure
         for i in range(n):
@@ -1616,7 +1783,11 @@ class Easel(QObject):
                 self.said.emit("Brushes paint on pixel layers. Pick one, or add one with + in Layers.", True)
             return
         layer, which = target
-        self._push("Eraser" if erase else "Brush")
+        if layer is self._quick:                                      # (the mask keeps its own steps of undo: the picture isn't changing)
+            self._quick_undo.append(QImage(layer["image"]))
+            del self._quick_undo[:-30]
+        else:
+            self._push("Eraser" if erase else "Brush")
         stroke = ez.new_image(self.doc.w, self.doc.h)
         painter = QPainter(stroke)
         painter.setOpacity(self.brush["flow"])
@@ -1630,8 +1801,10 @@ class Easel(QObject):
         self._drag = d
         mask_mode = which == "mask"
         self._live = (layer["id"], (lambda img, d=d: self._merge(img, d["stroke"], d["erase"], self.opacity, mask_mode))) if not mask_mode else None
-        if mask_mode:
+        if mask_mode or layer is self._quick:
             self._live = (layer["id"], lambda img, d=d: img)
+        if layer is self._quick:
+            self._live = None
 
     def _press_eraser(self, pt: QPointF, mods: int) -> None:
         self._press_brush(pt, mods, erase=True)
@@ -1649,6 +1822,9 @@ class Easel(QObject):
         if d["which"] == "mask":                                       # show the mask as it is being painted
             d["layer"]["mask"] = self._merge(d.setdefault("mask0", d["layer"]["mask"]), d["stroke"], d["erase"], self.opacity, True)
             self.doc.touch(d["layer"])
+        elif d["layer"] is self._quick:                                # and the Quick Mask
+            d["layer"]["image"] = self._merge(d.setdefault("base0", d["layer"]["image"]), d["stroke"], d["erase"], self.opacity)
+            d["layer"]["v"] = ez.next_v()
 
     def _release_brush(self, pt: QPointF, mods: int) -> None:
         d = self._drag
@@ -1658,7 +1834,7 @@ class Easel(QObject):
         if d["which"] == "mask":
             layer["mask"] = self._merge(d.get("mask0", layer["mask"]), d["stroke"], d["erase"], self.opacity, True)
         else:
-            layer["image"] = self._merge(layer["image"], d["stroke"], d["erase"], self.opacity)
+            layer["image"] = self._merge(d.get("base0", layer["image"]), d["stroke"], d["erase"], self.opacity)
         self._last_point = (pt.x(), pt.y())
         self.doc.touch(layer)
 
@@ -1707,8 +1883,10 @@ class Easel(QObject):
             g = QRadialGradient(a, max(1.0, math.hypot(b.x() - a.x(), b.y() - a.y())))
         else:
             g = QLinearGradient(a, b)
-        g.setColorAt(0, c0)
-        g.setColorAt(1, c1)
+        stops = ez.GRADIENTS.get(self.gradient_key, ("", None))[1]
+        stops = [(0.0, c0), (1.0, c1)] if stops is None or self._quick is not None or self._mask_edit else [(at, QColor(c)) for at, c in stops]
+        for at, c in stops:
+            g.setColorAt(1.0 - at if self.gradient_reverse else at, c)
         p = QPainter(img)
         p.fillRect(0, 0, self.doc.w, self.doc.h, QBrush(g))
         p.end()
@@ -2747,7 +2925,9 @@ class Easel(QObject):
 
     @Slot()
     def escape(self) -> None:
-        if self._xform is not None:
+        if self._quick is not None:
+            self.quickMask()
+        elif self._xform is not None:
             self.cancelTransform()
         elif self._node_sel is not None:
             self._node_sel = None
@@ -4202,6 +4382,8 @@ class EaselView(QQuickPaintedItem):
             e.setTool("move" if e.persona == "pixel" else "pointer")
         elif k in self.KEYS and self.KEYS[k] in (PIXEL_TOOLS if e.persona == "pixel" else VECTOR_TOOLS):
             e.setTool(self.KEYS[k])
+        elif k == Qt.Key.Key_Q:
+            e.quickMask()
         elif k == Qt.Key.Key_X:
             e.swapColours()
         elif k == Qt.Key.Key_D:
@@ -4287,6 +4469,12 @@ class EaselView(QQuickPaintedItem):
             pen.setDashOffset(self._ants)
             p.setPen(pen)
             p.drawPath(mapped)
+        if ov.get("quick") is not None:
+            p.save()
+            p.setOpacity(0.45)
+            p.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, z < 2)
+            p.drawImage(target, ov["quick"])
+            p.restore()
         if not ov["selection"].isEmpty():
             ants(ov["selection"])
         if ov["rect"] is not None:
