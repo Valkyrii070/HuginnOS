@@ -881,6 +881,27 @@ three things an editor is expected to have.
   `def` snippet tabbed through, the outline and sticky lines, a conflict settled and marked resolved, the Markdown
   preview.
 
+**Easel, round eleven: liquify, smooth tones, your own gradients, Colour Range**
+(`apps/huginn_easel.py`, `apps/huginn_easel_ui.py`, `apps/qml/Easel.qml`; `scripts/tests/easel_round11_test.py`, 62 checks):
+- *Liquify draws a patch at a time*, the last of the retouching tools to do so: under adjustment layers and blend
+  modes on a 6-megapixel picture it now keeps up with the pen. Each frame is checked to be the true picture.
+- *Gradients without steps.* A long gentle gradient in 8 bits has only so many levels to use, and drawn the plain way
+  shows them as bands. Easel now works the gradient in fine numbers and rounds with an even grain
+  (`ez.gradient_image`): averaged over a small patch the tone is right to a small part of a level everywhere, flat
+  colour stays exactly itself, and the grain is the same every time. While dragging on a big picture the quick
+  version is shown; what's kept on letting go is the fine one (a third of a second for 12 megapixels).
+- *Adjustment layers one over another are worked as one* (`apply_adjust_run`): plain ones in a row (full strength,
+  no mask, each channel on its own) carry fine numbers from one to the next and are rounded once. A stack of five
+  costs what one did, and darken-then-lighten no longer loses tones twice.
+- *Gradients of your own*: the gradient list has New from This…, which opens an editor (click the bar to add the
+  front colour, drag markers, Remove, Turn Round). Kept in `easel-gradients.json` under the user's data; yours can
+  be changed or forgotten, the ready-made ones can't be overwritten.
+- *Select › Colour Range*: the front colour, highlights, midtones, shadows, or a family of hues, with a Range slider
+  and what would be chosen washed over the picture as you move it. Soft where the picture is soft; inside the
+  selection if there is one.
+- Also: a selection of specks by the hundred thousand (a colour range over grain) is outlined by the patches the
+  specks make up; an outline round every speck took many seconds. What's selected is unchanged.
+
 **Easel, round ten: retouching speed, filter previews, Refine Edge, your own brushes, type spacing**
 (`apps/huginn_easel.py`, `apps/huginn_easel_ui.py`, `apps/qml/Easel.qml`; `scripts/tests/easel_round10_test.py`, 43 checks):
 - *Retouching brushes draw a patch at a time.* Dodge, burn, sponge, soften, sharpen, smudge, clone and heal used to
@@ -945,20 +966,22 @@ three of the gaps listed under round eight, narrowed.
   longer blend list. **What this does not make Easel**: see "Where Easel still falls short" below.
 
 **Where Easel still falls short of Photoshop and Affinity Photo** (so nobody is surprised; kept up to date, last after
-round ten):
+round eleven):
 - *Colour depth and management*: 8 bits a channel, sRGB only. No 16- or 32-bit pictures, no ICC profiles, no CMYK, no
   soft proofing. This is the largest gap for print and for heavy tonal work, and it reaches into every pixel routine.
+  (Round eleven takes the worst of the visible symptom away, steps in smooth tones, for gradients and for
+  adjustment layers one over another; the pictures themselves are still 8-bit.)
 - *How pictures are held*: whole layers in memory, drawn on the processor. The big editors hold tiles, keep a pyramid
   of sizes on disk and draw with the graphics card. Easel is comfortable at 12 megapixels and usable well past it; a
-  100-megapixel, 50-layer file is beyond it. Liquify still redraws the whole picture each frame.
-- *Selections*: no Select Subject or object selection (those need a trained model), no selecting by colour range
-  with a preview. Refine Edge has one control, not Photoshop's whole workspace.
+  100-megapixel, 50-layer file is beyond it.
+- *Selections*: no Select Subject or object selection (those need a trained model). Refine Edge and Colour Range
+  have one control each, not Photoshop's whole workspaces.
 - *Brushes*: no textures, dual brushes, tilt, wet mixing or brush files from other programs (.abr).
 - *Type*: one style per text box. No paragraph controls (justify, indents, hyphenation), no OpenType features, and
   type doesn't stay editable in a Photoshop file.
 - *Photography*: no raw files, no lens corrections, no HDR or panorama merging, no focus stacking.
 - *The rest*: no actions or batch processing, no artboards or slices, no 3D or video, no plug-ins, no generative fill,
-  no channels panel, no pattern fills, no editor for your own gradients.
+  no channels panel, no pattern fills. The gradient editor has no transparency stops or midpoints.
 
 **Easel, the deep dives** (`apps/huginn_easel.py`, `apps/huginn_easel_ui.py`): four more ways in, after round six's
 command fuzz. Each has a script in `scripts/tests/` that runs as an ordinary user (they refuse root).

@@ -7,6 +7,7 @@ import json
 import math
 import os
 import random
+import re
 import threading
 from pathlib import Path
 
@@ -110,7 +111,9 @@ class Easel(QObject):
         self._recent = [r for r in prefs.get("recent", []) if isinstance(r, str)][:12]
         self.fg, self.bg = prefs.get("fg", self.fg), prefs.get("bg", self.bg)
         self.snap, self.rulers = bool(prefs.get("snap", True)), bool(prefs.get("rulers", False))
+        self._range, self._range_kept = None, None                # Select › Colour Range being tried: the wash shown, and the sums kept
         self._load_brushes()
+        self._load_gradients()
         self._swatches = prefs.get("swatches") or ["#14171C", "#FFFFFF", "#E5484D", "#F76B15", "#FFC53D", "#30A46C", "#12A594", "#0090FF", "#3E63DD", "#8E4EC6", "#D6409F", "#8D8D8D"]
         if demo:
             self._demo_doc()
@@ -130,7 +133,7 @@ class Easel(QObject):
     bgColour = Property(str, lambda self: self.bg, notify=changed)
     swatches = Property("QVariantList", lambda self: self._swatches, notify=changed)
     brushes = Property("QVariantList", lambda self: [{"id": k, "name": v["name"]} for k, v in ez.BRUSHES.items()], notify=changed)
-    gradients = Property("QVariantList", lambda self: [{"id": k, "name": v[0]} for k, v in ez.GRADIENTS.items()], constant=True)
+    gradients = Property("QVariantList", lambda self: [{"id": k, "name": v[0], "mine": k in self._my_gradients} for k, v in ez.GRADIENTS.items()], notify=changed)
     gradientKey = Property(str, lambda self: "fgclear" if self.gradient_clear and self.gradient_key == "fgbg" else self.gradient_key, notify=changed)
     gradientReversed = Property(bool, lambda self: self.gradient_reverse, notify=changed)
     quickMaskOn = Property(bool, lambda self: self._quick is not None, notify=changed)
@@ -295,6 +298,139 @@ class Easel(QObject):
                 continue
             self._add_brush(ez.alpha_of(img.convertToFormat(ez.FMT)).astype(np.float32) / 255.0, f.stem)
 
+    # ------------------------------------------------------------------ gradients of your own
+    def _load_gradients(self) -> None:
+        self._my_gradients = {}
+        if self._demo:
+            return
+        try:
+            kept = json.loads((PREFS.parent / "easel-gradients.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return
+        if not isinstance(kept, dict):
+            return
+        for key, g in list(kept.items())[:60]:
+            try:
+                if not (isinstance(key, str) and re.fullmatch(r"mg[0-9a-f]{8}", key)):    # (no ready-made one has a name like that)
+                    continue
+                stops = [(at, c.name(QColor.NameFormat.HexArgb)) for at, c in ez.gradient_stops(g["stops"])]
+                name = str(g.get("name") or "My Gradient")[:40]
+            except (ValueError, TypeError, KeyError, AttributeError):
+                continue
+            self._my_gradients[key] = {"name": name, "stops": stops}
+            ez.GRADIENTS[key] = (name, stops)
+
+    def _save_gradients(self) -> None:
+        if self._demo:
+            return
+        try:
+            PREFS.parent.mkdir(parents=True, exist_ok=True)
+            (PREFS.parent / "easel-gradients.json").write_text(json.dumps(self._my_gradients, indent=1), encoding="utf-8")
+        except OSError:
+            pass
+
+    @Slot(str, result="QVariantList")
+    def gradientStops(self, key: str) -> list:
+        """A gradient's colours, for the editor: [{at, colour}]. The two made from the colours in hand give those."""
+        stops = ez.GRADIENTS.get(key, ("", None))[1]
+        if stops is None:
+            end = QColor(self.fg) if key == "fgclear" else QColor(self.bg)
+            if key == "fgclear":
+                end.setAlpha(0)
+            stops = [(0.0, QColor(self.fg)), (1.0, end)]
+        return [{"at": float(at), "colour": QColor(c).name(QColor.NameFormat.HexArgb if QColor(c).alpha() < 255 else QColor.NameFormat.HexRgb)} for at, c in stops]
+
+    @Slot("QVariantList", str, result=str)
+    def saveGradient(self, stops: list, key: str = "") -> str:
+        """Keep a gradient made in the editor (a new one, or one of your own changed) and take it in hand."""
+        try:
+            good = [(at, c.name(QColor.NameFormat.HexArgb if c.alpha() < 255 else QColor.NameFormat.HexRgb))
+                    for at, c in ez.gradient_stops([(st.get("at"), st.get("colour")) for st in stops if isinstance(st, dict)])]
+        except (ValueError, TypeError, AttributeError):
+            self.said.emit("A gradient needs at least two colours.", True)
+            return ""
+        if key not in self._my_gradients:
+            if len(self._my_gradients) >= 60:
+                self.said.emit("That's sixty gradients of your own. Forget one to make room.", True)
+                return ""
+            key = "mg" + os.urandom(4).hex()
+            taken = {g["name"] for g in self._my_gradients.values()}
+            name = next(f"My Gradient {i}" for i in range(1, 200) if f"My Gradient {i}" not in taken)
+        else:
+            name = self._my_gradients[key]["name"]
+        self._my_gradients[key] = {"name": name, "stops": good}
+        ez.GRADIENTS[key] = (name, good)
+        self._save_gradients()
+        self.gradient_key, self.gradient_clear = key, False
+        self.said.emit(f"{name} is in the gradient list.", False)
+        self.changed.emit()
+        return key
+
+    @Slot(str)
+    def forgetGradient(self, key: str) -> None:
+        if key not in self._my_gradients:
+            return
+        del self._my_gradients[key]
+        ez.GRADIENTS.pop(key, None)
+        if self.gradient_key == key:
+            self.gradient_key = "fgbg"
+        self._save_gradients()
+        self.changed.emit()
+
+    # ------------------------------------------------------------------ choosing by colour or tone
+    ranges = Property("QVariantList", lambda self: [{"id": k, "name": v} for k, v in ez.RANGES.items()], constant=True)
+
+    def _range_alpha(self, kind: str, fuzz: float):
+        fuzz = _f(fuzz, 0.0, 1.0)
+        if not self.doc or kind not in ez.RANGES or fuzz is None:
+            return None
+        key = (kind, round(fuzz, 3), self.fg if kind == "colour" else "", id(self.doc), self.doc.version, id(self.doc.selection))
+        kept = self._range_kept
+        if kept is not None and kept[0] == key:
+            return kept[1]
+        a = ez.colour_range(ez.image_to_array(self.doc.composite()), kind, self.fg, fuzz)
+        if self.doc.selection is not None:                             # inside what's already selected
+            a = (a.astype(np.uint16) * self.doc.selection_alpha() // 255).astype(np.uint8)
+        self._range_kept = (key, a)
+        return a
+
+    @Slot(str, float)
+    def previewRange(self, kind: str, fuzz: float) -> None:
+        """Select › Colour Range, while its sheet is open: what would be selected shows as a wash over the picture."""
+        a = self._range_alpha(kind, fuzz)
+        if a is None:
+            return
+        wash = ez.alpha_image(a)
+        q = QPainter(wash)
+        q.setCompositionMode(ez.CM.CompositionMode_SourceIn)
+        q.fillRect(wash.rect(), QColor("#FF3B6B"))
+        q.end()
+        self._range = wash
+        self.painted.emit()
+
+    @Slot()
+    def endRange(self) -> None:
+        if self._range is not None:
+            self._range, self._range_kept = None, None
+            self.painted.emit()
+
+    @Slot(str, float)
+    def selectRange(self, kind: str, fuzz: float) -> None:
+        a = self._range_alpha(kind, fuzz)
+        if a is None:
+            return
+        self._range = None
+        if not (a > 8).any():
+            self._range_kept = None
+            self.said.emit("Nothing in the picture is in that range.", True)
+            self.painted.emit()
+            return
+        self._push("Colour range")
+        self._range_kept = None
+        self.doc.selection = ez.alpha_image(a)
+        self._selection_changed()
+        self._refresh()
+
     def _add_brush(self, tip: np.ndarray, key: str) -> str:
         ez.CUSTOM_TIPS[key] = tip
         n = sum(1 for b in ez.BRUSHES.values() if b.get("tip") in ez.CUSTOM_TIPS and b.get("tip") != key) + 1
@@ -410,6 +546,7 @@ class Easel(QObject):
         self._last_point = None
         self._quick, self._quick_undo = None, []
         self._fprev = None
+        self._range, self._range_kept = None, None
         self._saved_at = None
         self._selection_changed()
         self.changed.emit()
@@ -536,6 +673,7 @@ class Easel(QObject):
     def _push(self, name: str) -> None:
         if self._fprev is not None:                                   # (a filter being tried is put away before anything is really done)
             self._fprev, self._live = None, None
+        self._range = None                                            # (and so is a colour range being tried)
         if self._quick is not None:                                   # anything else that changes the picture finishes the Quick Mask first
             self.quickMask()
         if self._drag is not None and not getattr(self, "_pointing", False):
@@ -805,6 +943,8 @@ class Easel(QObject):
                 kept = ((self._quick["v"], id(self._quick["image"])), wash)
                 self._quick_wash = kept
             out["quick"], out["selection"] = kept[1], QPainterPath()
+        elif self._range is not None:              # a colour range being tried shows the same way
+            out["quick"], out["selection"] = self._range, QPainterPath()
         d = self._drag or {}
         if d.get("kind") in ("select", "ellipsesel") and d.get("rect") is not None:
             out["rect"] = (d["kind"], d["rect"])
@@ -2036,24 +2176,29 @@ class Easel(QObject):
         self.doc.touch(layer)
         self._refresh()
 
-    def _gradient_image(self, a: QPointF, b: QPointF) -> QImage:
-        img = ez.new_image(self.doc.w, self.doc.h)
+    def _gradient_image(self, a: QPointF, b: QPointF, quick: bool = False) -> QImage:
+        """The gradient over the whole picture. `quick` is for while it's being dragged out: Qt's own, in a hundredth of
+        a second on a big picture; what's kept when the button is let go is worked finely, with no steps in it."""
         c0, c1 = QColor(self.fg), QColor(self.bg)
         if self.gradient_clear:
             c1 = QColor(self.fg)
             c1.setAlpha(0)
-        if self.gradient_kind == "radial":
-            g = QRadialGradient(a, max(1.0, math.hypot(b.x() - a.x(), b.y() - a.y())))
-        else:
-            g = QLinearGradient(a, b)
         stops = ez.GRADIENTS.get(self.gradient_key, ("", None))[1]
         stops = [(0.0, c0), (1.0, c1)] if stops is None or self._quick is not None or self._mask_edit else [(at, QColor(c)) for at, c in stops]
-        for at, c in stops:
-            g.setColorAt(1.0 - at if self.gradient_reverse else at, c)
-        p = QPainter(img)
-        p.fillRect(0, 0, self.doc.w, self.doc.h, QBrush(g))
-        p.end()
-        return img
+        if self.gradient_reverse:
+            stops = [(1.0 - at, c) for at, c in reversed(stops)]
+        if quick and self.doc.w * self.doc.h > 1_500_000:
+            g = QRadialGradient(a, max(1.0, math.hypot(b.x() - a.x(), b.y() - a.y()))) if self.gradient_kind == "radial" else QLinearGradient(a, b)
+            for at, c in stops:
+                g.setColorAt(at, c)
+            img = ez.new_image(self.doc.w, self.doc.h)
+            p = QPainter(img)
+            p.fillRect(0, 0, self.doc.w, self.doc.h, QBrush(g))
+            p.end()
+            return img
+        if self.gradient_kind == "radial":
+            b = QPointF(a.x() + max(1.0, math.hypot(b.x() - a.x(), b.y() - a.y())), a.y())
+        return ez.gradient_image(self.doc.w, self.doc.h, self.gradient_kind, a, b, stops)
 
     def _press_gradient(self, pt: QPointF, mods: int) -> None:
         target = self._target()
@@ -2070,7 +2215,7 @@ class Easel(QObject):
             r = math.hypot(dx, dy)
             pt = QPointF(d["start"].x() + r * math.cos(ang), d["start"].y() + r * math.sin(ang))
         d["end"] = pt
-        grad = self._gradient_image(d["start"], pt)
+        grad = self._gradient_image(d["start"], pt, True)
         self._live = (d["layer"]["id"], lambda img, g=grad: self._merge(img, g, False, self.opacity))
 
     def _release_gradient(self, pt: QPointF, mods: int) -> None:
@@ -4019,9 +4164,11 @@ class Easel(QObject):
             self._lq = lq                                           # strokes one after another warp the same original: restore can go all the way back
         d = {"kind": "liquify", "layer": layer, "lq": lq, "out": lq.get("out", src.copy()), "last": (pt.x(), pt.y()), "img": layer["image"],
              "sel": (self.doc.selection_alpha().astype(np.float32) / 255) if self.doc.selection is not None else None}
+        d["which"], d["new"] = "image", None
+        d["patch"] = lambda r, d=d: more._img(d["out"][r.y():r.y() + r.height(), r.x():r.x() + r.width()])
         self._drag = d
         self._liquify_at(d, pt.x(), pt.y(), 0.0, 0.0)
-        self._live = (layer["id"], lambda img, d=d: d["img"])
+        self._live = (layer["id"], lambda img, d=d: more._img(d["out"]))    # (the whole layer, only when the whole picture is asked for)
 
     def _liquify_at(self, d: dict, x: float, y: float, vx: float, vy: float) -> None:
         lq = d["lq"]
@@ -4039,6 +4186,8 @@ class Easel(QObject):
             bx0, by0, bx1, by1 = box
             a = d["sel"][by0:by1, bx0:bx1, None]
             d["out"][by0:by1, bx0:bx1] = lq["src"][by0:by1, bx0:bx1] * (1 - a) + d["out"][by0:by1, bx0:bx1] * a
+        touched = QRectF(box[0], box[1], box[2] - box[0], box[3] - box[1])
+        d["new"] = d["new"].united(touched) if d.get("new") is not None else touched
 
     def _move_liquify(self, pt: QPointF, mods: int) -> None:
         d = self._drag
@@ -4053,7 +4202,6 @@ class Easel(QObject):
             x, y = lx + (pt.x() - lx) * t, ly + (pt.y() - ly) * t
             self._liquify_at(d, x, y, (pt.x() - lx) / n, (pt.y() - ly) / n)
         d["last"] = (pt.x(), pt.y())
-        d["img"] = more._img(d["out"])
 
     def _release_liquify(self, pt: QPointF, mods: int) -> None:
         d = self._drag

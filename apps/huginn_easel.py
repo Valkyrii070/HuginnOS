@@ -780,24 +780,36 @@ def pool():
     return _POOL
 
 
+def apply_adjust_run(below: QImage, run: list) -> QImage:
+    """One or more adjustments of the kind where each channel's new value depends only on its old one, one over
+    another: [(kind, params)], bottom first. The 256 possible answers are worked out once and every pixel looked up: a
+    12-megapixel picture in a few hundredths of a second, however many adjustments there are. And the answers are
+    carried from one adjustment to the next as fine numbers, rounded to whole levels only at the end, so three
+    adjustments in a row don't leave the gaps and steps in smooth tones that rounding three times does."""
+    src = image_to_array(below)
+    x = np.repeat((np.arange(256, dtype=np.float32) / 255.0)[:, None, None], 3, axis=2)
+    for kind, params in run:
+        x = adjust_array(x, kind, params)
+    table = (x * 255 + 0.5).astype(np.uint8)[:, 0, :]
+    ramp0 = np.zeros((1, 1, 3), np.float32)                        # see-through pixels count as black for each adjustment in turn
+    clear0 = (adjust_array(ramp0, run[-1][0], run[-1][1]) * 255 + 0.5).astype(np.uint8)[0, 0]
+    out = np.empty_like(src)
+    clear = src[..., 3] == 0
+    for c in range(3):
+        out[..., c] = table[:, c][src[..., c]]
+        out[..., c][clear] = clear0[c]
+    out[..., 3] = src[..., 3]
+    return array_to_image(out)
+
+
 def apply_adjust_image(below: QImage, kind: str, params: dict) -> QImage:
     """An adjustment layer's doing: every pixel under it changed, each on its own. Worked a band of rows at a time
     (the numbers for a band fit in the processor's cache, where the whole picture's don't) and the bands side by side
     on every core: about four times quicker on a big picture, and the same answer to the last bit."""
+    if kind in PER_CHANNEL:
+        return apply_adjust_run(below, [(kind, params)])
     src = image_to_array(below)
     h = src.shape[0]
-    if kind in PER_CHANNEL:
-        # each channel's new value depends only on its old one: work the 256 possible answers out once (with the very
-        # same sums, so nothing changes) and look every pixel up. A 12-megapixel picture in a few hundredths of a second.
-        ramp = np.repeat((np.arange(256, dtype=np.float32) / 255.0)[:, None, None], 3, axis=2)
-        table = (adjust_array(ramp, kind, params) * 255 + 0.5).astype(np.uint8)[:, 0, :]
-        out = np.empty_like(src)
-        clear = src[..., 3] == 0
-        for c in range(3):
-            out[..., c] = table[:, c][src[..., c]]
-            out[..., c][clear] = table[0, c]                       # (see-through pixels count as black, as before)
-        out[..., 3] = src[..., 3]
-        return array_to_image(out)
 
     def band(rows: slice) -> np.ndarray:
         arr = src[rows].astype(np.float32) / 255.0
@@ -1454,6 +1466,13 @@ class Document:
         img, _ = self._item_image(it, live)
         blend_onto(out, img, head["blend"], head["opacity"])
 
+    @staticmethod
+    def _plain_adjust(it) -> bool:
+        """An adjustment layer that changes every pixel under it in full, each channel on its own: no mask, full
+        strength, showing. Several of these in a row come to one table of answers (apply_adjust_run)."""
+        return (not isinstance(it, tuple) and it["kind"] == "adjust" and it["visible"] and it.get("adjust") in PER_CHANNEL
+                and it["opacity"] >= 0.999 and not (it.get("mask") is not None and it.get("maskOn", True)))
+
     def _clipped_image(self, base, clipped: list, live=None) -> QImage:
         """A layer (or group) with the layers clipped to it, as one picture in the lower one's shape."""
         shape, _ = self._item_image(base, live)
@@ -1550,6 +1569,17 @@ class Document:
                 n += 1
             clipped = items[k + 1:n]
             if not clipped or head["kind"] == "adjust" or (head.get("clip") and not isinstance(base, tuple) and k == 0):
+                run = []                                           # plain adjustments straight over one another are worked as one
+                while k + len(run) < len(items) and self._plain_adjust(items[k + len(run)]):
+                    run.append(items[k + len(run)])
+                if len(run) > 1:
+                    done = apply_adjust_run(out, [(l["adjust"], l.get("params") or {}) for l in run])
+                    p = QPainter(out)
+                    p.setCompositionMode(CM.CompositionMode_Source)
+                    p.drawImage(0, 0, done)
+                    p.end()
+                    k += len(run)
+                    continue
                 self._lay(out, base, live)                         # nothing clipped to it (or nothing it could be clipped to)
                 k += 1
                 continue
@@ -1627,6 +1657,17 @@ class Document:
         grid = np.zeros((self.h * k + 2, self.w * k + 2), np.uint8)
         grid[1:-1, 1:-1] = np.repeat(np.repeat(a, k, axis=0), k, axis=1) if k > 1 else a
         found, _ = cv2.findContours(grid, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
+        if len(found) > 30_000:
+            # specks by the hundred thousand (a colour range over film grain): an outline round every one took many
+            # seconds to make and as long to draw, and showed nothing but a shimmer. The specks are joined into the
+            # patches they make up and those are outlined; what's selected is untouched, only the line round it is rougher.
+            rough = cv2.morphologyEx(cv2.morphologyEx(a.astype(np.uint8), cv2.MORPH_CLOSE, np.ones((5, 5), np.uint8)), cv2.MORPH_OPEN, np.ones((5, 5), np.uint8))
+            k = 1
+            grid = np.zeros((self.h + 2, self.w + 2), np.uint8)
+            grid[1:-1, 1:-1] = rough
+            found, _ = cv2.findContours(grid, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
+            if len(found) > 30_000:
+                found = sorted(found, key=len, reverse=True)[:30_000]
         path = QPainterPath()
         path.setFillRule(Qt.FillRule.OddEvenFill)
         for c in found:
@@ -2069,6 +2110,117 @@ GRADIENTS = {"fgbg": ("Front to Back Colour", None), "fgclear": ("Front Colour t
              "gold": ("Gold", [(0, "#5B3A00"), (0.3, "#D9A521"), (0.5, "#FFF3B0"), (0.7, "#D9A521"), (1, "#6B4500")]),
              "spectrum": ("Spectrum", [(0, "#FF0000"), (0.17, "#FFFF00"), (0.33, "#00FF00"), (0.5, "#00FFFF"), (0.67, "#0000FF"), (0.83, "#FF00FF"), (1, "#FF0000")]),
              "aurora": ("Aurora", [(0, "#05101F"), (0.4, "#0E6B5C"), (0.65, "#3DDC97"), (0.85, "#9B5DE5"), (1, "#0B1026")])}
+
+
+_NOISE = None
+
+
+def _noise(h: int, w: int, y0: int = 0) -> np.ndarray:
+    """The same fine grain every time (0..1, a 256-pixel tile repeated): what's added before rounding so that a slow
+    change of tone comes out as a mix of two neighbouring levels instead of a visible step."""
+    global _NOISE
+    if _NOISE is None:
+        r = np.random.default_rng(20261122)
+        _NOISE = r.random((256, 256), dtype=np.float32)            # (evenly spread: only then is the average of the mix the true tone)
+    ys = (np.arange(y0, y0 + h) % 256)[:, None]
+    xs = (np.arange(w) % 256)[None, :]
+    return _NOISE[ys, xs]
+
+
+def gradient_stops(stops: list) -> list:
+    """Stops as [(place 0..1, QColor)], in order, with one at each end. Raises ValueError when they make no sense."""
+    out = []
+    for st in stops or []:
+        try:
+            at, c = float(st[0]), QColor(st[1])
+        except (TypeError, ValueError, IndexError):
+            raise ValueError("a gradient stop is a place and a colour")
+        if not (at == at) or not c.isValid():
+            raise ValueError("a gradient stop is a place and a colour")
+        out.append((max(0.0, min(1.0, at)), c))
+    if len(out) < 2:
+        raise ValueError("a gradient needs two colours at least")
+    out.sort(key=lambda st: st[0])
+    out = out[:32]
+    if out[0][0] > 0:
+        out.insert(0, (0.0, out[0][1]))
+    if out[-1][0] < 1:
+        out.append((1.0, out[-1][1]))
+    return out
+
+
+def gradient_image(w: int, h: int, kind: str, a: QPointF, b: QPointF, stops: list, smooth: bool = True) -> QImage:
+    """A gradient over the whole picture from a to b (straight, or round about a), through `stops` [(place, QColor)].
+    Worked in fine numbers and rounded with a little grain, so a long gentle gradient has no visible steps in it (the
+    plain way gives bands a few pixels to a few dozen pixels wide wherever the colours are close). Where the colour
+    isn't changing it comes out exactly that colour."""
+    stops = gradient_stops(stops)
+    n = 8192
+    at = np.array([s_[0] for s_ in stops], np.float64)
+    at = at + np.arange(len(at)) * 1e-9                            # (two stops at one place: a hard edge, in the order given)
+    cols = np.array([[c.red(), c.green(), c.blue(), c.alpha()] for _, c in stops], np.float64)
+    ramp = np.linspace(0.0, 1.0, n)
+    lut = np.stack([np.interp(ramp, at, cols[:, c]) for c in range(4)], axis=1).astype(np.float32)
+    ax, ay, bx, by = a.x(), a.y(), b.x(), b.y()
+    dx, dy = bx - ax, by - ay
+    length2 = max(1e-6, dx * dx + dy * dy)
+    xs = (np.arange(w, dtype=np.float32) + 0.5 - ax)[None, :]
+
+    def band(rows: slice) -> np.ndarray:
+        ys = (np.arange(rows.start, rows.stop, dtype=np.float32) + 0.5 - ay)[:, None]
+        if kind == "radial":
+            t = np.sqrt(xs * xs + ys * ys) / math.sqrt(length2)
+        else:
+            t = (xs * dx + ys * dy) / length2
+        v = lut[(np.clip(t, 0.0, 1.0) * (n - 1) + 0.5).astype(np.int32)]     # (8192 places along the line: far finer than a level)
+        if smooth:
+            # (the grain runs from just over 0 to just under 1, and the number is then cut to a whole level: a
+            # colour that isn't changing stays exactly itself, and one between two levels becomes a mix of the two)
+            return np.clip(v + _noise(rows.stop - rows.start, w, rows.start)[..., None] * 0.996 + 0.002, 0, 255).astype(np.uint8)
+        return np.clip(v + 0.5, 0, 255).astype(np.uint8)
+    step = max(16, min(128, 300_000 // max(1, w)))
+    rows = [slice(y, min(h, y + step)) for y in range(0, h, step)]
+    out = np.concatenate([band(r) for r in rows] if w * h < 400_000 else list(pool().map(band, rows)))
+    return array_to_image(out)
+
+
+RANGES = {"colour": "The front colour", "highlights": "Highlights", "midtones": "Midtones", "shadows": "Shadows",
+          "reds": "Reds", "yellows": "Yellows", "greens": "Greens", "cyans": "Cyans", "blues": "Blues", "magentas": "Magentas"}
+_HUES = {"reds": 0, "yellows": 60, "greens": 120, "cyans": 180, "blues": 240, "magentas": 300}
+
+
+def colour_range(rgba: np.ndarray, kind: str, colour_: str, fuzz: float) -> np.ndarray:
+    """Select › Colour Range: how much each pixel belongs (0..255) to a colour, a band of tones or a family of hues.
+    `fuzz` 0..1 is how far from the middle of the range still counts; belonging falls away smoothly, so the selection
+    has a soft edge where the picture has a soft change."""
+    fuzz = max(0.01, min(1.0, float(fuzz)))
+    rgb = rgba[..., :3].astype(np.float32)
+    if kind == "colour":
+        c = QColor(colour_)
+        ref = np.array([c.red(), c.green(), c.blue()], np.float32)
+        # (the eye's rough weighting: a step in green shows more than the same step in blue)
+        d = np.sqrt((((rgb - ref) * np.array([0.55, 0.75, 0.38], np.float32)) ** 2).sum(axis=2)) / 255.0
+        reach = 0.04 + fuzz * 0.6
+        m = 1.0 - np.clip((d - reach * 0.5) / (reach * 0.5), 0, 1)
+    elif kind in ("highlights", "midtones", "shadows"):
+        lum = (rgb @ np.array([0.2126, 0.7152, 0.0722], np.float32)) / 255.0
+        mid = {"highlights": 1.0, "midtones": 0.5, "shadows": 0.0}[kind]
+        reach = 0.1 + fuzz * 0.45
+        m = 1.0 - np.clip((np.abs(lum - mid) - reach * 0.6) / (reach * 0.4), 0, 1)
+    elif kind in _HUES:
+        mx, mn = rgb.max(axis=2), rgb.min(axis=2)
+        span = mx - mn
+        safe = np.where(span > 0, span, 1)
+        r, g, b = rgb[..., 0], rgb[..., 1], rgb[..., 2]
+        hue = np.where(mx == r, ((g - b) / safe) % 6, np.where(mx == g, (b - r) / safe + 2, (r - g) / safe + 4)) * 60.0
+        away = np.abs((hue - _HUES[kind] + 180) % 360 - 180)
+        reach = 12 + fuzz * 48
+        m = 1.0 - np.clip((away - reach * 0.6) / (reach * 0.4), 0, 1)
+        m = m * np.clip((span / 255.0 - 0.06) / 0.14, 0, 1)        # (greys have no hue to speak of)
+    else:
+        raise ValueError("no such range")
+    m = m * (rgba[..., 3].astype(np.float32) / 255.0)
+    return (m * 255 + 0.5).astype(np.uint8)
 
 
 def dab(size: float, hardness: float, colour_: QColor) -> QImage:

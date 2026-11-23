@@ -70,3 +70,13 @@ joins the brush list as My Brush and is there next time you open Easel.
 
 ## Letter and line spacing
 With the text tool, Spacing on the bar sets the room between letters and Lines the room between lines.
+
+## Choosing by colour or tone
+Select › Colour Range chooses everything of one kind: the front colour (pick it from the picture first with the
+eyedropper), the highlights, midtones or shadows, or all the reds, greens and so on. Range sets how near a colour must
+be. What would be chosen shows in pink while the sheet is open.
+
+## Gradients of your own
+With the gradient tool, open the gradient list and choose New from This…. Click the bar to add the front colour at
+that place, drag the markers to move the colours, and press Keep. Your gradients stay in the list; Change and Forget
+are beside each one.
