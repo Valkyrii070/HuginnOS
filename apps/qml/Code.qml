@@ -10,6 +10,17 @@ GlassWindow {
     visible: true
     property string panel: "files"
     property bool side: true
+    // ---- zen mode: nothing but the code (the side panel, tabs, tools, terminal and status come back when you leave it)
+    property bool zen: false
+    property var zenWas: ({})
+    function toggleZen() {
+        if (!zen) { zenWas = { side: side, term: term }; side = false; term = false; zen = true }
+        else { zen = false; side = !!zenWas.side; term = !!zenWas.term }
+        var v = view(); if (v) v.focusEditor()
+    }
+    readonly property int curTab: Backend.current
+    onCurTabChanged: Backend.autoSave("focus")
+    onActiveChanged: if (!active) Backend.autoSave("focus")
     property bool term: false
     property string bottom: "terminal"                     // what the bottom panel shows: terminal or debug
     property bool split: false                             // two editors side by side
@@ -49,17 +60,23 @@ GlassWindow {
     readonly property int sideW: side ? 280 : 0
     readonly property string mono: Qt.fontFamilies().indexOf(Theme.t.fontMono) >= 0 ? Theme.t.fontMono : Qt.fontFamilies().indexOf("DejaVu Sans Mono") >= 0 ? "DejaVu Sans Mono" : "monospace"
     readonly property var tab: Backend.current >= 0 && Backend.current < Backend.tabs.length ? Backend.tabs[Backend.current] : null
-    readonly property color slab: Theme.t.dark ? "#111318" : "#FCFCFE"
-    readonly property color gutterInk: Theme.t.dark ? "#5A6170" : "#A3A9B4"
-    readonly property color lineGlow: Theme.t.dark ? "#1A1D24" : "#F1F2F8"
+    // A VS Code colour theme you imported (Backend.theme) takes the editor's colours; without one, the system's light and dark.
+    readonly property var vsTheme: Backend.theme
+    readonly property bool themed: !!vsTheme.name
+    readonly property bool codeDark: themed ? !!vsTheme.dark : Theme.t.dark
+    readonly property color slab: themed && vsTheme.paper ? vsTheme.paper : Theme.t.dark ? "#111318" : "#FCFCFE"
+    readonly property color codeInk: themed && vsTheme.ink ? vsTheme.ink : themed ? (codeDark ? "#D4D4D4" : "#1F2328") : Theme.t.text
+    readonly property color gutterInk: themed && vsTheme.gutter ? vsTheme.gutter : codeDark ? "#5A6170" : "#A3A9B4"
+    readonly property color lineGlow: themed && vsTheme.line ? vsTheme.line : themed ? Qt.alpha(codeInk, 0.07) : Theme.t.dark ? "#1A1D24" : "#F1F2F8"
     readonly property color addInk: "#3FB950"
     readonly property color modInk: "#4D8DFF"
     readonly property color delInk: "#F85149"
     readonly property string unit: Backend.status.indentText || "    "
     function colours() {
-        return { key: Theme.t.dark ? "#C792EA" : "#7C3AED", comment: Theme.t.dark ? "#6B7385" : "#8A909C", string: Theme.t.dark ? "#A5D6A7" : "#2E7D32",
-                 number: Theme.t.dark ? "#F78C6C" : "#C2410C", type: Theme.t.dark ? "#7FDBCA" : "#0F766E", func: Theme.t.dark ? "#82AAFF" : "#1D4ED8",
-                 deco: Theme.t.dark ? "#FF8FA3" : "#BE185D", head: Theme.t.accent }
+        var d = codeDark, t = themed ? vsTheme : ({})
+        return { key: t.key || (d ? "#C792EA" : "#7C3AED"), comment: t.comment || (d ? "#6B7385" : "#8A909C"), string: t.string || (d ? "#A5D6A7" : "#2E7D32"),
+                 number: t.number || (d ? "#F78C6C" : "#C2410C"), type: t.type || (d ? "#7FDBCA" : "#0F766E"), func: t.func || (d ? "#82AAFF" : "#1D4ED8"),
+                 deco: t.deco || (d ? "#FF8FA3" : "#BE185D"), head: t.head || Theme.t.accent }
     }
     function view() { return docs.itemAt(Backend.current) }
     function ask(kind, extra) { var s = extra || {}; s.kind = kind; sheet = s }
@@ -157,6 +174,21 @@ GlassWindow {
         { name: "Split the Editor", key: "Ctrl+\\", run: function () { win.toggleSplit() } },
         { name: "Toggle the Minimap", key: "", run: function () { Backend.setMinimap(!Backend.minimap) } },
         { name: "Show the Debug Console", key: "", run: function () { win.bottom = "debug"; win.term = true } },
+        { name: "Fold", key: "Ctrl+Shift+[", run: function () { var v = win.view(); if (v) v.foldHere(1) } },
+        { name: "Unfold", key: "Ctrl+Shift+]", run: function () { var v = win.view(); if (v) v.foldHere(-1) } },
+        { name: "Fold All", key: "", run: function () { if (Backend.current >= 0) Backend.foldAll(Backend.current) } },
+        { name: "Unfold All", key: "", run: function () { if (Backend.current >= 0) Backend.unfoldAll(Backend.current) } },
+        { name: "Zen Mode", key: "", run: function () { win.toggleZen() } },
+        { name: "Peek at the Definition", key: "Alt+F12", run: function () { var v = win.view(); if (v) v.peek() } },
+        { name: "Emmet: Expand the Abbreviation", key: "", run: function () { var v = win.view(); if (v) v.emmet() } },
+        { name: "File History…", key: "", run: function () { if (Backend.current >= 0) win.ask("history", { tab: Backend.current, name: Backend.tabs[Backend.current].name, rows: Backend.historyOf(Backend.current) }) } },
+        { name: "Show All Commands", key: "Ctrl+Shift+P", run: function () { win.openPalette(">") } },
+        { name: "Settings…", key: "Ctrl+,", run: function () { win.ask("settings") } },
+        { name: "Keyboard Shortcuts…", key: "", run: function () { win.ask("keys") } },
+        { name: "Settings: Open settings.json", key: "", run: function () { Backend.openSettingsFile() } },
+        { name: "Colour Theme: Import a VS Code Theme…", key: "", run: function () { win.ask("theme", { now: "" }) } },
+        { name: "Colour Theme: Use the System's Colours", key: "", run: function () { Backend.clearTheme() } },
+        { name: "VS Code: Bring My Snippets, Settings and Keys", key: "", run: function () { toast.say(Backend.importFromVSCode(), false) } },
         { name: "Build", key: "Ctrl+Shift+B", run: function () { win.buildIt() } },
         { name: "Build: Show Tasks and Output", key: "", run: function () { win.showBuild() } },
         { name: "Build: Run the Last Task Again", key: "", run: function () { win.showBuild(); win.bld.again() } },
@@ -227,6 +259,29 @@ GlassWindow {
     ]
     function toggleTerm() { term = !term; if (term) Qt.callLater(function () { termKeys.forceActiveFocus() }); else { var v = view(); if (v) v.focusEditor() } }
     readonly property var bld: Backend.build
+    // ---- shortcuts you chose (Settings › Keyboard Shortcuts), and VS Code's when that keymap is on. A command's own
+    // shortcut gives way when the command is given another, and when its keys are given to another command.
+    readonly property var keyOver: Backend.keys
+    property bool capturing: false                       // the next key press is being taken as a new shortcut
+    readonly property var keyState: {
+        var taken = {}, moved = {}, list = [], over = keyOver
+        for (var n = 0; n < commands.length; n++) {
+            var seq = over[commands[n].name]
+            if (seq === undefined || seq.toLowerCase() === (commands[n].key || "").toLowerCase()) continue
+            if (commands[n].key) moved[commands[n].key.toLowerCase()] = true
+            if (seq) { taken[seq.toLowerCase()] = true; taken[seq.split(",")[0].trim().toLowerCase()] = true; list.push({ name: commands[n].name, seq: seq, n: n }) }
+        }
+        return { taken: taken, moved: moved, list: list }
+    }
+    function free(seq) { var k = seq.toLowerCase(); return !capturing && !keyState.taken[k] && !keyState.moved[k] }
+    function keyOf(cmd) { var o = keyOver[cmd.name]; return o !== undefined ? o : cmd.key }
+    function commandWith(seq, but) {                     // the command a shortcut runs now ("" when none)
+        var k = seq.toLowerCase()
+        for (var n = 0; n < commands.length; n++) if (commands[n].name !== but && (keyOf(commands[n]) || "").toLowerCase() === k) return commands[n].name
+        return ""
+    }
+    Repeater { model: win.capturing ? [] : win.keyState.list
+        Item { id: overKey; required property var modelData; Shortcut { sequence: overKey.modelData.seq; onActivated: win.commands[overKey.modelData.n].run() } } }
     function showBuild() { bottom = "build"; term = true; buildOut.follow = true }
     function buildIt() { showBuild(); bld.runDefault() }
     function runTask(id) { showBuild(); bld.run(id) }
@@ -305,7 +360,10 @@ GlassWindow {
         var out = [], q = text.toLowerCase(), i
         if (text.charAt(0) === ">") {
             q = q.substring(1).trim()
-            for (i = 0; i < commands.length; i++) if (commands[i].name.toLowerCase().indexOf(q) >= 0 && (!commands[i].ai || win.aiOn)) out.push({ label: commands[i].name, detail: commands[i].key, act: "cmd", n: i })
+            for (i = 0; i < commands.length; i++) if (commands[i].name.toLowerCase().indexOf(q) >= 0 && (!commands[i].ai || win.aiOn)) out.push({ label: commands[i].name, detail: win.keyOf(commands[i]), act: "cmd", n: i })
+            var ls = Backend.launches, ts = win.bld.tasks
+            for (i = 0; i < ls.length; i++) if (("debug: " + ls[i].name).toLowerCase().indexOf(q) >= 0) out.push({ label: "Debug: " + ls[i].name, detail: ls[i].ok ? "launch.json" : "can't start here", act: "launch", name: ls[i].name })
+            for (i = 0; i < ts.length; i++) if (("task: " + ts[i].name).toLowerCase().indexOf(q) >= 0) out.push({ label: "Task: " + ts[i].name, detail: ts[i].detail, act: "task", id: ts[i].id })
             return out
         }
         if (text.charAt(0) === ":") {
@@ -326,6 +384,8 @@ GlassWindow {
         palOpen = false
         if (!row) return
         if (row.act === "cmd") commands[row.n].run()
+        else if (row.act === "launch") { bottom = "debug"; term = true; Backend.startLaunch(row.name) }
+        else if (row.act === "task") runTask(row.id)
         else if (row.act === "file") Backend.openRel(row.rel, -1, 0)
         else if (row.act === "line" && row.n > 0) { var v = view(); if (v) v.goTo(row.n - 1, 0) }
         else if (row.act === "sym") { var w = view(); if (w) w.goTo(row.n, 0) }
@@ -364,54 +424,57 @@ GlassWindow {
     }
     Component.onCompleted: syncDocs()
 
-    Shortcut { sequence: "Ctrl+S"; onActivated: win.save() }
-    Shortcut { sequence: "Ctrl+Alt+S"; onActivated: toast.say(Backend.saveAll() + " saved", false) }
-    Shortcut { sequence: "Ctrl+W"; onActivated: if (Backend.current >= 0) win.closeTab(Backend.current) }
-    Shortcut { sequence: "Ctrl+P"; onActivated: win.openPalette("") }
-    Shortcut { sequence: "Ctrl+Shift+P"; onActivated: win.openPalette(">") }
-    Shortcut { sequence: "Ctrl+G"; onActivated: win.openPalette(":") }
-    Shortcut { sequence: "Alt+Left"; onActivated: win.travel(-1) }
-    Shortcut { sequence: "Alt+Right"; onActivated: win.travel(1) }
-    Shortcut { sequence: "Ctrl+Alt+W"; onActivated: Backend.reopenClosed() }
-    Shortcut { sequence: "Ctrl+Shift+O"; onActivated: win.openPalette("@") }
-    Shortcut { sequence: "Ctrl+F"; onActivated: win.startFind(false) }
-    Shortcut { sequence: "Ctrl+H"; onActivated: win.startFind(true) }
-    Shortcut { sequence: "Ctrl+Shift+F"; onActivated: win.showPanel("search") }
-    Shortcut { sequence: "Ctrl+Shift+E"; onActivated: win.showPanel("files") }
-    Shortcut { sequence: "Ctrl+Shift+G"; onActivated: win.showPanel("git") }
-    Shortcut { sequence: "Ctrl+Shift+M"; onActivated: win.showPanel("problems") }
-    Shortcut { sequence: "Ctrl+Shift+\\"; onActivated: win.toBracket() }
-    Shortcut { sequence: "Ctrl+Shift+T"; onActivated: win.showPanel("tests") }
-    Shortcut { sequence: "Ctrl+Alt+B"; onActivated: win.blameOn = !win.blameOn }
+    Shortcut { sequence: "Ctrl+S"; enabled: win.free("Ctrl+S"); onActivated: win.save() }
+    Shortcut { sequence: "Ctrl+Alt+S"; enabled: win.free("Ctrl+Alt+S"); onActivated: toast.say(Backend.saveAll() + " saved", false) }
+    Shortcut { sequence: "Ctrl+W"; enabled: win.free("Ctrl+W"); onActivated: if (Backend.current >= 0) win.closeTab(Backend.current) }
+    Shortcut { sequence: "Ctrl+P"; enabled: win.free("Ctrl+P"); onActivated: win.openPalette("") }
+    Shortcut { sequence: "Ctrl+Shift+P"; enabled: win.free("Ctrl+Shift+P"); onActivated: win.openPalette(">") }
+    Shortcut { sequence: "Ctrl+G"; enabled: win.free("Ctrl+G"); onActivated: win.openPalette(":") }
+    Shortcut { sequence: "Alt+Left"; enabled: win.free("Alt+Left"); onActivated: win.travel(-1) }
+    Shortcut { sequence: "Alt+Right"; enabled: win.free("Alt+Right"); onActivated: win.travel(1) }
+    Shortcut { sequence: "Ctrl+Alt+W"; enabled: win.free("Ctrl+Alt+W"); onActivated: Backend.reopenClosed() }
+    Shortcut { sequence: "Ctrl+Shift+O"; enabled: win.free("Ctrl+Shift+O"); onActivated: win.openPalette("@") }
+    Shortcut { sequence: "Ctrl+F"; enabled: win.free("Ctrl+F"); onActivated: win.startFind(false) }
+    Shortcut { sequence: "Ctrl+H"; enabled: win.free("Ctrl+H"); onActivated: win.startFind(true) }
+    Shortcut { sequence: "Ctrl+Shift+F"; enabled: win.free("Ctrl+Shift+F"); onActivated: win.showPanel("search") }
+    Shortcut { sequence: "Ctrl+Shift+E"; enabled: win.free("Ctrl+Shift+E"); onActivated: win.showPanel("files") }
+    Shortcut { sequence: "Ctrl+Shift+G"; enabled: win.free("Ctrl+Shift+G"); onActivated: win.showPanel("git") }
+    Shortcut { sequence: "Ctrl+Shift+M"; enabled: win.free("Ctrl+Shift+M"); onActivated: win.showPanel("problems") }
+    Shortcut { sequence: "Ctrl+Shift+\\"; enabled: win.free("Ctrl+Shift+\\"); onActivated: win.toBracket() }
+    Shortcut { sequence: "Ctrl+Shift+T"; enabled: win.free("Ctrl+Shift+T"); onActivated: win.showPanel("tests") }
+    Shortcut { sequence: "Ctrl+Alt+B"; enabled: win.free("Ctrl+Alt+B"); onActivated: win.blameOn = !win.blameOn }
     function showCommit(sha, title) { if (!sha) return; var info = Backend.commitInfo(sha); win.ask("diff", { rel: "", staged: false, commit: info, rows: Backend.commitRows(sha, "") }) }
-    Shortcut { sequence: "Ctrl+B"; onActivated: win.side = !win.side }
-    Shortcut { sequence: "Ctrl+`"; onActivated: win.toggleTerm() }
-    Shortcut { sequence: "F5"; onActivated: win.debugIt() }
-    Shortcut { sequence: "Ctrl+Shift+B"; onActivated: win.buildIt() }
-    Shortcut { sequence: "F8"; onActivated: win.bld.step(1) }
-    Shortcut { sequence: "Shift+F8"; onActivated: win.bld.step(-1) }
-    Shortcut { sequence: "Ctrl+F5"; onActivated: win.runIt() }
-    Shortcut { sequence: "Shift+F5"; onActivated: win.dbg.stop() }
-    Shortcut { sequence: "F6"; onActivated: win.dbg.pause() }
-    Shortcut { sequence: "F10"; onActivated: win.dbg.stepOver() }
-    Shortcut { sequence: "F11"; onActivated: win.dbg.stepIn() }
-    Shortcut { sequence: "Shift+F11"; onActivated: win.dbg.stepOut() }
-    Shortcut { sequence: "Ctrl+\\"; onActivated: win.toggleSplit() }
-    Shortcut { sequence: "Ctrl+N"; onActivated: win.newFile() }
-    Shortcut { sequence: "Ctrl+O"; onActivated: { win.browseAt = Backend.root || Backend.home; win.ask("open") } }
-    Shortcut { sequence: "Ctrl+Shift+I"; onActivated: if (Backend.current >= 0) Backend.format(Backend.current) }
-    Shortcut { sequence: "Ctrl+Shift+V"; onActivated: win.mdPreview = !win.mdPreview }
-    Shortcut { sequence: "Alt+Z"; onActivated: Backend.setWrap(!Backend.wrap) }
-    Shortcut { sequences: ["Ctrl+=", "Ctrl++"]; onActivated: Backend.setSize(Backend.size + 1) }
-    Shortcut { sequence: "Ctrl+-"; onActivated: Backend.setSize(Backend.size - 1) }
-    Shortcut { sequence: "Ctrl+Tab"; onActivated: if (Backend.tabs.length) Backend.select((Backend.current + 1) % Backend.tabs.length) }
-    Shortcut { sequence: "Ctrl+Shift+Tab"; onActivated: if (Backend.tabs.length) Backend.select((Backend.current - 1 + Backend.tabs.length) % Backend.tabs.length) }
-    Shortcut { sequence: "Escape"; enabled: aiPanel.visible || win.palOpen || win.finding || win.tip !== "" || win.comp.length > 0 || win.menuFor !== null || win.sheet !== null || win.sig !== null || win.fixMenu !== null
-        onActivated: { if (win.sheet) win.sheet = null; else if (aiPanel.visible) aiPanel.close(); else if (win.palOpen || win.tip || win.comp.length || win.menuFor || win.sig || win.fixMenu) win.closeOverlays(); else { win.finding = false; var v = win.view(); if (v) v.focusEditor() } } }
+    Shortcut { sequence: "Ctrl+B"; enabled: win.free("Ctrl+B"); onActivated: win.side = !win.side }
+    Shortcut { sequence: "Ctrl+`"; enabled: win.free("Ctrl+`"); onActivated: win.toggleTerm() }
+    Shortcut { sequence: "F5"; enabled: win.free("F5"); onActivated: win.debugIt() }
+    Shortcut { sequence: "Ctrl+,"; enabled: win.free("Ctrl+,"); onActivated: win.ask("settings") }
+    Shortcut { sequence: "Ctrl+Shift+["; enabled: win.free("Ctrl+Shift+["); onActivated: { var v = win.view(); if (v) v.foldHere(1) } }
+    Shortcut { sequence: "Ctrl+Shift+]"; enabled: win.free("Ctrl+Shift+]"); onActivated: { var v = win.view(); if (v) v.foldHere(-1) } }
+    Shortcut { sequence: "Ctrl+Shift+B"; enabled: win.free("Ctrl+Shift+B"); onActivated: win.buildIt() }
+    Shortcut { sequence: "F8"; enabled: win.free("F8"); onActivated: win.bld.step(1) }
+    Shortcut { sequence: "Shift+F8"; enabled: win.free("Shift+F8"); onActivated: win.bld.step(-1) }
+    Shortcut { sequence: "Ctrl+F5"; enabled: win.free("Ctrl+F5"); onActivated: win.runIt() }
+    Shortcut { sequence: "Shift+F5"; enabled: win.free("Shift+F5"); onActivated: win.dbg.stop() }
+    Shortcut { sequence: "F6"; enabled: win.free("F6"); onActivated: win.dbg.pause() }
+    Shortcut { sequence: "F10"; enabled: win.free("F10"); onActivated: win.dbg.stepOver() }
+    Shortcut { sequence: "F11"; enabled: win.free("F11"); onActivated: win.dbg.stepIn() }
+    Shortcut { sequence: "Shift+F11"; enabled: win.free("Shift+F11"); onActivated: win.dbg.stepOut() }
+    Shortcut { sequence: "Ctrl+\\"; enabled: win.free("Ctrl+\\"); onActivated: win.toggleSplit() }
+    Shortcut { sequence: "Ctrl+N"; enabled: win.free("Ctrl+N"); onActivated: win.newFile() }
+    Shortcut { sequence: "Ctrl+O"; enabled: win.free("Ctrl+O"); onActivated: { win.browseAt = Backend.root || Backend.home; win.ask("open") } }
+    Shortcut { sequence: "Ctrl+Shift+I"; enabled: win.free("Ctrl+Shift+I"); onActivated: if (Backend.current >= 0) Backend.format(Backend.current) }
+    Shortcut { sequence: "Ctrl+Shift+V"; enabled: win.free("Ctrl+Shift+V"); onActivated: win.mdPreview = !win.mdPreview }
+    Shortcut { sequence: "Alt+Z"; enabled: win.free("Alt+Z"); onActivated: Backend.setWrap(!Backend.wrap) }
+    Shortcut { sequences: ["Ctrl+=", "Ctrl++"]; enabled: win.free("Ctrl+="); onActivated: Backend.setSize(Backend.size + 1) }
+    Shortcut { sequence: "Ctrl+-"; enabled: win.free("Ctrl+-"); onActivated: Backend.setSize(Backend.size - 1) }
+    Shortcut { sequence: "Ctrl+Tab"; enabled: win.free("Ctrl+Tab"); onActivated: if (Backend.tabs.length) Backend.select((Backend.current + 1) % Backend.tabs.length) }
+    Shortcut { sequence: "Ctrl+Shift+Tab"; enabled: win.free("Ctrl+Shift+Tab"); onActivated: if (Backend.tabs.length) Backend.select((Backend.current - 1 + Backend.tabs.length) % Backend.tabs.length) }
+    Shortcut { sequence: "Escape"; enabled: aiPanel.visible || win.palOpen || win.finding || win.tip !== "" || win.comp.length > 0 || win.menuFor !== null || win.sheet !== null || win.sig !== null || win.fixMenu !== null || win.zen
+        onActivated: { if (win.sheet) win.sheet = null; else if (aiPanel.visible) aiPanel.close(); else if (win.palOpen || win.tip || win.comp.length || win.menuFor || win.sig || win.fixMenu) win.closeOverlays(); else if (win.finding) { win.finding = false; var v = win.view(); if (v) v.focusEditor() } else if (win.zen) win.toggleZen() } }
 
     islands: [
         // the open files, floating across the top
-        Item { id: tabsBar; objectName: "tabsBar"; x: Math.max(win.sideW + 24, win.lifted ? win.titleEnd + 10 : 0); y: win.topY; height: 40; width: win.width - x - toolBox.width - 26; visible: Backend.tabs.length > 0
+        Item { id: tabsBar; objectName: "tabsBar"; x: Math.max(win.sideW + 24, win.lifted ? win.titleEnd + 10 : 0); y: win.topY; height: 40; width: win.width - x - toolBox.width - 26; visible: Backend.tabs.length > 0 && !win.zen
             ListView { id: tabList; anchors.fill: parent; orientation: ListView.Horizontal; spacing: 6; clip: true; model: Backend.tabs; boundsBehavior: Flickable.StopAtBounds
                 currentIndex: Backend.current
                 onCurrentIndexChanged: positionViewAtIndex(currentIndex, ListView.Contain)
@@ -422,7 +485,7 @@ GlassWindow {
                     Row { id: tabRow; x: 12; anchors.verticalCenter: parent.verticalCenter; spacing: 7
                         Rectangle { width: 8; height: 8; radius: 4; anchors.verticalCenter: parent.verticalCenter; color: win.langInk(tabPill.modelData.lang) }
                         Label { text: tabPill.modelData.name; font.pixelSize: 12; font.weight: tabPill.on ? Font.DemiBold : Font.Normal; width: Math.min(implicitWidth, 150); elide: Text.ElideMiddle
-                            color: tabPill.modelData.errors > 0 ? win.delInk : Theme.t.text }
+                            color: tabPill.modelData.errors > 0 ? win.delInk : tabPill.on ? win.codeInk : Theme.t.text }
                         Item { width: 16; height: 16; anchors.verticalCenter: parent.verticalCenter
                             Rectangle { visible: tabPill.modelData.dirty && !closeX.hovered; anchors.centerIn: parent; width: 8; height: 8; radius: 4; color: Theme.t.text }
                             Pressable { id: closeX; anchors.fill: parent; radius: 8; color: hovered ? Theme.t.hover : "transparent"; visible: !tabPill.modelData.dirty || hovered || tabPill.hovered
@@ -430,12 +493,13 @@ GlassWindow {
                                 Glyph { anchors.centerIn: parent; name: "x"; size: 10; visible: !tabPill.modelData.dirty || closeX.hovered } } } } } } },
         // The tools on the left, Run and Debug on their own at the right edge: a quick second click on the terminal
         // (or anything else) never lands on Run
-        Item { id: toolBox; anchors { right: parent.right; rightMargin: win.liftRight } y: win.topY; height: runBox.height; width: toolsIsland.width + 12 + runBox.width
+        Item { id: toolBox; visible: !win.zen; anchors { right: parent.right; rightMargin: win.liftRight } y: win.topY; height: runBox.height; width: toolsIsland.width + 12 + runBox.width
             Island { id: toolsIsland; objectName: "toolsIsland"
                 Seg { objectName: "newFileButton"; icon: "newfile"; tip: "New file (Ctrl+N)"; onClicked: win.newFile() }
                 Seg { icon: "search"; tip: "Go to a file or command (Ctrl+P)"; onClicked: win.openPalette("") }
                 Seg { objectName: "termButton"; icon: "terminal"; tip: "Terminal (Ctrl+`)"; on: win.term; onClicked: win.toggleTerm() }
-                Seg { icon: "split"; tip: "Two editors side by side (Ctrl+\\)"; on: win.split; onClicked: win.toggleSplit() } }
+                Seg { icon: "split"; tip: "Two editors side by side (Ctrl+\\)"; on: win.split; onClicked: win.toggleSplit() }
+                Seg { objectName: "settingsButton"; icon: "gear"; tip: "Settings (Ctrl+,)"; onClicked: win.ask("settings") } }
             Island { id: runBox; objectName: "runIsland"; x: toolsIsland.width + 12
                 Seg { icon: "bug"; text: win.dbg.active ? "Debugging" : "Debug"; on: win.dbg.active; tip: "Debug (F5)"; onClicked: win.debugIt() }
                 Seg { objectName: "buildButton"; visible: win.bld.tasks.length > 0; icon: win.bld.running ? "stop" : "check"; text: win.bld.running ? "Stop" : "Build"; on: win.bld.running
@@ -495,15 +559,99 @@ GlassWindow {
             Rectangle { anchors.fill: parent; radius: win.r; color: "#77000000"; MouseArea { anchors.fill: parent; acceptedButtons: Qt.AllButtons; onClicked: if (win.sheet && win.sheet.kind !== "dirty") win.sheet = null } }
             Rectangle { id: card; anchors.centerIn: parent; radius: 18; color: Theme.t.menu_bg; border.width: 1; border.color: Theme.t.menu_border
                 readonly property string kind: win.sheet ? win.sheet.kind : ""
-                width: kind === "diff" ? win.width - 120 : kind === "open" || kind === "langs" || kind === "branches" ? 560 : 470
-                height: kind === "diff" ? win.height - 100 : kind === "open" || kind === "langs" || kind === "branches" ? Math.min(win.height - 80, 560) : kind === "dirty" || kind === "clash" || kind === "trash" || kind === "discard" ? 170 : 200
+                width: kind === "diff" ? win.width - 120 : kind === "settings" || kind === "keys" ? Math.min(win.width - 80, 760) : kind === "open" || kind === "langs" || kind === "branches" || kind === "history" ? 560 : 470
+                height: kind === "diff" ? win.height - 100 : kind === "settings" || kind === "keys" ? win.height - 90 : kind === "open" || kind === "langs" || kind === "branches" || kind === "history" ? Math.min(win.height - 80, 560) : kind === "dirty" || kind === "clash" || kind === "trash" || kind === "discard" ? 170 : 200
                 MouseArea { anchors.fill: parent }
                 Label { x: 24; y: 20; width: parent.width - 48; elide: Text.ElideMiddle; font.pixelSize: 17; font.weight: Font.DemiBold
                     text: ({ "open": "Open a folder", "dirty": "Save changes to “" + (win.sheet ? win.sheet.name : "") + "”?", "clash": "This file changed on disk",
                              "new": win.sheet && win.sheet.dir ? "New folder" : "New file", "rename": "Rename “" + (win.sheet ? win.sheet.name : "") + "”",
-                             "trash": "Move “" + (win.sheet ? win.sheet.name : "") + "” to the Trash?", "renamesym": "Rename “" + (win.sheet ? win.sheet.name : "") + "” everywhere", "debugprog": "Which program should be debugged?", "unreal": "Where is Unreal Engine?", "aiask": win.sheet && win.sheet.mode === "write" ? "What should it write?" : "How should it change?", "run": "What Run does", "discard": "Throw away the changes to “" + (win.sheet ? win.sheet.rel : "") + "”?",
-                             "langs": win.sheet && win.sheet.mode === "new" ? "New file in…" : "Languages", "branches": "Branches",
+                             "trash": "Move “" + (win.sheet ? win.sheet.name : "") + "” to the Trash?", "renamesym": "Rename “" + (win.sheet ? win.sheet.name : "") + "” everywhere", "debugprog": "Which program should be debugged?", "unreal": "Where is Unreal Engine?", "theme": "Which theme file?", "aiask": win.sheet && win.sheet.mode === "write" ? "What should it write?" : "How should it change?", "run": "What Run does", "discard": "Throw away the changes to “" + (win.sheet ? win.sheet.rel : "") + "”?",
+                             "langs": win.sheet && win.sheet.mode === "new" ? "New file in…" : "Languages", "branches": "Branches", "settings": "Settings", "keys": "Keyboard Shortcuts", "history": "History of “" + (win.sheet ? win.sheet.name : "") + "”",
                              "diff": (win.sheet ? win.sheet.rel : "") + (win.sheet && win.sheet.staged ? "  ·  staged" : "") })[card.kind] || "" }
+                // ---- Settings: Code's own, kept in its settings.json under VS Code's names; a project's .vscode/settings.json lies over them
+                ListView { id: setList; objectName: "settingsList"; visible: card.kind === "settings"; x: 24; y: 58; width: parent.width - 48; height: parent.height - 58 - 66; clip: true; boundsBehavior: Flickable.StopAtBounds
+                    model: card.kind === "settings" ? Backend.settingsList : []
+                    property real keepY: 0                                  // (the list is made again when a setting changes: stay where you were)
+                    onModelChanged: contentY = keepY
+                    function set(key, value) { keepY = contentY; Backend.setSetting(key, value) }
+                    section.property: "group"
+                    section.delegate: Label { required property string section; height: 34; verticalAlignment: Text.AlignBottom; bottomPadding: 6; text: section.toUpperCase(); font.pixelSize: 10; font.weight: Font.Bold; font.letterSpacing: 1; secondary: true }
+                    delegate: Item { id: setRow; required property var modelData; width: setList.width - 8; height: Math.max(46, setCol.height + 16)
+                        readonly property bool wide: modelData.kind === "globs"
+                        Column { id: setCol; y: 8; width: parent.width - (setRow.wide ? 0 : 250); spacing: 2
+                            Label { width: parent.width; elide: Text.ElideRight; text: setRow.modelData.title; font.pixelSize: 13; font.weight: setRow.modelData.changed ? Font.DemiBold : Font.Normal }
+                            Label { visible: text !== ""; width: parent.width; wrapMode: Text.WordWrap; secondary: true; font.pixelSize: 11; text: setRow.modelData.about }
+                            Label { visible: setRow.modelData.where === "project"; width: parent.width; wrapMode: Text.WordWrap; font.pixelSize: 11; color: win.modInk; text: "This project's .vscode/settings.json sets this." }
+                            Label { width: parent.width; elide: Text.ElideRight; secondary: true; font.pixelSize: 10; font.family: win.mono; opacity: 0.7; text: setRow.modelData.key }
+                            Rectangle { visible: setRow.wide; width: parent.width - 40; height: 64; radius: 10; color: Theme.t.capsule; border.width: 1; border.color: globBox.activeFocus ? Theme.t.accent : Theme.t.capsule_border
+                                Flickable { anchors { fill: parent; margins: 8 } contentHeight: globBox.contentHeight; clip: true
+                                    TextEdit { id: globBox; width: parent.width; text: setRow.modelData.kind === "globs" ? setRow.modelData.value : ""; color: Theme.t.text; font.family: win.mono; font.pixelSize: 12; selectByMouse: true
+                                        onActiveFocusChanged: if (!activeFocus && setRow.modelData.kind === "globs" && text !== setRow.modelData.value) setList.set(setRow.modelData.key, text) } } } }
+                        Row { visible: !setRow.wide; anchors { right: parent.right; rightMargin: 4; verticalCenter: parent.verticalCenter } spacing: 6; opacity: setRow.modelData.where === "project" ? 0.55 : 1
+                            Seg { visible: setRow.modelData.changed; icon: "refresh"; tip: "Back to Code's own"; onClicked: { setList.keepY = setList.contentY; Backend.resetSetting(setRow.modelData.key) } }
+                            Toggle { visible: setRow.modelData.kind === "bool"; anchors.verticalCenter: parent.verticalCenter; on: setRow.modelData.kind === "bool" && setRow.modelData.value === true; onToggled: function (v) { setList.set(setRow.modelData.key, v) } }
+                            Repeater { model: setRow.modelData.choices
+                                Seg { required property string modelData; text: modelData; on: setRow.modelData.value === modelData; onClicked: setList.set(setRow.modelData.key, modelData) } }
+                            Rectangle { visible: ["int", "numbers", "text"].indexOf(setRow.modelData.kind) >= 0; width: setRow.modelData.kind === "int" ? 70 : 170; height: 30; radius: 10; anchors.verticalCenter: parent.verticalCenter
+                                color: Theme.t.capsule; border.width: 1; border.color: setIn.activeFocus ? Theme.t.accent : Theme.t.capsule_border
+                                TextInput { id: setIn; anchors { fill: parent; leftMargin: 10; rightMargin: 10 } verticalAlignment: TextInput.AlignVCenter; clip: true; color: Theme.t.text; font.pixelSize: 13; selectByMouse: true
+                                    readOnly: setRow.modelData.kind === "text"; text: "" + setRow.modelData.value
+                                    onEditingFinished: if (!readOnly && text !== "" + setRow.modelData.value) setList.set(setRow.modelData.key, setRow.modelData.kind === "int" ? (parseInt(text) || 0) : text) } } } } }
+                Row { visible: card.kind === "settings"; anchors { left: parent.left; leftMargin: 20; bottom: parent.bottom; bottomMargin: 18 } spacing: 4
+                    Seg { text: "Keyboard Shortcuts…"; onClicked: win.ask("keys") }
+                    Seg { text: "settings.json"; tip: "Open Code's settings file to edit by hand"; tipAbove: true; onClicked: { win.sheet = null; Backend.openSettingsFile() } }
+                    Seg { text: "Import a Theme…"; onClicked: win.ask("theme", { now: "" }) }
+                    Seg { visible: Backend.vscodeFolder !== ""; text: "Bring from VS Code"; tip: "Your snippets, settings and key bindings, from " + Backend.vscodeFolder; tipAbove: true; onClicked: toast.say(Backend.importFromVSCode(), false) } }
+                // ---- a file's history: a copy kept at every save; pick one to see what changed since, and go back to it if you like
+                ListView { id: fileHist; objectName: "historyList"; visible: card.kind === "history"; x: 16; y: 58; width: parent.width - 32; height: parent.height - 58 - 66; clip: true; boundsBehavior: Flickable.StopAtBounds
+                    model: card.kind === "history" ? win.sheet.rows : []
+                    delegate: Pressable { id: fileHistRow; required property var modelData; required property int index; width: fileHist.width - 6; height: 36; radius: 9; color: hovered ? Theme.t.hover : "transparent"
+                        onClicked: { var s = win.sheet; win.ask("diff", { rel: s.name + "  ·  " + modelData.when + "  →  now", staged: false, rows: Backend.historyDiff(s.tab, modelData.id), restore: { tab: s.tab, id: modelData.id } }) }
+                        Label { x: 12; anchors.verticalCenter: parent.verticalCenter; font.pixelSize: 13; text: fileHistRow.modelData.when }
+                        Label { anchors { right: parent.right; rightMargin: 12; verticalCenter: parent.verticalCenter } secondary: true; font.pixelSize: 12
+                            text: fileHistRow.modelData.lines + (fileHistRow.modelData.lines === 1 ? " line" : " lines") + (fileHistRow.index === 0 ? "  ·  the latest" : "") } } }
+                Label { visible: card.kind === "history" && fileHist.count === 0; anchors.centerIn: parent; width: parent.width - 80; wrapMode: Text.WordWrap; horizontalAlignment: Text.AlignHCenter; secondary: true
+                    text: Backend.options.history ? "Nothing kept yet. Code keeps a copy each time this file is saved, for a month." : "Keeping a history is switched off in Settings." }
+                // ---- Keyboard Shortcuts: click a command, press its new keys
+                Item { id: keysPage; visible: card.kind === "keys"; x: 24; y: 56; width: parent.width - 48; height: parent.height - 56 - 66
+                    property string taking: ""                            // the command whose new shortcut is being pressed
+                    onVisibleChanged: { taking = ""; win.capturing = false; if (visible) keyFilter.focusIn() }
+                    onTakingChanged: { win.capturing = taking !== ""; if (taking !== "") keyCatch.forceActiveFocus() }
+                    readonly property var rows: { var q = keyFilter.text.toLowerCase(), o = win.keyOver, mine = Backend.ownKeys, out = []
+                        for (var n = 0; n < win.commands.length; n++) { var c = win.commands[n], k = win.keyOf(c)
+                            if (!q || c.name.toLowerCase().indexOf(q) >= 0 || (k || "").toLowerCase().indexOf(q) >= 0) out.push({ name: c.name, key: k || "", own: mine[c.name] !== undefined, other: o[c.name] !== undefined && o[c.name].toLowerCase() !== (c.key || "").toLowerCase() }) }
+                        return out }
+                    Field { id: keyFilter; width: 260; placeholder: "Find a command or a key" }
+                    Row { anchors.right: parent.right; height: 30; spacing: 4
+                        Label { anchors.verticalCenter: parent.verticalCenter; secondary: true; font.pixelSize: 12; text: "Keys like" }
+                        Seg { text: "Huginn"; on: Backend.options.keymap === "Huginn"; onClicked: Backend.setSetting("huginn.keymap", "Huginn") }
+                        Seg { text: "VS Code"; on: Backend.options.keymap === "VS Code"; onClicked: Backend.setSetting("huginn.keymap", "VS Code") } }
+                    Item { id: keyCatch; focus: keysPage.taking !== ""
+                        Keys.onPressed: function (e) {
+                            if (keysPage.taking === "") return
+                            e.accepted = true
+                            if (e.key === Qt.Key_Escape) { keysPage.taking = ""; return }
+                            var seq = (e.key === Qt.Key_Backspace || e.key === Qt.Key_Delete) && e.modifiers === Qt.NoModifier ? "" : Backend.keyName(e.key, e.modifiers)
+                            if (seq === "" && e.key !== Qt.Key_Backspace && e.key !== Qt.Key_Delete) return            // a modifier on its own: keep waiting
+                            var was = seq ? win.commandWith(seq, keysPage.taking) : ""
+                            Backend.setKey(keysPage.taking, seq)
+                            if (was) { Backend.setKey(was, ""); toast.say(seq + " was “" + was + "”, which has no shortcut now.", false) }
+                            keysPage.taking = "" } }
+                    ListView { id: keyList; objectName: "keyList"; y: 40; width: parent.width; height: parent.height - 40; clip: true; boundsBehavior: Flickable.StopAtBounds; model: keysPage.rows; reuseItems: true
+                        delegate: Pressable { id: keyRow; required property var modelData; width: keyList.width - 8; height: 32; radius: 8
+                            readonly property bool taking: keysPage.taking === modelData.name
+                            color: taking ? Qt.alpha(Theme.t.accent, 0.22) : hovered ? Theme.t.hover : "transparent"
+                            onClicked: keysPage.taking = taking ? "" : modelData.name
+                            Label { x: 10; width: parent.width - 300; elide: Text.ElideRight; anchors.verticalCenter: parent.verticalCenter; font.pixelSize: 13; text: keyRow.modelData.name }
+                            Label { anchors { right: parent.right; rightMargin: 44; verticalCenter: parent.verticalCenter } font.pixelSize: 12; font.family: keyRow.taking ? Theme.t.font : win.mono
+                                font.weight: keyRow.modelData.own ? Font.DemiBold : Font.Normal; color: keyRow.taking ? Theme.t.accent : keyRow.modelData.own || keyRow.modelData.other ? Theme.t.text : Theme.t.text_secondary
+                                text: keyRow.taking ? "Press the keys  (Esc: leave it, Backspace: none)" : keyRow.modelData.key || "—" }
+                            Seg { visible: keyRow.modelData.own && !keyRow.taking; anchors { right: parent.right; rightMargin: 4; verticalCenter: parent.verticalCenter } icon: "refresh"; tip: "Back to Code's own"
+                                onClicked: Backend.resetKey(keyRow.modelData.name) } } } }
+                Row { visible: card.kind === "keys"; anchors { left: parent.left; leftMargin: 20; bottom: parent.bottom; bottomMargin: 18 } spacing: 4
+                    Seg { text: "Settings…"; onClicked: win.ask("settings") }
+                    Seg { text: "Put Them All Back"; onClicked: Backend.resetKeys() }
+                    Seg { visible: Backend.vscodeFolder !== ""; text: "Bring from VS Code"; tipAbove: true; tip: "Your key bindings (and snippets and settings), from " + Backend.vscodeFolder; onClicked: toast.say(Backend.importFromVSCode(), false) } }
                 // Languages: pick one for a new file (it starts with a few lines of it), or add what one needs: its helper
                 // for suggestions and problems, and its tools for Run (from Ubuntu, or npm into your own folder)
                 Label { visible: card.kind === "langs"; x: 24; y: 48; width: parent.width - 48; wrapMode: Text.WordWrap; secondary: true; font.pixelSize: 12
@@ -540,14 +688,14 @@ GlassWindow {
                 Label { visible: ["dirty", "clash", "trash", "discard"].indexOf(card.kind) >= 0; x: 24; y: 52; width: parent.width - 48; wrapMode: Text.WordWrap; secondary: true
                     text: card.kind === "dirty" ? "If you don't save, your changes are lost." : card.kind === "clash" ? "Something else changed it since you opened it. Keep yours (overwrite) or take what's on disk?"
                         : card.kind === "trash" ? "You can put it back from the Trash in Files." : "This can't be undone: the file goes back to how it was at the last commit." }
-                TextBox { id: nameBox; objectName: "nameBox"; visible: ["new", "rename", "run", "renamesym", "debugprog", "aiask", "unreal"].indexOf(card.kind) >= 0; x: 24; y: 58; width: parent.width - 48; mono: card.kind === "run" || card.kind === "renamesym" || card.kind === "debugprog" || card.kind === "unreal"
-                    placeholder: card.kind === "unreal" ? "for example: /home/you/UnrealEngine" : card.kind === "run" ? "for example: python3 -m aurora" : card.kind === "renamesym" ? "new name" : card.kind === "debugprog" ? "build/myprogram" : card.kind === "aiask" ? (win.sheet && win.sheet.mode === "write" ? "for example: a function that reads a CSV file into a list of dicts" : "for example: add error handling") : card.kind === "new" ? (win.sheet && win.sheet.dir ? "folder name" : "name.py, or folder/name.py") : ""
+                TextBox { id: nameBox; objectName: "nameBox"; visible: ["new", "rename", "run", "renamesym", "debugprog", "aiask", "unreal", "theme"].indexOf(card.kind) >= 0; x: 24; y: 58; width: parent.width - 48; mono: card.kind === "run" || card.kind === "renamesym" || card.kind === "debugprog" || card.kind === "unreal"
+                    placeholder: card.kind === "theme" ? "for example: /home/you/Downloads/monokai-color-theme.json" : card.kind === "unreal" ? "for example: /home/you/UnrealEngine" : card.kind === "run" ? "for example: python3 -m aurora" : card.kind === "renamesym" ? "new name" : card.kind === "debugprog" ? "build/myprogram" : card.kind === "aiask" ? (win.sheet && win.sheet.mode === "write" ? "for example: a function that reads a CSV file into a list of dicts" : "for example: add error handling") : card.kind === "new" ? (win.sheet && win.sheet.dir ? "folder name" : "name.py, or folder/name.py") : ""
                     onAccepted: sheetOk.clicked() }
                 Label { visible: card.kind === "aiask"; x: 24; y: 100; width: parent.width - 48; wrapMode: Text.WordWrap; secondary: true; font.pixelSize: 11
                     text: (win.sheet && win.sheet.mode === "write" ? "Written in " + (win.tab && win.tab.lang ? win.tab.lang : "this file's language") + ", at the cursor"
                            : "On what's selected, or the whole file") + ". Huginn AI shows it first; nothing changes until you say so." }
-                Label { visible: card.kind === "run" || card.kind === "debugprog" || card.kind === "renamesym" || card.kind === "unreal"; x: 24; y: 100; width: parent.width - 48; wrapMode: Text.WordWrap; secondary: true; font.pixelSize: 11
-                    text: card.kind === "unreal" ? "The folder that holds Engine/ and Setup.sh: the one Epic's download unpacks to, or your clone of its source after Setup.sh and make. Code remembers it for every project." : card.kind === "run" ? "Kept in the project as .huginn-run, so it travels with it." : card.kind === "debugprog" ? "The program you built, with debugging information (gcc -g, cargo build). Kept in the project as .huginn-debug."
+                Label { visible: card.kind === "run" || card.kind === "debugprog" || card.kind === "renamesym" || card.kind === "unreal" || card.kind === "theme"; x: 24; y: 100; width: parent.width - 48; wrapMode: Text.WordWrap; secondary: true; font.pixelSize: 11
+                    text: card.kind === "theme" ? "A VS Code colour theme is a .json file (inside a theme extension, in its themes folder). Code takes its editor and syntax colours; the rest of the window keeps the system's look." : card.kind === "unreal" ? "The folder that holds Engine/ and Setup.sh: the one Epic's download unpacks to, or your clone of its source after Setup.sh and make. Code remembers it for every project." : card.kind === "run" ? "Kept in the project as .huginn-run, so it travels with it." : card.kind === "debugprog" ? "The program you built, with debugging information (gcc -g, cargo build). Kept in the project as .huginn-debug."
                         : "Every place it's used changes, in every file (the language helper finds them). Open files change but aren't saved." }
                 // the folder picker
                 Item { visible: card.kind === "open"; x: 16; y: 54; width: parent.width - 32; height: parent.height - 120
@@ -581,11 +729,12 @@ GlassWindow {
                 Row { anchors { right: parent.right; rightMargin: 20; bottom: parent.bottom; bottomMargin: 18 } spacing: 8
                     Btn { visible: card.kind === "dirty"; text: "Don't Save"; onClicked: { var t = win.sheet.tab; win.sheet = null; Backend.close(t, true) } }
                     Btn { visible: card.kind === "new" && !(win.sheet && win.sheet.dir); text: "In a Language…"; onClicked: win.ask("langs", { mode: "new" }) }
-                    Btn { text: card.kind === "diff" || card.kind === "branches" || card.kind === "langs" && win.sheet.mode !== "new" ? "Done" : "Cancel"; onClicked: win.sheet = null }
+                    Btn { text: card.kind === "diff" || card.kind === "branches" || card.kind === "settings" || card.kind === "keys" || card.kind === "history" || card.kind === "langs" && win.sheet.mode !== "new" ? "Done" : "Cancel"; onClicked: win.sheet = null }
+                    Btn { visible: card.kind === "diff" && !!win.sheet.restore; text: "Go Back to This Version"; onClicked: { var r = win.sheet.restore; win.sheet = null; if (Backend.historyRestore(r.tab, r.id)) toast.say("That version is in the editor. Save to keep it; undo brings back what was here.", false) } }
                     Btn { visible: card.kind === "diff" && !win.sheet.staged && !!win.sheet.canStage; text: "Stage"; onClicked: { Backend.stage(win.sheet.rel); win.sheet = null } }
                     Btn { visible: card.kind === "clash"; text: "Take Theirs"; onClicked: { var t = win.sheet.tab; win.sheet = null; Backend.reload(t) } }
-                    Btn { id: sheetOk; visible: card.kind !== "diff" && card.kind !== "langs" && card.kind !== "branches"; primary: card.kind !== "trash" && card.kind !== "discard"; danger: card.kind === "trash" || card.kind === "discard"
-                        text: ({ "open": "Open This Folder", "dirty": "Save", "clash": "Keep Mine", "new": "Make", "rename": "Rename", "trash": "Move to Trash", "run": "Use It", "discard": "Throw Away", "renamesym": "Rename", "debugprog": "Debug", "aiask": "Ask", "unreal": "Use This Folder" })[card.kind] || "OK"
+                    Btn { id: sheetOk; visible: card.kind !== "diff" && card.kind !== "langs" && card.kind !== "branches" && card.kind !== "settings" && card.kind !== "keys" && card.kind !== "history"; primary: card.kind !== "trash" && card.kind !== "discard"; danger: card.kind === "trash" || card.kind === "discard"
+                        text: ({ "open": "Open This Folder", "dirty": "Save", "clash": "Keep Mine", "new": "Make", "rename": "Rename", "trash": "Move to Trash", "run": "Use It", "discard": "Throw Away", "renamesym": "Rename", "debugprog": "Debug", "aiask": "Ask", "unreal": "Use This Folder", "theme": "Use This Theme" })[card.kind] || "OK"
                         onClicked: {
                             var s = win.sheet, why = ""
                             if (s.kind === "open") { win.sheet = null; Backend.openFolder(win.browseAt); return }
@@ -597,13 +746,14 @@ GlassWindow {
                             else if (s.kind === "discard") why = Backend.discard(s.rel)
                             else if (s.kind === "run") { Backend.setRun(nameBox.text); win.sheet = null; return }
                             else if (s.kind === "renamesym") { win.sheet = null; Backend.renameSymbol(s.tab, s.line, s.col, nameBox.text); return }
+                            else if (s.kind === "theme") { var no = Backend.importTheme(nameBox.text); if (no) { toast.say(no, true); return } win.sheet = null; return }
                             else if (s.kind === "unreal") { var why = Backend.build.setUnreal(nameBox.text); if (why) { toast.say(why, true); return } win.sheet = null; win.showBuild(); return }
                             else if (s.kind === "debugprog") { win.sheet = null; win.bottom = "debug"; win.term = true; Backend.startDebug(nameBox.text); return }
                             else if (s.kind === "aiask") { var said = nameBox.text.trim(); if (!said) return; win.sheet = null; win.aiCode(s.mode, said); return }
                             if (why) toast.say(why, true); else win.sheet = null } } } } }
     ]
-    onSheetChanged: if (sheet && ["new", "rename", "run", "renamesym", "debugprog", "aiask", "unreal"].indexOf(sheet.kind) >= 0) {
-        nameBox.text = sheet.kind === "rename" || sheet.kind === "renamesym" ? sheet.name : sheet.kind === "run" || sheet.kind === "debugprog" || sheet.kind === "unreal" ? (sheet.now || "") : ""; nameBox.focusIn(); nameBox.input.selectAll() }
+    onSheetChanged: if (sheet && ["new", "rename", "run", "renamesym", "debugprog", "aiask", "unreal", "theme"].indexOf(sheet.kind) >= 0) {
+        nameBox.text = sheet.kind === "rename" || sheet.kind === "renamesym" ? sheet.name : sheet.kind === "run" || sheet.kind === "debugprog" || sheet.kind === "unreal" || sheet.kind === "theme" ? (sheet.now || "") : ""; nameBox.focusIn(); nameBox.input.selectAll() }
 
     // ================================================================ the side island
     Rectangle { id: sideBox; visible: win.side; x: 12; y: 64; width: win.sideW; height: parent.height - y - 12; radius: 18; color: Theme.t.island; border.width: 1; border.color: Theme.t.islandLine; clip: true
@@ -775,7 +925,7 @@ GlassWindow {
     function runSearch() { Backend.search(searchBox.text, sCase.on2, sRe.on2, sWord.on2) }
 
     // ================================================================ the slab: the code
-    Rectangle { id: slab; objectName: "slab"; x: win.sideW + (win.side ? 24 : 12); y: 64; width: parent.width - x - 12; height: parent.height - y - 46 - (termBox.visible ? termBox.height + 10 : 0)
+    Rectangle { id: slab; objectName: "slab"; x: win.sideW + (win.side ? 24 : 12); y: win.zen ? 56 : 64; width: parent.width - x - 12; height: parent.height - y - (win.zen ? 12 : 46) - (termBox.visible ? termBox.height + 10 : 0)
         radius: 18; color: win.slab; border.width: 1; border.color: Theme.t.islandLine; clip: true
         Repeater { id: docs; model: docModel
             delegate: Item { id: v; required property string path; required property int index
@@ -822,9 +972,34 @@ GlassWindow {
                 property var marks: ({})
                 property var probs: []
                 property var starts: [0]
+                // ---- folding: lines folded away take no room, so a line's row on screen is no longer its number
+                property var hid: []                         // [[first, last]…] the runs of hidden lines, in order
+                property var foldable: []                    // [[start, end]…] what could be folded
+                readonly property int hidCount: { var n = 0; for (var k = 0; k < hid.length; k++) n += hid[k][1] - hid[k][0] + 1; return n }
+                function row(line) { var r = line; for (var k = 0; k < hid.length && hid[k][0] <= line; k++) r -= Math.min(line, hid[k][1]) - hid[k][0] + 1; return r }
+                function lineAt(row) { var l = row; for (var k = 0; k < hid.length && hid[k][0] <= l; k++) l += hid[k][1] - hid[k][0] + 1; return l }
+                function isHidden(line) { for (var k = 0; k < hid.length; k++) if (line >= hid[k][0] && line <= hid[k][1]) return true; return false }
+                function relayout() { edit.font.pixelSize = Backend.size + 1; edit.font.pixelSize = Qt.binding(function () { return Backend.size }) }     // (the text is laid out again: nothing lighter does it)
+                function refold() {
+                    hid = Backend.hiddenOf(index); relayout()
+                    var lc = lineCol()
+                    if (isHidden(lc[0])) { var k = lc[0]; while (k > 0 && isHidden(k)) k--; lineStarts(); edit.cursorPosition = posOf(k + 1, 0) - 1 }     // the cursor never stays in what's folded
+                }
+                function foldHere(way) { var lc = lineCol(); if (way > 0) Backend.foldAt(index, lc[0]); else if (way < 0) Backend.unfoldAt(index, lc[0]); else Backend.toggleFold(index, lc[0]) }
+                Timer { id: foldTick; interval: 350; onTriggered: { v.foldable = Backend.options.folding ? Backend.foldRanges(v.index) : []; if (v.hid.length) Backend.checkFolds(v.index) } }
+                Connections { target: Backend
+                    function onFolded(i) { if (i === v.index) v.refold() }
+                    function onHinted(i, rows) { if (i === v.index) v.hints = rows }
+                    function onPeeked(i, what) { if (i === v.index && v.visible) v.peekAt = what } }
+                // ---- inlay hints (from the language's helper), gathered at the end of their lines
+                property var hints: []
+                property var peekAt: null                    // {path, name, line, first, text}: a definition shown here
+                Timer { id: hintTick; interval: 500; onTriggered: if (Backend.options.inlay && v.visible) Backend.inlayHints(v.index, v.topLine, v.lineAt(v.row(v.topLine) + Math.ceil(scroll.height / Math.max(1, edit.cursorRectangle.height)) + 2)) }
                 readonly property var info: (index >= 0 && index < Backend.tabs.length && Backend.tabs[index]) || ({})
-                function reload() { loading = true; var at = edit.cursorPosition; known = Backend.textOf(index); edit.text = known; edit.cursorPosition = Math.min(at, edit.length); loading = false; restyle(); refresh() }
+                function reload() { loading = true; var at = edit.cursorPosition; known = Backend.textOf(index); edit.text = known; edit.cursorPosition = Math.min(at, edit.length); loading = false; hid = []; foldTick.restart(); hintTick.restart(); restyle(); refresh() }
                 function restyle() { Backend.style(index, { doc: edit.textDocument, colours: win.colours() }) }
+                readonly property string look: (win.themed ? win.vsTheme.name : "") + (win.codeDark ? "/dark" : "/light")       // another theme, or light to dark: colour the text again
+                onLookChanged: if (!loading) restyle()
                 function refresh() { marks = Backend.marksOf(index); probs = Backend.problemsOf(index); bps = Backend.breakpointsOf(index); lineStarts() }
                 function lineStarts() { var s = [0], t = edit.text; for (var k = t.indexOf("\n"); k >= 0; k = t.indexOf("\n", k + 1)) s.push(k + 1); starts = s }
                 function posOf(line, col) { return Math.min(edit.length, (starts[Math.min(line, starts.length - 1)] || 0) + col) }
@@ -838,9 +1013,12 @@ GlassWindow {
                 function replaceRange(a, b, text) { edit.remove(a, b); edit.insert(a, text) }
                 function lineCol() { var before = edit.getText(0, edit.cursorPosition); var nl = before.lastIndexOf("\n"); return [before.split("\n").length - 1, edit.cursorPosition - nl - 1] }
                 function cursorTo(p) { edit.cursorPosition = p; edit.forceActiveFocus(); scroll.follow(edit.positionToRectangle(p)) }
-                function goTo(line, col) { lineStarts(); var p = posOf(line, col); edit.cursorPosition = p; edit.forceActiveFocus(); scroll.centreOn(edit.positionToRectangle(p)) }
+                function goTo(line, col) { if (hid.length && isHidden(line)) Backend.unfoldAt(index, line); lineStarts(); var p = posOf(line, col); edit.cursorPosition = p; edit.forceActiveFocus(); scroll.centreOn(edit.positionToRectangle(p)) }
                 function suggest() { var lc = lineCol(); Backend.complete(index, lc[0], lc[1]) }
                 function definition() { var lc = lineCol(); Backend.definition(index, lc[0], lc[1]) }
+                function peek() { var lc = lineCol(); Backend.peek(index, lc[0], lc[1]) }
+                function emmet() { var t = edit.text, at = edit.cursorPosition, em = Backend.emmetAt(index, t.substring(t.lastIndexOf("\n", at - 1) + 1, at))
+                    if (em.body) startSnippet(at - em.back, at, em.body); else toast.say("There's no Emmet abbreviation before the cursor (it works in HTML and CSS).", true) }
                 function hover() { var lc = lineCol(); Backend.hover(index, lc[0], lc[1]) }
                 function wordBefore() { var t = edit.getText(Math.max(0, edit.cursorPosition - 80), edit.cursorPosition); var m = /[A-Za-z_][A-Za-z0-9_]*$/.exec(t); return m ? m[0] : "" }
                 function offer(items) { win.compAll = items; filterOffer() }
@@ -1035,13 +1213,13 @@ GlassWindow {
                 Timer { id: conflictTick; interval: 300; onTriggered: v.conflicts = Backend.conflictsOf(v.index) }
                 // ---- sticky scroll: the lines that open the scopes at the top of the view
                 property var sticky: []
-                readonly property int topLine: Math.max(0, Math.floor((scroll.contentY - edit.y + 2) / Math.max(1, edit.cursorRectangle.height)))
-                onContentYChanged: { stickyTick.restart(); decoTick.restart() }
+                readonly property int topLine: lineAt(Math.max(0, Math.floor((scroll.contentY - edit.y + 2) / Math.max(1, edit.cursorRectangle.height))))
+                onContentYChanged: { stickyTick.restart(); decoTick.restart(); hintTick.restart() }
                 readonly property real contentY: scroll.contentY
                 onTopLineChanged: stickyTick.restart()
                 Timer { id: stickyTick; interval: 60
                     onTriggered: {
-                        v.sticky = v.topLine > 0 && !Backend.wrap ? Backend.stickyAt(v.index, v.topLine) : [] } }
+                        v.sticky = v.topLine > 0 && !Backend.wrap && Backend.options.sticky ? Backend.stickyAt(v.index, v.topLine) : [] } }
                 function lineRange() {   // the first and last line of the selection (or the cursor's line)
                     var a = edit.selectionStart, b = edit.selectionEnd, t = edit.text
                     var s = t.lastIndexOf("\n", a - 1) + 1
@@ -1165,9 +1343,9 @@ GlassWindow {
                         height: edit.height; color: Theme.t.dark ? "#E6111317" : "#EEF6F7F9"; radius: 6
                         Text { anchors.fill: parent; anchors.leftMargin: 8; font.family: win.mono; font.pixelSize: Math.max(9, Backend.size - 2); color: Theme.t.text_secondary; elide: Text.ElideRight
                             lineHeight: edit.cursorRectangle.height > 0 ? edit.cursorRectangle.height : 1.0; lineHeightMode: Text.FixedHeight; textFormat: Text.PlainText
-                            text: v.blameRows.map(function (b) { return b.first ? (b.author.split(" ")[0] + ", " + b.when).substring(0, 30) : "" }).join("\n") }
+                            text: v.blameRows.filter(function (b, k) { return !v.hid.length || !v.isHidden(k) }).map(function (b) { return b.first ? (b.author.split(" ")[0] + ", " + b.when).substring(0, 30) : "" }).join("\n") }
                         MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor
-                            onClicked: function (m) { var k = Math.floor(m.y / Math.max(1, edit.cursorRectangle.height)), b = v.blameRows[k]; if (b && b.sha) win.showCommit(b.sha, b.summary) } } }
+                            onClicked: function (m) { var k = v.lineAt(Math.floor(m.y / Math.max(1, edit.cursorRectangle.height))), b = v.blameRows[k]; if (b && b.sha) win.showCommit(b.sha, b.summary) } } }
                     Text { visible: win.blameOn && !Backend.wrap && v.blameRows.length > 0 && v.blameNow !== null; z: 3; x: edit.x + edit.contentWidth + 40; y: edit.y + edit.cursorRectangle.y
                         height: edit.cursorRectangle.height; verticalAlignment: Text.AlignVCenter; font.family: win.mono; font.pixelSize: Math.max(9, Backend.size - 2); color: win.gutterInk; opacity: 0.8
                         text: v.blameNow ? v.blameNow.author + ", " + v.blameNow.when + (v.blameNow.summary ? " · " + v.blameNow.summary : "") : "" }
@@ -1177,15 +1355,15 @@ GlassWindow {
                     Repeater { model: Backend.wrap ? [] : v.conflicts
                         Item { required property var modelData; required property int index
                             readonly property real lh: edit.cursorRectangle.height
-                            Rectangle { x: 0; y: edit.y + modelData.start * parent.lh; width: scroll.contentWidth; height: parent.lh; color: Qt.rgba(0.25, 0.73, 0.31, 0.32) }
-                            Rectangle { x: 0; y: edit.y + (modelData.start + 1) * parent.lh; width: scroll.contentWidth; height: ((modelData.base > 0 ? modelData.base : modelData.mid) - modelData.start - 1) * parent.lh; color: Qt.rgba(0.25, 0.73, 0.31, 0.13) }
-                            Rectangle { x: 0; y: edit.y + modelData.mid * parent.lh; width: scroll.contentWidth; height: parent.lh; color: Qt.rgba(0.5, 0.5, 0.5, 0.2) }
-                            Rectangle { x: 0; y: edit.y + (modelData.mid + 1) * parent.lh; width: scroll.contentWidth; height: (modelData.end - modelData.mid - 1) * parent.lh; color: Qt.rgba(0.3, 0.55, 1, 0.13) }
-                            Rectangle { x: 0; y: edit.y + modelData.end * parent.lh; width: scroll.contentWidth; height: parent.lh; color: Qt.rgba(0.3, 0.55, 1, 0.32) } } }
+                            Rectangle { x: 0; y: edit.y + v.row(modelData.start) * parent.lh; width: scroll.contentWidth; height: parent.lh; color: Qt.rgba(0.25, 0.73, 0.31, 0.32) }
+                            Rectangle { x: 0; y: edit.y + (v.row(modelData.start) + 1) * parent.lh; width: scroll.contentWidth; height: (v.row(modelData.base > 0 ? modelData.base : modelData.mid) - v.row(modelData.start) - 1) * parent.lh; color: Qt.rgba(0.25, 0.73, 0.31, 0.13) }
+                            Rectangle { x: 0; y: edit.y + v.row(modelData.mid) * parent.lh; width: scroll.contentWidth; height: parent.lh; color: Qt.rgba(0.5, 0.5, 0.5, 0.2) }
+                            Rectangle { x: 0; y: edit.y + (v.row(modelData.mid) + 1) * parent.lh; width: scroll.contentWidth; height: (v.row(modelData.end) - v.row(modelData.mid) - 1) * parent.lh; color: Qt.rgba(0.3, 0.55, 1, 0.13) }
+                            Rectangle { x: 0; y: edit.y + v.row(modelData.end) * parent.lh; width: scroll.contentWidth; height: parent.lh; color: Qt.rgba(0.3, 0.55, 1, 0.32) } } }
                     Repeater { model: Backend.wrap ? [] : v.conflicts      // …and what to keep, over the text so it can be clicked
                         Row { required property var modelData; required property int index; objectName: "conflictBar"; z: 8
                             readonly property int which: index
-                            x: scroll.contentX + edit.x + 260; y: edit.y + modelData.start * edit.cursorRectangle.height; height: edit.cursorRectangle.height; spacing: 10
+                            x: scroll.contentX + edit.x + 260; y: edit.y + v.row(modelData.start) * edit.cursorRectangle.height; height: edit.cursorRectangle.height; spacing: 10
                             Repeater { model: [["ours", "Keep ours (" + parent.modelData.oursName + ")"], ["theirs", "Keep theirs (" + parent.modelData.theirsName + ")"], ["both", "Keep both"]]
                                 Text { required property var modelData; anchors.verticalCenter: parent.verticalCenter; text: modelData[1]; font.pixelSize: Math.max(10, Backend.size - 3); color: Theme.t.accent; font.underline: ma.containsMouse
                                     MouseArea { id: ma; anchors.fill: parent; anchors.margins: -3; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
@@ -1193,8 +1371,8 @@ GlassWindow {
 
                     // a faint line down each level of indentation
                     Repeater { model: v.guides
-                        Rectangle { required property var modelData; x: edit.x + modelData.col * widest.advanceWidth; y: edit.y + modelData.from * edit.cursorRectangle.height
-                            width: 1; height: (modelData.to - modelData.from + 1) * edit.cursorRectangle.height; color: Qt.alpha(Theme.t.text, 0.09) } }
+                        Rectangle { required property var modelData; visible: !v.hid.length || !v.isHidden(modelData.from); x: edit.x + modelData.col * widest.advanceWidth; y: edit.y + v.row(modelData.from) * edit.cursorRectangle.height
+                            width: 1; height: (v.row(modelData.to) - v.row(modelData.from) + 1) * edit.cursorRectangle.height; color: Qt.alpha(win.codeInk, 0.09) } }
                     // the word under the cursor, wherever else it is in view
                     Repeater { model: v.occ.at
                         Rectangle { required property var modelData; readonly property rect r: edit.positionToRectangle(modelData)
@@ -1225,23 +1403,51 @@ GlassWindow {
                         MouseArea { anchors.fill: parent; anchors.margins: -3; cursorShape: Qt.PointingHandCursor; onClicked: v.fixHere() } }
                     // line numbers
                     Text { id: gutter; x: 0; y: edit.y; width: gutterW; horizontalAlignment: Text.AlignRight; rightPadding: 14; color: win.gutterInk; renderType: Text.NativeRendering
-                        readonly property int gutterW: 34 + String(edit.lineCount).length * Math.ceil(Backend.size * 0.62)
+                        readonly property int gutterW: (win.zen && Backend.options.zenNoNumbers ? 0 : 34 + String(edit.lineCount).length * Math.ceil(Backend.size * 0.62))
                         visible: !Backend.wrap; font.family: win.mono; font.pixelSize: Backend.size; lineHeight: edit.cursorRectangle.height > 0 ? edit.cursorRectangle.height : 1.0; lineHeightMode: Text.FixedHeight
-                        text: { var n = edit.lineCount, all = new Array(n); for (var k = 0; k < n; k++) all[k] = k + 1; return all.join("\n") } }
+                        text: { if (win.zen && Backend.options.zenNoNumbers) return ""
+                                var n = edit.lineCount + v.hidCount, h = v.hid, all = [], at = 0       // (lineCount is the lines laid out: folded ones aren't)
+                                for (var k = 0; k < n; k++) { if (at < h.length && k >= h[at][0]) { k = h[at][1]; at++; continue } all.push(k + 1) }
+                                return all.join("\n") } }
+                    // folding: an arrow beside each line that has something under it (shown near the pointer, and wherever something is folded)
+                    Repeater { model: Backend.wrap || !Backend.options.folding ? [] : v.foldable.filter(function (r) { var y = v.row(r[0]); return !v.isHidden(r[0]) && y >= v.row(v.topLine) - 2 && y <= v.row(v.topLine) + scroll.height / Math.max(1, edit.cursorRectangle.height) + 2 })
+                        Text { id: foldArrow; required property var modelData; z: 7
+                            readonly property bool shut: { for (var k = 0; k < v.hid.length; k++) if (v.hid[k][0] === modelData[0] + 1) return true; return false }
+                            x: gutter.width - 13; y: edit.y + v.row(modelData[0]) * edit.cursorRectangle.height; width: 12; height: edit.cursorRectangle.height
+                            horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter; text: shut ? "▸" : "▾"; font.pixelSize: Math.max(9, Backend.size - 3)
+                            color: shut ? Theme.t.accent : win.gutterInk; opacity: shut || gutterHover.hovered || foldMouse.containsMouse ? 1 : 0
+                            MouseArea { id: foldMouse; anchors.fill: parent; anchors.margins: -2; hoverEnabled: true; cursorShape: Qt.PointingHandCursor; onClicked: Backend.toggleFold(v.index, foldArrow.modelData[0]) } } }
+                    Item { x: 0; y: edit.y; width: gutter.width + 8; height: edit.height; HoverHandler { id: gutterHover } }
+                    // …and at the end of a folded line, what stands for the lines under it (click to see them again)
+                    Repeater { model: Backend.wrap ? [] : v.hid
+                        Rectangle { id: foldMark; required property var modelData; z: 7
+                            readonly property rect at: { v.starts; return edit.positionToRectangle(Math.max(0, v.posOf(modelData[0], 0) - 1)) }
+                            x: edit.x + at.x + 8; y: edit.y + at.y + 2; width: foldText.width + 12; height: edit.cursorRectangle.height - 4; radius: 5; color: Qt.alpha(Theme.t.accent, 0.18)
+                            Text { id: foldText; anchors.centerIn: parent; text: "⋯ " + (foldMark.modelData[1] - foldMark.modelData[0] + 1) + (foldMark.modelData[1] === foldMark.modelData[0] ? " line" : " lines"); color: Theme.t.accent; font.pixelSize: Math.max(9, Backend.size - 3) }
+                            MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: Backend.unfoldAt(v.index, foldMark.modelData[0]) } } }
+                    // inlay hints, after the end of their lines
+                    Repeater { model: Backend.wrap || !Backend.options.inlay ? [] : v.hints
+                        Text { required property var modelData; z: 3; visible: !v.hid.length || !v.isHidden(modelData.line)
+                            readonly property rect at: { v.starts; return edit.positionToRectangle(Math.max(0, v.posOf(modelData.line + 1, 0) - 1)) }
+                            x: edit.x + at.x + 28; y: edit.y + at.y; height: edit.cursorRectangle.height; verticalAlignment: Text.AlignVCenter
+                            text: modelData.text; textFormat: Text.PlainText; font.family: win.mono; font.pixelSize: Math.max(9, Backend.size - 2); font.italic: true; color: win.gutterInk } }
+                    // rulers (editor.rulers): a faint line down each column named
+                    Repeater { model: Backend.wrap ? [] : Backend.options.rulers
+                        Rectangle { required property int modelData; z: 1; x: edit.x + modelData * widest.advanceWidth; y: 0; width: 1; height: Math.max(scroll.contentHeight, scroll.height); color: Qt.alpha(win.codeInk, 0.1) } }
                     // breakpoints: click a line number to set or clear one
                     MouseArea { visible: !Backend.wrap; x: 0; y: edit.y; width: gutter.width - 8; height: edit.height; cursorShape: Qt.PointingHandCursor
-                        onClicked: function (m) { Backend.toggleBreakpoint(v.index, Math.floor(m.y / Math.max(1, edit.cursorRectangle.height))) } }
+                        onClicked: function (m) { Backend.toggleBreakpoint(v.index, v.lineAt(Math.floor(m.y / Math.max(1, edit.cursorRectangle.height)))) } }
                     Repeater { model: Backend.wrap ? [] : v.bps
-                        Rectangle { required property int modelData; x: 3; y: edit.y + modelData * edit.cursorRectangle.height + (edit.cursorRectangle.height - 11) / 2
+                        Rectangle { required property int modelData; x: 3; visible: !v.hid.length || !v.isHidden(modelData); y: edit.y + v.row(modelData) * edit.cursorRectangle.height + (edit.cursorRectangle.height - 11) / 2
                             width: 11; height: 11; radius: 5.5; color: "#E5484D"; border.width: 1; border.color: "#33000000" } }
                     // where the debugger stopped
-                    Rectangle { visible: win.dbg.whereFile === v.path && win.dbg.whereLine >= 0; x: 0; y: edit.y + win.dbg.whereLine * edit.cursorRectangle.height - 1
+                    Rectangle { visible: win.dbg.whereFile === v.path && win.dbg.whereLine >= 0; x: 0; y: edit.y + v.row(win.dbg.whereLine) * edit.cursorRectangle.height - 1
                         width: scroll.contentWidth; height: edit.cursorRectangle.height + 2; color: Qt.rgba(1, 0.78, 0.2, 0.22)
                         Text { x: 1; anchors.verticalCenter: parent.verticalCenter; text: "➜"; color: "#F5B83D"; font.pixelSize: Backend.size; visible: !Backend.wrap } }
                     // Git's marks beside the numbers
                     Repeater { model: Backend.wrap ? [] : Object.keys(v.marks)
                         Rectangle { required property string modelData; readonly property string kind: v.marks[modelData]
-                            x: gutter.width - 6; y: edit.y + (parseInt(modelData) * edit.cursorRectangle.height) + (kind === "del" ? edit.cursorRectangle.height - 3 : 0)
+                            x: gutter.width - 6; y: edit.y + (v.row(parseInt(modelData)) * edit.cursorRectangle.height) + (kind === "del" ? edit.cursorRectangle.height - 3 : 0)
                             width: 3; height: kind === "del" ? 5 : edit.cursorRectangle.height; radius: 1.5; color: kind === "add" ? win.addInk : kind === "mod" ? win.modInk : win.delInk } }
                     // problems: a dot by the number and a wavy line under the words
                     Repeater { model: v.probs.slice(0, 300)
@@ -1253,7 +1459,7 @@ GlassWindow {
                             Rectangle { x: edit.x + parent.a.x; y: edit.y + parent.a.y + parent.a.height - 2; width: Math.max(8, (parent.b.y === parent.a.y ? parent.b.x : edit.contentWidth) - parent.a.x); height: 2; color: parent.ink; opacity: 0.85 } } }
                     TextEdit { id: edit; objectName: "editor"; x: Backend.wrap ? 20 : gutter.width + 6; y: 12
                         width: Backend.wrap ? scroll.width - 40 : Math.max(contentWidth + 20, scroll.width - x - 10)
-                        color: Theme.t.text; selectionColor: Qt.alpha(Theme.t.accent, 0.45); selectedTextColor: Theme.t.text
+                        color: win.codeInk; selectionColor: win.themed && win.vsTheme.select ? win.vsTheme.select : Qt.alpha(Theme.t.accent, 0.45); selectedTextColor: win.codeInk
                         font.family: win.mono; font.pixelSize: Backend.size; wrapMode: Backend.wrap ? TextEdit.Wrap : TextEdit.NoWrap; textFormat: TextEdit.PlainText
                         readOnly: !!v.info.readOnly; selectByMouse: true; persistentSelection: true; tabStopDistance: win.tabW * widest.advanceWidth; focus: v.index === Backend.current
                         onActiveFocusChanged: if (activeFocus && win.split && v.index !== Backend.current) { var side = v.side; Backend.select(v.index); win.pane = side }
@@ -1267,7 +1473,8 @@ GlassWindow {
                             if (v.loading || text === v.known) return      // colouring touches the text too: only real typing counts
                             if (v.snip && !v.multiBusy) v.snipShift(length - v.snip.len)
                             if (!v.multiBusy && v.extra.length) v.extra = []
-                            conflictTick.restart(); stickyTick.restart(); decoTick.restart()
+                            conflictTick.restart(); stickyTick.restart(); decoTick.restart(); foldTick.restart(); hintTick.restart()
+                            if (v.peekAt) v.peekAt = null
                             v.known = text
                             mmTick.restart()
                             Backend.edit(v.index, text); v.lineStarts()
@@ -1329,8 +1536,12 @@ GlassWindow {
                             if (e.key === Qt.Key_F12 && shift) { v.referencesHere(); e.accepted = true; return }
                             if (e.key === Qt.Key_F2) { v.renameHere(); e.accepted = true; return }
                             if (e.key === Qt.Key_F9) { var lc9 = v.lineCol(); Backend.toggleBreakpoint(v.index, lc9[0]); e.accepted = true; return }
+                            if (e.key === Qt.Key_F12 && alt) { v.peek(); e.accepted = true; return }
                             if (e.key === Qt.Key_F12) { v.definition(); e.accepted = true; return }
+                            if (e.key === Qt.Key_Escape && v.peekAt) { v.peekAt = null; e.accepted = true; return }
                             if (e.key === Qt.Key_Tab && !ctrl) {
+                                var em = edit.selectedText === "" ? Backend.emmetAt(v.index, t.substring(t.lastIndexOf("\n", at - 1) + 1, at)) : ({})
+                                if (em.body) { v.startSnippet(at - em.back, at, em.body); e.accepted = true; return }
                                 if (edit.selectedText.indexOf("\n") >= 0) v.indent(false); else { edit.remove(edit.selectionStart, edit.selectionEnd); edit.insert(edit.cursorPosition, win.unit) }
                                 e.accepted = true; return }
                             if (e.key === Qt.Key_Backtab) { v.indent(true); e.accepted = true; return }
@@ -1393,7 +1604,7 @@ GlassWindow {
                         Rectangle { required property var modelData; width: parent.width; height: edit.cursorRectangle.height + 2; color: win.slab
                             Text { x: 0; width: gutter.width; horizontalAlignment: Text.AlignRight; rightPadding: 14; anchors.verticalCenter: parent.verticalCenter; text: modelData.line + 1
                                 font.family: win.mono; font.pixelSize: Backend.size; color: win.gutterInk }
-                            Text { x: edit.x - scroll.contentX; anchors.verticalCenter: parent.verticalCenter; text: modelData.text; font.family: win.mono; font.pixelSize: Backend.size; color: Theme.t.text; textFormat: Text.PlainText }
+                            Text { x: edit.x - scroll.contentX; anchors.verticalCenter: parent.verticalCenter; text: modelData.text; font.family: win.mono; font.pixelSize: Backend.size; color: win.codeInk; textFormat: Text.PlainText }
                             MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: v.goTo(modelData.line, 0) } } }
                     Rectangle { width: parent.width; height: 1; color: Theme.t.islandLine } }
                 // what the call being typed wants
@@ -1428,6 +1639,21 @@ GlassWindow {
                         Text { id: mdText; width: mdFlick.width; wrapMode: Text.Wrap; textFormat: Text.MarkdownText; text: edit.text; color: Theme.t.text; font.pixelSize: 14
                             baseUrl: "file://" + v.path; onLinkActivated: function (link) { Qt.openUrlExternally(link) } } } }
                 // what the language server says about the word under the cursor
+                Rectangle { id: peekBox; objectName: "peekBox"; visible: v.visible && v.peekAt !== null; z: 6; width: Math.min(760, v.width - 60); height: peekCode.contentHeight + 52; radius: 12; clip: true
+                    color: win.slab; border.width: 1; border.color: Theme.t.accent
+                    readonly property point at: edit.mapToItem(v, 0, edit.cursorRectangle.y + edit.cursorRectangle.height)
+                    x: Math.max(20, (v.width - width) / 2); y: at.y + 6 + height > v.height ? Math.max(8, at.y - edit.cursorRectangle.height - height - 6) : at.y + 6
+                    Rectangle { width: parent.width; height: 34; radius: 12; color: Qt.alpha(Theme.t.accent, 0.14)
+                        Label { x: 14; width: parent.width - 150; elide: Text.ElideMiddle; anchors.verticalCenter: parent.verticalCenter; font.pixelSize: 12; font.weight: Font.DemiBold; color: win.codeInk
+                            text: v.peekAt ? v.peekAt.name + "  ·  line " + (v.peekAt.line + 1) : "" }
+                        Row { anchors { right: parent.right; rightMargin: 6; verticalCenter: parent.verticalCenter } spacing: 2
+                            Seg { text: "Open"; tip: "Go there (F12)"; onClicked: { var w = v.peekAt; v.peekAt = null; Backend.openFile(w.path, true, w.line, 0) } }
+                            Seg { icon: "x"; onClicked: { v.peekAt = null; v.focusEditor() } } } }
+                    Rectangle { visible: v.peekAt !== null; x: 0; y: 40 + (v.peekAt ? (v.peekAt.line - v.peekAt.first) : 0) * (peekCode.contentHeight / Math.max(1, peekCode.lineCount)); width: parent.width; height: peekCode.contentHeight / Math.max(1, peekCode.lineCount); color: win.lineGlow }
+                    Text { x: 12; y: 40; width: 44; horizontalAlignment: Text.AlignRight; color: win.gutterInk; font.family: win.mono; font.pixelSize: Math.max(10, Backend.size - 1); textFormat: Text.PlainText
+                        text: { if (!v.peekAt) return ""; var n = v.peekAt.text.split("\n").length, a = []; for (var k = 0; k < n; k++) a.push(v.peekAt.first + k + 1); return a.join("\n") } }
+                    Text { id: peekCode; x: 68; y: 40; width: parent.width - 80; clip: true; color: win.codeInk; font.family: win.mono; font.pixelSize: Math.max(10, Backend.size - 1); textFormat: Text.PlainText
+                        text: v.peekAt ? v.peekAt.text.replace(/\t/g, "    ") : "" } }
                 Rectangle { visible: v.visible && win.tip !== ""; z: 6; width: Math.min(560, v.width - 40); height: Math.min(260, tipText.contentHeight + 24); radius: 12; clip: true
                     color: Theme.t.menu_bg; border.width: 1; border.color: Theme.t.menu_border
                     readonly property point at: edit.mapToItem(v, edit.cursorRectangle.x, edit.cursorRectangle.y)
@@ -1564,7 +1790,13 @@ GlassWindow {
         // ---- the debugger: where it stopped, what things hold, and a console
         Item { id: dbgPanel; visible: win.bottom === "debug"; anchors { fill: parent; topMargin: 42; leftMargin: 10; rightMargin: 10; bottomMargin: 8 }
             Label { visible: !win.dbg.active && win.dbg.output.length === 0; anchors.centerIn: parent; secondary: true; width: 520; wrapMode: Text.WordWrap; horizontalAlignment: Text.AlignHCenter
-                text: "Click beside a line number to set a breakpoint, then press F5. Python uses debugpy; C, C++, Rust and Go use GDB." }
+                text: "Click beside a line number to set a breakpoint, then press F5. Python uses debugpy; C, C++, Rust and Go use GDB."
+                      + (Backend.launches.length ? "\n\nThis project's launch.json:" : "") }
+            Flow { visible: !win.dbg.active && win.dbg.output.length === 0 && Backend.launches.length > 0; anchors { horizontalCenter: parent.horizontalCenter; top: parent.verticalCenter; topMargin: 44 } width: Math.min(parent.width - 40, 620); spacing: 6
+                Repeater { model: Backend.launches
+                    Seg { required property var modelData; text: modelData.name; on: modelData.chosen; opacity: modelData.ok ? 1 : 0.5
+                        tip: modelData.ok ? (modelData.chosen ? "What F5 starts" : "Debug with this, and make it what F5 starts") : "Can't be started here: " + modelData.why
+                        onClicked: Backend.startLaunch(modelData.name) } } }
             Column { id: stackCol; visible: win.dbg.active; width: parent.width * 0.28; height: parent.height; spacing: 4
                 Label { text: "CALL STACK" + (win.dbg.reason ? "  ·  " + win.dbg.reason : ""); secondary: true; font.pixelSize: 10; font.weight: Font.DemiBold; width: parent.width; elide: Text.ElideRight }
                 ListView { width: parent.width; height: parent.height - 20; clip: true; model: win.dbg.frames; boundsBehavior: Flickable.StopAtBounds
@@ -1612,7 +1844,7 @@ GlassWindow {
             MouseArea { id: closeTerm; anchors.fill: parent; hoverEnabled: true; onClicked: win.toggleTerm() } } }
 
     // ================================================================ the status line
-    Item { id: statusBar; objectName: "statusBar"; x: slab.x; width: slab.width; y: parent.height - 38; height: 28
+    Item { id: statusBar; objectName: "statusBar"; visible: !win.zen; x: slab.x; width: slab.width; y: parent.height - 38; height: 28
         Row { x: 6; spacing: 14; anchors.verticalCenter: parent.verticalCenter
             Pressable { visible: Backend.isGit; width: brRow.width + 12; height: 24; radius: 12; color: hovered ? Theme.t.hover : "transparent"; onClicked: win.ask("branches")
                 Row { id: brRow; x: 6; spacing: 5; anchors.verticalCenter: parent.verticalCenter

@@ -221,7 +221,7 @@ def export_presets(root: Path) -> list:
     return out
 
 
-def tasks(root: Path, cfg: dict = None) -> list:
+def tasks(root: Path, cfg: dict = None, known: dict = None) -> list:
     """Every task this project offers, the most useful first. The first "build" task is what Build (Ctrl+Shift+B) runs
     until you choose another."""
     if not root or not Path(root).is_dir():
@@ -239,6 +239,9 @@ def tasks(root: Path, cfg: dict = None) -> list:
             if isinstance(row, dict) and row.get("name") and row.get("command"):
                 group = row.get("group") if row.get("group") in GROUPS else "build"
                 out.append(_task(f"own:{i}", str(row["name"]), str(row["command"]), group, "from .huginn-tasks.json"))
+
+    import huginn_vscode                                             # the project's .vscode/tasks.json, as VS Code would list them
+    out += huginn_vscode.tasks(root, known)
 
     if (root / "project.godot").is_file():
         godot = godot_command(root, cfg)
@@ -341,7 +344,8 @@ def uses_lfs(root: Path) -> bool:
 
 def default_task(found: list, chosen: str = "") -> dict:
     """What Build runs: the task you chose for this project, else the first build task."""
-    return next((t for t in found if t["id"] == chosen and t["command"]), None) or next((t for t in found if t["group"] == "build" and t["command"]), None) \
+    return next((t for t in found if t["id"] == chosen and t["command"]), None) or next((t for t in found if t.get("default") and t["command"]), None) \
+        or next((t for t in found if t["group"] == "build" and t["command"]), None) \
         or next((t for t in found if t["command"]), None)
 
 
@@ -508,12 +512,13 @@ class Builder(QObject):
     finished = Signal(str, int)               # the task's id and its exit code
     wantsTools = Signal(str)                  # a setup task was chosen: the pack's name, or "unreal" to choose the folder
 
-    def __init__(self, parent=None, save_all=None, env_path: list = ()):
+    def __init__(self, parent=None, save_all=None, env_path: list = (), known=None):
         super().__init__(parent)
         self._root, self._tasks, self._cfg = None, [], load_config()
         self._proc, self._task, self._status, self._started = None, None, "", 0.0
         self._problems, self._seen, self._state, self._tail, self._stopped = [], set(), {}, "", False
         self._save_all, self._env_path, self._at = save_all, list(env_path), -1
+        self._known = known                      # () -> what ${file} and the rest stand for now (for .vscode/tasks.json)
         self._lines = Lines(self)
         self._pending = []
         self._flush = QTimer(self, interval=60, singleShot=True)
@@ -527,7 +532,7 @@ class Builder(QObject):
     @Slot()
     def refresh(self) -> None:
         self._cfg = load_config()
-        self._tasks = tasks(self._root, self._cfg) if self._root else []
+        self._tasks = tasks(self._root, self._cfg, self._known() if self._known else None) if self._root else []
         self.changed.emit()
 
     def _chosen(self) -> str:
@@ -590,8 +595,13 @@ class Builder(QObject):
 
     @Slot(str)
     def run(self, tid: str) -> None:
+        if self._root and self._proc is None and tid.startswith("vscode:"):
+            self.refresh()                                               # (${file} means the file in front now)
         task = next((t for t in self._tasks if t["id"] == tid), None)
         if not task or not self._root:
+            return
+        if not task["command"] and task["group"] != "setup":
+            self.said.emit(f"“{task['name']}” can't be run here: {task['detail']}.", True)
             return
         if task["group"] == "setup" and not task["command"]:
             self.wantsTools.emit(tid.split(":", 1)[1])

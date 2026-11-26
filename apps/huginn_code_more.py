@@ -1,6 +1,10 @@
 """Code, round four: the parts that don't need a window. Snippets and their tab stops, merge conflicts, the scopes
 for sticky scroll and the outline, and quick fixes for Python's commonest problems (an import not used, a name
 never imported), for when the language server has none of its own."""
+import hashlib
+import os
+import time
+from pathlib import Path
 import re
 import sys
 
@@ -177,10 +181,15 @@ def snippet_parse(body: str, unit: str = "    ", indent: str = "") -> dict:
     return {"text": text, "stops": [stops[k]["at"][0] for k in order], "same": [stops[k]["at"][1:] for k in order]}
 
 
+EXTRA_SNIPPETS = {}          # {language or "*": {prefix: (what, body)}}: the project's, and ones brought from VS Code
+
+
 def snippet_items(lang: str, prefix: str) -> list:
-    """Completion items for the snippets whose names start like the word being typed."""
+    """Completion items for the snippets whose names start like the word being typed. The project's own, and the ones
+    brought over from VS Code, come before Code's built-in ones of the same name."""
     out = []
-    for name, (what, body) in (SNIPPETS.get(lang) or {}).items():
+    rows = dict(SNIPPETS.get(lang) or {}, **(EXTRA_SNIPPETS.get("*") or {}), **(EXTRA_SNIPPETS.get(lang) or {}))
+    for name, (what, body) in rows.items():
         if prefix and name.startswith(prefix):
             out.append({"label": name, "insert": body, "snippet": body, "detail": what, "kind": 15, "sort": "~" + name})
     return out
@@ -712,3 +721,108 @@ def put_back(new: str, c: dict) -> tuple:
             return (max(0, s - 1), total, "")
         return (s, e, "")
     return (s, e - 1, "\n".join(c["old"]))
+
+
+# ---------------------------------------------------------------- folding
+def fold_ranges(text: str, tab: int = 4, limit: int = 20000) -> list:
+    """What can be folded away, by indentation: [(start, end)] line numbers (from 0), each a line followed by more
+    deeply indented ones; `end` is the last of those (blank lines after them are left showing, and so is a closing
+    brace back at the start's own depth). Sorted by start."""
+    lines = text.split("\n")
+    if len(lines) > 200000:
+        return []
+    out, stack, last = [], [], -1
+    for i, line in enumerate(lines + ["x"]):                         # (a last line at depth 0 closes whatever is open)
+        if not line.strip():
+            continue
+        depth = len(line) - len(line.lstrip()) if "\t" not in line[:len(line) - len(line.lstrip())] else len(line[:len(line) - len(line.lstrip())].expandtabs(tab))
+        while stack and stack[-1][0] >= depth:
+            _, start = stack.pop()
+            if last > start:
+                out.append((start, last))
+        stack.append((depth, i))
+        last = i
+    out.sort()
+    return out[:limit]
+
+
+def fold_range_at(ranges: list, line: int):
+    """The range to fold for a line: the one that starts on it, else the innermost one it is inside."""
+    best = None
+    for start, end in ranges:
+        if start == line:
+            return (start, end)
+        if start < line <= end and (best is None or start > best[0]):
+            best = (start, end)
+    return best
+
+
+# ---------------------------------------------------------------- a file's history (a copy at every save)
+HISTORY = Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local/share") / "huginn" / "code-history"
+HISTORY_KEEP, HISTORY_DAYS, HISTORY_MAX = 60, 30, 2 * 1024 * 1024
+
+
+def _history_dir(path: str) -> Path:
+    return HISTORY / hashlib.sha1(os.path.abspath(path).encode("utf-8", "surrogatepass")).hexdigest()[:20]
+
+
+def history_keep(path: str, text: str, now: float = None) -> bool:
+    """Keep this version of a file (called when it is saved). Not kept: one the same as the last, or over 2 MB.
+    Old ones go: past the sixtieth, and past thirty days (the five newest stay whatever their age)."""
+    data = text.encode("utf-8", "surrogatepass")
+    if len(data) > HISTORY_MAX or path.startswith("untitled:"):
+        return False
+    folder, now = _history_dir(path), time.time() if now is None else now
+    try:
+        folder.mkdir(parents=True, exist_ok=True, mode=0o700)
+        have = sorted(f for f in folder.iterdir() if f.suffix == ".txt" and f.stem.isdigit())
+        if have and have[-1].read_bytes() == data:
+            return False
+        (folder / "path").write_text(os.path.abspath(path), encoding="utf-8", errors="surrogatepass")
+        stamp = max(int(now * 1000), int(have[-1].stem) + 1 if have else 0)
+        tmp = folder / f"{stamp}.saving"
+        tmp.write_bytes(data)
+        os.replace(tmp, folder / f"{stamp}.txt")
+        have.append(folder / f"{stamp}.txt")
+        for k, f in enumerate(have):
+            from_end = len(have) - k
+            if from_end > HISTORY_KEEP or (from_end > 5 and int(f.stem) / 1000 < now - HISTORY_DAYS * 86400):
+                f.unlink(missing_ok=True)
+        return True
+    except (OSError, ValueError):
+        return False
+
+
+def history_list(path: str, now: float = None) -> list:
+    """A file's kept versions, newest first: [{id, when, lines, size}]."""
+    folder, now, out = _history_dir(path), time.time() if now is None else now, []
+    try:
+        files = sorted((f for f in folder.iterdir() if f.suffix == ".txt" and f.stem.isdigit()), reverse=True)
+    except OSError:
+        return out
+    today = time.strftime("%Y-%m-%d", time.localtime(now))
+    for f in files:
+        try:
+            at, data = int(f.stem) / 1000, f.read_bytes()
+        except (OSError, ValueError):
+            continue
+        day = time.strftime("%Y-%m-%d", time.localtime(at))
+        when = ("Today" if day == today else "Yesterday" if day == time.strftime("%Y-%m-%d", time.localtime(now - 86400)) else time.strftime("%-d %B %Y", time.localtime(at)))
+        out.append({"id": f.stem, "when": f"{when}, {time.strftime('%H:%M:%S', time.localtime(at))}", "lines": data.count(b"\n") + (1 if data and not data.endswith(b"\n") else 0), "size": len(data)})
+    return out
+
+
+def history_read(path: str, ident: str):
+    """One kept version's text, or None."""
+    if not ident.isdigit():
+        return None
+    try:
+        return (_history_dir(path) / f"{ident}.txt").read_bytes().decode("utf-8", "surrogatepass")
+    except (OSError, ValueError):
+        return None
+
+
+def history_diff(old: str, new: str, context: int = 3) -> str:
+    """A unified diff from an old version to the text now."""
+    import difflib
+    return "\n".join(difflib.unified_diff(old.split("\n"), new.split("\n"), "then", "now", lineterm="", n=context))

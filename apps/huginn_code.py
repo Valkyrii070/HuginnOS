@@ -16,13 +16,15 @@ import threading
 import time
 from pathlib import Path
 
-from PySide6.QtCore import (Property, QFileSystemWatcher, QObject, QProcess, QStandardPaths, QTimer, QUrl, Signal, Slot)
-from PySide6.QtGui import QColor, QFont, QImage, QPainter, QSyntaxHighlighter, QTextCharFormat, QTextCursor
+from PySide6.QtCore import (Property, QFileSystemWatcher, QKeyCombination, QObject, QProcess, QStandardPaths, Qt, QTimer, QUrl, Signal, Slot)
+from PySide6.QtGui import QColor, QFont, QImage, QKeySequence, QPainter, QSyntaxHighlighter, QTextCharFormat, QTextCursor
 from PySide6.QtQuick import QQuickImageProvider
 
 import huginn_build as hb
 import huginn_code_more as more
 import huginn_debug as hd
+import huginn_emmet as emmet
+import huginn_vscode as vsc
 
 STATE = Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local/share") / "huginn" / "code.json"
 TEXT_LIMIT = 8 * 1024 * 1024
@@ -162,7 +164,14 @@ def which(program: str):
     return shutil.which(program) or shutil.which(program, path=os.pathsep.join(EXTRA_BIN))
 
 
+ASSOCIATIONS = []          # [(glob, language)] from the open project's files.associations (.vscode/settings.json)
+
+
 def language_of(path: str, head: str = "") -> str:
+    return (vsc.associated(path, ASSOCIATIONS) if ASSOCIATIONS else "") or _language_of(path, head)
+
+
+def _language_of(path: str, head: str = "") -> str:
     name = Path(path).name
     suffix = Path(path).suffix.lower()
     for lang, (ends, *_rest) in LANGS.items():
@@ -391,7 +400,7 @@ class LspClient(QObject):
                 "codeAction": {"codeActionLiteralSupport": {"codeActionKind": {"valueSet": ["", "quickfix", "refactor", "source", "source.organizeImports"]}}},
                 "hover": {"contentFormat": ["plaintext", "markdown"]}, "definition": {}, "references": {}, "documentSymbol": {"hierarchicalDocumentSymbolSupport": True},
                 "rename": {"prepareSupport": False},
-                "publishDiagnostics": {"relatedInformation": False}, "formatting": {}},
+                "publishDiagnostics": {"relatedInformation": False}, "formatting": {}, "inlayHint": {}},
                 "workspace": {"workspaceFolders": True, "configuration": True, "workspaceEdit": {"documentChanges": True}, "applyEdit": True, "executeCommand": {}}}},
             self._started, early=True)
 
@@ -989,13 +998,16 @@ class Code(QObject):
         self._root, self._docs, self._at = None, [], -1
         self._open_dirs, self._tree, self._files_cache = set(), [], None
         self._recent, self._size, self._wrap = [], 14, False
+        self._user, self._proj, self._hide, self._launch_list, self._theme = {}, {}, [], [], {}
         self._places, self._closed = {}, []                      # where the cursor was in each file; the tabs closed, latest last
         self._results, self._searching, self._query = [], False, ""
         self._branch, self._changes, self._git = "", [], False
         self._servers, self._server_note = {}, {}
         self._term, self._busy = None, ""
         self._results_title = ""
-        self._build = hb.Builder(self, save_all=lambda: self.saveAll(), env_path=EXTRA_BIN)
+        self._auto_save = QTimer(self, interval=1000, singleShot=True)
+        self._auto_save.timeout.connect(lambda: self.autoSave("delay"))
+        self._build = hb.Builder(self, save_all=lambda: self.saveAll(), env_path=EXTRA_BIN, known=lambda: self._vs_vars())
         self._build.goTo.connect(lambda path, line, col: self.openFile(path, True, line, col))
         self._build.said.connect(self.said.emit)
         self._build.finished.connect(self._built)
@@ -1044,9 +1056,202 @@ class Code(QObject):
             data = {}
         self._state = data if isinstance(data, dict) else {}
         self._recent = [r for r in self._state.get("recent", []) if isinstance(r, str)][:10]
-        self._size = int(self._state.get("size", 14)) if str(self._state.get("size", 14)).isdigit() else 14
-        self._wrap = bool(self._state.get("wrap", False))
-        self._minimap = bool(self._state.get("minimap", True))
+        self._user = vsc.load_user()
+        if not vsc.SETTINGS_FILE.exists():                         # what Code kept in its state before it had settings
+            old = {"editor.formatOnSave": "formatOnSave", "files.trimTrailingWhitespace": "trimOnSave", "files.insertFinalNewline": "trimOnSave",
+                   "editor.guides.indentation": "guides", "editor.occurrencesHighlight": "occurrences", "editor.minimap.enabled": "minimap", "editor.fontSize": "size"}
+            self._user.update({k: self._state[v] for k, v in old.items() if v in self._state and vsc.clean(k, self._state[v]) is not None})
+            if "wrap" in self._state:
+                self._user["editor.wordWrap"] = "on" if self._state["wrap"] else "off"
+        self._theme = self._state.get("theme") if isinstance(self._state.get("theme"), dict) else {}
+        self._apply_settings()
+
+    # ---------------------------------------------------------------- settings (VS Code's names; the project's lie over the user's)
+    def setting(self, key: str, d=None):
+        return vsc.value(key, self._user, self._proj, vsc.vs_ids_for(d.lang, LANGS) if d is not None and d.lang else ())
+
+    def _apply_settings(self) -> None:
+        """What a few settings are also kept as, for the window's own properties."""
+        self._size = self.setting("editor.fontSize")
+        self._wrap = self.setting("editor.wordWrap") == "on"
+        self._minimap = bool(self.setting("editor.minimap.enabled"))
+        self._hide = [k for k, v in self.setting("files.exclude").items() if v] + [p for p in vsc.excluded(self._proj) if p not in self.setting("files.exclude")]
+        ASSOCIATIONS[:] = vsc.associations(dict(self._user, **self._proj), LANGS)
+
+    def _set_user(self, key: str, value) -> None:
+        value = vsc.clean(key, value)
+        if value is None:
+            return
+        if value == vsc.DEFAULTS.get(key):
+            self._user.pop(key, None)                               # (the file holds only what differs from the defaults)
+        else:
+            self._user[key] = value
+        if not self._demo:
+            vsc.save_user(self._user)
+        self._apply_settings()
+
+    @Slot(str, "QVariant")
+    def setSetting(self, key: str, value) -> None:
+        """Change one of Code's own settings (the Settings page, and the commands that toggle one)."""
+        if hasattr(value, "toVariant"):
+            value = value.toVariant()
+        if key not in vsc.KINDS:
+            return
+        if vsc.KINDS[key] == "numbers" and isinstance(value, str):
+            value = [int(n) for n in re.findall(r"\d+", value)]
+        if vsc.KINDS[key] == "globs" and isinstance(value, str):
+            value = {line.strip(): True for line in value.splitlines() if line.strip()}
+        if vsc.KINDS[key] == "int" and isinstance(value, str) and value.strip().lstrip("-").isdigit():
+            value = int(value)
+        self._set_user(key, value)
+        self._files_cache = None
+        if key == "files.exclude":
+            self._soon.start()
+        if key == "huginn.keymap":
+            self.keysChanged.emit()
+        self.changed.emit()
+
+    @Slot(str)
+    def resetSetting(self, key: str) -> None:
+        if key in vsc.DEFAULTS:
+            self.setSetting(key, vsc.DEFAULTS[key])
+
+    def _get_settings(self) -> list:
+        rows = []
+        for key, group, kind, default, title, about, choices in vsc.SCHEMA:
+            now = vsc.value(key, self._user, self._proj)
+            shown = ", ".join(str(n) for n in now) if kind == "numbers" else "\n".join(k for k, v in now.items() if v) if kind == "globs" else now
+            rows.append({"key": key, "group": group, "kind": kind, "title": title, "about": about, "value": shown, "choices": list(choices) if kind == "choice" else [],
+                         "low": choices[0] if kind == "int" else 0, "high": choices[1] if kind == "int" else 0, "where": vsc.where_set(key, self._user, self._proj),
+                         "changed": key in self._user})
+        return rows
+    settingsList = Property("QVariantList", _get_settings, notify=changed)
+
+    # ---------------------------------------------------------------- a VS Code colour theme, and what VS Code kept in the home
+    theme = Property("QVariantMap", lambda self: self._theme or {}, notify=changed)
+
+    @Slot(str, result=str)
+    def importTheme(self, path: str) -> str:
+        """Use a VS Code colour theme file (.json). Returns "" when it's in use, else why not."""
+        path = path.replace("file://", "").strip()
+        data = vsc.load_jsonc(path)
+        if data is None:
+            return "That file isn't there, or isn't a theme Code can read (a VS Code colour theme is a .json file)."
+        got = vsc.theme(data, Path(path).stem)
+        if not got:
+            return "That file has no editor colours in it, so it isn't a colour theme."
+        self._theme = got
+        self._set_user("workbench.colorTheme", got["name"])
+        self._keep()
+        self.changed.emit()
+        return ""
+
+    @Slot()
+    def clearTheme(self) -> None:
+        self._theme = {}
+        self._set_user("workbench.colorTheme", "")
+        self._keep()
+        self.changed.emit()
+
+    vscodeFolder = Property(str, lambda self: str(vsc.user_dir() or ""), notify=changed)
+
+    @Slot(result=str)
+    def importFromVSCode(self) -> str:
+        """Bring the user's snippets, editor settings and key bindings over from VS Code's own folder. Returns what
+        came, in words."""
+        got = vsc.user_import(LANGS)
+        if not got["found"]:
+            return "VS Code's settings weren't found on this computer (they live in ~/.config/Code/User)."
+        cfg = vsc.load_jsonc(Path(got["found"]) / "settings.json")
+        took = 0
+        for key in vsc.KINDS:
+            if isinstance(cfg, dict) and key in cfg and key not in ("workbench.colorTheme", "huginn.keymap") and vsc.clean(key, cfg[key]) is not None:
+                self._user[key] = vsc.clean(key, cfg[key])
+                took += 1
+        for block, rows in (cfg.items() if isinstance(cfg, dict) else ()):
+            if block.startswith("[") and isinstance(rows, dict):
+                keep = {k: v for k, v in rows.items() if k in vsc.KINDS and vsc.clean(k, v) is not None}
+                if keep:
+                    self._user[block] = keep
+        if got["keys"]:
+            self._user["huginn.keys"] = dict(self._user.get("huginn.keys") or {}, **got["keys"])
+        if not self._demo:
+            vsc.save_user(self._user)
+        self._state["snippets"] = {lang: {k: list(v) for k, v in rows.items()} for lang, rows in got["snippets"].items()}
+        count = sum(len(rows) for rows in got["snippets"].values())
+        self._apply_settings()
+        self._read_project()
+        self._keep()
+        self.keysChanged.emit()
+        self.changed.emit()
+        parts = [f"{took} setting{'' if took == 1 else 's'}", f"{count} snippet{'' if count == 1 else 's'}", f"{len(got['keys'])} key binding{'' if len(got['keys']) == 1 else 's'}"]
+        note = f" Its colour theme, {got['theme']}, lives inside an extension: import the theme's .json file to use it." if got["theme"] else ""
+        return "Brought from VS Code: " + ", ".join(parts) + "." + note
+    settingsPath = Property(str, lambda self: str(vsc.SETTINGS_FILE), constant=True)
+    keysChanged = Signal()
+
+    # ---------------------------------------------------------------- keyboard shortcuts you choose
+    def _get_keys(self) -> dict:
+        """{command name: key sequence} for the commands whose shortcut isn't Code's own: VS Code's, when that keymap is
+        chosen, and over those the ones you set yourself ("" takes a command's shortcut away)."""
+        preset = dict(vsc.VSCODE_KEYMAP) if self.setting("huginn.keymap") == "VS Code" else {}
+        own = self._user.get("huginn.keys")
+        preset.update({str(k): str(v) for k, v in own.items() if isinstance(v, str)} if isinstance(own, dict) else {})
+        return preset
+    keys = Property("QVariantMap", _get_keys, notify=keysChanged)
+    ownKeys = Property("QVariantMap", lambda self: dict(self._user.get("huginn.keys") or {}) if isinstance(self._user.get("huginn.keys"), dict) else {}, notify=keysChanged)
+
+    @Slot(str, str)
+    def setKey(self, command: str, sequence: str) -> None:
+        """Give a command a shortcut of your own ("" for none)."""
+        command, sequence = command.strip()[:120], sequence.strip()[:60]
+        if not command:
+            return
+        if sequence and QKeySequence(sequence).isEmpty():
+            return
+        own = dict(self._user.get("huginn.keys") or {}) if isinstance(self._user.get("huginn.keys"), dict) else {}
+        own[command] = QKeySequence(sequence).toString() if sequence else ""
+        self._user["huginn.keys"] = own
+        if not self._demo:
+            vsc.save_user(self._user)
+        self.keysChanged.emit()
+
+    @Slot(str)
+    def resetKey(self, command: str) -> None:
+        own = dict(self._user.get("huginn.keys") or {}) if isinstance(self._user.get("huginn.keys"), dict) else {}
+        if own.pop(command, None) is not None:
+            if own:
+                self._user["huginn.keys"] = own
+            else:
+                self._user.pop("huginn.keys", None)
+            if not self._demo:
+                vsc.save_user(self._user)
+            self.keysChanged.emit()
+
+    @Slot()
+    def resetKeys(self) -> None:
+        if self._user.pop("huginn.keys", None) is not None and not self._demo:
+            vsc.save_user(self._user)
+        self.keysChanged.emit()
+
+    @Slot(int, int, result=str)
+    def keyName(self, key: int, modifiers: int) -> str:
+        """What a key press is called ("Ctrl+Shift+K"); "" for a modifier on its own."""
+        idle = (Qt.Key.Key_Control, Qt.Key.Key_Shift, Qt.Key.Key_Alt, Qt.Key.Key_Meta, Qt.Key.Key_AltGr, Qt.Key.Key_unknown, Qt.Key.Key_Super_L, Qt.Key.Key_Super_R)
+        if key <= 0 or key in tuple(k.value for k in idle):
+            return ""
+        all_mods = Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.ShiftModifier | Qt.KeyboardModifier.AltModifier | Qt.KeyboardModifier.MetaModifier
+        try:
+            return QKeySequence(QKeyCombination(Qt.KeyboardModifier(modifiers & all_mods.value), Qt.Key(key))).toString()
+        except (ValueError, TypeError):
+            return ""
+
+    @Slot()
+    def openSettingsFile(self) -> None:
+        """Code's own settings.json, to edit by hand (made with what's set now if it isn't there yet)."""
+        if not vsc.SETTINGS_FILE.exists() and not self._demo:
+            vsc.save_user(self._user)
+        self.openFile(str(vsc.SETTINGS_FILE), True)
 
     def _keep(self) -> None:
         if self._demo:
@@ -1055,7 +1260,7 @@ class Code(QObject):
             self._state.setdefault("projects", {})[str(self._root)] = {"open": [d.path for d in self._docs], "at": self._at, "dirs": sorted(self._open_dirs)[:200],
                                                                     "places": {p: a for p, a in self._places.items() if p.startswith(str(self._root))},
                                                                     "breakpoints": {k: v for k, v in self._dbg.all_breakpoints().items() if k.startswith(str(self._root))}}
-        self._state.update(recent=self._recent, size=self._size, wrap=self._wrap, minimap=self._minimap, last=str(self._root) if self._root else "")
+        self._state.update(recent=self._recent, size=self._size, wrap=self._wrap, minimap=self._minimap, last=str(self._root) if self._root else "", theme=self._theme)
         try:
             STATE.parent.mkdir(parents=True, exist_ok=True)
             tmp = STATE.with_suffix(".saving")
@@ -1137,6 +1342,15 @@ def advice(sky: Sky) -> str:
         if not path.strip():                                  # (no path isn't "the folder Code happened to start in")
             return
         root = Path(path.replace("file://", "")).expanduser().resolve()
+        space = {}
+        if root.is_file() and root.suffix == ".code-workspace":     # VS Code's workspace file: its (first) folder, with its settings
+            folders, space = vsc.workspace_settings(root)
+            if not folders:
+                self.said.emit("That workspace file names no folder.", True)
+                return
+            if len(folders) > 1:
+                self.said.emit(f"That workspace has {len(folders)} folders. Code opens one at a time: this is the first, {Path(folders[0]).name}.", False)
+            root = Path(folders[0])
         if not root.is_dir():
             self.said.emit("That folder isn't there any more.", True)
             return
@@ -1147,6 +1361,8 @@ def advice(sky: Sky) -> str:
             self._keep()                                           # (the folder being left: its tabs and where the cursor was in each)
             self._close_all()
         self._root = root
+        self._space = space
+        self._read_project()
         self._recent = [str(root)] + [r for r in self._recent if r != str(root)]
         del self._recent[10:]
         saved = self._state.get("projects", {}).get(str(root), {}) if restore else {}
@@ -1185,6 +1401,9 @@ def advice(sky: Sky) -> str:
             return
         self._close_all()
         self._root, self._tree, self._branch, self._changes, self._git = None, [], "", [], False
+        self._space = {}
+        self._read_project()
+        self._build.set_root(None)
         self._keep()
         self.treeChanged.emit()
         self.changed.emit()
@@ -1205,7 +1424,7 @@ def advice(sky: Sky) -> str:
                 except OSError:
                     return
                 for e in entries:
-                    if e.name == ".git":
+                    if e.name == ".git" or (self._hide and vsc.is_excluded(os.path.relpath(e.path, self._root), self._hide)):
                         continue
                     try:
                         is_dir = e.is_dir()
@@ -1491,6 +1710,8 @@ def advice(sky: Sky) -> str:
             text = text.replace("\r\n", "\n").replace("\r", "\n")
         if text == d.text:                                    # colouring touches the document too: nothing was typed
             return
+        if self.setting("files.autoSave") == "afterDelay":
+            self._auto_save.start()
         delta = text.count("\n") - d.text.count("\n")
         if delta and self._dbg.lines_for(d.path):            # breakpoints below an added or removed line move with their code
             old, new = d.text.split("\n"), text.split("\n")
@@ -1519,7 +1740,7 @@ def advice(sky: Sky) -> str:
         if d.read_only:
             self.said.emit(d.why or "This file is read only.", True)
             return "failed"
-        if self._state.get("formatOnSave") and not getattr(self, "_formatting", False):
+        if self._config(d).get("format_on_save") == "true" and not getattr(self, "_formatting", False):
             c = self._client_for(d, start=False)
             if c and c.up and c.caps.get("documentFormattingProvider"):   # formatted first, then saved (when the formatter answers)
                 self._formatting = True
@@ -1533,6 +1754,9 @@ def advice(sky: Sky) -> str:
                 self.format(i, then=after)
                 return ""
         self._tidy_before_save(i)
+        keep = self.setting("huginn.localHistory") and not self._demo and not d.path.startswith("untitled:")
+        if keep and d.saved and d.saved != d.text and not more.history_list(d.path):
+            more.history_keep(d.path, d.saved, time.time() - 1)     # (what the file held before Code first changed it)
         try:
             got = d.save(force)
         except OSError as e:
@@ -1544,9 +1768,39 @@ def advice(sky: Sky) -> str:
         if client:
             client.notify("textDocument/didSave", {"textDocument": {"uri": d.uri}, "text": d.text})
         self._marks(d)
+        self._saved_file(d)
         self.refreshGit()
         self.changed.emit()
         return ""
+
+    def _saved_file(self, d: Doc) -> None:
+        """A file has just been saved: a copy for its history, and the project's own rules read again if it is one."""
+        p = Path(d.path)
+        if self.setting("huginn.localHistory") and not self._demo:
+            more.history_keep(d.path, d.text)
+        if self._root and (p.parent.name == ".vscode" or p.name in (".editorconfig", ".huginn-tasks.json") or p.suffix == ".code-workspace"):
+            self._read_project()
+            self._build.refresh()
+        if p == vsc.SETTINGS_FILE:
+            self._user = vsc.load_user()
+            self._apply_settings()
+            self.keysChanged.emit()
+
+    @Slot(str)
+    def autoSave(self, why: str) -> None:
+        """Save what's changed, when the setting says to: "delay" (a second after typing stops) or "focus" (on going
+        to another tab or app). A file with no name yet, or one that changed on disk meanwhile, is left for you."""
+        mode = self.setting("files.autoSave")
+        if self._demo or not ((why == "delay" and mode == "afterDelay") or (why == "focus" and mode in ("onFocusChange", "afterDelay"))):
+            return
+        for i, d in enumerate(self._docs):
+            if d.dirty and not d.read_only and not d.path.startswith("untitled:"):
+                try:
+                    if Path(d.path).is_file() and abs(Path(d.path).stat().st_mtime - (d.mtime or 0)) > 0.001:
+                        continue                                    # changed on disk: that question is asked when you save
+                except OSError:
+                    continue
+                self.save(i, False)
 
     @Slot(result=int)
     def saveAll(self) -> int:
@@ -1692,7 +1946,7 @@ def advice(sky: Sky) -> str:
         server = self._server_note.get(d.lang, "")
         return {"lang": d.lang, "encoding": ("UTF-8" if d.encoding == "utf-8" else "UTF-16" if d.encoding.startswith("utf-16") else "Latin-1") + (" with BOM" if d.bom else ""),
                 "eol": "CRLF" if d.crlf else "LF", "indent": "Tab" if ind == "\t" else f"Spaces: {len(ind)}", "indentText": ind,
-                "tabWidth": self._tab_width(d), "config": bool(cfg),
+                "tabWidth": self._tab_width(d), "config": bool(cfg.get("_file")),
                 "server": server, "comment": LANGS.get(d.lang, LANGS["Text"])[1], "block": list(LANGS.get(d.lang, LANGS["Text"])[2] or [])}
 
     def _get_problems(self) -> list:
@@ -1730,6 +1984,12 @@ def advice(sky: Sky) -> str:
         """A task finished: what it made may be new files, and a fresh compile_commands.json is what clangd reads."""
         self._files_cache = None
         self._soon.start()
+        waiting, self._after_build = getattr(self, "_after_build", None), None
+        if waiting and waiting[0] == tid:
+            if code == 0:
+                self._launch(waiting[1])
+            else:
+                self.said.emit("The task before debugging failed, so the debugger wasn't started.", True)
         if code == 0 and tid in ("ue:clangd", "cmake:configure", "cmake:build") and self._root:
             made = next((p for p in (self._root / "compile_commands.json", self._root / "build" / "compile_commands.json") if p.is_file()), None)
             link = self._root / "compile_commands.json"
@@ -1790,13 +2050,13 @@ def advice(sky: Sky) -> str:
 
     @Slot(int)
     def setSize(self, n: int) -> None:
-        self._size = max(9, min(32, n))
+        self._set_user("editor.fontSize", max(9, min(32, n)))
         self._keep()
         self.changed.emit()
 
     @Slot(bool)
     def setWrap(self, on: bool) -> None:
-        self._wrap = on
+        self._set_user("editor.wordWrap", "on" if on else "off")
         self._keep()
         self.changed.emit()
 
@@ -1816,8 +2076,79 @@ def advice(sky: Sky) -> str:
     # ---------------------------------------------------------------- finding things
     def _all_files(self) -> list:
         if self._files_cache is None:
-            self._files_cache = list_files(self._root) if self._root else []
+            found = list_files(self._root) if self._root else []
+            self._files_cache = [f for f in found if not vsc.is_excluded(f, self._hide)] if self._hide else found
         return self._files_cache
+
+    # ---------------------------------------------------------------- what Visual Studio Code left in the project
+    def _read_project(self) -> None:
+        """.vscode/settings.json (a .code-workspace file's settings under it), the project's snippets and its debug
+        configurations. Read when the folder opens and again when one of those files is saved."""
+        root = self._root
+        self._proj = dict(getattr(self, "_space", None) or {}, **vsc.settings(root)) if root else {}
+        self._apply_settings()
+        more.EXTRA_SNIPPETS.clear()
+        for layer in (self._state.get("snippets") if isinstance(self._state.get("snippets"), dict) else {}, vsc.project_snippets(root, LANGS) if root else {}):
+            for lang, rows in layer.items():
+                if isinstance(rows, dict):
+                    more.EXTRA_SNIPPETS.setdefault(lang, {}).update({k: tuple(v) for k, v in rows.items() if isinstance(v, (list, tuple)) and len(v) == 2})
+        self._launch_list = vsc.launches(root, self._vs_vars()) if root else []
+        self._files_cache = None
+
+    def _vs_vars(self) -> dict:
+        d = self._docs[self._at] if 0 <= self._at < len(self._docs) else None
+        return vsc.variables(self._root or Path.home(), d.path if d else "", 0)
+
+    def _get_launches(self) -> list:
+        chosen = (self._state.get("launch") or {}).get(str(self._root), "") if self._root else ""
+        first = next((c["name"] for c in self._launch_list if c["name"] == chosen and c["kind"]), "") or next((c["name"] for c in self._launch_list if c["kind"]), "")
+        return [{"name": c["name"], "ok": bool(c["kind"]), "why": c["why"], "chosen": c["name"] == first} for c in self._launch_list]
+    launches = Property("QVariantList", _get_launches, notify=changed)
+
+    @Slot(str)
+    def startLaunch(self, name: str) -> None:
+        """Debug with one of the project's .vscode/launch.json configurations (and make it the one F5 uses)."""
+        if self._dbg.active or not self._root:
+            return
+        self._launch_list = vsc.launches(self._root, self._vs_vars())      # ${file} is the file in front now
+        cfg = next((c for c in self._launch_list if c["name"] == name), None)
+        if cfg is None:
+            return
+        if not cfg["kind"]:
+            self.said.emit(f"“{name}” can't be started here: {cfg['why']}.", True)
+            return
+        self._state.setdefault("launch", {})[str(self._root)] = name
+        self._keep()
+        self.saveAll()
+        before = cfg["before"] and next((t for t in self._build.tasks if t["name"] == cfg["before"] and t["command"]), None)
+        if before and not self._demo:
+            self._after_build = (before["id"], cfg)                        # (its preLaunchTask first; debugging follows if it works)
+            self._build.run(before["id"])
+            self.said.emit(f"Running “{before['name']}” first…", False)
+            return
+        self._launch(cfg)
+
+    def _launch(self, cfg: dict) -> None:
+        launch, root = dict(cfg["launch"]), self._root or Path.home()
+        try:
+            if cfg["kind"] == "python":
+                python = launch.pop("python", "python3")
+                if not hd.has_debugpy(python):
+                    raise ValueError("Debugging Python needs debugpy (the python3-debugpy package).")
+                argv, name = [python, "-m", "debugpy.adapter"], "debugpy"
+            else:
+                if not hd.gdb_has_dap():
+                    raise ValueError("Debugging compiled programs needs GDB 14 or later (the gdb package).")
+                if not Path(launch["program"]).is_file():
+                    raise ValueError(f"The program {launch['program']} isn't there. Build first.")
+                argv, name = ["gdb", "-q", "-i", "dap"], "GDB"
+        except ValueError as err:
+            self.said.emit(str(err), True)
+            return
+        if self._demo:
+            self.said.emit(f"Would debug “{cfg['name']}” with {name}.", False)
+            return
+        self._dbg.start(argv, launch, name, str(launch.get("cwd") or root))
 
     @Slot(str, result="QVariantList")
     def quickOpen(self, query: str) -> list:
@@ -1863,6 +2194,8 @@ def advice(sky: Sky) -> str:
 
         def go():
             hits = search_files(root, asked, case, regex, word)
+            if self._hide:
+                hits = [h for h in hits if not vsc.is_excluded(h["path"], self._hide)]
 
             def done():
                 if asked != self._query:
@@ -2599,7 +2932,233 @@ def advice(sky: Sky) -> str:
                 self.openFile(path, True, start.get("line", 0), start.get("character", 0))
         c.request("textDocument/definition", {"textDocument": {"uri": d.uri}, "position": {"line": line, "character": col}}, got)
 
-    def _guess_definition(self, d: Doc, line: int, col: int) -> None:
+    # ---------------------------------------------------------------- peek: the definition shown where you are
+    peeked = Signal(int, "QVariantMap")                  # tab, {path, name, line, first, text, lang}: a few lines around it
+
+    @Slot(int, int, int)
+    def peek(self, i: int, line: int, col: int) -> None:
+        """Show the definition of what's under the cursor without leaving the file (the helper's answer, else the
+        project searched for a definition of that name)."""
+        if not 0 <= i < len(self._docs):
+            return
+        d = self._docs[i]
+
+        def show(path: str, at: int) -> None:
+            try:
+                other = next((x for x in self._docs if x.path == path), None)
+                text = other.text if other else Path(path).read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                return
+            lines = text.split("\n")
+            first = max(0, at - 3)
+            try:
+                name = os.path.relpath(path, self._root) if self._root and Path(path).is_relative_to(self._root) else path
+            except ValueError:
+                name = path
+            self.peeked.emit(i, {"path": path, "name": name, "line": at, "first": first, "text": "\n".join(line[:400] for line in lines[first:first + 14]),
+                                 "lang": language_of(path, text[:200])})
+
+        c = self._client_for(d, start=False)
+        if not c:
+            self._guess_definition(d, line, col, show)
+            return
+        self._push_changes()
+
+        def got(result, error):
+            loc = result[0] if isinstance(result, list) and result else result
+            if not loc:
+                self._guess_definition(d, line, col, show)
+                return
+            path = QUrl(loc.get("uri") or loc.get("targetUri") or "").toLocalFile()
+            if path:
+                show(path, int(((loc.get("range") or loc.get("targetSelectionRange") or {}).get("start") or {}).get("line", 0)))
+        c.request("textDocument/definition", {"textDocument": {"uri": d.uri}, "position": {"line": line, "character": col}}, got)
+
+    # ---------------------------------------------------------------- inlay hints: what the helper adds beside the code
+    hinted = Signal(int, "QVariantList")                 # tab, [{line, text}]: hints gathered to the end of their line
+
+    @Slot(int, int, int)
+    def inlayHints(self, i: int, first: int, last: int) -> None:
+        """Ask the helper for the hints on these lines (parameter names, inferred types). They come back gathered at
+        the end of each line, since Code's editor can't put words between yours."""
+        if not 0 <= i < len(self._docs) or not self.setting("editor.inlayHints.enabled"):
+            return
+        d = self._docs[i]
+        c = self._client_for(d, start=False)
+        if not c or not c.up or not c.caps.get("inlayHintProvider"):
+            return
+        self._push_changes()
+        first, last = max(0, first), max(first, min(last, first + 400))
+
+        def got(result, error):
+            rows = {}
+            for h in result if isinstance(result, list) else []:
+                if not isinstance(h, dict):
+                    continue
+                label = h.get("label")
+                label = "".join(str(p.get("value", "")) for p in label if isinstance(p, dict)) if isinstance(label, list) else str(label or "")
+                pos = h.get("position") or {}
+                if label.strip():
+                    rows.setdefault(int(pos.get("line", 0)), []).append((int(pos.get("character", 0)), label.strip().strip(":").strip() if h.get("kind") == 2 else label.strip()))
+            lines = d.text.split("\n")
+            out = []
+            for ln, hints in sorted(rows.items()):
+                if 0 <= ln < len(lines):
+                    hints.sort()
+                    out.append({"line": ln, "text": "  ".join(text for _, text in hints)[:160]})
+            if d in self._docs:
+                self.hinted.emit(self._docs.index(d), out)
+        c.request("textDocument/inlayHint", {"textDocument": {"uri": d.uri}, "range": {"start": {"line": first, "character": 0}, "end": {"line": last + 1, "character": 0}}}, got)
+
+    # ---------------------------------------------------------------- folding
+    folded = Signal(int)                                 # tab: what is folded changed (the editor lays its text out again)
+
+    def _text_doc(self, d: Doc):
+        return d.styler.document() if getattr(d, "styler", None) is not None else None
+
+    def _fold_ranges(self, d: Doc) -> list:
+        key = (len(d.text), hash(d.text))
+        if getattr(d, "_folds", (None,))[0] != key:
+            d._folds = (key, more.fold_ranges(d.text, self._tab_width(d)))
+        return d._folds[1]
+
+    @Slot(int, result="QVariantList")
+    def foldRanges(self, i: int) -> list:
+        """[[start, end]…]: the lines that can be folded away under their first."""
+        if not 0 <= i < len(self._docs) or not self.setting("editor.folding"):
+            return []
+        return [list(r) for r in self._fold_ranges(self._docs[i])]
+
+    @Slot(int, result="QVariantList")
+    def hiddenOf(self, i: int) -> list:
+        """[[first, last]…]: the runs of lines that are folded away now, in order."""
+        doc = self._text_doc(self._docs[i]) if 0 <= i < len(self._docs) else None
+        out = []
+        if doc is None:
+            return out
+        block, n, run = doc.firstBlock(), 0, None
+        while block.isValid():
+            if not block.isVisible():
+                run = [n, n] if run is None else [run[0], n]
+            elif run is not None:
+                out.append(run)
+                run = None
+            block, n = block.next(), n + 1
+        if run is not None:
+            out.append(run)
+        return out
+
+    def _set_hidden(self, i: int, hide: set, show: set) -> bool:
+        """Hide and show lines of tab i's text. Returns whether anything changed (and says so to the window)."""
+        doc = self._text_doc(self._docs[i])
+        if doc is None:
+            return False
+        changed = False
+        for n in sorted(hide | show):
+            block = doc.findBlockByNumber(n)
+            want = n not in hide
+            if block.isValid() and block.isVisible() != want and (n > 0 or want):
+                block.setVisible(want)
+                changed = True
+        if changed:
+            doc.markContentsDirty(0, doc.characterCount())
+            self.folded.emit(i)
+        return changed
+
+    @Slot(int, int)
+    def toggleFold(self, i: int, line: int) -> None:
+        """Fold what's under this line, or unfold it if it is folded."""
+        if not 0 <= i < len(self._docs):
+            return
+        run = next((r for r in self.hiddenOf(i) if r[0] == line + 1), None)
+        if run:
+            self._set_hidden(i, set(), set(range(run[0], run[1] + 1)))
+            return
+        r = more.fold_range_at(self._fold_ranges(self._docs[i]), line)
+        if r and self.setting("editor.folding"):
+            self._set_hidden(i, set(range(r[0] + 1, r[1] + 1)), set())
+
+    @Slot(int, int)
+    def foldAt(self, i: int, line: int) -> None:
+        if 0 <= i < len(self._docs) and not any(r[0] == line + 1 for r in self.hiddenOf(i)):
+            self.toggleFold(i, line)
+
+    @Slot(int, int)
+    def unfoldAt(self, i: int, line: int) -> None:
+        """Show a line that is folded away (with the rest of its fold), or what's folded under it."""
+        if not 0 <= i < len(self._docs):
+            return
+        run = next((r for r in self.hiddenOf(i) if r[0] - 1 <= line <= r[1]), None)
+        if run:
+            self._set_hidden(i, set(), set(range(run[0], run[1] + 1)))
+
+    @Slot(int)
+    def foldAll(self, i: int) -> None:
+        if 0 <= i < len(self._docs) and self.setting("editor.folding"):
+            hide = set()
+            for start, end in self._fold_ranges(self._docs[i]):
+                hide.update(range(start + 1, end + 1))
+            self._set_hidden(i, hide, set())
+
+    @Slot(int)
+    def unfoldAll(self, i: int) -> None:
+        if 0 <= i < len(self._docs):
+            self._set_hidden(i, set(), {n for r in self.hiddenOf(i) for n in range(r[0], r[1] + 1)})
+
+    @Slot(int)
+    def checkFolds(self, i: int) -> None:
+        """After the text changed: nothing stays hidden unless a line that can still be folded stands over it (text
+        you can't see, with no way to bring it back, must never be)."""
+        if not 0 <= i < len(self._docs):
+            return
+        runs = self.hiddenOf(i)
+        if not runs:
+            return
+        starts = {start: end for start, end in self._fold_ranges(self._docs[i])}
+        orphans = set()
+        for first, last in runs:
+            if starts.get(first - 1, -1) < last:
+                orphans.update(range(first, last + 1))
+        if orphans:
+            self._set_hidden(i, set(), orphans)
+
+    # ---------------------------------------------------------------- Emmet
+    @Slot(int, str, result="QVariantMap")
+    def emmetAt(self, i: int, before: str) -> dict:
+        """Tab after an abbreviation in HTML or CSS: {back: how many characters of it to replace, body: the snippet},
+        or {} when what's before the cursor isn't one."""
+        if not 0 <= i < len(self._docs):
+            return {}
+        lang = self._docs[i].lang
+        kind = "css" if lang == "CSS" else "html" if lang in ("HTML", "PHP", "Vue", "Svelte", "XML") or Path(self._docs[i].path).suffix in (".jsx", ".tsx", ".html", ".htm", ".vue") else ""
+        if not kind:
+            return {}
+        abbr = emmet.abbreviation_before(before[-400:], kind)
+        body = (emmet.expand_css(abbr) if kind == "css" else emmet.expand(abbr)) if abbr else None
+        return {"back": len(abbr), "body": body} if body else {}
+
+    # ---------------------------------------------------------------- a file's history
+    @Slot(int, result="QVariantList")
+    def historyOf(self, i: int) -> list:
+        return more.history_list(self._docs[i].path) if 0 <= i < len(self._docs) else []
+
+    @Slot(int, str, result="QVariantList")
+    def historyDiff(self, i: int, ident: str) -> list:
+        """The changes from a kept version to the text now, as rows for the diff sheet."""
+        old = more.history_read(self._docs[i].path, ident) if 0 <= i < len(self._docs) else None
+        return diff_rows(more.history_diff(old, self._docs[i].text)) if old is not None else []
+
+    @Slot(int, str, result=bool)
+    def historyRestore(self, i: int, ident: str) -> bool:
+        """Put a kept version's text back in the editor (not saved until you save; undo brings back what was there)."""
+        old = more.history_read(self._docs[i].path, ident) if 0 <= i < len(self._docs) else None
+        if old is None or self._docs[i].read_only:
+            return False
+        if old != self._docs[i].text:
+            self._edit_text(i, [[0, len(self._docs[i].text), old.replace("\r\n", "\n")]])
+        return True
+
+    def _guess_definition(self, d: Doc, line: int, col: int, show=None) -> None:
         lines = d.text.split("\n")
         if not 0 <= line < len(lines):
             return
@@ -2611,7 +3170,10 @@ def advice(sky: Sky) -> str:
         pat = re.compile(rf"^\s*(?:async\s+)?(?:def|class|function|func|fn|struct|enum|interface|type|const|let|var)\s+{re.escape(name)}\b")
         for n, l in enumerate(lines):
             if pat.match(l):
-                self.jump.emit(self._docs.index(d), n, l.find(name))
+                if show:
+                    show(d.path, n)
+                else:
+                    self.jump.emit(self._docs.index(d), n, l.find(name))
                 return
         self.said.emit(f"Couldn't find where “{name}” is made.", True)
 
@@ -3351,15 +3913,31 @@ def advice(sky: Sky) -> str:
 
     # ---------------------------------------------------------------- the project's own rules (.editorconfig)
     def _config(self, d: Doc) -> dict:
+        """The rules for this file, in .editorconfig's words: Code's settings (the project's .vscode/settings.json
+        over the user's, the language's block first), then the project's .editorconfig over those."""
+        ids = vsc.vs_ids_for(d.lang, LANGS) if d.lang else ()
+        get = lambda key: vsc.value(key, self._user, self._proj, ids)                     # noqa: E731
+        cfg = {"trim_trailing_whitespace": "true" if get("files.trimTrailingWhitespace") else "false", "insert_final_newline": "true" if get("files.insertFinalNewline") else "false",
+               "format_on_save": "true" if get("editor.formatOnSave") else "false", "tab_width": str(get("editor.tabSize"))}
+        cfg.update({k: v for k, v in vsc.editor_config(self._proj, ids).items() if k in ("end_of_line",)})
         try:
-            return more.editorconfig_for(d.path) if not d.path.startswith("untitled:") else {}
+            own = more.editorconfig_for(d.path) if not d.path.startswith("untitled:") else {}
         except (OSError, ValueError, RecursionError):
-            return {}
+            own = {}
+        cfg["_own"], cfg["_file"] = bool(own.get("indent_style") or own.get("indent_size")), bool(own)
+        cfg.update(own)
+        return cfg
 
     def _unit(self, d: Doc) -> str:
         """What one level of indentation is in this file: what the project's .editorconfig says, else what the file
-        already does, else four spaces."""
-        return more.editorconfig_unit(self._config(d)) or indent_of(d.text) or "    "
+        already does (unless told not to look), else the setting: so many spaces, or a tab."""
+        cfg = self._config(d)
+        if cfg.get("_own"):
+            unit = more.editorconfig_unit(cfg)
+            if unit:
+                return unit
+        found = indent_of(d.text) if self.setting("editor.detectIndentation", d) else ""
+        return found or (" " * int(self.setting("editor.tabSize", d)) if self.setting("editor.insertSpaces", d) else "\t")
 
     def _tab_width(self, d: Doc) -> int:
         cfg = self._config(d)
@@ -3373,8 +3951,7 @@ def advice(sky: Sky) -> str:
     def _tidy_before_save(self, i: int) -> None:
         d = self._docs[i]
         cfg = self._config(d)
-        trim = cfg.get("trim_trailing_whitespace") != "false" and (self._state.get("trimOnSave", True) or cfg.get("trim_trailing_whitespace") == "true")
-        final = cfg.get("insert_final_newline") != "false" and (self._state.get("trimOnSave", True) or cfg.get("insert_final_newline") == "true")
+        trim, final = cfg.get("trim_trailing_whitespace") == "true", cfg.get("insert_final_newline") == "true"
         if (trim or final) and not d.read_only and not d.binary:
             tidy = more.trim_text(d.text, d.lang, trim, final)
             if tidy != d.text:
@@ -3394,19 +3971,22 @@ def advice(sky: Sky) -> str:
 
     @Slot(str, bool)
     def setOption(self, key: str, on: bool) -> None:
-        if key in ("formatOnSave", "trimOnSave", "guides", "occurrences"):
-            self._state[key] = bool(on)
-            self._keep()
-            self.changed.emit()
+        for name in {"formatOnSave": ("editor.formatOnSave",), "trimOnSave": ("files.trimTrailingWhitespace", "files.insertFinalNewline"),
+                     "guides": ("editor.guides.indentation",), "occurrences": ("editor.occurrencesHighlight",)}.get(key, ()):
+            self.setSetting(name, bool(on))
 
-    options = Property("QVariantMap", lambda self: {"formatOnSave": bool(self._state.get("formatOnSave", False)), "trimOnSave": bool(self._state.get("trimOnSave", True)),
-                                                    "guides": bool(self._state.get("guides", True)), "occurrences": bool(self._state.get("occurrences", True))},
+    options = Property("QVariantMap", lambda self: {"formatOnSave": bool(self.setting("editor.formatOnSave")), "trimOnSave": bool(self.setting("files.trimTrailingWhitespace")),
+                                                    "guides": bool(self.setting("editor.guides.indentation")), "occurrences": bool(self.setting("editor.occurrencesHighlight")),
+                                                    "sticky": bool(self.setting("editor.stickyScroll.enabled")), "folding": bool(self.setting("editor.folding")),
+                                                    "inlay": bool(self.setting("editor.inlayHints.enabled")), "rulers": self.setting("editor.rulers"),
+                                                    "autoSave": self.setting("files.autoSave"), "history": bool(self.setting("huginn.localHistory")),
+                                                    "keymap": self.setting("huginn.keymap"), "zenNoNumbers": bool(self.setting("zenMode.hideLineNumbers"))},
                        notify=changed)
 
     # ---------------------------------------------------------------- the minimap
     @Slot(bool)
     def setMinimap(self, on: bool) -> None:
-        self._minimap = bool(on)
+        self._set_user("editor.minimap.enabled", bool(on))
         self._keep()
         self.changed.emit()
 
@@ -3442,6 +4022,10 @@ def advice(sky: Sky) -> str:
         compiled languages (Code guesses the newest one in the build folders)."""
         if self._dbg.active:
             self._dbg.resume()
+            return
+        chosen = next((c["name"] for c in self._get_launches() if c["chosen"]), "") if not program else ""
+        if chosen:
+            self.startLaunch(chosen)
             return
         d = self._docs[self._at] if 0 <= self._at < len(self._docs) else None
         if d is None:

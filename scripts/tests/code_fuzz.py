@@ -275,14 +275,15 @@ for n in range(STEPS):
             want = expected_bytes(d)
             have = Path(d.path).read_bytes()
             saves += 1
-            if want is not None and have != want and not c._state.get("trimOnSave", True) and not c._state.get("formatOnSave") and not getattr(d, "mixed", False):
+            if want is not None and have != want and not c.options["trimOnSave"] and not c.options["formatOnSave"] and not getattr(d, "mixed", False):
                 problem("what was saved isn't what the tab holds", f"{d.path}: {len(have)} bytes on disk, {len(want)} expected")
-            if d.dirty and not c._state.get("formatOnSave"):
+            if d.dirty and not c.options["formatOnSave"]:
                 problem("still marked unsaved after a save that worked", d.path)
     if n % 150 == 0:
         # a file opened and saved without a change keeps every byte (tidying off for this check)
-        opts = {k: c._state.get(k) for k in ("trimOnSave", "formatOnSave")}
-        c._state.update(trimOnSave=False, formatOnSave=False)
+        opts = {k: c.options[k] for k in ("trimOnSave", "formatOnSave")}
+        for k in opts:
+            c.setOption(k, False)
         for name in ("crlf.txt", "bom.txt", "latin1.txt", "astral.txt", "noeol.txt", "tabs.c", "mixed.txt", "badutf.txt", "empty.txt"):
             p = str(P / name)
             if not os.path.isfile(p) or any(d.path == p for d in docs()):
@@ -302,10 +303,7 @@ for n in range(STEPS):
             except Exception:
                 problem(f"open and save {name}", traceback.format_exc())
         for k, v in opts.items():
-            if v is None:
-                c._state.pop(k, None)
-            else:
-                c._state[k] = v
+            c.setOption(k, bool(v))
     if n % 300 == 0:
         print(f"step {n}: {len(docs())} tabs, {len(problems)} kinds of problem, {time.time() - t0:.0f}s", flush=True)
 
