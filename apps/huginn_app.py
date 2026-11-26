@@ -4075,7 +4075,30 @@ class Shell(QObject):
         self._paint.setInterval(16)
         self._paint.timeout.connect(self._render)
         settings.changed.connect(self._render)
+        # What's to be typed for the person once the shell is listening (Code's Run). Written the moment the shell
+        # is started, it's thrown away: the shell clears what was typed before its first prompt.
+        self._ready, self._waiting = False, []
+        self._settle = QTimer(self)
+        self._settle.setSingleShot(True)
+        self._settle.setInterval(180)                     # the prompt has been drawn and nothing more is coming
+        self._settle.timeout.connect(self._now_ready)
+        QTimer.singleShot(4000, self._now_ready)          # (a shell that prints nothing at all still gets it)
         self._spawn(start)
+
+    def _now_ready(self) -> None:
+        if self._ready:
+            return
+        self._ready = True
+        for data in self._waiting:
+            self._send(data)
+        self._waiting = []
+
+    def type_when_ready(self, data: bytes) -> None:
+        """Type this into the shell: now if it's listening, else as soon as its first prompt is up."""
+        if getattr(self, "_ready", True):
+            self._send(data)
+        else:
+            self._waiting.append(data)
 
     def _spawn(self, start) -> None:
         import pty
@@ -4116,6 +4139,8 @@ class Shell(QObject):
             self.closed.emit()
             return
         self._stream.feed(data)
+        if not self._ready:
+            self._settle.start()
         if self._screen.title:
             self._title = self._screen.title
         if not self._paint.isActive():

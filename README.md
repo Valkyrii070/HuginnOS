@@ -816,6 +816,24 @@ Four apps are being taken, round by round, to the level of the professional tool
   this round: 56 of 56, 23 of 23, 40 of 41 (a tolerance in an old check), and one that stops at a check written for an older undo. On screen: the missing tile and Find Missing, picking and
   overwriting, the 2× chip, the Screen layer. Not tested: sound while shuttling (no sound card here).
 
+**From the second run on real hardware (three screens, live session)**:
+- *The start menu opened on the wrong screen.* Its window named no screen, so the compositor chose one, often a
+  screen with no dock. It is now on the dock's screen, where it grows out of the orb (`shell/qml/Shell.qml`).
+- *Left alone, the live session ended at the sign-in screen asking for a password* the trial account doesn't have.
+  The live session no longer goes to sleep by itself (`huginn_sessiond.py`), and if its session ends for any reason
+  SDDM signs straight back in (`Relogin=true`, set by `casper-bottom/99huginn_session`). What ended the session on
+  that computer isn't known: sleep is the likeliest, a crash when the screens turned off is possible.
+- *Run in Code did nothing the first time.* The command was typed into the terminal the moment its shell was
+  started, and the shell throws away what arrives before its first prompt. `Shell.type_when_ready` holds it until
+  the prompt is up. Reproduced and checked in the nested session.
+- *Adding a language in Code failed in the live session.* The password prompt wouldn't take an empty password and
+  the trial account has no other. In the live session nothing asks for one now (the polkit rule the installer
+  removes), and the prompt accepts an empty password there. As an ordinary user and as root the install itself
+  (PackageKit: refresh, then install) works in the test system.
+- *The installer* now keeps GRUB's three-line pointer to its menu in both EFI/ubuntu and EFI/BOOT (`grub_pointers`).
+  This is a precaution, not the known cause of the "grub>" prompt seen after one installation: tried in QEMU, the
+  signed GRUB finds a pointer in either place.
+
 **Code, pro round six: finding your way round** (`apps/huginn_code.py`, `apps/huginn_code_more.py`, `apps/qml/Code.qml`;
 `scripts/tests/code_round6_test.py`, 49 checks):
 - *Back and forward* (Alt+Left, Alt+Right): a jump of more than a few lines, or to another file, is remembered as a

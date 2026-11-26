@@ -293,6 +293,8 @@ class Agent(QObject):
     echo = Property(bool, lambda self: self._echo, notify=changed)
     ready = Property(bool, lambda self: bool(self._asking) and not self._busy, notify=changed)
     busy = Property(bool, lambda self: self._busy, notify=changed)
+    # the installation drive's session: its account has no password, so an empty one is an answer there
+    live = Property(bool, lambda self: os.path.exists("/cdrom/casper/filesystem.squashfs"), constant=True)
     error = Property(str, lambda self: self._error, notify=changed)
     info = Property(str, lambda self: self._info, notify=changed)
     tries = Property(int, lambda self: self._tries, notify=changed)

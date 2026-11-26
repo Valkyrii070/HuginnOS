@@ -8,5 +8,12 @@ esac
 f=/root/etc/sddm.conf
 if [ -f "$f" ] && grep -q '^Session=' "$f"; then
     sed -i 's/^Session=.*/Session=huginn/' "$f"
+    # If the session ends (signed out, or it fell over), go straight back in. Without this the sign-in screen came up
+    # asking for a password, and the trial account hasn't got one to give.
+    if grep -q '^Relogin=' "$f"; then
+        sed -i 's/^Relogin=.*/Relogin=true/' "$f"
+    else
+        sed -i '/^Session=huginn/a Relogin=true' "$f"
+    fi
 fi
 exit 0

@@ -2226,9 +2226,10 @@ def advice(sky: Sky) -> str:
         if term is None:
             self.said.emit(f"Would run: {command}", False)
             return
+        send = getattr(term, "type_when_ready", term._send)     # (a terminal just opened isn't listening yet)
         if self._root:
-            term._send(f"cd {json.dumps(str(self._root))}\r".encode())
-        term._send((command + "\r").encode("utf-8"))
+            send(f"cd {json.dumps(str(self._root))}\r".encode())
+        send((command + "\r").encode("utf-8"))
 
     @Slot(str)
     def terminalAt(self, path: str) -> None:
@@ -2240,7 +2241,7 @@ def advice(sky: Sky) -> str:
         if term is None:
             self.said.emit(f"Would open a terminal in {where}", False)
             return
-        term._send(f"cd {json.dumps(str(where))}\r".encode())
+        getattr(term, "type_when_ready", term._send)(f"cd {json.dumps(str(where))}\r".encode())
 
     @Slot(str)
     def copyPath(self, path: str) -> None:

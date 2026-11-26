@@ -87,6 +87,38 @@ KEPT_OUT_OF_VERSIONS = (".cache", ".local/share/Steam", ".var/app")       # in t
 BTRFS_OPTS = "compress=zstd:1,noatime"
 
 
+def grub_pointers(esp: Path, fs_uuid: str, prefix: str) -> list:
+    """Ubuntu's signed GRUB (the one Secure Boot needs) always looks for its menu through EFI/ubuntu/grub.cfg, a
+    three-line pointer to the real menu, wherever GRUB itself was started from. Installed only in the fallback place
+    (EFI/BOOT: a USB drive, or firmware that forgets its entries), grub-install writes that pointer beside it in
+    EFI/BOOT alone, GRUB finds no menu, and the computer starts at a bare "grub>" prompt. So the pointer is kept in
+    both places. Returns the files written."""
+    places = [esp / "ubuntu" / "grub.cfg", esp / "BOOT" / "grub.cfg"]
+    text = ""
+    for f in places:
+        try:
+            if f.is_file() and "configfile" in f.read_text(errors="replace"):
+                text = f.read_text(errors="replace")
+                break
+        except OSError:
+            pass
+    if not text:
+        text = f"search.fs_uuid {fs_uuid} root\nset prefix=($root)'{prefix}'\nconfigfile $prefix/grub.cfg\n"
+    made = []
+    for f in places:
+        try:
+            if f.is_file() and "configfile" in f.read_text(errors="replace"):
+                continue
+            if f.parent.name == "BOOT" and not f.parent.is_dir():
+                continue                                           # nothing was installed in the fallback place
+            f.parent.mkdir(parents=True, exist_ok=True)
+            f.write_text(text)
+            made.append(str(f))
+        except OSError:
+            pass
+    return made
+
+
 def fstab(root_uuid: str, efi_uuid: str = "", boot_uuid: str = "", encrypted: bool = False, swap: bool = True) -> str:
     rows = ["# /etc/fstab: the disks Huginn OS mounts at start-up (written by the installer).",
             "# The system is btrfs subvolume @ (restore points are snapshots of it, in @snapshots: huginn-snapshot);",
@@ -583,6 +615,10 @@ class Engine:
         else:
             self.run(["grub-install", "--target=i386-pc", "--recheck", p["disk"]], chroot=True, timeout=600)
         self.run(["update-grub"], chroot=True, timeout=900)
+        if p.get("firmware") == "uefi":
+            root_uuid = self.uuid(self.dev["boot"] if "boot" in self.dev else self.dev["rootfs"])
+            for made in grub_pointers(t / "boot/efi/EFI", root_uuid, "/grub" if "boot" in self.dev else "/@/boot/grub"):
+                self.log(f"(GRUB's pointer to its menu written at {made})")
         self.step("boot", 1)
 
     def unmount(self) -> None:

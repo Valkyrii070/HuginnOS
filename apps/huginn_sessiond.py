@@ -1114,7 +1114,9 @@ class Session(QObject):
         if locks["auto"] and idle >= locks["after"] and not getattr(self, "_idle_locked", False) and not LIVE and not self.inhibited("screen"):
             self._idle_locked = True                          # once each time it's left alone
             self.lock()
-        if sleep > 0 and idle >= sleep and self._stage != "slept" and not self.inhibited("sleep"):
+        # (never by itself from the installation drive: the system is running off that drive, and a computer that went
+        # to sleep on it came back at the sign-in screen, asking for a password the trial account doesn't have)
+        if sleep > 0 and idle >= sleep and self._stage != "slept" and not LIVE and not self.inhibited("sleep"):
             self._stage = "slept"
             self.do("sleep")
         elif off > 0 and idle >= off and self._stage in ("", "dim") and not self.inhibited("screen"):

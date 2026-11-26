@@ -54,14 +54,14 @@ Window {
                         text: modelData.realName || modelData.name; on: Agent.chosen === index; onClicked: { Agent.choose(index); pass.focusIn() } } } }
             TextBox { id: pass; objectName: "password"; width: parent.width; height: 40; secret: !Agent.echo
                 placeholder: Agent.busy ? "Checking…" : (Agent.prompt || "Password"); enabled: !Agent.busy
-                onAccepted: if (Agent.ready && text !== "") Agent.authenticate(text) }
+                onAccepted: if (Agent.ready && (text !== "" || Agent.live)) Agent.authenticate(text) }
             Label { objectName: "error"; visible: Agent.error !== "" || Agent.info !== ""; width: parent.width; wrapMode: Text.WordWrap; font.pixelSize: 12
                 color: Agent.error !== "" ? Theme.t.danger : Theme.t.text_secondary; text: Agent.error || Agent.info }
             Item { width: parent.width; height: 38
                 Label { anchors { left: parent.left; verticalCenter: parent.verticalCenter } width: parent.width - 220; elide: Text.ElideRight; font.pixelSize: 10; secondary: true; text: Agent.actionId }
                 Row { anchors.right: parent.right; spacing: 8
                     Btn { objectName: "cancel"; text: "Cancel"; onClicked: Agent.cancel() }
-                    Btn { objectName: "authenticate"; text: "Authenticate"; primary: true; opacity: Agent.ready && pass.text !== "" ? 1 : 0.5
-                        onClicked: if (Agent.ready && pass.text !== "") Agent.authenticate(pass.text) } } } } }
+                    Btn { objectName: "authenticate"; text: "Authenticate"; primary: true; opacity: Agent.ready && (pass.text !== "" || Agent.live) ? 1 : 0.5
+                        onClicked: if (Agent.ready && (pass.text !== "" || Agent.live)) Agent.authenticate(pass.text) } } } } }
     Shortcut { sequence: "Escape"; onActivated: Agent.cancel() }
 }

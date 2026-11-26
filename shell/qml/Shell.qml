@@ -132,7 +132,7 @@ QtObject {
         if (win.visible) { win.visible = false; Qt.callLater(function () { win.visible = true }) }
     }
     onMainScreenChanged: moveTo(topBarWin, mainScreen)
-    onDockScreenChanged: { moveTo(dockWin, dockScreen); dockTrail.restart() }
+    onDockScreenChanged: { moveTo(dockWin, dockScreen); moveTo(launcherWin, dockScreen); dockTrail.restart() }
     // the frame-time display (Super+Alt+F, Settings › Displays): each screen's frames over the last second
     property var frameStats: ({})
     property Timer frameTick: Timer {
@@ -752,6 +752,11 @@ QtObject {
         Component.onCompleted: Status.glassWindow(launcherWin, "huginn-launcher")      // only its glass is blurred behind it
         visible: shell.open === "launcher" || launcher.visible; color: "transparent"
         LayerShell.Window.scope: "huginn-launcher"
+        // On the screen the dock is on: the menu grows out of the dock's orb. (Left to itself a layer surface goes to
+        // whichever screen the compositor fancies, which with several screens was often one with no dock at all.)
+        property string placedOn: ""
+        LayerShell.Window.screen: shell.dockScreen
+        LayerShell.Window.wantsToBeOnActiveScreen: false
         LayerShell.Window.layer: LayerShell.Window.LayerOverlay
         LayerShell.Window.anchors: LayerShell.Window.AnchorTop | LayerShell.Window.AnchorBottom | LayerShell.Window.AnchorLeft | LayerShell.Window.AnchorRight
         LayerShell.Window.keyboardInteractivity: shell.open === "launcher" ? LayerShell.Window.KeyboardInteractivityExclusive : LayerShell.Window.KeyboardInteractivityNone
