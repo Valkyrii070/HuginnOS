@@ -334,6 +334,13 @@ def kernel_args(cmdline: str = None) -> str:
     return " ".join(keep + ["rootflags=subvol=@"])
 
 
+def plain_reason(text: str) -> str:
+    """A restore point's name as one plain line. It's written into GRUB's menu, where a new line, a quote, a brace or
+    a $ would be read as part of the menu's own script."""
+    text = "".join(ch if ch.isprintable() and ch not in "'\"`\\{}$;|&<>" else " " for ch in str(text))
+    return " ".join(text.split())[:80]
+
+
 def menu_text(points: list, fs_uuid: str, boot_uuid: str, args: str) -> str:
     """GRUB's submenu of restore points. With /boot inside btrfs each starts its own kernel from inside its snapshot;
     with a separate /boot, the kernel copy kept there for it."""
@@ -343,7 +350,7 @@ def menu_text(points: list, fs_uuid: str, boot_uuid: str, args: str) -> str:
              "submenu 'Huginn OS restore points' --id huginn-restore-points {"]
     for p in points:
         when = time.strftime("%a %d %b %Y, %H:%M", time.localtime(p["date"]))
-        title = f"{when}: {p['reason']}".replace("'", "")
+        title = f"{when}: {plain_reason(p.get('reason', ''))}"
         k = p.get("kernel", "")
         if not k:
             continue
@@ -505,7 +512,7 @@ def main(argv: list) -> int:
         if cmd == "auto":
             auto()
         elif cmd == "create":
-            print(json.dumps(create(" ".join(rest)[:80] or "Made by you", mine=True)))
+            print(json.dumps(create(plain_reason(" ".join(rest)) or "Made by you", mine=True)))
         elif cmd == "undo" and rest and rest[0].isdigit():
             print(json.dumps(undo(int(rest[0]))))
         elif cmd == "forget" and rest and rest[0].isdigit():

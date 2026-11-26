@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Easel, the deep dives: damaged and hostile files, what each format keeps, painting under adjustment layers at
 speed, and the canvas's own bookkeeping.  Usage: easel_round7_test.py <kit root>   (QT_QPA_PLATFORM=offscreen)"""
-import io, json, os, shutil, struct, sys, tempfile, time, zipfile
+import json, os, shutil, struct, sys, tempfile, time, zipfile
 from pathlib import Path
 KIT = Path(sys.argv[1] if len(sys.argv) > 1 else ".").resolve()
 home = tempfile.mkdtemp(prefix="easel7-")
@@ -11,7 +11,7 @@ from PySide6.QtGui import QGuiApplication, QImage, QPainter, QColor, QLinearGrad
 from PySide6.QtCore import QRect
 app = QGuiApplication.instance() or QGuiApplication(sys.argv[:1])
 import numpy as np
-import huginn_easel as ez, huginn_easel_ui as eu, huginn_easel_more as more
+import huginn_easel as ez, huginn_easel_ui as eu
 
 passed = failed = 0
 def ok(what, cond, extra=""):

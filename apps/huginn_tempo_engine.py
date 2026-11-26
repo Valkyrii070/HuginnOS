@@ -47,7 +47,7 @@ from pathlib import Path
 import numpy as np
 
 
-def lfilter(*args, **kwargs):
+def lfilter(*args, **kwargs):  # noqa: F811 (it replaces itself with scipy's the first time it's called)
     """scipy's lfilter, imported when first needed (scipy.signal takes about a second to import). Tempo warms it up
     in the background once its window is showing, so the first note doesn't wait."""
     global lfilter

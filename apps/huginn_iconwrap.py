@@ -169,7 +169,7 @@ def glass(bright: str, part: str, smoke: bool = True) -> str:
 
 # ------------------------------------------------------------------------------------------------ wrapping one
 def load(path: str):
-    from PySide6.QtCore import QByteArray, QRectF, Qt
+    from PySide6.QtCore import QRectF, Qt
     from PySide6.QtGui import QImage, QPainter
     img = QImage(SIZE, SIZE, QImage.Format_ARGB32_Premultiplied)
     img.fill(Qt.transparent)

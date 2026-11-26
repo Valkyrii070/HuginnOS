@@ -5,7 +5,7 @@ import json
 import math
 
 import numpy as np
-from PySide6.QtCore import QPointF, QRectF, Qt
+from PySide6.QtCore import QPointF, Qt
 from PySide6.QtGui import QColor, QImage, QPainter, QPolygonF, QTransform
 
 try:

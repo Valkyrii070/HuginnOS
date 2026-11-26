@@ -12,7 +12,7 @@ SRC = sys.argv[1] if len(sys.argv) > 1 else "/src"
 ROUNDS = int(sys.argv[2]) if len(sys.argv) > 2 else 400
 SEED = int(sys.argv[3]) if len(sys.argv) > 3 else 1
 sys.path.insert(0, SRC + "/apps"); sys.path.insert(0, SRC + "/shell")
-from PySide6.QtGui import QGuiApplication, QPainter, QColor
+from PySide6.QtGui import QGuiApplication
 app = QGuiApplication(sys.argv[:1])
 import huginn_easel as ez, huginn_easel_ui as eu
 random.seed(SEED)

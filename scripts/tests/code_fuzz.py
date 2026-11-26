@@ -2,7 +2,7 @@
 import os as _os, sys as _sys
 if _os.geteuid() == 0:        # it renames, removes and replaces at random: never as root, where a slip reaches the whole system
     _sys.exit("code_fuzz.py: run this as an ordinary user (it refuses to run as root).")
-import hashlib, os, random, shutil, subprocess, sys, tempfile, time, traceback
+import os, random, subprocess, sys, tempfile, time, traceback
 home = tempfile.mkdtemp(prefix="codefuzz-")
 os.environ.update(HOME=home, XDG_DATA_HOME=home + "/d", XDG_CONFIG_HOME=home + "/c", XDG_CACHE_HOME=home + "/k", QT_QPA_PLATFORM="offscreen",
                   GIT_AUTHOR_NAME="Ada", GIT_AUTHOR_EMAIL="ada@x.invalid", GIT_COMMITTER_NAME="Ada", GIT_COMMITTER_EMAIL="ada@x.invalid")

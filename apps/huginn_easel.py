@@ -1766,7 +1766,6 @@ class Document:
         part = path + ".saving"
         stack = ET.Element("image", {"w": str(self.w), "h": str(self.h), "version": "0.0.5"})
         top = ET.SubElement(stack, "stack")
-        import huginn_easel_more as more
         with zipfile.ZipFile(part, "w", zipfile.ZIP_DEFLATED) as z:
             z.writestr("mimetype", "image/openraster", compress_type=zipfile.ZIP_STORED)
             count = [0]
@@ -2522,7 +2521,6 @@ def write_psd(doc: "Document", path: str) -> None:
     out += struct.pack(">I", 0)                                       # colour mode data
     res = b"8BIM" + struct.pack(">H", 1005) + b"\x00\x00" + struct.pack(">I", 16) + struct.pack(">IHHIHH", doc.dpi << 16, 1, 1, doc.dpi << 16, 1, 1)
     out += struct.pack(">I", len(res)) + res                          # the resolution, so print sizes come across
-    import huginn_easel_more as more
 
     layers = doc.export_layers(groups=False, clipping=True)
     records, pictures = bytearray(), bytearray()

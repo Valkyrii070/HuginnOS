@@ -7,7 +7,7 @@ KIT = Path(sys.argv[1] if len(sys.argv) > 1 else ".").resolve()
 home = tempfile.mkdtemp(prefix="easel11-")
 os.environ.update(HOME=home, XDG_DATA_HOME=home + "/d", XDG_CONFIG_HOME=home + "/c", QT_QPA_PLATFORM=os.environ.get("QT_QPA_PLATFORM", "offscreen"))
 sys.path[:0] = [str(KIT / "apps"), str(KIT / "shell")]
-from PySide6.QtGui import QGuiApplication, QImage, QPainter, QColor
+from PySide6.QtGui import QGuiApplication, QPainter, QColor
 from PySide6.QtCore import QPointF
 app = QGuiApplication.instance() or QGuiApplication(sys.argv[:1])
 import numpy as np

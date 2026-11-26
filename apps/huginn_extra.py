@@ -40,7 +40,16 @@ def run(args: list, timeout: float = 15, feed: str = None) -> tuple:
         return 126, str(err)
 
 
+def web_only(url: str) -> str:
+    """The address, if it's one on the web. A feed can name anything as an address; a file on this computer
+    (file://…) or some other scheme is never fetched on a feed's say-so."""
+    if not str(url).lower().startswith(("http://", "https://")):
+        raise OSError("That isn't a web address.")
+    return url
+
+
 def fetch(url: str, timeout: float = 20, limit: int = 8_000_000) -> bytes:
+    web_only(url)
     req = urllib.request.Request(url, headers={"User-Agent": AGENT, "Accept": "*/*"})
     with urllib.request.urlopen(req, timeout=timeout) as reply:
         return reply.read(limit)
@@ -961,8 +970,8 @@ class Podcasts(Worker):
         def work():
             target.parent.mkdir(parents=True, exist_ok=True)
             part = target.with_name("." + target.name + ".part")
-            req = urllib.request.Request(e["url"], headers={"User-Agent": AGENT})
             try:
+                req = urllib.request.Request(web_only(e["url"]), headers={"User-Agent": AGENT})
                 with urllib.request.urlopen(req, timeout=40) as reply, open(part, "wb") as out:
                     total = 0
                     while True:

@@ -415,8 +415,10 @@ class Feeds(QObject):
             headers["If-None-Match"] = etag
         if modified:
             headers["If-Modified-Since"] = modified
-        req = urllib.request.Request(url, headers=headers)
         try:
+            if not url.lower().startswith(("http://", "https://")):          # (a feed may name anything; only the web is fetched)
+                raise OSError("That isn't a web address.")
+            req = urllib.request.Request(url, headers=headers)
             with urllib.request.urlopen(req, timeout=25) as reply:
                 return reply.status, reply.read(15_000_000), reply.headers.get("ETag", ""), reply.headers.get("Last-Modified", ""), reply.geturl(), reply.headers.get("Content-Type", "")
         except urllib.error.HTTPError as err:

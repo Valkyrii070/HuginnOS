@@ -1,0 +1,24 @@
+# The checks the code is held to (scripts/lint.sh runs them). Bugs (F, E9, B, PLE) and security (S, from bandit).
+# Formatting is not checked: the code's own layout (aligned trailing comments, lines to 160) is kept by hand.
+line-length = 160
+exclude = ["vendor", "work", "out", "compositor"]
+
+[lint]
+select = ["F", "E9", "B", "S", "PLE"]
+ignore = [
+    "S101",  # assert: the tests are plain scripts
+    "S603", "S607", "S404", "S606",  # running programs: what a desktop does all day; none goes through a shell with outside text
+    "S311",  # random: used for looks and test data; secrets use the secrets module (vault, sharing)
+    "S110", "S112",  # try/except/pass and continue: best-effort desktop integration, each one commented where it matters
+    "S324",  # sha1/md5: names for cache files and calendar ids, never for anything secret
+    "S108",  # /tmp: only as the fallback when XDG_RUNTIME_DIR isn't set (it always is in a session)
+    "S310",  # urlopen: every address comes from the app's own settings or passes a web-only check (feeds, podcasts)
+    "S314",  # ElementTree on outside XML: every such parser refuses DOCTYPE/ENTITY first (feeds, OPML, podcasts)
+    "S608",  # SQL built from strings: only fixed column and table names; every value is a bound parameter
+    "S104",  # 0.0.0.0: one place, asking whether a port is free
+    "S105",  # "password" in a name: the alphabet generated passwords are drawn from
+    "B008", "B905", "B007", "B023", "B904",  # style, or closures used inside the loop that makes them (each one read)
+]
+
+[lint.per-file-ignores]
+"scripts/**" = ["S102", "F841", "B018", "F541", "F821", "E701", "E702"]

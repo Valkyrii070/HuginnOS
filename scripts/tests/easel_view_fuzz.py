@@ -16,7 +16,6 @@ from PySide6.QtCore import QEvent, QEventLoop, QPoint, QPointF, QTimer, Qt
 from PySide6.QtGui import QGuiApplication, QHoverEvent, QImage, QKeyEvent, QMouseEvent, QPainter, QWheelEvent
 from PySide6.QtQuick import QQuickWindow
 app = QGuiApplication(sys.argv[:1])
-import numpy as np
 import huginn_easel as ez, huginn_easel_ui as eu
 random.seed(SEED)
 win = QQuickWindow(); win.resize(900, 640)

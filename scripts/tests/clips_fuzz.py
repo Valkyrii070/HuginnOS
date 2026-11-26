@@ -66,7 +66,6 @@ if os.environ.get("MEASURE"):
             grew["biggest"].append(("image", d, c._engine.size, log[-1][:90], svcs))
         return r
     c._engine.load, c._engine.image = load, image
-    import atexit
 if os.environ.get("NO_PREVIEW"):
     c._render_still = lambda: None
 if os.environ.get("NO_UNDO"):

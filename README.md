@@ -816,6 +816,29 @@ Four apps are being taken, round by round, to the level of the professional tool
   this round: 56 of 56, 23 of 23, 40 of 41 (a tolerance in an old check), and one that stops at a check written for an older undo. On screen: the missing tile and Find Missing, picking and
   overwriting, the 2× chip, the Screen layer. Not tested: sound while shuttling (no sound card here).
 
+**Audit, first pass (static checks and the security surfaces)**. `scripts/lint.sh` runs all of it; `ruff.toml` holds
+the Python rules and says, rule by rule, why each one left out was left out.
+- *What was run*: ruff's bug and security rules (pyflakes, bugbear, bandit) over all 118 Python files (about
+  115,000 lines); shellcheck over the 36 shell scripts; clippy over the compositor (18,600 lines of Rust); a search
+  of every source file for hidden direction-changing characters.
+- *What it found*: no undefined names, no injection, no unsafe unpacking. shellcheck: nothing at warning level.
+  clippy: 22 style notes (15 of them "this if can be collapsed"), no correctness lints; left as they are. The
+  Python findings were read one by one: the SQL built from strings uses only fixed column names with bound values,
+  outside XML is refused if it carries a DOCTYPE or ENTITY, archives are unpacked with traversal blocked, the
+  closures flagged in loops are all used inside the loop that makes them.
+- *Read by hand*: the helpers that run as root (`/usr/libexec/huginn-*`) and their polkit actions, everything that
+  listens on a socket (all on 127.0.0.1 or a 0600 Unix socket with a peer check), the password vault (scrypt,
+  AES-GCM, `secrets`), every place a fixed /tmp path or a web address is used.
+- *Fixed*: a restore point's name went into GRUB's menu with only quotes removed, so a name with a new line in it
+  could add lines to the menu's script (it takes an administrator to make one; now it is one plain line,
+  `plain_reason`). Feeds and podcasts fetched whatever address a feed named, `file://` included; now only http(s)
+  (`web_only`). Six unused imports and 25 in the tests removed; invisible characters in Mail's source written as
+  escapes.
+- *Not done, and worth saying*: this is not a line-by-line reading of 135,000 lines. The QML (170 files) was not
+  linted or reformatted: it is the densest code here (1,700 lines over 200 characters) and the part a reader will
+  find hardest; reformatting it is a job to do app by app with each one checked on screen. No optimisation was made
+  in this pass: nothing was profiled, so nothing was changed on a guess.
+
 **From the second run on real hardware (three screens, live session)**:
 - *The start menu opened on the wrong screen.* Its window named no screen, so the compositor chose one, often a
   screen with no dock. It is now on the dock's screen, where it grows out of the orb (`shell/qml/Shell.qml`).

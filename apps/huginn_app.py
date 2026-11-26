@@ -5854,7 +5854,7 @@ def main() -> int:
     if args.app == "welcome" and not (args.demo or args.shot or args.first_run):
         # The tour runs on the desktop itself, in the shell: ask it to (a session without Huginn's shell gets the window)
         try:
-            from gi.repository import Gio, GLib
+            from gi.repository import Gio
             Gio.bus_get_sync(Gio.BusType.SESSION, None).call_sync("org.huginn.Shell", "/org/huginn/Shell", "org.huginn.Shell", "Tour", None, None,
                                                                 Gio.DBusCallFlags.NO_AUTO_START, 2000, None)
             return 0

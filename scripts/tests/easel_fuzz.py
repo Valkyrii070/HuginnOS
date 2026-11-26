@@ -3,7 +3,7 @@ Undo really undoes. Usage: easel_fuzz.py /src [steps] [seed]"""
 import os as _os, sys as _sys
 if _os.geteuid() == 0:        # it saves, exports and opens at random: never as root
     _sys.exit("easel_fuzz.py: run this as an ordinary user (it refuses to run as root).")
-import faulthandler, hashlib, math, os, random, sys, tempfile, time, traceback
+import faulthandler, hashlib, os, random, sys, tempfile, time, traceback
 faulthandler.enable()
 home = tempfile.mkdtemp(prefix="easelfuzz-")
 os.environ.update(EASEL_CHECK_MIPS="1", HOME=home, XDG_DATA_HOME=home + "/d", XDG_CONFIG_HOME=home + "/c", XDG_CACHE_HOME=home + "/k", QT_QPA_PLATFORM="offscreen")
@@ -12,7 +12,7 @@ STEPS = int(sys.argv[2]) if len(sys.argv) > 2 else 1200
 SEED = int(sys.argv[3]) if len(sys.argv) > 3 else 1
 sys.path.insert(0, SRC + "/apps"); sys.path.insert(0, SRC + "/shell")
 from PySide6.QtCore import QEventLoop, QTimer
-from PySide6.QtGui import QGuiApplication, QImage
+from PySide6.QtGui import QGuiApplication
 app = QGuiApplication(sys.argv[:1])
 import numpy as np
 import huginn_easel as ez, huginn_easel_ui as eu

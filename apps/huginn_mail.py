@@ -400,7 +400,7 @@ def html_to_text(source: str) -> str:
         parser.close()
     except Exception:                                              # broken markup: show what was understood so far
         pass
-    text = "".join(parser.out).replace("\xa0", " ").replace("‌", "").replace("​", "")
+    text = "".join(parser.out).replace("\xa0", " ").replace("\u200c", "").replace("\u200b", "")
     text = re.sub(r"[ \t]+\n", "\n", re.sub(r"\n[ \t]+", "\n", text))
     return re.sub(r"\n{3,}", "\n\n", text).strip()
 
