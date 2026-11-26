@@ -402,6 +402,76 @@ c.peek(tab("a.py"), 4, 10); wait(lambda: bool(got), 15)
 ok("peek shows the definition's lines without leaving the file", got and got[-1]["line"] == 0 and got[-1]["first"] == 0 and got[-1]["text"].startswith("def helper():") and got[-1]["name"] == "a.py"
    and c.tabs[c.current]["name"] == "a.py", got[-1:] )
 
+# ================================================================== another computer, over SSH
+import subprocess
+import huginn_remote as hr
+PT = hr.parse_target
+def refused(text):
+    try:
+        PT(text)
+    except ValueError as err:
+        return str(err)
+    return ""
+ok("who, where and which folder", PT("astrid@build-box:/srv/game") == {"user": "astrid", "host": "build-box", "port": 0, "path": "/srv/game", "spec": "astrid@build-box", "label": "astrid@build-box:/srv/game"}
+   and PT("box")["path"] == "" and PT("box:proj/x")["path"] == "proj/x" and PT("ssh://astrid@box:2222/srv/a b")["port"] == 2222 and PT("ssh://astrid@box:2222/srv/a b")["path"] == "/srv/a b"
+   and PT("astrid@[fe80::1]:/x")["host"] == "[fe80::1]" and PT("  box  ")["host"] == "box")
+ok("a name that would be read as one of ssh's options, or isn't a name, is refused with words", refused("-oProxyCommand=evil") and refused("a b") and refused("u ser@h") and refused("host:/a\nb") and refused("")
+   and refused("ssh://box:99999/x") and refused("box;rm -rf ~") and refused("$(reboot)"))
+RM = PT("astrid@build-box:/srv/game"); MT = "/home/a/.cache/huginn/remote/x"
+ok("each computer and folder has its own place to be mounted, with a plain name", hr.mount_point(RM).parent == hr.MOUNTS and hr.mount_point(RM) != hr.mount_point(PT("astrid@build-box:/srv/other"))
+   and "/" not in hr.mount_point(PT("ssh://a@b:22/x y/z")).name and " " not in hr.mount_point(PT("ssh://a@b:22/x y/z")).name)
+mc = hr.mount_command(RM, MT)
+ok("the mount line: sshfs, coming back after a drop, files shown as yours, one shared connection", "sshfs -o reconnect,idmap=user" in mc and "ControlMaster=auto" in mc and "astrid@build-box:/srv/game" in mc and mc.rstrip().endswith("opening the folder.'")
+   and "ControlPath=" in mc and f" {MT} " in mc, mc)
+ok("a port is ssh's -p", hr.ssh_options(PT("ssh://a@b:2222/x"))[-2:] == ["-p", "2222"] and "-p 2222" in hr.mount_command(PT("ssh://a@b:2222/x"), MT) and "-p" not in hr.ssh_options(RM))
+w = hr.wrap(RM, f"make -C {MT}/sub && cat '{MT}/a b.txt' {MT}", mount=MT)
+ok("a command as run over there: in the folder there, this computer's paths turned into the other's, and never stopping to ask", w.endswith("astrid@build-box 'cd /srv/game && make -C /srv/game/sub && cat '\"'\"'/srv/game/a b.txt'\"'\"' /srv/game'")
+   and "BatchMode=yes" in w and " -t " not in w, w)
+ok("with a terminal it may ask; a shell there starts in the folder", " -t " in hr.wrap(RM, "ls", tty=True) and "BatchMode" not in hr.wrap(RM, "ls", tty=True) and hr.shell_command(RM).endswith("'cd /srv/game && exec \"$SHELL\" -l'"))
+HM = PT("box")
+ok("the home folder over there: paths are from it", hr.wrap(HM, f"ls {MT}/x", mount=MT).endswith("box 'ls x'") and hr.to_remote(HM, MT, MT + "/x/y") == "x/y" and hr.to_local(HM, MT, "x/y") == MT + "/x/y" and hr.to_local(HM, MT, "/abs") == "")
+ok("a path on one side as it is on the other; outside the folder it has no place here", hr.to_remote(RM, MT, MT + "/src/a.c") == "/srv/game/src/a.c" and hr.to_remote(RM, MT, MT) == "/srv/game"
+   and hr.to_local(RM, MT, "/srv/game/src/a.c") == MT + "/src/a.c" and hr.to_local(RM, MT, "/srv/game") == MT and hr.to_local(RM, MT, "/etc/passwd") == "" and hr.to_local(RM, MT, "/srv/gamer/x") == "")
+cfgf = Path(home) / "ssh_config"; cfgf.write_text("Host build-box render\n  HostName 10.0.0.5\nhost *.lan !bad\n  User x\nHost github.com\nHost -evil\n")
+ok("the computers ~/.ssh/config names, not its patterns", hr.config_hosts(cfgf) == ["build-box", "render", "github.com"] and hr.config_hosts(Path(home) / "none") == [])
+fake_mount = Path(home) / "mounted"; (fake_mount / "src").mkdir(parents=True); (fake_mount / "src" / "a.c").write_text("x\n")
+st8 = {"there": (hr, RM, str(fake_mount))}
+got = hb.parse_line("/srv/game/src/a.c:3:1: error: over there", fake_mount, st8)
+ok("an error naming a file on the other computer opens the same file here", got and got["path"] == str(fake_mount / "src" / "a.c") and got["line"] == 2, got)
+got = [hb.parse_line(l, fake_mount, st8) for l in ("make[1]: Entering directory '/srv/game/src'", "a.c:9:2: warning: deep")][1]
+ok("…also when make says which directory there it is in", got and got["path"] == str(fake_mount / "src" / "a.c"), got)
+ok("with no folder open there is no remote; a bad name is refused before anything is tried", c.remote == {} and "isn't a computer's name" in c.remoteConnect("bad name") and c.remote == {})
+
+reach = shutil.which("ssh") and shutil.which("sshfs") and subprocess.run(["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=4", "testbox", "true"], capture_output=True).returncode == 0
+if reach:                                                          # (a test SSH server on this computer, with a throwaway key: see the README)
+    remote = PT("testbox:remote-proj"); mount = hr.mount_point(remote)
+    there = Path.home().parent  # not used: the server's own home is where remote-proj lives
+    subprocess.run(["ssh", "-o", "BatchMode=yes", "testbox", "rm -rf remote-proj && mkdir -p remote-proj/src && printf 'all:\\n\\tcc -o prog src/main.c\\n' > remote-proj/Makefile && "
+                    "printf '#include <stdio.h>\\nint main(void)\\n{\\n    printf(\"hi\\\\n\")\\n    return 0;\\n}\\n' > remote-proj/src/main.c"], capture_output=True, timeout=30)
+    if hr.is_mounted(mount):
+        subprocess.run(hr.unmount_command(mount), capture_output=True)
+    done = subprocess.run(["bash", "-c", hr.mount_command(remote, mount)], capture_output=True, text=True, timeout=60)
+    ok("a real SSH server: the folder mounts", done.returncode == 0 and hr.is_mounted(mount) and sorted(os.listdir(mount)) == ["Makefile", "src"], (done.returncode, done.stderr[:200]))
+    while c.tabs:
+        c.close(0, True)                                           # (what earlier checks left unsaved is let go)
+    ok("Code opens it, and knows it is on another computer", c.remoteConnect("testbox:remote-proj") == "" and str(c._root) == str(mount) and c.remote.get("spec") == "testbox" and c.remote.get("connected") is True, c.remote)
+    c.openFile(str(mount / "src" / "main.c")); spin(300); i = tab("main.c")
+    ok("its files open as any others", c.textOf(i).startswith("#include <stdio.h>"))
+    ok("it is among the computers offered next time", "testbox:remote-proj" in c.remoteHosts)
+    b.run("make"); wait(lambda: not b.running, 90)
+    ok("Build runs there, and its error comes back as a place in the file here", b.status.startswith("Failed") and [(p["name"], p["line"]) for p in b.problems if p["severity"] == 1][:1] == [("src/main.c", 3)]
+       and b.lines.rows[0]["text"].endswith("(on testbox)"), (b.status, b.problems, [r["text"] for r in b.lines.rows][:6]))
+    c.edit(i, '#include <stdio.h>\nint main(void)\n{\n    printf("hi\\n");\n    return 0;\n}\n'); c.save(i, False); spin(200)
+    b.again(); wait(lambda: not b.running, 90)
+    made = subprocess.run(["ssh", "-o", "BatchMode=yes", "testbox", "remote-proj/prog"], capture_output=True, text=True, timeout=30).stdout
+    ok("fixed here and saved, it builds there, and the program made there runs there", b.status.startswith("Done") and made == "hi\n", (b.status, made))
+    k = len(said); c.startDebug("")
+    ok("debugging there is refused in words, not tried here", any("another computer" in x for x in said[k:]) and not c.debug.active)
+    c.remoteDisconnect(); spin(200)
+    ok("disconnecting closes the folder and lets the mount go", c._root is None and not hr.is_mounted(mount) and any("Disconnected from testbox" in x for x in said[-3:]), said[-3:])
+else:
+    print("(no test SSH server here: mounting, building and disconnecting for real are skipped)")
+
 print(f"{passed} passed, {failed} failed")
 shutil.rmtree(home, ignore_errors=True)
 sys.exit(1 if failed else 0)

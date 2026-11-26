@@ -24,6 +24,7 @@ import huginn_build as hb
 import huginn_code_more as more
 import huginn_debug as hd
 import huginn_emmet as emmet
+import huginn_remote as hr
 import huginn_vscode as vsc
 
 STATE = Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local/share") / "huginn" / "code.json"
@@ -1005,9 +1006,11 @@ class Code(QObject):
         self._servers, self._server_note = {}, {}
         self._term, self._busy = None, ""
         self._results_title = ""
+        self._remote_poll = QTimer(self, interval=1000)
+        self._remote_poll.timeout.connect(self._remote_check)
         self._auto_save = QTimer(self, interval=1000, singleShot=True)
         self._auto_save.timeout.connect(lambda: self.autoSave("delay"))
-        self._build = hb.Builder(self, save_all=lambda: self.saveAll(), env_path=EXTRA_BIN, known=lambda: self._vs_vars())
+        self._build = hb.Builder(self, save_all=lambda: self.saveAll(), env_path=EXTRA_BIN, known=lambda: self._vs_vars(), remote=lambda: self._remote_of())
         self._build.goTo.connect(lambda path, line, col: self.openFile(path, True, line, col))
         self._build.said.connect(self.said.emit)
         self._build.finished.connect(self._built)
@@ -2080,6 +2083,96 @@ def advice(sky: Sky) -> str:
             self._files_cache = [f for f in found if not vsc.is_excluded(f, self._hide)] if self._hide else found
         return self._files_cache
 
+    # ---------------------------------------------------------------- another computer, over SSH
+    def _remote_of(self, root=None) -> tuple:
+        """(the remote, its mount) when this folder is one mounted from another computer, else (None, None)."""
+        root = root if root is not None else self._root
+        known = self._state.get("remotes") if isinstance(self._state.get("remotes"), dict) else {}
+        if root:
+            for mount, remote in known.items():
+                if isinstance(remote, dict) and (str(root) == mount or str(root).startswith(mount + "/")):
+                    return remote, mount
+        return None, None
+
+    def _get_remote(self) -> dict:
+        remote, mount = self._remote_of()
+        return dict(remote, mount=mount, connected=hr.is_mounted(mount)) if remote else {}
+    remote = Property("QVariantMap", _get_remote, notify=changed)
+
+    def _get_remote_hosts(self) -> list:
+        known = self._state.get("remotes") if isinstance(self._state.get("remotes"), dict) else {}
+        recent = [r["label"] for r in known.values() if isinstance(r, dict) and r.get("label")]
+        return recent[-8:][::-1] + [h for h in hr.config_hosts() if h not in recent]
+    remoteHosts = Property("QVariantList", _get_remote_hosts, notify=changed)
+
+    @Slot(str, result=str)
+    def remoteConnect(self, target: str) -> str:
+        """Open a folder on another computer. Returns "" when it's under way (or already open), else why not. The
+        mount line is typed into the terminal, where ssh asks for whatever it needs; Code opens the folder when it
+        appears."""
+        try:
+            remote = hr.parse_target(target)
+        except ValueError as err:
+            return str(err)
+        missing = hr.tools_missing()
+        if missing:
+            return f"This needs {' and '.join(missing)} (the {'openssh-client and sshfs' if len(missing) > 1 else 'sshfs' if missing == ['sshfs'] else 'openssh-client'} package)."
+        if any(d.dirty for d in self._docs):
+            return "Save or close your changed files first."
+        mount = hr.mount_point(remote)
+        self._state.setdefault("remotes", {})[str(mount)] = remote
+        self._keep()
+        if hr.is_mounted(mount):
+            self.openFolder(str(mount))
+            return ""
+        if self._demo:
+            self.said.emit(f"Would connect to {remote['label']}.", False)
+            return ""
+        term = self._get_term()
+        if term is None:
+            return "The terminal couldn't be opened, and that is where the connection is made."
+        getattr(term, "type_when_ready", term._send)((hr.mount_command(remote, mount) + "\r").encode())
+        self._remote_wait, self._remote_tries = str(mount), 0
+        self._remote_poll.start()
+        self.said.emit(f"Connecting to {remote['spec']}… Answer in the terminal if it asks for a password.", False)
+        return ""
+
+    def _remote_check(self) -> None:
+        mount = getattr(self, "_remote_wait", "")
+        self._remote_tries = getattr(self, "_remote_tries", 0) + 1
+        if mount and hr.is_mounted(mount):
+            self._remote_poll.stop()
+            self._remote_wait = ""
+            self.openFolder(mount)
+            self.said.emit("Connected. Run and Build happen on that computer; the terminal here is still this one.", False)
+        elif not mount or self._remote_tries > 180:
+            self._remote_poll.stop()
+            if mount:
+                self.said.emit("The connection wasn't made. The terminal shows what ssh said.", True)
+
+    @Slot()
+    def remoteDisconnect(self) -> None:
+        remote, mount = self._remote_of()
+        if not remote:
+            return
+        if any(d.dirty for d in self._docs):
+            self.said.emit("Save or close your changed files first.", True)
+            return
+        self.closeFolder()
+        try:
+            done = subprocess.run(hr.unmount_command(mount), capture_output=True, text=True, timeout=20)
+            self.said.emit(f"Disconnected from {remote['spec']}." if done.returncode == 0 else f"Couldn't disconnect: {(done.stderr or '').strip()[:160]}", done.returncode != 0)
+        except (OSError, subprocess.SubprocessError) as err:
+            self.said.emit(f"Couldn't disconnect: {err}", True)
+
+    @Slot()
+    def remoteShell(self) -> None:
+        """A shell on the other computer, in the project's folder, in the terminal below."""
+        remote, _ = self._remote_of()
+        term = self._get_term() if remote else None
+        if term is not None:
+            getattr(term, "type_when_ready", term._send)((hr.shell_command(remote) + "\r").encode())
+
     # ---------------------------------------------------------------- what Visual Studio Code left in the project
     def _read_project(self) -> None:
         """.vscode/settings.json (a .code-workspace file's settings under it), the project's snippets and its debug
@@ -2705,6 +2798,10 @@ def advice(sky: Sky) -> str:
             self.said.emit(f"Would run: {command}", False)
             return
         send = getattr(term, "type_when_ready", term._send)     # (a terminal just opened isn't listening yet)
+        remote, mount = self._remote_of()
+        if remote:                                              # the project is on another computer: so is what it runs
+            send((hr.wrap(remote, command, tty=True, mount=mount) + "\r").encode("utf-8"))
+            return
         if self._root:
             send(f"cd {json.dumps(str(self._root))}\r".encode())
         send((command + "\r").encode("utf-8"))
@@ -4022,6 +4119,9 @@ def advice(sky: Sky) -> str:
         compiled languages (Code guesses the newest one in the build folders)."""
         if self._dbg.active:
             self._dbg.resume()
+            return
+        if self._remote_of()[0]:
+            self.said.emit("Debugging on another computer isn't something Code does yet. Run (Ctrl+F5) and Build happen there.", True)
             return
         chosen = next((c["name"] for c in self._get_launches() if c["chosen"]), "") if not program else ""
         if chosen:

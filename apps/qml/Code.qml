@@ -174,6 +174,9 @@ GlassWindow {
         { name: "Split the Editor", key: "Ctrl+\\", run: function () { win.toggleSplit() } },
         { name: "Toggle the Minimap", key: "", run: function () { Backend.setMinimap(!Backend.minimap) } },
         { name: "Show the Debug Console", key: "", run: function () { win.bottom = "debug"; win.term = true } },
+        { name: "Remote: Open a Folder on Another Computer (SSH)…", key: "", run: function () { win.ask("remote", { now: "" }) } },
+        { name: "Remote: Open a Shell There", key: "", run: function () { if (Backend.remote.spec) { win.bottom = "terminal"; win.term = true; Backend.remoteShell() } else toast.say("This project isn't on another computer.", true) } },
+        { name: "Remote: Disconnect", key: "", run: function () { if (Backend.remote.spec) Backend.remoteDisconnect(); else toast.say("This project isn't on another computer.", true) } },
         { name: "Fold", key: "Ctrl+Shift+[", run: function () { var v = win.view(); if (v) v.foldHere(1) } },
         { name: "Unfold", key: "Ctrl+Shift+]", run: function () { var v = win.view(); if (v) v.foldHere(-1) } },
         { name: "Fold All", key: "", run: function () { if (Backend.current >= 0) Backend.foldAll(Backend.current) } },
@@ -560,12 +563,12 @@ GlassWindow {
             Rectangle { id: card; anchors.centerIn: parent; radius: 18; color: Theme.t.menu_bg; border.width: 1; border.color: Theme.t.menu_border
                 readonly property string kind: win.sheet ? win.sheet.kind : ""
                 width: kind === "diff" ? win.width - 120 : kind === "settings" || kind === "keys" ? Math.min(win.width - 80, 760) : kind === "open" || kind === "langs" || kind === "branches" || kind === "history" ? 560 : 470
-                height: kind === "diff" ? win.height - 100 : kind === "settings" || kind === "keys" ? win.height - 90 : kind === "open" || kind === "langs" || kind === "branches" || kind === "history" ? Math.min(win.height - 80, 560) : kind === "dirty" || kind === "clash" || kind === "trash" || kind === "discard" ? 170 : 200
+                height: kind === "diff" ? win.height - 100 : kind === "settings" || kind === "keys" ? win.height - 90 : kind === "open" || kind === "langs" || kind === "branches" || kind === "history" ? Math.min(win.height - 80, 560) : kind === "dirty" || kind === "clash" || kind === "trash" || kind === "discard" ? 170 : kind === "remote" ? 290 : 200
                 MouseArea { anchors.fill: parent }
                 Label { x: 24; y: 20; width: parent.width - 48; elide: Text.ElideMiddle; font.pixelSize: 17; font.weight: Font.DemiBold
                     text: ({ "open": "Open a folder", "dirty": "Save changes to “" + (win.sheet ? win.sheet.name : "") + "”?", "clash": "This file changed on disk",
                              "new": win.sheet && win.sheet.dir ? "New folder" : "New file", "rename": "Rename “" + (win.sheet ? win.sheet.name : "") + "”",
-                             "trash": "Move “" + (win.sheet ? win.sheet.name : "") + "” to the Trash?", "renamesym": "Rename “" + (win.sheet ? win.sheet.name : "") + "” everywhere", "debugprog": "Which program should be debugged?", "unreal": "Where is Unreal Engine?", "theme": "Which theme file?", "aiask": win.sheet && win.sheet.mode === "write" ? "What should it write?" : "How should it change?", "run": "What Run does", "discard": "Throw away the changes to “" + (win.sheet ? win.sheet.rel : "") + "”?",
+                             "trash": "Move “" + (win.sheet ? win.sheet.name : "") + "” to the Trash?", "renamesym": "Rename “" + (win.sheet ? win.sheet.name : "") + "” everywhere", "debugprog": "Which program should be debugged?", "unreal": "Where is Unreal Engine?", "theme": "Which theme file?", "remote": "Open a folder on another computer", "aiask": win.sheet && win.sheet.mode === "write" ? "What should it write?" : "How should it change?", "run": "What Run does", "discard": "Throw away the changes to “" + (win.sheet ? win.sheet.rel : "") + "”?",
                              "langs": win.sheet && win.sheet.mode === "new" ? "New file in…" : "Languages", "branches": "Branches", "settings": "Settings", "keys": "Keyboard Shortcuts", "history": "History of “" + (win.sheet ? win.sheet.name : "") + "”",
                              "diff": (win.sheet ? win.sheet.rel : "") + (win.sheet && win.sheet.staged ? "  ·  staged" : "") })[card.kind] || "" }
                 // ---- Settings: Code's own, kept in its settings.json under VS Code's names; a project's .vscode/settings.json lies over them
@@ -602,6 +605,10 @@ GlassWindow {
                     Seg { text: "settings.json"; tip: "Open Code's settings file to edit by hand"; tipAbove: true; onClicked: { win.sheet = null; Backend.openSettingsFile() } }
                     Seg { text: "Import a Theme…"; onClicked: win.ask("theme", { now: "" }) }
                     Seg { visible: Backend.vscodeFolder !== ""; text: "Bring from VS Code"; tip: "Your snippets, settings and key bindings, from " + Backend.vscodeFolder; tipAbove: true; onClicked: toast.say(Backend.importFromVSCode(), false) } }
+                // the computers you've opened before, and the ones ~/.ssh/config names
+                Flow { visible: card.kind === "remote" && Backend.remoteHosts.length > 0; x: 24; y: 176; width: parent.width - 48; height: 50; clip: true; spacing: 6
+                    Repeater { model: card.kind === "remote" ? Backend.remoteHosts.slice(0, 8) : []
+                        Seg { required property string modelData; text: modelData; onClicked: nameBox.text = modelData } } }
                 // ---- a file's history: a copy kept at every save; pick one to see what changed since, and go back to it if you like
                 ListView { id: fileHist; objectName: "historyList"; visible: card.kind === "history"; x: 16; y: 58; width: parent.width - 32; height: parent.height - 58 - 66; clip: true; boundsBehavior: Flickable.StopAtBounds
                     model: card.kind === "history" ? win.sheet.rows : []
@@ -688,14 +695,14 @@ GlassWindow {
                 Label { visible: ["dirty", "clash", "trash", "discard"].indexOf(card.kind) >= 0; x: 24; y: 52; width: parent.width - 48; wrapMode: Text.WordWrap; secondary: true
                     text: card.kind === "dirty" ? "If you don't save, your changes are lost." : card.kind === "clash" ? "Something else changed it since you opened it. Keep yours (overwrite) or take what's on disk?"
                         : card.kind === "trash" ? "You can put it back from the Trash in Files." : "This can't be undone: the file goes back to how it was at the last commit." }
-                TextBox { id: nameBox; objectName: "nameBox"; visible: ["new", "rename", "run", "renamesym", "debugprog", "aiask", "unreal", "theme"].indexOf(card.kind) >= 0; x: 24; y: 58; width: parent.width - 48; mono: card.kind === "run" || card.kind === "renamesym" || card.kind === "debugprog" || card.kind === "unreal"
-                    placeholder: card.kind === "theme" ? "for example: /home/you/Downloads/monokai-color-theme.json" : card.kind === "unreal" ? "for example: /home/you/UnrealEngine" : card.kind === "run" ? "for example: python3 -m aurora" : card.kind === "renamesym" ? "new name" : card.kind === "debugprog" ? "build/myprogram" : card.kind === "aiask" ? (win.sheet && win.sheet.mode === "write" ? "for example: a function that reads a CSV file into a list of dicts" : "for example: add error handling") : card.kind === "new" ? (win.sheet && win.sheet.dir ? "folder name" : "name.py, or folder/name.py") : ""
+                TextBox { id: nameBox; objectName: "nameBox"; visible: ["new", "rename", "run", "renamesym", "debugprog", "aiask", "unreal", "theme", "remote"].indexOf(card.kind) >= 0; x: 24; y: 58; width: parent.width - 48; mono: card.kind === "run" || card.kind === "renamesym" || card.kind === "debugprog" || card.kind === "unreal" || card.kind === "remote"
+                    placeholder: card.kind === "remote" ? "astrid@build-box:/srv/game" : card.kind === "theme" ? "for example: /home/you/Downloads/monokai-color-theme.json" : card.kind === "unreal" ? "for example: /home/you/UnrealEngine" : card.kind === "run" ? "for example: python3 -m aurora" : card.kind === "renamesym" ? "new name" : card.kind === "debugprog" ? "build/myprogram" : card.kind === "aiask" ? (win.sheet && win.sheet.mode === "write" ? "for example: a function that reads a CSV file into a list of dicts" : "for example: add error handling") : card.kind === "new" ? (win.sheet && win.sheet.dir ? "folder name" : "name.py, or folder/name.py") : ""
                     onAccepted: sheetOk.clicked() }
                 Label { visible: card.kind === "aiask"; x: 24; y: 100; width: parent.width - 48; wrapMode: Text.WordWrap; secondary: true; font.pixelSize: 11
                     text: (win.sheet && win.sheet.mode === "write" ? "Written in " + (win.tab && win.tab.lang ? win.tab.lang : "this file's language") + ", at the cursor"
                            : "On what's selected, or the whole file") + ". Huginn AI shows it first; nothing changes until you say so." }
-                Label { visible: card.kind === "run" || card.kind === "debugprog" || card.kind === "renamesym" || card.kind === "unreal" || card.kind === "theme"; x: 24; y: 100; width: parent.width - 48; wrapMode: Text.WordWrap; secondary: true; font.pixelSize: 11
-                    text: card.kind === "theme" ? "A VS Code colour theme is a .json file (inside a theme extension, in its themes folder). Code takes its editor and syntax colours; the rest of the window keeps the system's look." : card.kind === "unreal" ? "The folder that holds Engine/ and Setup.sh: the one Epic's download unpacks to, or your clone of its source after Setup.sh and make. Code remembers it for every project." : card.kind === "run" ? "Kept in the project as .huginn-run, so it travels with it." : card.kind === "debugprog" ? "The program you built, with debugging information (gcc -g, cargo build). Kept in the project as .huginn-debug."
+                Label { visible: card.kind === "run" || card.kind === "debugprog" || card.kind === "renamesym" || card.kind === "unreal" || card.kind === "theme" || card.kind === "remote"; x: 24; y: 100; width: parent.width - 48; wrapMode: Text.WordWrap; secondary: true; font.pixelSize: 11
+                    text: card.kind === "remote" ? "Who, which computer, and the folder there (over SSH; the other computer needs nothing installed). Its files open here as if they were on this one; Run and Build happen there. If ssh needs a password, it asks in the terminal: Code never sees it." : card.kind === "theme" ? "A VS Code colour theme is a .json file (inside a theme extension, in its themes folder). Code takes its editor and syntax colours; the rest of the window keeps the system's look." : card.kind === "unreal" ? "The folder that holds Engine/ and Setup.sh: the one Epic's download unpacks to, or your clone of its source after Setup.sh and make. Code remembers it for every project." : card.kind === "run" ? "Kept in the project as .huginn-run, so it travels with it." : card.kind === "debugprog" ? "The program you built, with debugging information (gcc -g, cargo build). Kept in the project as .huginn-debug."
                         : "Every place it's used changes, in every file (the language helper finds them). Open files change but aren't saved." }
                 // the folder picker
                 Item { visible: card.kind === "open"; x: 16; y: 54; width: parent.width - 32; height: parent.height - 120
@@ -734,7 +741,7 @@ GlassWindow {
                     Btn { visible: card.kind === "diff" && !win.sheet.staged && !!win.sheet.canStage; text: "Stage"; onClicked: { Backend.stage(win.sheet.rel); win.sheet = null } }
                     Btn { visible: card.kind === "clash"; text: "Take Theirs"; onClicked: { var t = win.sheet.tab; win.sheet = null; Backend.reload(t) } }
                     Btn { id: sheetOk; visible: card.kind !== "diff" && card.kind !== "langs" && card.kind !== "branches" && card.kind !== "settings" && card.kind !== "keys" && card.kind !== "history"; primary: card.kind !== "trash" && card.kind !== "discard"; danger: card.kind === "trash" || card.kind === "discard"
-                        text: ({ "open": "Open This Folder", "dirty": "Save", "clash": "Keep Mine", "new": "Make", "rename": "Rename", "trash": "Move to Trash", "run": "Use It", "discard": "Throw Away", "renamesym": "Rename", "debugprog": "Debug", "aiask": "Ask", "unreal": "Use This Folder", "theme": "Use This Theme" })[card.kind] || "OK"
+                        text: ({ "open": "Open This Folder", "dirty": "Save", "clash": "Keep Mine", "new": "Make", "rename": "Rename", "trash": "Move to Trash", "run": "Use It", "discard": "Throw Away", "renamesym": "Rename", "debugprog": "Debug", "aiask": "Ask", "unreal": "Use This Folder", "theme": "Use This Theme", "remote": "Connect" })[card.kind] || "OK"
                         onClicked: {
                             var s = win.sheet, why = ""
                             if (s.kind === "open") { win.sheet = null; Backend.openFolder(win.browseAt); return }
@@ -746,14 +753,15 @@ GlassWindow {
                             else if (s.kind === "discard") why = Backend.discard(s.rel)
                             else if (s.kind === "run") { Backend.setRun(nameBox.text); win.sheet = null; return }
                             else if (s.kind === "renamesym") { win.sheet = null; Backend.renameSymbol(s.tab, s.line, s.col, nameBox.text); return }
+                            else if (s.kind === "remote") { var bad = Backend.remoteConnect(nameBox.text); if (bad) { toast.say(bad, true); return } win.sheet = null; win.bottom = "terminal"; win.term = true; return }
                             else if (s.kind === "theme") { var no = Backend.importTheme(nameBox.text); if (no) { toast.say(no, true); return } win.sheet = null; return }
                             else if (s.kind === "unreal") { var why = Backend.build.setUnreal(nameBox.text); if (why) { toast.say(why, true); return } win.sheet = null; win.showBuild(); return }
                             else if (s.kind === "debugprog") { win.sheet = null; win.bottom = "debug"; win.term = true; Backend.startDebug(nameBox.text); return }
                             else if (s.kind === "aiask") { var said = nameBox.text.trim(); if (!said) return; win.sheet = null; win.aiCode(s.mode, said); return }
                             if (why) toast.say(why, true); else win.sheet = null } } } } }
     ]
-    onSheetChanged: if (sheet && ["new", "rename", "run", "renamesym", "debugprog", "aiask", "unreal", "theme"].indexOf(sheet.kind) >= 0) {
-        nameBox.text = sheet.kind === "rename" || sheet.kind === "renamesym" ? sheet.name : sheet.kind === "run" || sheet.kind === "debugprog" || sheet.kind === "unreal" || sheet.kind === "theme" ? (sheet.now || "") : ""; nameBox.focusIn(); nameBox.input.selectAll() }
+    onSheetChanged: if (sheet && ["new", "rename", "run", "renamesym", "debugprog", "aiask", "unreal", "theme", "remote"].indexOf(sheet.kind) >= 0) {
+        nameBox.text = sheet.kind === "rename" || sheet.kind === "renamesym" ? sheet.name : sheet.kind === "run" || sheet.kind === "debugprog" || sheet.kind === "unreal" || sheet.kind === "theme" || sheet.kind === "remote" ? (sheet.now || "") : ""; nameBox.focusIn(); nameBox.input.selectAll() }
 
     // ================================================================ the side island
     Rectangle { id: sideBox; visible: win.side; x: 12; y: 64; width: win.sideW; height: parent.height - y - 12; radius: 18; color: Theme.t.island; border.width: 1; border.color: Theme.t.islandLine; clip: true
@@ -1854,6 +1862,10 @@ GlassWindow {
                 Row { id: prRow; x: 6; spacing: 5; anchors.verticalCenter: parent.verticalCenter
                     Rectangle { width: 7; height: 7; radius: 4; anchors.verticalCenter: parent.verticalCenter; color: Backend.problems.length ? win.delInk : win.addInk }
                     Label { text: Backend.problems.length ? Backend.problems.length + (Backend.problems.length === 1 ? " problem" : " problems") : "No problems"; font.pixelSize: 11 } } }
+            Pressable { objectName: "remotePill"; visible: !!Backend.remote.spec; width: rmRow.width + 12; height: 24; radius: 12; color: hovered ? Theme.t.hover : Qt.alpha(Theme.t.accent, 0.16); onClicked: win.openPalette(">Remote")
+                Row { id: rmRow; x: 6; spacing: 5; anchors.verticalCenter: parent.verticalCenter
+                    Rectangle { width: 7; height: 7; radius: 4; anchors.verticalCenter: parent.verticalCenter; color: Backend.remote.connected ? win.addInk : win.delInk }
+                    Label { font.pixelSize: 11; text: "SSH: " + (Backend.remote.spec || "") + (Backend.remote.connected ? "" : "  (not connected)") } } }
             Pressable { objectName: "buildPill"; visible: win.bld.running || win.bld.errors + win.bld.warnings > 0; width: bpRow.width + 12; height: 24; radius: 12; color: hovered ? Theme.t.hover : "transparent"; onClicked: win.showBuild()
                 Row { id: bpRow; x: 6; spacing: 5; anchors.verticalCenter: parent.verticalCenter
                     Rectangle { width: 7; height: 7; radius: 4; anchors.verticalCenter: parent.verticalCenter; color: win.bld.running ? win.modInk : win.bld.errors ? win.delInk : "#E3B341" }

@@ -363,16 +363,19 @@ _PY = re.compile(r'^\s*File "(?P<file>[^"]+)", line (?P<line>\d+)')
 _MAKE_DIR = re.compile(r"^make(?:\[\d+\])?: (Entering|Leaving) directory [`'](.+)'$")
 
 
-def locate(name: str, root: Path, dirs: list = ()) -> str:
+def locate(name: str, root: Path, dirs: list = (), there=None) -> str:
     """The real path of a file a compiler named ("" when there is no such file): absolute, relative to the project,
     to a directory make said it entered, or to one of the usual build folders. res:// is Godot's name for the project."""
     name = name.strip().strip('"')
     if name.startswith("res://"):
         name = name[6:]
+    if there and name.startswith("/"):                               # a path on the other computer: the same file under the mount
+        name = there[0].to_local(there[1], there[2], name) or name
     if not name or len(name) > 1024 or "\0" in name:
         return ""
     p = Path(name)
-    tries = [p] if p.is_absolute() else [Path(d) / p for d in reversed(list(dirs))] + [root / p] + [root / b / p for b in ("build", "build-release", "Source", "src")]
+    entered = [Path(there[0].to_local(there[1], there[2], d) or d) if there else Path(d) for d in reversed(list(dirs))]      # (make's directories are the other computer's)
+    tries = [p] if p.is_absolute() else [d / p for d in entered] + [root / p] + [root / b / p for b in ("build", "build-release", "Source", "src")]
     for t in tries:
         try:
             if t.is_file():
@@ -397,7 +400,7 @@ def parse_line(line: str, root: Path, state: dict):
         return None
 
     def problem(file, ln, col, sev, msg):
-        path = locate(file, root, dirs)
+        path = locate(file, root, dirs, state.get("there"))
         if not path:
             return None
         return {"path": path, "line": max(0, int(ln) - 1), "col": max(0, int(col or 1) - 1), "severity": sev, "message": (msg or "").strip()[:600] or "here"}
@@ -512,13 +515,14 @@ class Builder(QObject):
     finished = Signal(str, int)               # the task's id and its exit code
     wantsTools = Signal(str)                  # a setup task was chosen: the pack's name, or "unreal" to choose the folder
 
-    def __init__(self, parent=None, save_all=None, env_path: list = (), known=None):
+    def __init__(self, parent=None, save_all=None, env_path: list = (), known=None, remote=None):
         super().__init__(parent)
         self._root, self._tasks, self._cfg = None, [], load_config()
         self._proc, self._task, self._status, self._started = None, None, "", 0.0
         self._problems, self._seen, self._state, self._tail, self._stopped = [], set(), {}, "", False
         self._save_all, self._env_path, self._at = save_all, list(env_path), -1
         self._known = known                      # () -> what ${file} and the rest stand for now (for .vscode/tasks.json)
+        self._remote = remote                    # () -> (remote, mount) when the project is on another computer (huginn_remote)
         self._lines = Lines(self)
         self._pending = []
         self._flush = QTimer(self, interval=60, singleShot=True)
@@ -614,7 +618,14 @@ class Builder(QObject):
         self._task, self._problems, self._seen, self._state, self._tail, self._stopped = task, [], set(), {}, "", False
         self._pending, self._at = [], -1
         self._lines.clear()
-        self._lines.add([{"text": "$ " + task["command"], "kind": "command", "path": "", "line": 0, "col": 0}])
+        command, remote, mount = task["command"], None, None
+        if self._remote:
+            remote, mount = self._remote()
+        if remote:                                                   # over ssh, in the folder there; its paths come back as ours
+            import huginn_remote
+            command = huginn_remote.wrap(remote, command, mount=mount)
+            self._state["there"] = (huginn_remote, remote, mount)
+        self._lines.add([{"text": "$ " + task["command"] + (f"     (on {remote['spec']})" if remote else ""), "kind": "command", "path": "", "line": 0, "col": 0}])
         self._status, self._started = "Running…", time.time()
         proc = QProcess(self)
         proc.setWorkingDirectory(str(self._root / task["cwd"]) if task.get("cwd") else str(self._root))
@@ -629,7 +640,7 @@ class Builder(QObject):
         proc.errorOccurred.connect(self._failed)
         self._proc = proc
         # (its own session: Stop reaches the compiler's children too, not only the shell)
-        proc.start("setsid", ["bash", "-c", task["command"]])
+        proc.start("setsid", ["bash", "-c", command])
         self.changed.emit()
 
     @Slot()

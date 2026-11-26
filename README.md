@@ -934,6 +934,46 @@ checked here: Godot 4 itself (Flathub can't run in the build container), Godot's
 questions, and anything against a real Unreal Engine, which is far too large to fetch; those commands follow Epic's
 and Godot's documentation. Debugging inside Godot or Unreal from Code is not done.
 
+**Code, round eight: what it takes from Visual Studio Code.** VS Code still ships for Linux (1.148, November 2026;
+only 32-bit ARM Linux was deprecated), so this isn't a rescue: it is so a project made there opens here as it is,
+and so Code has the features people miss. None of VS Code's code is used (it is TypeScript on Electron; Code is
+Python and QML): these are its file formats, read, and its features, written again. **Its extensions do not run in
+Code**: they are programs for VS Code's own extension host.
+
+- **A project's `.vscode` folder** (`apps/huginn_vscode.py`). `tasks.json`: its tasks lead the Build tab, with their
+  arguments, working folder, environment, `dependsOn`, Linux overrides, the default build task and `${file}`,
+  `${workspaceFolder}` and the rest filled in when run; a task that asks for an `${input:…}`, or belongs to an
+  extension, is listed with why it can't run. `launch.json`: Python (debugpy) and C, C++ and Rust (cppdbg, lldb and
+  gdb configurations, all through GDB) start from F5 or by name, their `preLaunchTask` first. `settings.json`:
+  indentation, format and trim on save, final newline, line endings, rulers, `files.exclude`, `files.associations`,
+  per language too; an `.editorconfig` still lies over it. `*.code-snippets`. A `.code-workspace` file opens its
+  first folder with its settings. JSON with comments and trailing commas is read as VS Code reads it.
+- **Settings** (Ctrl+,). Code's own are kept in `~/.config/huginn/code-settings.json` under VS Code's names
+  (`editor.tabSize`, `files.autoSave`…), so the same file means the same thing; the project's lie over yours, and the
+  page says which a value comes from. The file can be edited by hand, comments and all.
+- **Keyboard shortcuts** you choose: a page listing every command, click one and press its new keys (two-step
+  chords too); Code's own shortcut gives way, and so does whatever had those keys. A VS Code keymap is one switch.
+- **Brought from VS Code**: its colour themes (a theme's `.json`: editor and syntax colours), and from its folder in
+  the home (VSCodium's too) your snippets, the settings Code has, and your key bindings.
+- **In the editor**: folding (by indentation; arrows in the gutter, Fold All; text is never left hidden with nothing
+  over it), Emmet in HTML and CSS (`ul>li.item$*3` and Tab; `m10-20`), peek at a definition (Alt+F12), inlay hints
+  (gathered at the end of the line: this editor can't put words between yours), rulers, zen mode, a history of each
+  file (a copy at every save for a month, to compare with and go back to), and save automatically.
+- **Another computer over SSH** (`apps/huginn_remote.py`; "Remote: Open a Folder on Another Computer"). The other
+  computer needs only an SSH server. Its folder is mounted here with sshfs, so files, search, Git and the language
+  helpers work on it as they are; Run and the Build tab's tasks are sent over ssh and their errors come back as
+  places in the files here. One connection is shared, so ssh asks for a password or passphrase once, in the terminal:
+  Code never sees it. Not over SSH: debugging; and the language helpers run here, so they know this computer's
+  installed libraries, not the other's.
+
+`code_round8_test.py`: 142 checks. Shortcut changes, folding, peek, Emmet and zen mode were also driven with real key
+presses in the window. The SSH part ran for real against an SSH server on the build machine itself (a throwaway key,
+localhost only, removed afterwards): mount, read and write through it, build there with the error landing on its
+line here, fix, build, disconnect; without such a server the test says so and skips that part. Not checked: a
+password prompt in the terminal (the test used a key), another real machine, and a real VS Code installation's
+folder (a made one stood in). Not taken: extensions, multi-root workspaces, notebooks, dev containers, attaching a
+debugger, and inlay hints between words.
+
 **The "grub>" prompt after installing** (seen on real hardware; `search --file` and `configfile` by hand started the
 system, so the menu was fine and the pointer to it was not). GRUB finds its menu through a small pointer file that
 names the system's disk by its id. A pointer naming an id that isn't there gives exactly that bare prompt: checked in

@@ -13,3 +13,6 @@ gdb
 python3-pytest
 # Game projects keep their large files (textures, models, sound) in Git LFS: without it a clone is placeholders.
 git-lfs
+# Code on another computer over SSH: its folder is mounted with sshfs (apps/huginn_remote.py).
+sshfs
+openssh-client

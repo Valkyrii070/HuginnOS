@@ -26,8 +26,9 @@ STEPS = int(sys.argv[3]) if len(sys.argv) > 3 else 600
 SEED = int(sys.argv[4]) if len(sys.argv) > 4 else 1
 SLOW, HUNG = 2.0, 25
 # (System Monitor's end/force/pause would be turned on the fuzz itself: its own process is in the list it shows)
-# (attach/attachEditor are handed the window's own text box by the window: anything else is not a case to test)
-SKIP = re.compile(r"^(attach|attachEditor|end|force|pause|quit|exit|close|closeWindow|shutdown|shutDown|restart|reboot|powerOff|suspend|sleep|hibernate|signOut|logOut|logout|lock"
+# (attach/attachEditor are handed the window's own text box by the window: anything else is not a case to test;
+#  Code's remote commands would try to reach other computers)
+SKIP = re.compile(r"^(remoteConnect|remoteShell|remoteDisconnect|attach|attachEditor|end|force|pause|quit|exit|close|closeWindow|shutdown|shutDown|restart|reboot|powerOff|suspend|sleep|hibernate|signOut|logOut|logout|lock"
                   r"|stop|leave|leaving|eraseDisk|formatDisk|format|erase|wipe|factoryReset|resetEverything|install|startInstall|begin)$")
 random.seed(SEED)
 os.setpgrp()                                                         # whatever the commands start (other apps, helpers) is ended with the fuzz
