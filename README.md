@@ -901,6 +901,39 @@ grid, or typing in its last rows, started all four panes again (0.4 s each time)
 let Qt free what a window had thrown away, so items piled up until the app crawled; it does now.
 `sheets_grid_test.py` has 18 checks.
 
+**Code, round seven: for game developers** (Godot and Unreal are what the studio trying Huginn OS works in).
+
+- **Languages.** GDScript (annotations, `$Node` and `%Unique` paths, triple-quoted strings), Godot's scene and resource
+  files, Godot shaders, GLSL and HLSL (Unreal's `.usf`/`.ush` among them), `.uproject`/`.uplugin` as JSON, and `;`
+  comments and section heads in `.ini` files. A `.h` is C until it shows otherwise: C++ words in it, or a `.cpp` of
+  its name beside it or in Unreal's `Private/`. Snippets for Godot's callbacks and Unreal's macros (`uclass`, `uprop`,
+  `ufunc`, `uelog`); new-file templates; the folders engines fill (`.godot`, `Intermediate`, `Binaries`,
+  `DerivedDataCache`, `Saved`) are left out of the file list and the search.
+- **Build tasks** (`apps/huginn_build.py`; the Build tab in the bottom panel, Ctrl+Shift+B). A project is read for what
+  it can do: Godot (run, open in the editor, import, check scripts, export each preset), Unreal (build the editor and
+  the game, refresh clangd's code suggestions, open, play, generate project files, package, clean), CMake, Cargo,
+  Make (each target), Go, npm scripts, .NET, and your own in `.huginn-tasks.json`. The task you pick as the default is
+  kept per project. Tasks run in their own session, so Stop ends the compiler's children too.
+- **Errors you can click.** The output of gcc and clang, rustc, MSVC-style tools (Unreal's header tool, C#,
+  TypeScript), CMake, Godot, Go and Python tracebacks is read for places in real files: a line that names one opens it
+  there, F8 and Shift+F8 walk the errors, and the status bar shows the count. A path is tried against the project,
+  the build folders and the directory make says it entered; a file that isn't there is not a place.
+- **Tools, one step each.** Git LFS, C++ build tools, Godot 4 and Godot 4 (.NET) from Flathub, shader tools and
+  what Unreal's Setup.sh expects of the system, each added from the Build tab (Ubuntu's packages through the password
+  prompt, Flathub's into your own apps without one). Git LFS now ships in the image. A project that uses LFS without
+  it, or Godot or Unreal without the engine, says so in its task list. Unreal Engine itself comes from Epic: Code
+  finds it from `UE_ROOT`, Epic's own list of installs, the usual folders, or the folder you choose.
+- **GDScript suggestions** come from the Godot editor, which answers on a port while the project is open in it
+  (`huginn_lsp_tcp.py` carries the conversation; this computer only). Closed, Code says so instead of complaining.
+- After CMake configures or Unreal's suggestions task runs, `compile_commands.json` is put beside the sources and
+  clangd started again.
+
+`code_round7_test.py`: 93 checks, among them real builds with CMake and a C compiler and with Cargo (the error lands
+on its line; fixed, it builds), and Ubuntu's Godot 3 reporting a script error that lands on the script's line. Not
+checked here: Godot 4 itself (Flathub can't run in the build container), Godot's editor answering GDScript
+questions, and anything against a real Unreal Engine, which is far too large to fetch; those commands follow Epic's
+and Godot's documentation. Debugging inside Godot or Unreal from Code is not done.
+
 **The "grub>" prompt after installing** (seen on real hardware; `search --file` and `configfile` by hand started the
 system, so the menu was fine and the pointer to it was not). GRUB finds its menu through a small pointer file that
 names the system's disk by its id. A pointer naming an id that isn't there gives exactly that bare prompt: checked in

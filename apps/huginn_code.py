@@ -7,6 +7,7 @@ import itertools
 import json
 import os
 import re
+import shlex
 import shutil
 import sys
 import tempfile
@@ -19,12 +20,15 @@ from PySide6.QtCore import (Property, QFileSystemWatcher, QObject, QProcess, QSt
 from PySide6.QtGui import QColor, QFont, QImage, QPainter, QSyntaxHighlighter, QTextCharFormat, QTextCursor
 from PySide6.QtQuick import QQuickImageProvider
 
+import huginn_build as hb
 import huginn_code_more as more
 import huginn_debug as hd
 
 STATE = Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local/share") / "huginn" / "code.json"
 TEXT_LIMIT = 8 * 1024 * 1024
-HEAVY = {".git", "node_modules", "__pycache__", ".venv", "venv", "target", "build", "dist", ".mypy_cache", ".pytest_cache", ".tox", ".cache", ".idea", ".gradle"}
+HEAVY = {".git", "node_modules", "__pycache__", ".venv", "venv", "target", "build", "dist", ".mypy_cache", ".pytest_cache", ".tox", ".cache", ".idea", ".gradle",
+         # what game engines make and keep: Godot's imports, Unreal's builds and caches
+         ".godot", ".import", "build-release", "Intermediate", "Binaries", "DerivedDataCache", "Saved", "Packaged"}
 LIST_LIMIT = 30000
 
 # name: (suffixes or file names, line comment, block comment, key words, LSP language id, servers to try)
@@ -33,7 +37,7 @@ LANGS = {
                "python", [["pylsp"], ["pyright-langserver", "--stdio"], ["jedi-language-server"]]),
     "C": ((".c", ".h"), "//", ("/*", "*/"), "auto break case char const continue default do double else enum extern float for goto if inline int long register restrict return short signed sizeof static struct switch typedef union unsigned void volatile while bool true false NULL",
           "c", [["clangd"]]),
-    "C++": ((".cpp", ".cc", ".cxx", ".hpp", ".hh", ".hxx"), "//", ("/*", "*/"), "alignas auto bool break case catch char class const constexpr continue default delete do double else enum explicit export extern false float for friend if inline int long mutable namespace new noexcept nullptr operator override private protected public return short signed sizeof static struct switch template this throw true try typedef typename union unsigned using virtual void volatile while co_await co_return",
+    "C++": ((".cpp", ".cc", ".cxx", ".hpp", ".hh", ".hxx", ".inl", ".ipp", ".tpp"), "//", ("/*", "*/"), "alignas auto bool break case catch char class const constexpr continue default delete do double else enum explicit export extern false float for friend if inline int long mutable namespace new noexcept nullptr operator override private protected public return short signed sizeof static struct switch template this throw true try typedef typename union unsigned using virtual void volatile while co_await co_return",
             "cpp", [["clangd"]]),
     "Rust": ((".rs",), "//", ("/*", "*/"), "as async await break const continue crate dyn else enum extern false fn for if impl in let loop match mod move mut pub ref return self Self static struct super trait true type unsafe use where while",
              "rust", [["rust-analyzer"]]),
@@ -51,7 +55,7 @@ LANGS = {
            "csharp", [["omnisharp", "-lsp"]]),
     "Shell": ((".sh", ".bash", ".zsh", ".bashrc", ".profile", ".zshrc"), "#", None, "if then else elif fi for while until do done case esac in function return exit export local readonly set unset echo cd source shift",
               "shellscript", [["bash-language-server", "start"]]),
-    "JSON": ((".json", ".jsonc", ".hsheet", ".hslides", ".code-workspace"), "", None, "true false null", "json", [["vscode-json-languageserver", "--stdio"]]),
+    "JSON": ((".json", ".jsonc", ".hsheet", ".hslides", ".code-workspace", ".uproject", ".uplugin"), "", None, "true false null", "json", [["vscode-json-languageserver", "--stdio"]]),
     "YAML": ((".yml", ".yaml"), "#", None, "true false null yes no on off", "yaml", [["yaml-language-server", "--stdio"]]),
     "TOML": ((".toml",), "#", None, "true false", "toml", [["taplo", "lsp", "stdio"]]),
     "Settings": ((".conf", ".ini", ".cfg", ".desktop", ".service", ".list", ".env", ".properties", ".gitignore", ".gitattributes", ".editorconfig"), "#", None, "true false yes no on off", "ini", []),
@@ -59,6 +63,21 @@ LANGS = {
     "HTML": ((".html", ".htm", ".xml", ".svg", ".ui", ".xhtml"), "", ("<!--", "-->"), "", "html", [["vscode-html-language-server", "--stdio"]]),
     "CSS": ((".css", ".scss", ".less"), "", ("/*", "*/"), "important", "css", [["vscode-css-language-server", "--stdio"]]),
     "SQL": ((".sql",), "--", ("/*", "*/"), "select from where insert into values update set delete create table drop alter join left right inner outer on group by order having limit as and or not null primary key", "sql", []),
+    # Game engines. GDScript's helper is the Godot editor itself (it answers on a port while the project is open in it:
+    # huginn_lsp_tcp.py carries the conversation there); Unreal's C++ goes to clangd like any other.
+    "GDScript": ((".gd",), "#", None, "and as assert await break breakpoint class class_name const continue elif else enum extends for func if in is match not or pass preload load return self "
+                 "signal static super var void when while yield true false null PI TAU INF NAN export onready tool master puppet remote",
+                 "gdscript", [["python3", str(Path(__file__).resolve().with_name("huginn_lsp_tcp.py")), "127.0.0.1", "6005"]]),
+    "Godot Resource": ((".tscn", ".tres", ".godot", ".import", ".gdextension", ".escn", ".remap"), ";", None, "true false null", "godot-resource", []),
+    "Godot Shader": ((".gdshader", ".gdshaderinc"), "//", ("/*", "*/"), "shader_type render_mode uniform varying const in out inout struct void return if else for while do switch case default break continue discard "
+                     "instance global group_uniforms lowp mediump highp flat smooth true false source_color hint_range hint_normal hint_default_white hint_default_black hint_screen_texture "
+                     "hint_depth_texture filter_nearest filter_linear repeat_enable repeat_disable spatial canvas_item particles sky fog", "gdshader", []),
+    "GLSL": ((".glsl", ".vert", ".frag", ".geom", ".comp", ".tesc", ".tese", ".vsh", ".fsh", ".rgen", ".rchit", ".rmiss"), "//", ("/*", "*/"),
+             "attribute const uniform varying buffer shared coherent volatile restrict readonly writeonly layout centroid flat smooth noperspective patch sample break continue do for while "
+             "switch case default if else subroutine in out inout true false invariant precise discard return struct precision lowp mediump highp void", "glsl", [["glsl_analyzer"], ["glslls", "--stdin"]]),
+    "HLSL": ((".hlsl", ".hlsli", ".fx", ".fxh", ".usf", ".ush", ".cginc", ".compute", ".shader"), "//", ("/*", "*/"),
+             "break case cbuffer tbuffer class const continue default discard do else export extern false for if in inline inout interface namespace nointerpolation noperspective out packoffset "
+             "precise register return row_major column_major sample shared static struct switch technique pass true typedef uniform volatile while linear centroid groupshared void", "hlsl", []),
     "Lua": ((".lua",), "--", ("--[[", "]]"), "and break do else elseif end false for function if in local nil not or repeat return then true until while", "lua", [["lua-language-server"]]),
     "Make": (("Makefile", "makefile", "GNUmakefile", ".mk"), "#", None, "ifeq ifneq ifdef ifndef else endif include define endef export", "makefile", []),
     "CMake": (("CMakeLists.txt", ".cmake"), "#", None, "if else elseif endif foreach endforeach function endfunction macro endmacro set project add_executable add_library target_link_libraries find_package include", "cmake", []),
@@ -66,10 +85,24 @@ LANGS = {
     "Diff": ((".diff", ".patch"), "", None, "", "diff", []),
     "Text": ((".txt", ".text", ".log", ".csv", ".tsv", ".rst", ".tex", ".srt"), "", None, "", "plaintext", []),
 }
+_VEC = [f"{p}{k}{n}" for p in ("", "i", "u", "b", "d") for k in ("vec",) for n in "234"]
+TYPES = {
+    "GLSL": set("float double int uint bool mat2 mat3 mat4 mat2x3 mat2x4 mat3x2 mat3x4 mat4x2 mat4x3 sampler1D sampler2D sampler3D samplerCube sampler2DArray sampler2DShadow samplerCubeShadow "
+                "isampler2D usampler2D image2D atomic_uint".split() + _VEC),
+    "Godot Shader": set("float int uint bool mat2 mat3 mat4 sampler2D isampler2D usampler2D sampler2DArray sampler3D samplerCube samplerCubeArray".split() + _VEC),
+    "HLSL": set("bool int uint dword half float double min16float min10float min16int min12int min16uint string vector matrix Texture1D Texture2D Texture3D TextureCube Texture2DArray "
+                "SamplerState SamplerComparisonState sampler sampler2D samplerCUBE RWTexture2D Buffer RWBuffer StructuredBuffer RWStructuredBuffer ByteAddressBuffer".split()
+                + [f"{t}{n}" for t in ("float", "int", "uint", "bool", "half", "double") for n in ("2", "3", "4", "2x2", "3x3", "4x4", "3x4", "4x3")]),
+    "GDScript": set("bool int float".split()),
+    "C": set("size_t ssize_t int8_t int16_t int32_t int64_t uint8_t uint16_t uint32_t uint64_t intptr_t uintptr_t ptrdiff_t wchar_t".split()),
+    "C++": set("size_t ssize_t int8_t int16_t int32_t int64_t uint8_t uint16_t uint32_t uint64_t intptr_t uintptr_t ptrdiff_t wchar_t char8_t char16_t char32_t "
+               "int8 int16 int32 int64 uint8 uint16 uint32 uint64".split()),                # (the last eight are Unreal's)
+}
+HASH_LINES = ("C", "C++", "GLSL", "HLSL", "Godot Shader", "C#")          # a line starting with # is the preprocessor's
 SERVER_SETTINGS = {"pylsp": {"plugins": {"pycodestyle": {"enabled": False}, "mccabe": {"enabled": False}, "pyflakes": {"enabled": True}}}}
-SHEBANG = {"python": "Python", "bash": "Shell", "sh": "Shell", "zsh": "Shell", "node": "JavaScript"}
+SHEBANG = {"python": "Python", "bash": "Shell", "sh": "Shell", "zsh": "Shell", "node": "JavaScript", "godot": "GDScript"}
 RUNNERS = {"Python": 'python3 "{f}"', "Shell": 'bash "{f}"', "JavaScript": 'node "{f}"', "TypeScript": 'npx tsx "{f}"', "Go": 'go run "{f}"',
-           "C": 'cc "{f}" -o /tmp/huginn-run && /tmp/huginn-run', "C++": 'c++ "{f}" -o /tmp/huginn-run && /tmp/huginn-run', "Lua": 'lua "{f}"', "Rust": 'rustc "{f}" -o /tmp/huginn-run && /tmp/huginn-run'}
+           "C": 'cc "{f}" -o /tmp/huginn-run && /tmp/huginn-run', "C++": 'c++ "{f}" -o /tmp/huginn-run && /tmp/huginn-run', "Lua": 'lua "{f}"', "GLSL": 'glslangValidator "{f}"', "Rust": 'rustc "{f}" -o /tmp/huginn-run && /tmp/huginn-run'}
 
 
 # Adding a language: what it takes, from Ubuntu's archive (apt, through the system's password prompt) and, for the
@@ -97,6 +130,9 @@ LANG_PACKS = {
     "Lua": {"apt": ["lua5.4"], "tools": ["lua5.4"]},
     "SQL": {"apt": ["sqlite3"], "tools": ["sqlite3"]},
     "CMake": {"apt": ["cmake", "ninja-build", "build-essential"], "tools": ["cmake"]},
+    "C#": {"apt": ["dotnet-sdk-10.0"], "tools": ["dotnet"]},
+    "GDScript": {"flatpak": ["org.godotengine.Godot"], "tools": []},       # (its helper and its runner are the Godot editor)
+    "GLSL": {"apt": ["glslang-tools"], "tools": ["glslangValidator"]},
 }
 # What a new file in each language starts with (the cursor goes where the first line of real work goes).
 TEMPLATES = {
@@ -111,6 +147,10 @@ TEMPLATES = {
     "HTML": '<!DOCTYPE html>\n<html lang="en">\n<head>\n  <meta charset="utf-8">\n  <meta name="viewport" content="width=device-width, initial-scale=1">\n  <title>Hello</title>\n</head>\n<body>\n  <h1>Hello</h1>\n</body>\n</html>\n',
     "CSS": 'body {\n  font-family: system-ui, sans-serif;\n  margin: 2rem;\n}\n', "JSON": '{\n  \n}\n',
     "QML": 'import QtQuick\n\nRectangle {\n    width: 400; height: 300\n    Text { anchors.centerIn: parent; text: "Hello" }\n}\n',
+    "GDScript": 'extends Node\n\n\nfunc _ready() -> void:\n\tprint("Hello")\n',
+    "Godot Shader": "shader_type canvas_item;\n\nvoid fragment() {\n\tCOLOR = texture(TEXTURE, UV);\n}\n",
+    "GLSL": "#version 450\n\nlayout(location = 0) in vec2 uv;\nlayout(location = 0) out vec4 colour;\n\nvoid main() {\n    colour = vec4(uv, 0.0, 1.0);\n}\n",
+    "HLSL": "float4 PS(float2 uv : TEXCOORD0) : SV_Target\n{\n    return float4(uv, 0, 1);\n}\n",
     "Lua": 'print("Hello")\n', "SQL": "SELECT 'Hello';\n", "Markdown": "# Title\n\n", "YAML": "", "TOML": "", "Text": "",
 }
 # the first-named file for languages whose files are known by name, not by an ending
@@ -127,13 +167,29 @@ def language_of(path: str, head: str = "") -> str:
     suffix = Path(path).suffix.lower()
     for lang, (ends, *_rest) in LANGS.items():
         if name in ends or (suffix and suffix in ends) or (name.startswith(".") and name in ends):
-            return lang
+            return "C++" if lang == "C" and suffix == ".h" and cpp_header(path, head) else lang
     if head.startswith("#!"):
         first = head.split("\n", 1)[0]
         for word, lang in SHEBANG.items():
             if re.search(rf"\b{word}[0-9.]*\b", first):
                 return lang
     return "Text"
+
+
+CPP_MARKS = re.compile(r"^\s*(class|namespace|template)\b|\b(UCLASS|USTRUCT|UENUM|UINTERFACE|GENERATED_BODY|constexpr|nullptr|public:|private:|protected:)|#include\s*<[a-z_]+>|std::|::", re.M)
+
+
+def cpp_header(path: str, head: str = "") -> bool:
+    """A .h file is C until it shows otherwise: C++ words in what's read of it, or a .cpp of the same name beside it
+    (or in the Private/ folder Unreal keeps its sources in)."""
+    if head and CPP_MARKS.search(head):
+        return True
+    p = Path(path)
+    try:
+        beside = [p.parent, p.parent.parent / "Private", p.parent.parent / "src", p.parent.parent / "Source"]
+        return any((d / (p.stem + ext)).is_file() for d in beside for ext in (".cpp", ".cc", ".cxx"))
+    except OSError:
+        return False
 
 
 def fuzzy(query: str, text: str) -> int:
@@ -167,6 +223,7 @@ class CodeStyler(QSyntaxHighlighter):
         super().__init__(document)
         _, self.line, self.block, words, *_ = LANGS.get(language, LANGS["Text"])
         self.words = set(words.split())
+        self.types = TYPES.get(language, frozenset())
         self.lang = language
         self.fmt = {}
         for name in ("key", "comment", "string", "number", "type", "func", "deco", "head"):
@@ -217,9 +274,18 @@ class CodeStyler(QSyntaxHighlighter):
                 return
             self.setFormat(0, end + 3, self.fmt["string"])
             i = end + 3
-        if lang in ("C", "C++") and text.lstrip().startswith("#"):
+        if lang in HASH_LINES and text.lstrip().startswith("#"):
             self.setFormat(0, n, self.fmt["deco"])
             return
+        if lang in ("Settings", "Godot Resource"):
+            lead = text.lstrip()
+            if lang == "Settings" and lead.startswith(";"):            # (Windows-style .ini files, Unreal's among them)
+                self.setFormat(0, n, self.fmt["comment"])
+                return
+            if lead.startswith("[") and (lang == "Settings" or state != 1):
+                end = text.find(" ") if lang == "Godot Resource" and " " in text else n
+                self.setFormat(0, end, self.fmt["head"])               # [Section], or [node …] with its attributes after
+                i = end
         while i < n:
             ch = text[i]
             if self.block and text.startswith(self.block[0], i):
@@ -231,13 +297,13 @@ class CodeStyler(QSyntaxHighlighter):
                 self.setFormat(i, end + len(self.block[1]) - i, self.fmt["comment"])
                 i = end + len(self.block[1])
                 continue
-            if self.line and text.startswith(self.line, i) and (self.line != "#" or lang not in ("C", "C++") ):
+            if self.line and text.startswith(self.line, i) and (self.line != "#" or lang not in ("C", "C++")):
                 if self.line == "#" and lang == "Shell" and i > 0 and text[i - 1] not in " \t;":
                     i += 1
                     continue
                 self.setFormat(i, n - i, self.fmt["comment"])
                 return
-            if lang == "Python" and text.startswith(('"""', "'''"), i):
+            if lang in ("Python", "GDScript") and text.startswith(('"""', "'''"), i):
                 quote = text[i:i + 3]
                 end = text.find(quote, i + 3)
                 if end < 0:
@@ -254,7 +320,18 @@ class CodeStyler(QSyntaxHighlighter):
                 self.setFormat(i, min(j + 1, n) - i, self.fmt["string"])
                 i = j + 1
                 continue
-            if ch == "@" and lang in ("Python", "Java", "TypeScript", "C#"):
+            if ch in "$%" and lang == "GDScript" and i + 1 < n and (text[i + 1].isalpha() or text[i + 1] in '_"'):
+                j = i + 1                                              # $Node/Path and %UniqueName: a node in the scene
+                if text[j] == '"':
+                    j = text.find('"', j + 1)
+                    j = n if j < 0 else j + 1
+                else:
+                    while j < n and (text[j].isalnum() or text[j] in "_/"):
+                        j += 1
+                self.setFormat(i, j - i, self.fmt["deco"])
+                i = j
+                continue
+            if ch == "@" and lang in ("Python", "Java", "TypeScript", "C#", "GDScript"):
                 m = self.WORD.match(text, i + 1)
                 if m:
                     self.setFormat(i, m.end() - i, self.fmt["deco"])
@@ -271,6 +348,8 @@ class CodeStyler(QSyntaxHighlighter):
                 word = m.group()
                 if word in self.words:
                     self.setFormat(i, len(word), self.fmt["key"])
+                elif word in self.types:
+                    self.setFormat(i, len(word), self.fmt["type"])
                 elif m.end() < n and text[m.end()] == "(":
                     self.setFormat(i, len(word), self.fmt["func"])
                 elif word[0].isupper() and len(word) > 1 and lang not in ("Shell", "SQL", "Docker"):
@@ -778,6 +857,10 @@ def run_command(root: Path, doc_path: str, lang: str) -> str:
     if root:
         if (root / ".huginn-run").is_file():
             return (root / ".huginn-run").read_text(encoding="utf-8").strip()
+        if (root / "project.godot").is_file() and hb.godot_command(root):
+            return f"{hb.godot_command(root)} --path ."
+        if hb.uproject_of(root) and hb.unreal_root(hb.uproject_of(root)):
+            return f"{shlex.quote(hb.unreal_root(hb.uproject_of(root)) + '/Engine/Binaries/Linux/UnrealEditor')} {shlex.quote(str(hb.uproject_of(root)))}"
         if (root / "Cargo.toml").is_file():
             return "cargo run"
         if (root / "go.mod").is_file():
@@ -901,6 +984,7 @@ class Code(QObject):
         super().__init__()
         self._back.connect(lambda fn: fn())
         self._lang_done.connect(self._language_added)
+        self._tools_done.connect(self._tools_added)
         self._demo, self._shell_class, self._settings, self._trash = demo, shell_class, settings, trash
         self._root, self._docs, self._at = None, [], -1
         self._open_dirs, self._tree, self._files_cache = set(), [], None
@@ -911,6 +995,11 @@ class Code(QObject):
         self._servers, self._server_note = {}, {}
         self._term, self._busy = None, ""
         self._results_title = ""
+        self._build = hb.Builder(self, save_all=lambda: self.saveAll(), env_path=EXTRA_BIN)
+        self._build.goTo.connect(lambda path, line, col: self.openFile(path, True, line, col))
+        self._build.said.connect(self.said.emit)
+        self._build.finished.connect(self._built)
+        self._build.wantsTools.connect(self._tools_wanted)
         self._dbg = hd.Debugger(self)
         self._dbg.landed.connect(self._landed)
         self._dbg.said.connect(self.said.emit)
@@ -1075,6 +1164,7 @@ def advice(sky: Sky) -> str:
         if self._docs:
             self.select(max(0, min(saved.get("at", 0), len(self._docs) - 1)))
         self.refreshGit()
+        self._build.set_root(root)
         self._keep()
         self.changed.emit()
 
@@ -1510,6 +1600,9 @@ def advice(sky: Sky) -> str:
             pack = LANG_PACKS.get(name, {})
             helper = next((a[0] for a in info[5] if which(a[0])), "") if info[5] else ""
             tools = all(which(t) for t in pack.get("tools", [])) if pack else True
+            if name == "GDScript":                                     # Godot is both: there, or not
+                helper = "Godot" if hb.godot_command() else ""
+                tools = bool(helper)
             out.append({"name": name, "ext": next((e for e in info[0] if e.startswith(".")), info[0][0] if info[0] else ""),
                         "helper": helper, "hasHelper": bool(info[5]), "tools": tools, "canAdd": bool(pack) and (not tools or (bool(info[5]) and not helper)),
                         "adding": name in getattr(self, "_adding", set())})
@@ -1525,17 +1618,12 @@ def advice(sky: Sky) -> str:
             return
         self._adding = getattr(self, "_adding", set()) | {lang}
         self.changed.emit()
-        self.said.emit(f"Adding {lang}… The system may ask for your password.", False)
+        self.said.emit(f"Adding {lang}…" + (" The system may ask for your password." if pack.get("apt") else " This comes from Flathub and can take a few minutes."), False)
 
         def work():
-            why = ""
-            missing = [p for p in pack.get("apt", []) if not self._installed(p)]
-            if missing:
-                # fetches Ubuntu's package lists first if the computer has none yet (a fresh installation doesn't)
-                import sys as _sys
-                _sys.path.insert(0, str(Path(__file__).resolve().parent))
-                import huginn_packages
-                why = huginn_packages.install(missing)
+            import sys as _sys
+            _sys.path.insert(0, str(Path(__file__).resolve().parent))
+            why = hb.install_pack(pack, self._installed)
             if not why and pack.get("npm"):
                 npm = shutil.which("npm")
                 if not npm:
@@ -1632,6 +1720,61 @@ def advice(sky: Sky) -> str:
     busy = Property(str, lambda self: self._busy, notify=changed)
     home = Property(str, lambda self: str(Path.home()), constant=True)
     debug = Property(QObject, lambda self: self._dbg, constant=True)
+    build = Property(QObject, lambda self: self._build, constant=True)
+
+    # ---------------------------------------------------------------- build tasks and the tools they need
+    askUnreal = Signal()                     # a task needs to know where Unreal Engine is: the window asks for its folder
+    _tools_done = Signal(str, str)
+
+    def _built(self, tid: str, code: int) -> None:
+        """A task finished: what it made may be new files, and a fresh compile_commands.json is what clangd reads."""
+        self._files_cache = None
+        self._soon.start()
+        if code == 0 and tid in ("ue:clangd", "cmake:configure", "cmake:build") and self._root:
+            made = next((p for p in (self._root / "compile_commands.json", self._root / "build" / "compile_commands.json") if p.is_file()), None)
+            link = self._root / "compile_commands.json"
+            if made and made != link and not link.exists():
+                try:
+                    link.symlink_to(made.relative_to(self._root))        # (clangd looks beside the sources)
+                except OSError:
+                    pass
+            for lang in ("C", "C++"):
+                c = self._servers.pop(lang, None)                        # start clangd again so it reads the new list
+                if c and c.alive:
+                    c.proc.kill()
+            for d in self._docs:
+                if d.lang in ("C", "C++"):
+                    self._lsp_open(d)
+
+    def _tools_wanted(self, what: str) -> None:
+        if what == "unreal":
+            self.askUnreal.emit()
+        else:
+            self.addTools(what)
+
+    @Slot(str)
+    def addTools(self, name: str) -> None:
+        """Put in one of the tool packs a game project needs (huginn_build.TOOL_PACKS)."""
+        pack = hb.TOOL_PACKS.get(name)
+        adding = getattr(self, "_adding", set())
+        if not pack or self._demo or name in adding:
+            return
+        self._adding = adding | {name}
+        self.changed.emit()
+        self.said.emit(f"Adding {name}…" + (" The system may ask for your password." if pack.get("apt") else " This comes from Flathub and can take a few minutes."), False)
+
+        def work():
+            self._tools_done.emit(name, hb.install_pack(pack, self._installed))
+        threading.Thread(target=work, daemon=True).start()
+
+    def _tools_added(self, name: str, why: str) -> None:
+        self._adding = getattr(self, "_adding", set()) - {name}
+        self._servers = {k: v for k, v in self._servers.items() if v is not None}        # helpers that weren't there may be now
+        self._build.refresh()
+        self.changed.emit()
+        self.said.emit(why or f"{name} is ready.", bool(why))
+
+    addingTools = Property("QVariantList", lambda self: sorted(getattr(self, "_adding", set())), notify=changed)
     minimap = Property(bool, lambda self: self._minimap, notify=changed)
     resultsTitle = Property(str, lambda self: self._results_title, notify=searchDone)
 
@@ -2275,11 +2418,22 @@ def advice(sky: Sky) -> str:
             self._servers[lang] = None
             self._server_note[lang] = ""
             return None
+        if lang == "GDScript":
+            # Godot's editor is the helper, and only while this project is open in it: looked for again on each file
+            # opened (and when a helper that was there goes away), never remembered as missing.
+            import huginn_lsp_tcp
+            if self._root and hb.godot_major(self._root) == 3:
+                argv = argv[:-1] + ["6008"]                            # (where Godot 3's editor listens; Godot 4's is 6005)
+            if not huginn_lsp_tcp.port_open(argv[-2], int(argv[-1])):
+                self._server_note[lang] = "open the project in Godot for suggestions"
+                return None
         root = self._root or Path(d.path).parent
         client = LspClient(argv, root, info[4], self)
+        if lang == "GDScript":
+            client.proc.finished.connect(lambda *_: (self._servers.pop("GDScript", None), self._server_note.__setitem__("GDScript", "open the project in Godot for suggestions"), self.changed.emit()))
         client.diagnostics.connect(self._got_diagnostics)
         client.applyEdit.connect(self._workspace_edit)
-        client.failed.connect(lambda why, l=lang: (self._server_note.__setitem__(l, ""), self.said.emit(f"{l} helper: {why}", True)))
+        client.failed.connect(lambda why, l=lang: (self._server_note.__setitem__(l, ""), self.said.emit(f"{l} helper: {why}", True)) if l != "GDScript" else None)
         client.ready.connect(lambda l=lang, name=os.path.basename(argv[0]): (self._server_note.__setitem__(l, name), self.changed.emit()))
         self._servers[lang] = client
         self._server_note[lang] = "starting " + os.path.basename(argv[0])

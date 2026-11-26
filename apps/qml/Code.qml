@@ -157,6 +157,13 @@ GlassWindow {
         { name: "Split the Editor", key: "Ctrl+\\", run: function () { win.toggleSplit() } },
         { name: "Toggle the Minimap", key: "", run: function () { Backend.setMinimap(!Backend.minimap) } },
         { name: "Show the Debug Console", key: "", run: function () { win.bottom = "debug"; win.term = true } },
+        { name: "Build", key: "Ctrl+Shift+B", run: function () { win.buildIt() } },
+        { name: "Build: Show Tasks and Output", key: "", run: function () { win.showBuild() } },
+        { name: "Build: Run the Last Task Again", key: "", run: function () { win.showBuild(); win.bld.again() } },
+        { name: "Build: Stop", key: "", run: function () { win.bld.stop() } },
+        { name: "Build: Next Error", key: "F8", run: function () { win.bld.step(1) } },
+        { name: "Build: Previous Error", key: "Shift+F8", run: function () { win.bld.step(-1) } },
+        { name: "Build: Choose Unreal Engine's Folder…", key: "", run: function () { win.ask("unreal", { now: win.bld.unrealRoot || (Backend.home + "/UnrealEngine") }) } },
         { name: "Set the Run Command…", key: "", run: function () { win.ask("run", { now: Backend.runCommand() }) } },
         { name: "Format Document", key: "Ctrl+Shift+I", run: function () { if (Backend.current >= 0) Backend.format(Backend.current) } },
         { name: "Quick Fix…", key: "Ctrl+.", run: function () { var v = win.view(); if (v) v.fixHere() } },
@@ -219,6 +226,10 @@ GlassWindow {
         { name: "Git: Make This Folder a Repository", key: "", run: function () { Backend.initRepo() } }
     ]
     function toggleTerm() { term = !term; if (term) Qt.callLater(function () { termKeys.forceActiveFocus() }); else { var v = view(); if (v) v.focusEditor() } }
+    readonly property var bld: Backend.build
+    function showBuild() { bottom = "build"; term = true; buildOut.follow = true }
+    function buildIt() { showBuild(); bld.runDefault() }
+    function runTask(id) { showBuild(); bld.run(id) }
     function runIt() { bottom = "terminal"; term = true; Backend.run(""); Qt.callLater(function () { termKeys.forceActiveFocus() }) }
     function debugIt() { if (dbg.active) { dbg.resume(); return } bottom = "debug"; term = true; Backend.startDebug("") }
     // ---- back and forward through the places you've been (a jump of more than a few lines, or to another file, is a place)
@@ -251,7 +262,8 @@ GlassWindow {
                 if (win.split && Backend.current === win.otherTab) win.otherTab = win.lastCurrent          // picked the other pane's tab: they swap
                 win.lastCurrent = Backend.current }
             if (win.split && (win.otherTab < 0 || win.otherTab >= Backend.tabs.length || win.otherTab === Backend.current)) win.split = false }
-        function onAskProgram(guess) { win.ask("debugprog", { now: guess }) } }
+        function onAskProgram(guess) { win.ask("debugprog", { now: guess }) }
+        function onAskUnreal() { win.ask("unreal", { now: Backend.build.unrealRoot || (Backend.home + "/UnrealEngine") }) } }
     function startFind(rep) {
         finding = true; replacing = rep
         var v = view()
@@ -333,7 +345,8 @@ GlassWindow {
     function gitLetter(kind) { return ({ "new": "U", "added": "A", "deleted": "D", "renamed": "R", "conflict": "!", "changed": "M", "inside": "•" })[kind] || "" }
     function langInk(lang) {
         return ({ "Python": "#4B8BBE", "JavaScript": "#E8C547", "TypeScript": "#3178C6", "C": "#8C9EFF", "C++": "#F06292", "Rust": "#DEA584", "Go": "#00ADD8", "QML": "#41CD52",
-                  "Shell": "#89E051", "JSON": "#CBA34A", "Markdown": "#8E9AAF", "HTML": "#E44D26", "CSS": "#2965F1", "YAML": "#CB171E", "TOML": "#9C4221", "Java": "#B07219", "C#": "#178600", "Lua": "#000080" })[lang] || Theme.t.text_secondary
+                  "Shell": "#89E051", "JSON": "#CBA34A", "Markdown": "#8E9AAF", "HTML": "#E44D26", "CSS": "#2965F1", "YAML": "#CB171E", "TOML": "#9C4221", "Java": "#B07219", "C#": "#178600", "Lua": "#000080",
+                  "GDScript": "#478CBF", "Godot Resource": "#6A9FB5", "Godot Shader": "#8FB8DE", "GLSL": "#5686A5", "HLSL": "#AACE60", "CMake": "#DA3434" })[lang] || Theme.t.text_secondary
     }
 
     ListModel { id: docModel }
@@ -374,6 +387,9 @@ GlassWindow {
     Shortcut { sequence: "Ctrl+B"; onActivated: win.side = !win.side }
     Shortcut { sequence: "Ctrl+`"; onActivated: win.toggleTerm() }
     Shortcut { sequence: "F5"; onActivated: win.debugIt() }
+    Shortcut { sequence: "Ctrl+Shift+B"; onActivated: win.buildIt() }
+    Shortcut { sequence: "F8"; onActivated: win.bld.step(1) }
+    Shortcut { sequence: "Shift+F8"; onActivated: win.bld.step(-1) }
     Shortcut { sequence: "Ctrl+F5"; onActivated: win.runIt() }
     Shortcut { sequence: "Shift+F5"; onActivated: win.dbg.stop() }
     Shortcut { sequence: "F6"; onActivated: win.dbg.pause() }
@@ -422,6 +438,8 @@ GlassWindow {
                 Seg { icon: "split"; tip: "Two editors side by side (Ctrl+\\)"; on: win.split; onClicked: win.toggleSplit() } }
             Island { id: runBox; objectName: "runIsland"; x: toolsIsland.width + 12
                 Seg { icon: "bug"; text: win.dbg.active ? "Debugging" : "Debug"; on: win.dbg.active; tip: "Debug (F5)"; onClicked: win.debugIt() }
+                Seg { objectName: "buildButton"; visible: win.bld.tasks.length > 0; icon: win.bld.running ? "stop" : "check"; text: win.bld.running ? "Stop" : "Build"; on: win.bld.running
+                    tip: win.bld.running ? "Stop “" + win.bld.taskName + "”" : "Build (Ctrl+Shift+B)"; onClicked: win.bld.running ? win.bld.stop() : win.buildIt() }
                 Seg { objectName: "runButton"; icon: "play"; text: "Run"; tip: "Run (Ctrl+F5): " + (Backend.runCommand() || "nothing yet"); onClicked: win.runIt() } } },
         Toast { id: toast; anchors { horizontalCenter: parent.horizontalCenter; bottom: parent.bottom; bottomMargin: 56 } },
         AiPanel { id: aiPanel; z: 27; width: Math.min(680, win.width - 80); x: (win.width - width) / 2; anchors { bottom: parent.bottom; bottomMargin: 48 } maxHeight: win.height * 0.6 },
@@ -483,7 +501,7 @@ GlassWindow {
                 Label { x: 24; y: 20; width: parent.width - 48; elide: Text.ElideMiddle; font.pixelSize: 17; font.weight: Font.DemiBold
                     text: ({ "open": "Open a folder", "dirty": "Save changes to “" + (win.sheet ? win.sheet.name : "") + "”?", "clash": "This file changed on disk",
                              "new": win.sheet && win.sheet.dir ? "New folder" : "New file", "rename": "Rename “" + (win.sheet ? win.sheet.name : "") + "”",
-                             "trash": "Move “" + (win.sheet ? win.sheet.name : "") + "” to the Trash?", "renamesym": "Rename “" + (win.sheet ? win.sheet.name : "") + "” everywhere", "debugprog": "Which program should be debugged?", "aiask": win.sheet && win.sheet.mode === "write" ? "What should it write?" : "How should it change?", "run": "What Run does", "discard": "Throw away the changes to “" + (win.sheet ? win.sheet.rel : "") + "”?",
+                             "trash": "Move “" + (win.sheet ? win.sheet.name : "") + "” to the Trash?", "renamesym": "Rename “" + (win.sheet ? win.sheet.name : "") + "” everywhere", "debugprog": "Which program should be debugged?", "unreal": "Where is Unreal Engine?", "aiask": win.sheet && win.sheet.mode === "write" ? "What should it write?" : "How should it change?", "run": "What Run does", "discard": "Throw away the changes to “" + (win.sheet ? win.sheet.rel : "") + "”?",
                              "langs": win.sheet && win.sheet.mode === "new" ? "New file in…" : "Languages", "branches": "Branches",
                              "diff": (win.sheet ? win.sheet.rel : "") + (win.sheet && win.sheet.staged ? "  ·  staged" : "") })[card.kind] || "" }
                 // Languages: pick one for a new file (it starts with a few lines of it), or add what one needs: its helper
@@ -522,14 +540,14 @@ GlassWindow {
                 Label { visible: ["dirty", "clash", "trash", "discard"].indexOf(card.kind) >= 0; x: 24; y: 52; width: parent.width - 48; wrapMode: Text.WordWrap; secondary: true
                     text: card.kind === "dirty" ? "If you don't save, your changes are lost." : card.kind === "clash" ? "Something else changed it since you opened it. Keep yours (overwrite) or take what's on disk?"
                         : card.kind === "trash" ? "You can put it back from the Trash in Files." : "This can't be undone: the file goes back to how it was at the last commit." }
-                TextBox { id: nameBox; objectName: "nameBox"; visible: ["new", "rename", "run", "renamesym", "debugprog", "aiask"].indexOf(card.kind) >= 0; x: 24; y: 58; width: parent.width - 48; mono: card.kind === "run" || card.kind === "renamesym" || card.kind === "debugprog"
-                    placeholder: card.kind === "run" ? "for example: python3 -m aurora" : card.kind === "renamesym" ? "new name" : card.kind === "debugprog" ? "build/myprogram" : card.kind === "aiask" ? (win.sheet && win.sheet.mode === "write" ? "for example: a function that reads a CSV file into a list of dicts" : "for example: add error handling") : card.kind === "new" ? (win.sheet && win.sheet.dir ? "folder name" : "name.py, or folder/name.py") : ""
+                TextBox { id: nameBox; objectName: "nameBox"; visible: ["new", "rename", "run", "renamesym", "debugprog", "aiask", "unreal"].indexOf(card.kind) >= 0; x: 24; y: 58; width: parent.width - 48; mono: card.kind === "run" || card.kind === "renamesym" || card.kind === "debugprog" || card.kind === "unreal"
+                    placeholder: card.kind === "unreal" ? "for example: /home/you/UnrealEngine" : card.kind === "run" ? "for example: python3 -m aurora" : card.kind === "renamesym" ? "new name" : card.kind === "debugprog" ? "build/myprogram" : card.kind === "aiask" ? (win.sheet && win.sheet.mode === "write" ? "for example: a function that reads a CSV file into a list of dicts" : "for example: add error handling") : card.kind === "new" ? (win.sheet && win.sheet.dir ? "folder name" : "name.py, or folder/name.py") : ""
                     onAccepted: sheetOk.clicked() }
                 Label { visible: card.kind === "aiask"; x: 24; y: 100; width: parent.width - 48; wrapMode: Text.WordWrap; secondary: true; font.pixelSize: 11
                     text: (win.sheet && win.sheet.mode === "write" ? "Written in " + (win.tab && win.tab.lang ? win.tab.lang : "this file's language") + ", at the cursor"
                            : "On what's selected, or the whole file") + ". Huginn AI shows it first; nothing changes until you say so." }
-                Label { visible: card.kind === "run" || card.kind === "debugprog" || card.kind === "renamesym"; x: 24; y: 100; width: parent.width - 48; wrapMode: Text.WordWrap; secondary: true; font.pixelSize: 11
-                    text: card.kind === "run" ? "Kept in the project as .huginn-run, so it travels with it." : card.kind === "debugprog" ? "The program you built, with debugging information (gcc -g, cargo build). Kept in the project as .huginn-debug."
+                Label { visible: card.kind === "run" || card.kind === "debugprog" || card.kind === "renamesym" || card.kind === "unreal"; x: 24; y: 100; width: parent.width - 48; wrapMode: Text.WordWrap; secondary: true; font.pixelSize: 11
+                    text: card.kind === "unreal" ? "The folder that holds Engine/ and Setup.sh: the one Epic's download unpacks to, or your clone of its source after Setup.sh and make. Code remembers it for every project." : card.kind === "run" ? "Kept in the project as .huginn-run, so it travels with it." : card.kind === "debugprog" ? "The program you built, with debugging information (gcc -g, cargo build). Kept in the project as .huginn-debug."
                         : "Every place it's used changes, in every file (the language helper finds them). Open files change but aren't saved." }
                 // the folder picker
                 Item { visible: card.kind === "open"; x: 16; y: 54; width: parent.width - 32; height: parent.height - 120
@@ -567,7 +585,7 @@ GlassWindow {
                     Btn { visible: card.kind === "diff" && !win.sheet.staged && !!win.sheet.canStage; text: "Stage"; onClicked: { Backend.stage(win.sheet.rel); win.sheet = null } }
                     Btn { visible: card.kind === "clash"; text: "Take Theirs"; onClicked: { var t = win.sheet.tab; win.sheet = null; Backend.reload(t) } }
                     Btn { id: sheetOk; visible: card.kind !== "diff" && card.kind !== "langs" && card.kind !== "branches"; primary: card.kind !== "trash" && card.kind !== "discard"; danger: card.kind === "trash" || card.kind === "discard"
-                        text: ({ "open": "Open This Folder", "dirty": "Save", "clash": "Keep Mine", "new": "Make", "rename": "Rename", "trash": "Move to Trash", "run": "Use It", "discard": "Throw Away", "renamesym": "Rename", "debugprog": "Debug", "aiask": "Ask" })[card.kind] || "OK"
+                        text: ({ "open": "Open This Folder", "dirty": "Save", "clash": "Keep Mine", "new": "Make", "rename": "Rename", "trash": "Move to Trash", "run": "Use It", "discard": "Throw Away", "renamesym": "Rename", "debugprog": "Debug", "aiask": "Ask", "unreal": "Use This Folder" })[card.kind] || "OK"
                         onClicked: {
                             var s = win.sheet, why = ""
                             if (s.kind === "open") { win.sheet = null; Backend.openFolder(win.browseAt); return }
@@ -579,12 +597,13 @@ GlassWindow {
                             else if (s.kind === "discard") why = Backend.discard(s.rel)
                             else if (s.kind === "run") { Backend.setRun(nameBox.text); win.sheet = null; return }
                             else if (s.kind === "renamesym") { win.sheet = null; Backend.renameSymbol(s.tab, s.line, s.col, nameBox.text); return }
+                            else if (s.kind === "unreal") { var why = Backend.build.setUnreal(nameBox.text); if (why) { toast.say(why, true); return } win.sheet = null; win.showBuild(); return }
                             else if (s.kind === "debugprog") { win.sheet = null; win.bottom = "debug"; win.term = true; Backend.startDebug(nameBox.text); return }
                             else if (s.kind === "aiask") { var said = nameBox.text.trim(); if (!said) return; win.sheet = null; win.aiCode(s.mode, said); return }
                             if (why) toast.say(why, true); else win.sheet = null } } } } }
     ]
-    onSheetChanged: if (sheet && ["new", "rename", "run", "renamesym", "debugprog", "aiask"].indexOf(sheet.kind) >= 0) {
-        nameBox.text = sheet.kind === "rename" || sheet.kind === "renamesym" ? sheet.name : sheet.kind === "run" || sheet.kind === "debugprog" ? (sheet.now || "") : ""; nameBox.focusIn(); nameBox.input.selectAll() }
+    onSheetChanged: if (sheet && ["new", "rename", "run", "renamesym", "debugprog", "aiask", "unreal"].indexOf(sheet.kind) >= 0) {
+        nameBox.text = sheet.kind === "rename" || sheet.kind === "renamesym" ? sheet.name : sheet.kind === "run" || sheet.kind === "debugprog" || sheet.kind === "unreal" ? (sheet.now || "") : ""; nameBox.focusIn(); nameBox.input.selectAll() }
 
     // ================================================================ the side island
     Rectangle { id: sideBox; visible: win.side; x: 12; y: 64; width: win.sideW; height: parent.height - y - 12; radius: 18; color: Theme.t.island; border.width: 1; border.color: Theme.t.islandLine; clip: true
@@ -1483,7 +1502,64 @@ GlassWindow {
         property var sh: win.term && win.bottom === "terminal" ? Backend.terminal : null
         Row { x: 8; y: 6; spacing: 2; z: 3
             Seg { text: "Terminal"; on: win.bottom === "terminal"; onClicked: { win.bottom = "terminal"; Qt.callLater(function () { termKeys.forceActiveFocus() }) } }
-            Seg { text: "Debug" + (win.dbg.active ? " ·" : ""); on: win.bottom === "debug"; onClicked: win.bottom = "debug" } }
+            Seg { text: "Debug" + (win.dbg.active ? " ·" : ""); on: win.bottom === "debug"; onClicked: win.bottom = "debug" }
+            Seg { objectName: "buildTab"; text: "Build" + (win.bld.running ? " ·" : win.bld.errors ? " " + win.bld.errors : ""); on: win.bottom === "build"; onClicked: win.bottom = "build" } }
+        // ---- build: the project's tasks on the left, the running task's output on the right (a line that names a place opens it)
+        Item { id: buildPanel; objectName: "buildPanel"; visible: win.bottom === "build"; anchors { fill: parent; topMargin: 42; leftMargin: 10; rightMargin: 10; bottomMargin: 8 }
+            property string hint: ""                                        // what the task under the pointer would run
+            readonly property var groupNames: ({ "build": "BUILD", "run": "RUN", "test": "TEST", "package": "PACKAGE", "clean": "CLEAN", "setup": "SET UP" })
+            ListView { id: taskList; objectName: "taskList"; width: Math.min(280, parent.width * 0.3); height: parent.height; clip: true; boundsBehavior: Flickable.StopAtBounds; spacing: 1
+                model: win.bld.tasks
+                section.property: "group"
+                section.delegate: Label { required property string section; x: 8; height: 22; verticalAlignment: Text.AlignBottom; text: buildPanel.groupNames[section] || section; font.pixelSize: 10; font.weight: Font.Bold; font.letterSpacing: 1; secondary: true }
+                delegate: Pressable { id: taskRow; required property var modelData; width: taskList.width - 6; height: 30; radius: 8
+                    readonly property bool now: win.bld.running && win.bld.taskName === modelData.name
+                    color: now ? Qt.alpha(Theme.t.accent, 0.2) : hovered ? Theme.t.hover : "transparent"
+                    onClicked: win.runTask(modelData.id)
+                    Rectangle { visible: taskRow.modelData.default; x: 4; anchors.verticalCenter: parent.verticalCenter; width: 4; height: 14; radius: 2; color: Theme.t.accent }
+                    Label { x: 14; width: parent.width - 44; elide: Text.ElideRight; anchors.verticalCenter: parent.verticalCenter; text: taskRow.modelData.name; font.pixelSize: 12
+                        font.weight: taskRow.modelData.default ? Font.DemiBold : Font.Normal; color: taskRow.modelData.group === "setup" && !taskRow.modelData.command ? win.modInk : Theme.t.text }
+                    Seg { visible: taskRow.hovered && !taskRow.modelData.default && taskRow.modelData.group === "build" && !!taskRow.modelData.command
+                        anchors { right: parent.right; rightMargin: 2; verticalCenter: parent.verticalCenter } icon: "check"; tip: "Make this what Build (Ctrl+Shift+B) runs"; onClicked: win.bld.makeDefault(taskRow.modelData.id) }
+                    onHoveredChanged: buildPanel.hint = hovered ? (modelData.detail ? modelData.detail + ":  " : "") + modelData.command : "" }
+                footer: Column { width: taskList.width - 6; topPadding: 8; spacing: 2
+                    Label { visible: toolRep.count > 0; x: 8; text: "TOOLS"; font.pixelSize: 10; font.weight: Font.Bold; font.letterSpacing: 1; secondary: true }
+                    Repeater { id: toolRep; model: win.bld.packs.filter(function (p) { return !p.ready })
+                        Pressable { id: packRow; required property var modelData; width: taskList.width - 6; height: 30; radius: 8; color: hovered ? Theme.t.hover : "transparent"
+                            readonly property bool adding: Backend.addingTools.indexOf(modelData.name) >= 0
+                            onClicked: if (!adding) Backend.addTools(modelData.name)
+                            Glyph { x: 10; anchors.verticalCenter: parent.verticalCenter; name: "plus"; size: 12; ink: Theme.t.text_secondary }
+                            Label { x: 30; width: parent.width - 36; elide: Text.ElideRight; anchors.verticalCenter: parent.verticalCenter; font.pixelSize: 12; secondary: packRow.adding; text: packRow.adding ? "Adding " + packRow.modelData.name + "…" : "Add " + packRow.modelData.name }
+                            onHoveredChanged: buildPanel.hint = hovered ? modelData.about : "" } } }
+                Label { visible: taskList.count === 0; y: 20; width: taskList.width - 12; x: 6; wrapMode: Text.WordWrap; secondary: true; font.pixelSize: 12
+                    text: Backend.root ? "Nothing to build was found here. Code looks for project.godot, a .uproject, CMakeLists.txt, Cargo.toml, a Makefile, go.mod, package.json, or your own .huginn-tasks.json." : "Open a project folder to see what it can build." } }
+            Rectangle { x: taskList.width + 4; width: 1; height: parent.height; color: Theme.t.islandLine }
+            Item { x: taskList.width + 14; width: parent.width - x; height: parent.height
+                Row { id: buildHead; height: 26; spacing: 6
+                    Label { anchors.verticalCenter: parent.verticalCenter; font.pixelSize: 12; font.weight: Font.DemiBold; text: win.bld.taskName || "Build" }
+                    Label { anchors.verticalCenter: parent.verticalCenter; font.pixelSize: 12; secondary: true; width: Math.min(implicitWidth, buildOut.width - 260); elide: Text.ElideRight
+                        text: !win.bld.running && buildPanel.hint ? buildPanel.hint : win.bld.status }
+                    Label { visible: win.bld.errors + win.bld.warnings > 0 && win.bld.running; anchors.verticalCenter: parent.verticalCenter; font.pixelSize: 12; color: win.bld.errors ? win.delInk : "#E3B341"
+                        text: (win.bld.errors ? win.bld.errors + (win.bld.errors === 1 ? " error" : " errors") : "") + (win.bld.errors && win.bld.warnings ? ", " : "") + (win.bld.warnings ? win.bld.warnings + (win.bld.warnings === 1 ? " warning" : " warnings") : "") } }
+                Row { anchors.right: parent.right; height: 26; spacing: 2
+                    Seg { visible: win.bld.running; icon: "stop"; tip: "Stop"; onClicked: win.bld.stop() }
+                    Seg { visible: !win.bld.running && !!win.bld.taskName; icon: "refresh"; tip: "Run it again"; onClicked: win.bld.again() }
+                    Seg { visible: win.bld.problems.length > 0; icon: "up"; tip: "Previous error (Shift+F8)"; onClicked: win.bld.step(-1) }
+                    Seg { visible: win.bld.problems.length > 0; icon: "down"; tip: "Next error (F8)"; onClicked: win.bld.step(1) }
+                    Seg { visible: !win.bld.running && buildOut.count > 0; icon: "trash"; tip: "Clear"; onClicked: win.bld.clear() } }
+                ListView { id: buildOut; objectName: "buildOut"; y: 30; width: parent.width; height: parent.height - 30; clip: true; boundsBehavior: Flickable.StopAtBounds; model: win.bld.lines; reuseItems: true
+                    property bool follow: true                                  // stay at the end while it runs, until you scroll up
+                    onCountChanged: if (follow) Qt.callLater(positionViewAtEnd)
+                    onMovementEnded: follow = atYEnd
+                    delegate: Item { id: outRow; required property int index; required property string text; required property string kind; required property string path
+                        width: buildOut.width; height: outText.height
+                        Rectangle { anchors.fill: parent; visible: outMouse.containsMouse && !!outRow.path; color: Theme.t.hover; radius: 4 }
+                        Text { id: outText; x: 4; width: parent.width - 8; wrapMode: Text.WrapAnywhere; textFormat: Text.PlainText; text: outRow.text; font.family: win.mono; font.pixelSize: 12; renderType: Text.NativeRendering
+                            font.underline: outMouse.containsMouse && !!outRow.path
+                            color: outRow.kind === "error" ? win.delInk : outRow.kind === "warning" ? "#E3B341" : outRow.kind === "command" || outRow.kind === "note" ? Theme.t.text_secondary : outRow.kind === "done" ? win.addInk : Theme.t.text }
+                        MouseArea { id: outMouse; anchors.fill: parent; hoverEnabled: true; cursorShape: outRow.path ? Qt.PointingHandCursor : Qt.ArrowCursor; onClicked: if (outRow.path) win.bld.open(outRow.index) } } }
+                Label { visible: buildOut.count === 0; anchors.centerIn: parent; width: Math.min(460, parent.width - 20); wrapMode: Text.WordWrap; horizontalAlignment: Text.AlignHCenter; secondary: true
+                    text: "Choose a task, or press Ctrl+Shift+B to build. Errors in the output open the file at the line when clicked; F8 goes to the next one." } } }
         DebugButtons { objectName: "dbgDock"; visible: win.dbg.active; z: 3; y: 6; height: 32; anchors.horizontalCenter: parent.horizontalCenter }
         // ---- the debugger: where it stopped, what things hold, and a console
         Item { id: dbgPanel; visible: win.bottom === "debug"; anchors { fill: parent; topMargin: 42; leftMargin: 10; rightMargin: 10; bottomMargin: 8 }
@@ -1546,6 +1622,10 @@ GlassWindow {
                 Row { id: prRow; x: 6; spacing: 5; anchors.verticalCenter: parent.verticalCenter
                     Rectangle { width: 7; height: 7; radius: 4; anchors.verticalCenter: parent.verticalCenter; color: Backend.problems.length ? win.delInk : win.addInk }
                     Label { text: Backend.problems.length ? Backend.problems.length + (Backend.problems.length === 1 ? " problem" : " problems") : "No problems"; font.pixelSize: 11 } } }
+            Pressable { objectName: "buildPill"; visible: win.bld.running || win.bld.errors + win.bld.warnings > 0; width: bpRow.width + 12; height: 24; radius: 12; color: hovered ? Theme.t.hover : "transparent"; onClicked: win.showBuild()
+                Row { id: bpRow; x: 6; spacing: 5; anchors.verticalCenter: parent.verticalCenter
+                    Rectangle { width: 7; height: 7; radius: 4; anchors.verticalCenter: parent.verticalCenter; color: win.bld.running ? win.modInk : win.bld.errors ? win.delInk : "#E3B341" }
+                    Label { font.pixelSize: 11; text: win.bld.running ? "Building…" : win.bld.errors ? win.bld.errors + (win.bld.errors === 1 ? " build error" : " build errors") : win.bld.warnings + (win.bld.warnings === 1 ? " build warning" : " build warnings") } } }
             Row { objectName: "crumbs"; visible: !!win.tab && win.crumbs.length > 0; spacing: 2; anchors.verticalCenter: parent.verticalCenter
                 Repeater { model: win.crumbs
                     Pressable { required property var modelData; required property int index; width: crL.width + 12; height: 22; radius: 11; color: hovered ? Theme.t.hover : "transparent"

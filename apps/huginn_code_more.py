@@ -42,6 +42,52 @@ SNIPPETS = {
         "struct": ("Structure", "typedef struct {\n\t${2:int field};\n} ${1:Name};${0}"),
         "pf": ("Print", "printf(\"${1:%d}\\n\", ${2});${0}"),
     },
+    "C++": {
+        "main": ("A program's start", "int main(int argc, char **argv)\n{\n\t${0}\n\treturn 0;\n}"),
+        "for": ("Counting loop", "for (int ${1:i} = 0; ${1:i} < ${2:n}; ++${1:i}) {\n\t${0}\n}"),
+        "fore": ("For each", "for (auto &${1:item} : ${2:items}) {\n\t${0}\n}"),
+        "if": ("If", "if (${1:condition}) {\n\t${0}\n}"),
+        "inc": ("Include", "#include <${1:vector}>${0}"),
+        "class": ("Class", "class ${1:Name}\n{\npublic:\n\t${1:Name}();\n\nprivate:\n\t${0}\n};"),
+        # Unreal Engine's
+        "uclass": ("Unreal: an actor class", "UCLASS()\nclass ${1:MYGAME}_API A${2:MyActor} : public AActor\n{\n\tGENERATED_BODY()\n\npublic:\n\tA${2:MyActor}();\n\nprotected:\n\tvirtual void BeginPlay() override;\n\npublic:\n\tvirtual void Tick(float DeltaTime) override;\n${0}\n};"),
+        "ustruct": ("Unreal: a struct", "USTRUCT(BlueprintType)\nstruct F${1:MyData}\n{\n\tGENERATED_BODY()\n\n\t${0}\n};"),
+        "uenum": ("Unreal: an enum", "UENUM(BlueprintType)\nenum class E${1:MyState} : uint8\n{\n\t${2:Idle},\n\t${0}\n};"),
+        "uprop": ("Unreal: a property", "UPROPERTY(${1:EditAnywhere, BlueprintReadWrite}, Category = \"${2:Game}\")\n${3:float} ${4:Speed}${0};"),
+        "ufunc": ("Unreal: a function", "UFUNCTION(${1:BlueprintCallable}, Category = \"${2:Game}\")\n${3:void} ${4:DoIt}(${5});${0}"),
+        "uelog": ("Unreal: write to the log", "UE_LOG(LogTemp, ${1:Warning}, TEXT(\"${2:message}\")${3});${0}"),
+        "check": ("Unreal: check a pointer", "if (!IsValid(${1:Actor}))\n{\n\treturn${2};\n}${0}"),
+    },
+    "GDScript": {
+        "ready": ("When the node enters the scene", "func _ready() -> void:\n\t${0:pass}"),
+        "process": ("Every frame", "func _process(delta: float) -> void:\n\t${0:pass}"),
+        "physics": ("Every physics step", "func _physics_process(delta: float) -> void:\n\t${0:pass}"),
+        "input": ("On input", "func _unhandled_input(event: InputEvent) -> void:\n\tif event.is_action_pressed(\"${1:ui_accept}\"):\n\t\t${0:pass}"),
+        "func": ("Function", "func ${1:name}(${2}) -> ${3:void}:\n\t${0:pass}"),
+        "export": ("A value set in the editor", "@export var ${1:speed}: ${2:float} = ${3:1.0}${0}"),
+        "onready": ("A node, found when ready", "@onready var ${1:sprite}: ${2:Sprite2D} = $${3:Sprite2D}${0}"),
+        "signal": ("Signal", "signal ${1:changed}(${2})${0}"),
+        "class": ("A named class", "class_name ${1:Name}\nextends ${2:Node}\n\n${0}"),
+        "for": ("Loop", "for ${1:i} in ${2:range(10)}:\n\t${0:pass}"),
+        "if": ("If", "if ${1:condition}:\n\t${0:pass}"),
+        "match": ("Match", "match ${1:value}:\n\t${2:0}:\n\t\t${0:pass}\n\t_:\n\t\tpass"),
+        "await": ("Wait a while", "await get_tree().create_timer(${1:1.0}).timeout${0}"),
+        "pr": ("Print", "print(${1})${0}"),
+    },
+    "Godot Shader": {
+        "canvas": ("A 2D shader", "shader_type canvas_item;\n\nvoid fragment() {\n\t${0:COLOR = texture(TEXTURE, UV);}\n}"),
+        "spatial": ("A 3D shader", "shader_type spatial;\n\nvoid fragment() {\n\tALBEDO = ${0:vec3(1.0)};\n}"),
+        "uni": ("Uniform", "uniform ${1:float} ${2:amount} = ${3:1.0};${0}"),
+    },
+    "GLSL": {
+        "main": ("A fragment shader", "#version ${1:450}\n\nlayout(location = 0) in vec2 uv;\nlayout(location = 0) out vec4 colour;\n\nvoid main() {\n\t${0:colour = vec4(uv, 0.0, 1.0);}\n}"),
+        "uni": ("Uniform", "uniform ${1:float} ${2:name};${0}"),
+        "for": ("Counting loop", "for (int ${1:i} = 0; ${1:i} < ${2:n}; ${1:i}++) {\n\t${0}\n}"),
+    },
+    "HLSL": {
+        "ps": ("A pixel shader", "float4 ${1:PS}(float2 uv : TEXCOORD0) : SV_Target\n{\n\t${0:return float4(uv, 0, 1);}\n}"),
+        "cb": ("Constant buffer", "cbuffer ${1:PerFrame} : register(b${2:0})\n{\n\t${0}\n};"),
+    },
     "Rust": {
         "fn": ("Function", "fn ${1:name}(${2}) {\n\t${0}\n}"),
         "pfn": ("Public function", "pub fn ${1:name}(${2}) -> ${3:()} {\n\t${0}\n}"),
@@ -79,7 +125,7 @@ SNIPPETS = {
     },
 }
 SNIPPETS["TypeScript"] = dict(SNIPPETS["JavaScript"], intf=("Interface", "interface ${1:Name} {\n\t${2:field}: ${3:string};${0}\n}"))
-SNIPPETS["C++"] = dict(SNIPPETS["C"], cls=("Class", "class ${1:Name} {\npublic:\n\t${1:Name}();\n\t${0}\n};"),
+SNIPPETS["C++"] = dict(SNIPPETS["C"], **SNIPPETS["C++"], cls=("Class", "class ${1:Name} {\npublic:\n\t${1:Name}();\n\t${0}\n};"),
                        cout=("Print", "std::cout << ${1} << std::endl;${0}"))
 
 
