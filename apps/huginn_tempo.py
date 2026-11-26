@@ -463,7 +463,7 @@ class Tempo(QObject):
         name = inst.get("name", "")
         if inst.get("engine") == "sampler":
             name = f"Sampler · {inst.get('sound') or 'drop a sound'}"
-        return {**{k: v for k, v in t.items() if k not in ("automation",)}, "regions": regions, "instName": name if t["kind"] != "stack" else f"{len(members)} tracks",
+        return {**{k: v for k, v in t.items() if k not in ("automation",)}, "regions": regions, "instName": name if t["kind"] != "stack" else ("1 track" if len(members) == 1 else f"{len(members)} tracks"),
                 "family": self._plugin_family(t.get("instrument") or {}) or inst.get("family", ""), "automation": t.get("automation") or {}, "colour": t.get("colour") or COLOURS.get(t["kind"], "#4FA3FF"),
                 "output": t.get("output", ""), "members": members, "summary": summary, "open": t.get("open", True), "lane": t.get("lane", "volume"),
                 "midiFx": t.get("midiFx") or {}, "outputName": (self._t(t.get("output", "")) or {}).get("name", ""),
@@ -1980,7 +1980,7 @@ class Tempo(QObject):
                     self._before()
                     r2["tune"] = {"notes": notes, "amount": 0.0}
                     self._keep()
-                    self.said.emit(f"{len(notes)} notes found. Tune them to the key, or drag one where it should be.", False)
+                    self.said.emit(("1 note found. Tune it" if len(notes) == 1 else f"{len(notes)} notes found. Tune them") + " to the key, or drag one where it should be.", False)
                 elif notes is None:
                     self.said.emit("Couldn't read that recording.", True)
                 self.changed.emit()
@@ -2046,7 +2046,7 @@ class Tempo(QObject):
         self._p["regions"].append(reg)
         self._sel_region, self._sel_track = reg["id"], t["id"]
         self._keep()
-        self.said.emit(f"{len(notes)} notes on a piano under the recording: pick any instrument for them.", False)
+        self.said.emit(("1 note" if len(notes) == 1 else f"{len(notes)} notes") + " on a piano under the recording: pick any instrument for them.", False)
         return reg["id"]
 
     @Slot()

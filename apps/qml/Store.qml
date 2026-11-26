@@ -82,7 +82,8 @@ GlassWindow {
     Label { visible: Backend.available && !Backend.ready; anchors.centerIn: parent; text: "Reading the app catalogue…"; secondary: true }
     Column { visible: Backend.available && Backend.ready && Backend.count === 0 && Backend.installedCount === 0; anchors.centerIn: parent; spacing: 8; width: 400
         Label { text: "No catalogue yet"; font.pixelSize: 17; font.weight: Font.DemiBold; anchors.horizontalCenter: parent.horizontalCenter }
-        Label { width: parent.width; wrapMode: Text.WordWrap; horizontalAlignment: Text.AlignHCenter; secondary: true; lineHeight: 1.3; text: "The list of apps hasn't been downloaded. Connect to the internet and open App Store again." } }
+        Label { width: parent.width; wrapMode: Text.WordWrap; horizontalAlignment: Text.AlignHCenter; secondary: true; lineHeight: 1.3; text: "The list of apps hasn't been downloaded. Connect to the internet and try again." }
+        Btn { anchors.horizontalCenter: parent.horizontalCenter; text: "Try Again"; onClicked: Backend.tryAgain() } }
 
     // ---------------- Updates
     Flickable { visible: win.updatesView && !win.detail; anchors.fill: parent; contentHeight: ups.height + 110; clip: true

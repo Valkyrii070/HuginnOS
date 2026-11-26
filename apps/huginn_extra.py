@@ -12,6 +12,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import threading
 import time
 import urllib.parse
@@ -1461,6 +1462,38 @@ class ArgosEngine:
         self._package.install_from_path(path)
 
 
+TRANSLATOR_HOME = DATA_HOME / "translator"          # the translator, when a person added it themselves (Translate › Add the Translator)
+
+
+def _own_translator_path() -> None:
+    """Let Python see a translator the person added for themselves (it lives in their own folder, in a venv)."""
+    for site in sorted(TRANSLATOR_HOME.glob("lib/python3*/site-packages")):
+        if str(site) not in sys.path:
+            sys.path.append(str(site))
+
+
+def add_translator(run=subprocess.run, home: Path = None) -> str:
+    """Fetch Argos Translate into the person's own folder, the way the image's build does into /opt: a venv, the
+    processor-only build of PyTorch (the ordinary one brings 5 GB of graphics-card libraries), then Argos itself.
+    "" when it's in; else why not, in a sentence. Nothing here needs a password."""
+    home = home or TRANSLATOR_HOME
+    steps = [([sys.executable, "-m", "venv", "--system-site-packages", str(home)], "make room for the translator"),
+             ([str(home / "bin" / "pip"), "install", "--no-cache-dir", "torch", "--index-url", "https://download.pytorch.org/whl/cpu"], "fetch the translator's engine"),
+             ([str(home / "bin" / "pip"), "install", "--no-cache-dir", "argostranslate"], "fetch the translator")]
+    for cmd, what in steps:
+        try:
+            done = run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=3600)
+        except subprocess.TimeoutExpired:
+            return f"Couldn't {what}: it took too long."
+        except OSError as err:
+            return f"Couldn't {what} ({err})."
+        if done.returncode != 0:
+            tail = [ln.strip() for ln in (done.stderr or done.stdout or "").splitlines() if ln.strip()]
+            shutil.rmtree(home, ignore_errors=True)               # half a translator is no use: the next try starts clean
+            return f"Couldn't {what}" + (f" ({tail[-1][:140]})" if tail else "") + ". Is the computer online?"
+    return ""
+
+
 class Translate(Worker):
     """Translate text without it leaving the computer. Language packs are fetched once each (that fetch is the only
     time the network is used); after that it works offline."""
@@ -1485,12 +1518,37 @@ class Translate(Worker):
             self._pairs = [("en", "English", "es", "Spanish"), ("es", "Spanish", "en", "English"), ("en", "English", "nb", "Norwegian"), ("en", "English", "fr", "French")]
             self._a, self._b, self._out = "en", "nb", "God morgen. Kaffen er klar, og snøen har lagt seg over fjorden."
             return
+        self._adding = False
         if engine is None:
+            _own_translator_path()
             try:
                 self._engine = ArgosEngine()
             except Exception:                                      # not installed (or half-installed): the screen explains
                 self._engine = None
         self._reload()
+
+    @Slot()
+    def addTranslator(self) -> None:
+        """The image came without the translator (it's about a gigabyte, and a build without the network leaves it
+        out): fetch it into this person's own folder. Several minutes; the window says so while it works."""
+        if self._demo or self._engine is not None or self._adding:
+            return
+        self._adding = True
+        self.changed.emit()
+
+        def then(why):
+            self._adding = False
+            if isinstance(why, Exception):
+                why = f"The translator couldn't be added ({why})."
+            if not why:
+                _own_translator_path()
+                try:
+                    self._engine = ArgosEngine()
+                except Exception as err:
+                    why = f"The translator was fetched but wouldn't start ({err})."
+            self._reload()
+            self.said.emit(why or "The translator is in. Now choose your languages.", bool(why))
+        self.bg(add_translator, then)
 
     def _reload(self) -> None:
         try:
@@ -1597,7 +1655,8 @@ class Translate(Worker):
             self.changed.emit()
         self.bg(lambda: self._engine.install_file(path), then)
 
-    ready = Property(bool, lambda self: self._demo or self._engine is not None, constant=True)
+    ready = Property(bool, lambda self: self._demo or self._engine is not None, notify=changed)
+    adding = Property(bool, lambda self: getattr(self, "_adding", False), notify=changed)
     hasPacks = Property(bool, lambda self: bool(self._pairs), notify=changed)
     source = Property(str, lambda self: self._a, notify=changed)
     target = Property(str, lambda self: self._b, notify=changed)

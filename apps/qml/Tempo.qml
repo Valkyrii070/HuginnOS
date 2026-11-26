@@ -1080,7 +1080,7 @@ GlassWindow {
                         onClicked: { Backend.openProject(modelData.path); win.sheet = "" }
                         Glyph { x: 10; anchors.verticalCenter: parent.verticalCenter; name: "music"; size: 15 }
                         Label { x: 36; anchors.verticalCenter: parent.verticalCenter; text: modelData.name; font.weight: Font.DemiBold }
-                        Label { anchors { right: parent.right; rightMargin: 10; verticalCenter: parent.verticalCenter } text: modelData.tracks + " tracks  ·  " + modelData.when; font.pixelSize: 11; secondary: true } } } }
+                        Label { anchors { right: parent.right; rightMargin: 10; verticalCenter: parent.verticalCenter } text: (modelData.tracks === 1 ? "1 track" : modelData.tracks + " tracks") + "  ·  " + modelData.when; font.pixelSize: 11; secondary: true } } } }
             // key
             Column { visible: win.sheet === "key"; x: 24; y: 60; width: parent.width - 48; spacing: 12
                 Flow { width: parent.width; spacing: 3

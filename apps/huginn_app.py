@@ -1157,9 +1157,9 @@ class Files(QObject):
         if self._find:
             new = dict(pairs)
             self._hits = [Path(new.get(str(hit), str(hit))) for hit in self._hits]
-        self._remember(f"Undo Rename of {len(pairs)}", "renames", pairs, f"{len(pairs)} items renamed.")
+        self._remember(f"Undo Rename of {len(pairs)}", "renames", pairs, ("1 item renamed." if len(pairs) == 1 else f"{len(pairs)} items renamed."))
         self.changed.emit()
-        self.said.emit(f"{len(pairs)} items renamed.")
+        self.said.emit(("1 item renamed." if len(pairs) == 1 else f"{len(pairs)} items renamed."))
         return ""
 
     @Slot()
@@ -4711,8 +4711,8 @@ class Archives(QObject):
     inside = Property(str, lambda self: self._inside, notify=changed)
     note = Property(str, lambda self: self._note, notify=changed)
     lastFolder = Property(str, lambda self: self._last, notify=changed)
-    summary = Property(str, lambda self: (f"{sum(1 for m in self._members if not m['dir'])} files, "
-                                          f"{human_size(sum(m['bytes'] for m in self._members))} unpacked") if self._path else "", notify=changed)
+    summary = Property(str, lambda self: (("1 file, " if sum(1 for m in self._members if not m['dir']) == 1 else f"{sum(1 for m in self._members if not m['dir'])} files, ")
+                                          + f"{human_size(sum(m['bytes'] for m in self._members))} unpacked") if self._path else "", notify=changed)
 
     @Slot(str)
     def open(self, path: str) -> None:
@@ -5179,12 +5179,34 @@ class Store(QObject):
         try:
             remotes = subprocess.run([self._flatpak, "remotes", "--columns=name"], capture_output=True, text=True, timeout=20).stdout.split()
             if "flathub" in remotes:
+                # Flathub is known but its list of apps was never fetched (the image was built without the network):
+                # fetch it now. Without this the store said "No catalogue yet" for good.
+                if not self._catalogue_files():
+                    for scope in ((), ("--user",)):
+                        subprocess.run([self._flatpak, "update", *scope, "--appstream", "-y", "flathub"], capture_output=True, timeout=600)
+                        if self._catalogue_files():
+                            break
                 return
             if subprocess.run([self._flatpak, "remote-add", "--user", "--if-not-exists", "flathub", "https://dl.flathub.org/repo/flathub.flatpakrepo"],
                               capture_output=True, timeout=60).returncode == 0:
                 subprocess.run([self._flatpak, "update", "--user", "--appstream", "-y", "flathub"], capture_output=True, timeout=600)
         except (OSError, subprocess.SubprocessError):
             pass
+
+    @staticmethod
+    def _catalogue_files() -> list:
+        roots = [Path("/var/lib/flatpak"), Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local/share") / "flatpak"]
+        return [f for f in (r / "appstream" / "flathub" / os.uname().machine / "active" / "appstream.xml.gz" for r in roots) if f.is_file()]
+
+    @Slot()
+    def tryAgain(self) -> None:
+        """No catalogue (the computer was offline the first time): look for it again."""
+        if self._demo or not self._flatpak or not self._ready:
+            return
+        import threading
+        self._ready = False
+        self.changed.emit()
+        threading.Thread(target=self._read_catalogue, daemon=True).start()
 
     def _read_catalogue(self) -> None:
         """Parse Flathub's AppStream file that flatpak keeps on disk. Runs off the main thread."""

@@ -839,6 +839,27 @@ the Python rules and says, rule by rule, why each one left out was left out.
   find hardest; reformatting it is a job to do app by app with each one checked on screen. No optimisation was made
   in this pass: nothing was profiled, so nothing was changed on a guess.
 
+**Audit, second pass: every app opened for real** (`scripts/tests/apps_real_check.py`). The smoke test opens each
+app in its demo; this opens all 53 the way a person first meets them, as an ordinary user with an empty home folder,
+times each to its first picture and records everything it says. All 53 start and draw; once the disk is warm each
+is up in under a second beyond the test's own wait. Each picture was looked at. What that turned up:
+- *Translate* told people to run `pipx install argostranslate` when the image came without the translator (a build
+  with no route to PyTorch's server leaves it out). It now has an Add the Translator button that fetches it into the
+  person's own folder (`add_translator`: a venv, the processor-only PyTorch, Argos), with no password. The fetch
+  itself can't be tried from the build machine; the steps are the build's own, and its failure paths are checked.
+- *App Store*: if Flathub was known but its list of apps had never been fetched, the store said "No catalogue yet"
+  for good. It now fetches the list, and the empty screen has a Try Again button.
+- *System Monitor* asked the icon theme for other apps' icons and got nothing when no theme was in force; it now
+  looks in hicolor itself. Its footer said "1 apps".
+- *Counts that read wrongly at one* ("1 files", "1 matches", "1 events", "1 tracks", "1 notes"): Code, Tempo,
+  Archives, Backup, Online Accounts and Files. Every count in the windows and the Python was searched for.
+- *Disks* showed a virtual machine's drives as "0x1af4"; now "Virtual drive".
+- Seen and left: the first app started after boot takes far longer than the rest on a cold disk (19 s here, on a
+  slow virtual disk; the libraries are being read for the first time). Maps and Weather show nothing without the
+  network, and say so.
+This pass looks at each app's first screen. It does not click through each app's features: the fuzzers and the
+round tests do that for Code, Easel and Clips only.
+
 **From the second run on real hardware (three screens, live session)**:
 - *The start menu opened on the wrong screen.* Its window named no screen, so the compositor chose one, often a
   screen with no dock. It is now on the dock's screen, where it grows out of the orb (`shell/qml/Shell.qml`).

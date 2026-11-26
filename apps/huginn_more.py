@@ -1594,7 +1594,7 @@ class Backup(QObject):
         last = history[0]
         age = time.time() - last["when"]
         info = last["info"]
-        detail = f"{int(info.get('files', 0)):,} files kept safe on “{self.destName}”."
+        detail = ("1 file" if int(info.get('files', 0)) == 1 else f"{int(info.get('files', 0)):,} files") + f" kept safe on “{self.destName}”."
         if state.get("error") and state.get("error_at", 0) > last["when"]:
             return {"state": "error", "title": "Last backup " + ago(last["when"]), "detail": "The latest try didn't finish: " + state["error"]}
         if not self.connected:
@@ -1871,7 +1871,10 @@ class Disks(QObject):
             walk(node)
             if not parts and not int(node.get("size") or 0):
                 continue                                           # an empty card reader slot
-            model = " ".join(x for x in ((node.get("vendor") or "").strip(), (node.get("model") or "").strip()) if x)
+            # (a virtual machine's drives give their maker as a bare number, 0x1af4: that tells a person nothing)
+            model = " ".join(x for x in ((node.get("vendor") or "").strip(), (node.get("model") or "").strip()) if x and not re.fullmatch(r"0x[0-9a-fA-F]+", x))
+            if node.get("tran") == "virtio" and not model:
+                model = "Virtual drive"
             drives.append({"dev": node.get("name") or "", "name": ("USB Drive" if node.get("tran") == "usb" else "Card" if "mmc" in (node.get("name") or "") and removable else
                                                                    "Removable Drive" if removable else "Internal Drive"),
                            "detail": " · ".join(x for x in (model, human_size(int(node.get("size") or 0))) if x), "removable": removable,

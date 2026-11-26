@@ -298,7 +298,7 @@ GlassWindow {
         }
         if (text.charAt(0) === ":") {
             var n = parseInt(text.substring(1))
-            return [{ label: isNaN(n) ? "Type a line number" : "Go to line " + n, detail: win.view() ? win.view().lines() + " lines" : "", act: "line", n: isNaN(n) ? -1 : n }]
+            return [{ label: isNaN(n) ? "Type a line number" : "Go to line " + n, detail: win.view() ? (win.view().lines() === 1 ? "1 line" : win.view().lines() + " lines") : "", act: "line", n: isNaN(n) ? -1 : n }]
         }
         if (text.charAt(0) === "@") {
             q = q.substring(1).trim()
@@ -551,7 +551,7 @@ GlassWindow {
                     header: Column { visible: !!(win.sheet && win.sheet.commit && win.sheet.commit.sha); width: diffList.width; spacing: 2; bottomPadding: visible ? 10 : 0
                         height: visible ? implicitHeight : 0
                         Label { width: parent.width; wrapMode: Text.WordWrap; text: win.sheet && win.sheet.commit ? win.sheet.commit.message || "" : ""; font.pixelSize: 13; font.weight: Font.DemiBold }
-                        Label { text: win.sheet && win.sheet.commit ? (win.sheet.commit.sha || "").substring(0, 10) + "  ·  " + win.sheet.commit.author + "  ·  " + win.sheet.commit.when + "  ·  " + (win.sheet.commit.files || []).length + " files" : ""
+                        Label { text: win.sheet && win.sheet.commit ? (win.sheet.commit.sha || "").substring(0, 10) + "  ·  " + win.sheet.commit.author + "  ·  " + win.sheet.commit.when + "  ·  " + ((win.sheet.commit.files || []).length === 1 ? "1 file" : (win.sheet.commit.files || []).length + " files") : ""
                             font.pixelSize: 11; secondary: true; font.family: win.mono } }
                     delegate: Rectangle { required property var modelData; width: diffList.width; height: modelData.kind === "hunk" ? 30 : modelData.kind === "file" ? 32 : 20
                         color: modelData.kind === "add" ? Qt.rgba(0.25, 0.73, 0.31, 0.16) : modelData.kind === "del" ? Qt.rgba(0.97, 0.32, 0.29, 0.16) : modelData.kind === "hunk" ? Theme.t.hover : modelData.kind === "file" ? Qt.alpha(Theme.t.accent, 0.14) : "transparent"
@@ -632,7 +632,7 @@ GlassWindow {
                 TextBox { id: sReplace; width: parent.width; placeholder: "Replace with (optional)" }
                 Row { spacing: 8
                     Label { anchors.verticalCenter: parent.verticalCenter; font.pixelSize: 11; secondary: true
-                        text: Backend.resultsTitle !== "" ? Backend.resultsTitle : Backend.searching ? "Searching…" : Backend.results.length === 1 ? "1 match" : Backend.results.length ? Backend.results.length + (Backend.results.length >= 2000 ? "+" : "") + " matches" : searchBox.text ? "No matches" : "" }
+                        text: Backend.resultsTitle !== "" ? Backend.resultsTitle : Backend.searching ? "Searching…" : Backend.results.length === 1 ? "1 match" : Backend.results.length ? (Backend.results.length === 1 ? "1 match" : Backend.results.length + (Backend.results.length >= 2000 ? "+" : "") + " matches") : searchBox.text ? "No matches" : "" }
                     Btn { visible: Backend.results.length > 0 && sReplace.text !== ""; text: "Replace All"; onClicked: toast.say("Replaced " + Backend.replaceAll(searchBox.text, sReplace.text, sCase.on2, sRe.on2, sWord.on2) + " places", false) } } }
             ListView { id: hits; objectName: "hits"; y: sCol.height + 10; width: parent.width; height: parent.height - y; clip: true; boundsBehavior: Flickable.StopAtBounds; reuseItems: true
                 model: win.searchRows(Backend.results)

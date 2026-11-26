@@ -732,7 +732,16 @@ class SysIcon(QQuickImageProvider):
 
     def requestPixmap(self, name, size, requested):
         side = max(requested.width(), requested.height(), 64)
-        return QIcon.fromTheme(name.split("?", 1)[0]).pixmap(side, side)      # (?v=N: asked again after the theme changed)
+        name = name.split("?", 1)[0]                                         # (?v=N: asked again after the theme changed)
+        pix = QIcon.fromTheme(name).pixmap(side, side)
+        if pix.isNull() and name and "/" not in name and ".." not in name:   # no icon theme in force: look in hicolor ourselves
+            for sub in ("scalable/apps/%s.svg", "128x128/apps/%s.png", "64x64/apps/%s.png", "48x48/apps/%s.png"):
+                path = "/usr/share/icons/hicolor/" + sub % name
+                if os.path.isfile(path):
+                    pix = QIcon(path).pixmap(side, side)
+                    if not pix.isNull():
+                        break
+        return pix
 
 
 def own_icon(key: str) -> str:

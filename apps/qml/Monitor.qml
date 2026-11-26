@@ -307,7 +307,7 @@ GlassWindow {
                 }
             }
             Footer { anchors.bottom: parent.bottom
-                summary: (Backend.counts.apps || 0) + " apps  ·  " + (Backend.counts.background || 0) + " in the background  ·  " + (Backend.counts.processes || 0) + " processes  ·  up " + win.duration(Backend.uptime) }
+                summary: (Backend.counts.apps || 0) + (Backend.counts.apps === 1 ? " app  ·  " : " apps  ·  ") + (Backend.counts.background || 0) + " in the background  ·  " + (Backend.counts.processes || 0) + (Backend.counts.processes === 1 ? " process  ·  up " : " processes  ·  up ") + win.duration(Backend.uptime) }
         }
 
         // ------------------------------------------------------------------------------------------- Processes

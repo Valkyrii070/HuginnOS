@@ -80,7 +80,10 @@ GlassWindow {
         Label { anchors.horizontalCenter: parent.horizontalCenter; font.pixelSize: 20; font.weight: Font.DemiBold; text: Backend.ready ? "Choose your languages" : "The translator isn't installed" }
         Label { width: parent.width; wrapMode: Text.WordWrap; horizontalAlignment: Text.AlignHCenter; secondary: true
             text: Backend.ready ? "Translate works on this computer, so it needs a language pack for each pair you use. Get them once; after that no text ever leaves the machine."
-                                : "Translate uses Argos Translate, which this computer doesn't have. It can be added with “pipx install argostranslate” (see the README); nothing is sent to an online translator instead." }
+                                : Backend.adding ? "Fetching the translator. It's about a gigabyte, so this takes several minutes; you can leave the window open and do something else."
+                                : "Translate works on this computer, with a translator this copy of Huginn OS came without. Adding it fetches about a gigabyte, once; after that no text ever leaves the machine." }
+        Btn { visible: !Backend.ready; anchors.horizontalCenter: parent.horizontalCenter; primary: true; enabled: !Backend.adding; opacity: enabled ? 1 : 0.5
+            text: Backend.adding ? "Adding…" : "Add the Translator"; onClicked: Backend.addTranslator() }
         Btn { visible: Backend.ready; anchors.horizontalCenter: parent.horizontalCenter; primary: true; text: "Get Languages"; onClicked: { win.sheet = "packs"; Backend.lookForPacks() } }
         Label { width: parent.width; wrapMode: Text.WordWrap; horizontalAlignment: Text.AlignHCenter; secondary: true; font.pixelSize: 12; topPadding: 8
             text: "Or turn on Huginn AI in Settings › AI, and Translate uses it for any language." } }

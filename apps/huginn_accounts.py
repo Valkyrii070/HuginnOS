@@ -746,9 +746,9 @@ class Accounts(QObject):
             p, st = PROVIDERS[a["provider"]], self._status.get(a["id"], {})
             bits = []
             if st.get("events"):
-                bits.append(f"{st['events']} events")
+                bits.append("1 event" if st['events'] == 1 else f"{st['events']} events")
             if st.get("contacts"):
-                bits.append(f"{st['contacts']} contacts")
+                bits.append("1 contact" if st['contacts'] == 1 else f"{st['contacts']} contacts")
             out.append({"id": a["id"], "provider": a["provider"], "providerName": p["name"], "email": a["email"], "a": p["a"], "b": p["b"],
                         "services": [{"id": s, "label": SERVICE_NAMES[s], "on": bool((a.get("services") or {}).get(s))} for s in p["services"]],
                         "error": st.get("error", ""), "synced": self._since(st.get("when", 0)), "summary": ", ".join(bits), "syncing": a["id"] in self._syncing})
@@ -883,7 +883,8 @@ class Accounts(QObject):
         write_status(self._status)
         self.changed.emit()
         name = PROVIDERS[acct["provider"]]["name"]
-        bits = [f"{result['events']} events" if result.get("events") else "", f"{result['contacts']} contacts" if result.get("contacts") else ""]
+        bits = [("1 event" if result["events"] == 1 else f"{result['events']} events") if result.get("events") else "",
+                    ("1 contact" if result["contacts"] == 1 else f"{result['contacts']} contacts") if result.get("contacts") else ""]
         self.said.emit(f"{name} is added" + (": " + " and ".join(b for b in bits if b) + " came across." if any(bits) else "."), False)
 
     @Slot()
