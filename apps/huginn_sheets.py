@@ -236,10 +236,26 @@ class Sheets(FileList):
     def _size(self) -> None:
         """Enough rows and columns for what's there, and room beyond."""
         ur, uc = self.book.used(self._at)
-        rows, cols = max(1000, ur + 200), min(se.MAX_COLS, max(26, uc + 6))
-        if (rows, cols) != (self.rows, self.cols):
-            self.rows, self.cols = rows, cols
-            self._panes()
+        self._grow(max(1000, ur + 200), min(se.MAX_COLS, max(26, uc + 6)))
+
+    def _grow(self, rows: int, cols: int) -> None:
+        """More rows or columns at the end. They are added on, so the window keeps every cell it has drawn (starting
+        the panes again costs most of a second; this is what scrolling down a long sheet, or typing in its last row,
+        asks for). The grid never gets smaller while a sheet is in front."""
+        if rows > self.rows:
+            models = [(m, m.rowCount()) for m in (self.main, self.left, self.heads["r"])]
+            for m, n in models:
+                m.beginInsertRows(QModelIndex(), n, n + rows - self.rows - 1)
+            self.rows = rows
+            for m, _ in models:
+                m.endInsertRows()
+        if cols > self.cols:
+            models = [(m, m.columnCount()) for m in (self.main, self.top, self.heads["c"])]
+            for m, n in models:
+                m.beginInsertColumns(QModelIndex(), n, n + cols - self.cols - 1)
+            self.cols = cols
+            for m, _ in models:
+                m.endInsertColumns()
 
     def _panes(self) -> None:
         fr, fc = self.sh["freeze"]
@@ -256,25 +272,21 @@ class Sheets(FileList):
     def _refresh(self) -> None:
         self.book.changed()
         self.looks.forget()
-        old = (self.rows, self.cols)
         self._size()
-        if (self.rows, self.cols) == old:
-            for g in (self.main, self.top, self.left, self.corner):
-                g.refresh()
+        for g in (self.main, self.top, self.left, self.corner):
+            g.refresh()
         self.chartsChanged.emit()
 
     @Slot(int)
     def growTo(self, row: int) -> None:
         """The view came near the last row or column: more of them."""
         if row > self.rows - 60 and self.rows < se.MAX_ROWS:
-            self.rows = min(se.MAX_ROWS, row + 500)
-            self._panes()
+            self._grow(min(se.MAX_ROWS, row + 500), self.cols)
 
     @Slot(int)
     def growCols(self, col: int) -> None:
         if col > self.cols - 3 and self.cols < se.MAX_COLS:
-            self.cols = min(se.MAX_COLS, col + 10)
-            self._panes()
+            self._grow(self.rows, min(se.MAX_COLS, col + 10))
 
     # ------------------------------------------------------------------ cells
     def fmt_of(self, r: int, c: int) -> dict:
@@ -1369,9 +1381,9 @@ class Sheets(FileList):
         self._at = max(0, min(index, len(self.book.sheets) - 1))
         self.book.changed()
         self.looks.forget()
-        self.rows, self.cols = 0, 0
-        self._size()
-        self._panes()
+        ur, uc = self.book.used(self._at)
+        self.rows, self.cols = max(1000, ur + 200), min(se.MAX_COLS, max(26, uc + 6))
+        self._panes()                                               # (once: every pane starts again for the new sheet)
         self.chartsChanged.emit()
 
     def _fresh_name(self, wanted: str, skip: int = -1) -> str:

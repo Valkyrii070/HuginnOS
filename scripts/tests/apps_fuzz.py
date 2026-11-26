@@ -62,7 +62,7 @@ sys.path[:0] = [str(KIT / "apps"), str(KIT / "shell")]
 sys.argv = ["huginn_app.py", APP]
 
 import huginn_app                                                    # noqa: E402
-from PySide6.QtCore import QMetaMethod, QObject, QUrl, QPointF, QRectF   # noqa: E402
+from PySide6.QtCore import QCoreApplication, QEvent, QMetaMethod, QObject, QUrl, QPointF, QRectF   # noqa: E402
 from PySide6.QtGui import QImage, QColor, QGuiApplication            # noqa: E402
 from PySide6.QtQml import QQmlApplicationEngine                      # noqa: E402
 
@@ -235,6 +235,8 @@ def fuzz(app):
             getattr(backend, name)(*args)
             for _ in range(3):
                 app.processEvents()
+            # (what a window throws away is only freed when asked for here: without it, every item ever made piles up)
+            QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
         except TimeoutError:
             hung.append(shown)
             print(f"HUNG   {shown}", flush=True)

@@ -41,6 +41,7 @@ GlassWindow {
     property bool refusedNow: false         // what was just typed was turned away by the cell's choices
     property int naming: -1
     property var fz: Backend.frozen
+    readonly property var filterRange: Backend.filterRange   // (read once here, not once by every cell)
     property int tick: 0                    // a change that cells drawn from Python can't see
     readonly property int railW: 236
     readonly property bool wide: width >= 1100
@@ -634,7 +635,7 @@ GlassWindow {
         readonly property int c: column + TableView.view.colOff
         readonly property bool inSel: r >= win.r0 && r <= win.r1 && c >= win.c0 && c <= win.c1
         readonly property bool active: r === win.ar && c === win.ac
-        readonly property var flt: Backend.filterRange
+        readonly property var flt: win.filterRange
         // merged cells: the first draws the whole of it, over the cells it covers (which draw nothing of their own)
         readonly property var span: cell.span || null
         readonly property bool covered: !!cell.covered
@@ -643,18 +644,21 @@ GlassWindow {
         z: span ? 1 : 0
         implicitWidth: 100; implicitHeight: 26
         color: covered ? "transparent" : cell.fill ? cell.fill : "#FFFFFF"
-        Rectangle { visible: !!cellItem.span; width: cellItem.mw; height: cellItem.mh; color: cellItem.cell.fill ? cellItem.cell.fill : "#FFFFFF"
-            Rectangle { anchors.fill: parent; visible: cellItem.inSel && !cellItem.active; color: Qt.alpha(Theme.t.accent, 0.13) }
-            Rectangle { anchors.right: parent.right; width: 1; height: parent.height; color: "#E3E6EA" }
-            Rectangle { anchors.bottom: parent.bottom; width: parent.width; height: 1; color: "#E3E6EA" }
-            Rectangle { visible: !!cellItem.span && cellItem.inSel && cellItem.r === win.r0 && cellItem.c === win.c0 && cellItem.r + cellItem.span[0] - 1 === win.r1 && cellItem.c + cellItem.span[1] - 1 === win.c1
-                anchors.fill: parent; color: "transparent"; border.width: 2; border.color: Theme.t.accent } }
+        // (what most cells never show is only made for the cells that do: a sheet is hundreds of these)
+        Loader { active: !!cellItem.span
+            sourceComponent: Rectangle { width: cellItem.mw; height: cellItem.mh; color: cellItem.cell.fill ? cellItem.cell.fill : "#FFFFFF"
+                Rectangle { anchors.fill: parent; visible: cellItem.inSel && !cellItem.active; color: Qt.alpha(Theme.t.accent, 0.13) }
+                Rectangle { anchors.right: parent.right; width: 1; height: parent.height; color: "#E3E6EA" }
+                Rectangle { anchors.bottom: parent.bottom; width: parent.width; height: 1; color: "#E3E6EA" }
+                Rectangle { visible: !!cellItem.span && cellItem.inSel && cellItem.r === win.r0 && cellItem.c === win.c0 && cellItem.r + cellItem.span[0] - 1 === win.r1 && cellItem.c + cellItem.span[1] - 1 === win.c1
+                    anchors.fill: parent; color: "transparent"; border.width: 2; border.color: Theme.t.accent } } }
         Rectangle { anchors.fill: parent; visible: cellItem.inSel && !cellItem.active && !cellItem.span; color: Qt.alpha(Theme.t.accent, 0.13) }
         Rectangle { visible: !cellItem.covered && !cellItem.span; anchors.right: parent.right; width: 1; height: parent.height; color: "#E3E6EA" }
         Rectangle { visible: !cellItem.covered && !cellItem.span; anchors.bottom: parent.bottom; width: parent.width; height: 1; color: "#E3E6EA" }
-        Rectangle { visible: cellItem.cell.bar !== undefined; x: 2; y: 3; height: parent.height - 7; radius: 2; width: Math.max(0, (parent.width - 5) * (cellItem.cell.bar || 0))   // a data bar
-            gradient: Gradient { orientation: Gradient.Horizontal
-                GradientStop { position: 0; color: Qt.alpha(cellItem.cell.barColor || "#638EC6", 0.85) } GradientStop { position: 1; color: Qt.alpha(cellItem.cell.barColor || "#638EC6", 0.25) } } }
+        Loader { active: cellItem.cell.bar !== undefined; x: 2; y: 3                                    // a data bar
+            sourceComponent: Rectangle { height: cellItem.height - 7; radius: 2; width: Math.max(0, (cellItem.width - 5) * (cellItem.cell.bar || 0))
+                gradient: Gradient { orientation: Gradient.Horizontal
+                    GradientStop { position: 0; color: Qt.alpha(cellItem.cell.barColor || "#638EC6", 0.85) } GradientStop { position: 1; color: Qt.alpha(cellItem.cell.barColor || "#638EC6", 0.25) } } } }
         Text { width: cellItem.mw; height: cellItem.mh; leftPadding: 5
             rightPadding: cellItem.flt.length && cellItem.r === cellItem.flt[0] && cellItem.c >= cellItem.flt[1] && cellItem.c <= cellItem.flt[3] ? 22 : 5
             text: cellItem.cell.t; textFormat: Text.PlainText; verticalAlignment: cellItem.cell.wrap ? Text.AlignTop : Text.AlignVCenter; topPadding: cellItem.cell.wrap ? 4 : 0
@@ -664,47 +668,56 @@ GlassWindow {
             font.family: cellItem.cell.font || "Inter"; font.pixelSize: cellItem.cell.size ? Math.round(cellItem.cell.size * 4 / 3) : 13
             font.bold: !!cellItem.cell.b; font.italic: !!cellItem.cell.i; font.underline: !!cellItem.cell.u; font.strikeout: !!cellItem.cell.s }
         // the selection's outline, drawn by the cells on its edges
-        Rectangle { visible: cellItem.inSel && cellItem.r === win.r0; width: parent.width; height: 2; color: Theme.t.accent; z: 3 }
-        Rectangle { visible: cellItem.inSel && cellItem.r === win.r1; anchors.bottom: parent.bottom; width: parent.width; height: 2; color: Theme.t.accent; z: 3 }
-        Rectangle { visible: cellItem.inSel && cellItem.c === win.c0; width: 2; height: parent.height; color: Theme.t.accent; z: 3 }
-        Rectangle { visible: cellItem.inSel && cellItem.c === win.c1; anchors.right: parent.right; width: 2; height: parent.height; color: Theme.t.accent; z: 3 }
+        Loader { active: cellItem.inSel && (cellItem.r === win.r0 || cellItem.r === win.r1 || cellItem.c === win.c0 || cellItem.c === win.c1); anchors.fill: parent; z: 3
+            sourceComponent: Item {
+                Rectangle { visible: cellItem.r === win.r0; width: parent.width; height: 2; color: Theme.t.accent }
+                Rectangle { visible: cellItem.r === win.r1; anchors.bottom: parent.bottom; width: parent.width; height: 2; color: Theme.t.accent }
+                Rectangle { visible: cellItem.c === win.c0; width: 2; height: parent.height; color: Theme.t.accent }
+                Rectangle { visible: cellItem.c === win.c1; anchors.right: parent.right; width: 2; height: parent.height; color: Theme.t.accent } } }
         // a reference in the formula being typed
-        Item { readonly property var f: win.refs.length ? win.refAt(cellItem.r, cellItem.c) : null; visible: f !== null; anchors.fill: parent; z: 4
-            Rectangle { anchors.fill: parent; color: parent.f ? Qt.alpha(parent.f.colour, 0.08) : "transparent" }
-            Rectangle { visible: !!parent.f && cellItem.r === parent.f.r0; width: parent.width; height: 2; color: parent.f ? parent.f.colour : "transparent" }
-            Rectangle { visible: !!parent.f && cellItem.r === parent.f.r1; anchors.bottom: parent.bottom; width: parent.width; height: 2; color: parent.f ? parent.f.colour : "transparent" }
-            Rectangle { visible: !!parent.f && cellItem.c === parent.f.c0; width: 2; height: parent.height; color: parent.f ? parent.f.colour : "transparent" }
-            Rectangle { visible: !!parent.f && cellItem.c === parent.f.c1; anchors.right: parent.right; width: 2; height: parent.height; color: parent.f ? parent.f.colour : "transparent" } }
+        Loader { active: win.refs.length > 0 && win.refAt(cellItem.r, cellItem.c) !== null; anchors.fill: parent; z: 4
+            sourceComponent: Item { readonly property var f: win.refs.length ? win.refAt(cellItem.r, cellItem.c) : null
+                Rectangle { anchors.fill: parent; color: parent.f ? Qt.alpha(parent.f.colour, 0.08) : "transparent" }
+                Rectangle { visible: !!parent.f && cellItem.r === parent.f.r0; width: parent.width; height: 2; color: parent.f ? parent.f.colour : "transparent" }
+                Rectangle { visible: !!parent.f && cellItem.r === parent.f.r1; anchors.bottom: parent.bottom; width: parent.width; height: 2; color: parent.f ? parent.f.colour : "transparent" }
+                Rectangle { visible: !!parent.f && cellItem.c === parent.f.c0; width: 2; height: parent.height; color: parent.f ? parent.f.colour : "transparent" }
+                Rectangle { visible: !!parent.f && cellItem.c === parent.f.c1; anchors.right: parent.right; width: 2; height: parent.height; color: parent.f ? parent.f.colour : "transparent" } } }
         // what was copied: a dashed outline
-        Rectangle { readonly property var k: win.clip; visible: !!k && cellItem.r >= k[0] && cellItem.r <= k[2] && cellItem.c >= k[1] && cellItem.c <= k[3]
-            anchors.fill: parent; color: "transparent"; border.width: 0; z: 2
-            Rectangle { visible: parent.k && cellItem.r === parent.k[0]; width: parent.width; height: 1; color: Theme.t.accent; opacity: 0.8 }
-            Rectangle { visible: parent.k && cellItem.r === parent.k[2]; anchors.bottom: parent.bottom; width: parent.width; height: 1; color: Theme.t.accent; opacity: 0.8 } }
+        Loader { readonly property var k: win.clip; active: !!k && cellItem.r >= k[0] && cellItem.r <= k[2] && cellItem.c >= k[1] && cellItem.c <= k[3] && (cellItem.r === k[0] || cellItem.r === k[2])
+            anchors.fill: parent; z: 2
+            sourceComponent: Item { readonly property var k: win.clip
+                Rectangle { visible: !!parent.k && cellItem.r === parent.k[0]; width: parent.width; height: 1; color: Theme.t.accent; opacity: 0.8 }
+                Rectangle { visible: !!parent.k && cellItem.r === parent.k[2]; anchors.bottom: parent.bottom; width: parent.width; height: 1; color: Theme.t.accent; opacity: 0.8 } } }
         // where a fill drag will reach
-        Item { readonly property int fr0: Math.min(win.r0, win.fillR); readonly property int fr1: Math.max(win.r1, win.fillR)
-            readonly property int fc0: Math.min(win.c0, win.fillC); readonly property int fc1: Math.max(win.c1, win.fillC)
-            visible: win.fillR >= 0 && cellItem.r >= fr0 && cellItem.r <= fr1 && cellItem.c >= fc0 && cellItem.c <= fc1; anchors.fill: parent; z: 3
-            Rectangle { visible: cellItem.r === parent.fr0; width: parent.width; height: 1; color: "#868E96" }
-            Rectangle { visible: cellItem.r === parent.fr1; anchors.bottom: parent.bottom; width: parent.width; height: 1; color: "#868E96" }
-            Rectangle { visible: cellItem.c === parent.fc0; width: 1; height: parent.height; color: "#868E96" }
-            Rectangle { visible: cellItem.c === parent.fc1; anchors.right: parent.right; width: 1; height: parent.height; color: "#868E96" } }
+        Loader { active: win.fillR >= 0 && cellItem.r >= Math.min(win.r0, win.fillR) && cellItem.r <= Math.max(win.r1, win.fillR)
+                         && cellItem.c >= Math.min(win.c0, win.fillC) && cellItem.c <= Math.max(win.c1, win.fillC); anchors.fill: parent; z: 3
+            sourceComponent: Item { readonly property int fr0: Math.min(win.r0, win.fillR); readonly property int fr1: Math.max(win.r1, win.fillR)
+                readonly property int fc0: Math.min(win.c0, win.fillC); readonly property int fc1: Math.max(win.c1, win.fillC)
+                Rectangle { visible: cellItem.r === parent.fr0; width: parent.width; height: 1; color: "#868E96" }
+                Rectangle { visible: cellItem.r === parent.fr1; anchors.bottom: parent.bottom; width: parent.width; height: 1; color: "#868E96" }
+                Rectangle { visible: cellItem.c === parent.fc0; width: 1; height: parent.height; color: "#868E96" }
+                Rectangle { visible: cellItem.c === parent.fc1; anchors.right: parent.right; width: 1; height: parent.height; color: "#868E96" } } }
         // the fill handle, at the selection's bottom right
-        Rectangle { visible: cellItem.r === win.r1 && cellItem.c === win.c1 && !win.editing; z: 12; width: 9; height: 9; radius: 2; color: Theme.t.accent; border.width: 1; border.color: "#FFFFFF"
-            x: parent.width - 5; y: parent.height - 5 }
+        Loader { active: cellItem.r === win.r1 && cellItem.c === win.c1 && !win.editing; z: 12; x: cellItem.width - 5; y: cellItem.height - 5
+            sourceComponent: Rectangle { width: 9; height: 9; radius: 2; color: Theme.t.accent; border.width: 1; border.color: "#FFFFFF" } }
         // a note: a small red corner
-        Canvas { visible: !!cellItem.cell.note; z: 11; width: 7; height: 7; anchors { right: parent.right; top: parent.top }
-            onPaint: { var c = getContext("2d"); c.reset(); c.fillStyle = "#E03131"; c.beginPath(); c.moveTo(0, 0); c.lineTo(7, 0); c.lineTo(7, 7); c.closePath(); c.fill() } }
+        Loader { active: !!cellItem.cell.note; z: 11; anchors { right: parent.right; top: parent.top }
+            sourceComponent: Canvas { width: 7; height: 7
+                onPaint: { var c = getContext("2d"); c.reset(); c.fillStyle = "#E03131"; c.beginPath(); c.moveTo(0, 0); c.lineTo(7, 0); c.lineTo(7, 7); c.closePath(); c.fill() } } }
         // a list to pick from: its arrow, on the cell that's chosen
-        Rectangle { visible: !!cellItem.cell.pick && cellItem.active && !win.editing; z: 13
-            anchors { right: parent.right; rightMargin: 2; verticalCenter: parent.verticalCenter } width: 18; height: Math.min(20, parent.height - 4); radius: 5
-            color: "#E9ECEF"; border.width: 1; border.color: "#CED4DA"
-            Glyph { anchors.centerIn: parent; name: "down"; size: 10; ink: "#495057" } }
+        Loader { active: !!cellItem.cell.pick && cellItem.active && !win.editing; z: 13
+            anchors { right: parent.right; rightMargin: 2; verticalCenter: parent.verticalCenter }
+            sourceComponent: Rectangle { width: 18; height: Math.min(20, cellItem.height - 4); radius: 5
+                color: "#E9ECEF"; border.width: 1; border.color: "#CED4DA"
+                Glyph { anchors.centerIn: parent; name: "down"; size: 10; ink: "#495057" } } }
         // a filter's arrow on the filter's first row
-        Rectangle { visible: cellItem.flt.length > 0 && cellItem.r === cellItem.flt[0] && cellItem.c >= cellItem.flt[1] && cellItem.c <= cellItem.flt[3]; z: 13
-            readonly property bool used: Backend.filterCols.indexOf(cellItem.c) >= 0       // some of this column's values are hidden
-            anchors { right: parent.right; rightMargin: 3; verticalCenter: parent.verticalCenter } width: 18; height: 18; radius: 5
-            color: used ? Theme.t.accent : "#E9ECEF"; border.width: 1; border.color: used ? Theme.t.accent : "#CED4DA"
-            Glyph { anchors.centerIn: parent; name: parent.used ? "filter" : "down"; size: parent.used ? 11 : 10; ink: parent.used ? Theme.t.onAccent : "#495057" } }
+        Loader { active: cellItem.flt.length > 0 && cellItem.r === cellItem.flt[0] && cellItem.c >= cellItem.flt[1] && cellItem.c <= cellItem.flt[3]; z: 13
+            anchors { right: parent.right; rightMargin: 3; verticalCenter: parent.verticalCenter }
+            sourceComponent: Rectangle {
+                readonly property bool used: Backend.filterCols.indexOf(cellItem.c) >= 0       // some of this column's values are hidden
+                width: 18; height: 18; radius: 5
+                color: used ? Theme.t.accent : "#E9ECEF"; border.width: 1; border.color: used ? Theme.t.accent : "#CED4DA"
+                Glyph { anchors.centerIn: parent; name: parent.used ? "filter" : "down"; size: parent.used ? 11 : 10; ink: parent.used ? Theme.t.onAccent : "#495057" } } }
     }
     component HeadView: TableView {
         id: hv

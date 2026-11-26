@@ -27,6 +27,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -87,28 +88,24 @@ KEPT_OUT_OF_VERSIONS = (".cache", ".local/share/Steam", ".var/app")       # in t
 BTRFS_OPTS = "compress=zstd:1,noatime"
 
 
+def pointer_text(fs_uuid: str, prefix: str) -> str:
+    """GRUB's pointer to its menu. It looks for the system's disk by its id and, should that find nothing (the id
+    changed, or the disk is known to this firmware another way), by the menu file itself."""
+    return (f"search.fs_uuid {fs_uuid} root\n"
+            f"if [ ! -e ($root){prefix}/grub.cfg ]; then\n"
+            f"    search --no-floppy --file --set=root {prefix}/grub.cfg\n"
+            f"fi\n"
+            f"set prefix=($root)'{prefix}'\n"
+            f"configfile $prefix/grub.cfg\n")
+
+
 def grub_pointers(esp: Path, fs_uuid: str, prefix: str) -> list:
-    """Ubuntu's signed GRUB (the one Secure Boot needs) always looks for its menu through EFI/ubuntu/grub.cfg, a
-    three-line pointer to the real menu, wherever GRUB itself was started from. Installed only in the fallback place
-    (EFI/BOOT: a USB drive, or firmware that forgets its entries), grub-install writes that pointer beside it in
-    EFI/BOOT alone, GRUB finds no menu, and the computer starts at a bare "grub>" prompt. So the pointer is kept in
-    both places. Returns the files written."""
-    places = [esp / "ubuntu" / "grub.cfg", esp / "BOOT" / "grub.cfg"]
-    text = ""
-    for f in places:
+    """Ubuntu's signed GRUB (the one Secure Boot needs) finds its menu through a small pointer file, EFI/ubuntu/grub.cfg
+    (or one beside GRUB itself in the fallback place, EFI/BOOT). With no pointer it can read, the computer starts at a
+    bare "grub>" prompt. The installer writes its own pointer in both places. Returns the files written."""
+    text, made = pointer_text(fs_uuid, prefix), []
+    for f in (esp / "ubuntu" / "grub.cfg", esp / "BOOT" / "grub.cfg"):
         try:
-            if f.is_file() and "configfile" in f.read_text(errors="replace"):
-                text = f.read_text(errors="replace")
-                break
-        except OSError:
-            pass
-    if not text:
-        text = f"search.fs_uuid {fs_uuid} root\nset prefix=($root)'{prefix}'\nconfigfile $prefix/grub.cfg\n"
-    made = []
-    for f in places:
-        try:
-            if f.is_file() and "configfile" in f.read_text(errors="replace"):
-                continue
             if f.parent.name == "BOOT" and not f.parent.is_dir():
                 continue                                           # nothing was installed in the fallback place
             f.parent.mkdir(parents=True, exist_ok=True)
@@ -117,6 +114,55 @@ def grub_pointers(esp: Path, fs_uuid: str, prefix: str) -> list:
         except OSError:
             pass
     return made
+
+
+ESP_TYPE = "c12a7328-f81f-11d2-ba4b-00a0c93ec93b"
+
+
+def pointer_target(text: str) -> str:
+    """The disk id a pointer file looks for ("" when it names none)."""
+    m = re.search(r"^\s*search\.fs_uuid\s+(\S+)", text, re.M)
+    return m.group(1) if m else ""
+
+
+def stale_pointers(own_esp: str, fs_uuid: str, prefix: str, log=lambda text: None, run=subprocess.run) -> list:
+    """Other disks in this computer can carry a pointer left by an earlier Ubuntu, or an earlier Huginn OS, that names
+    a system which is no longer there. Firmware that starts that one lands at a "grub>" prompt however good the new
+    install is. Each pointer whose system is gone is pointed at the new one (the old file is kept beside it as
+    grub.cfg.before-huginn); one whose system still exists is left alone. Returns the partitions changed."""
+    changed = []
+    try:
+        rows = run(["lsblk", "-rno", "PATH,FSTYPE,PARTTYPE"], capture_output=True, text=True, timeout=30).stdout.splitlines()
+        present = set(run(["blkid", "-s", "UUID", "-o", "value"], capture_output=True, text=True, timeout=30).stdout.split())
+    except (OSError, subprocess.SubprocessError):
+        return changed
+    for row in rows:
+        part = row.split()
+        if len(part) < 3 or part[1] != "vfat" or part[2].lower() != ESP_TYPE or part[0] == own_esp:
+            continue
+        where = tempfile.mkdtemp(prefix="huginn-esp-")
+        try:
+            if run(["mount", "-o", "rw", part[0], where], capture_output=True, timeout=30).returncode != 0:
+                continue
+            try:
+                f = Path(where) / "EFI" / "ubuntu" / "grub.cfg"
+                old = f.read_text(errors="replace") if f.is_file() else ""
+                target = pointer_target(old)
+                if target and target not in present:
+                    (f.parent / "grub.cfg.before-huginn").write_text(old)
+                    f.write_text(pointer_text(fs_uuid, prefix))
+                    changed.append(part[0])
+                    log(f"(a boot pointer on {part[0]} named a system that is gone ({target}): it now points here)")
+            finally:
+                run(["umount", where], capture_output=True, timeout=30)
+        except (OSError, subprocess.SubprocessError):
+            pass
+        finally:
+            try:
+                os.rmdir(where)
+            except OSError:
+                pass
+    return changed
 
 
 def fstab(root_uuid: str, efi_uuid: str = "", boot_uuid: str = "", encrypted: bool = False, swap: bool = True) -> str:
@@ -617,8 +663,11 @@ class Engine:
         self.run(["update-grub"], chroot=True, timeout=900)
         if p.get("firmware") == "uefi":
             root_uuid = self.uuid(self.dev["boot"] if "boot" in self.dev else self.dev["rootfs"])
-            for made in grub_pointers(t / "boot/efi/EFI", root_uuid, "/grub" if "boot" in self.dev else "/@/boot/grub"):
+            prefix = "/grub" if "boot" in self.dev else "/@/boot/grub"
+            for made in grub_pointers(t / "boot/efi/EFI", root_uuid, prefix):
                 self.log(f"(GRUB's pointer to its menu written at {made})")
+            if not p.get("removable"):                             # (a USB install leaves the computer's own disks alone)
+                stale_pointers(self.dev.get("efi", ""), root_uuid, prefix, self.log)
         self.step("boot", 1)
 
     def unmount(self) -> None:

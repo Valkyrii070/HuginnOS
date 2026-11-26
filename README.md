@@ -892,7 +892,23 @@ root. Every app now comes through several seeds clean. What it found, all fixed:
   only apps it listed are installed or opened. Settings: screen sizes, rates, window rules and game ids are checked
   before use. Scan, Screenshot, Slides, Notes, Code and Easel: a page, item or document that isn't there.
 
-Not found by it, and still open: the frozen panes in Sheets get slow with 50 frozen rows on a 700-column sheet.
+**Sheets, quicker.** What looked like slow frozen panes was three things. Each cell carried about forty items, most
+of them decorations it almost never shows (selection edges, the fill handle, a note's corner, filter arrows, data
+bars, merged blocks): those are now made only by the cells that show them, which halves what a sheet builds (12,095
+items to 5,941 for an empty one) and takes opening a sheet from 0.54 s to 0.19 s here. Scrolling near the end of the
+grid, or typing in its last rows, started all four panes again (0.4 s each time): rows and columns are now added on
+(under 0.05 s). And opening or switching a sheet started the panes twice. The fuzz itself was also at fault: it never
+let Qt free what a window had thrown away, so items piled up until the app crawled; it does now.
+`sheets_grid_test.py` has 18 checks.
+
+**The "grub>" prompt after installing** (seen on real hardware; `search --file` and `configfile` by hand started the
+system, so the menu was fine and the pointer to it was not). GRUB finds its menu through a small pointer file that
+names the system's disk by its id. A pointer naming an id that isn't there gives exactly that bare prompt: checked in
+QEMU with Ubuntu's signed GRUB. Two changes. The installer now writes its own pointer, which looks for the disk by
+id and then, if that finds nothing, by the menu file itself (the same test disk then starts). And, unless installing
+to a USB drive, it looks at the other disks' EFI partitions: a pointer there that names a system which no longer
+exists (an earlier Ubuntu or Huginn OS) is pointed at the new one, with the old file kept beside it; a pointer to a
+system that is still there is left alone (`boot_pointer_test.py`, 13 checks).
 
 **From the second run on real hardware (three screens, live session)**:
 - *The start menu opened on the wrong screen.* Its window named no screen, so the compositor chose one, often a
