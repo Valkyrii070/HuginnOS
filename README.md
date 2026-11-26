@@ -860,6 +860,40 @@ is up in under a second beyond the test's own wait. Each picture was looked at. 
 This pass looks at each app's first screen. It does not click through each app's features: the fuzzers and the
 round tests do that for Code, Easel and Clips only.
 
+**Audit, third pass: every app's commands, called with anything** (`scripts/tests/apps_fuzz.py <kit> <app> [steps]
+[seed]`). One fuzz for all 53 apps: it opens the app as an ordinary user in a throwaway home, lists every command the
+window can call, and calls them hundreds of times with what the app is showing (names, paths, ids) mixed with awkward
+values (nothing, "/", "..", a billion, "not a number", the wrong kind of thing). It reports commands that fail, take
+over two seconds or never return (also when stuck inside Qt), stops an app that writes more than 400 MB, and keeps
+canary files beside the home and beside the app's own folders to show a delete that reaches too far. It never runs as
+root. Every app now comes through several seeds clean. What it found, all fixed:
+
+- **Deletes that reached too far.** Machines removed the folder named by whatever id it was given, so an id of "/"
+  or ".." would have emptied the home folder; the AI model list did the same. Both now act only on an entry from
+  their own list. Mail's "remove account" used its id in a file pattern ("*" matched every account). Camera and
+  Recorder would trash or rename any path handed to them: now only their own pictures and recordings.
+- **Signals to the wrong processes.** System Monitor's End, Force, Pause and Resume passed numbers straight to the
+  system, where 0 and below mean "this whole group" or "everything of yours". Only single real processes now; the
+  same guard is on the AI helper and Dictation, which read a process number back from a file.
+- **Backup in a folder of the home.** Choosing, say, Music as the place for backups left all of Music out of the
+  backup. Now only earlier backups are left out. Going back opens only a backup from the list and only a place
+  inside it (`backup_inside_test.py`, 7 checks).
+- **Text off the screen as a browser option.** Lens handed what it read to the browser as an argument; text starting
+  with a dash would have been taken as one of the browser's options. Leading dashes are dropped.
+- **Sheets.** A cell place before A1 was stored and then stopped the sheet saving (the column's name never
+  finished); a fill or copy to a billion rows ran the computer out of memory. Every command's cell places are now
+  brought onto the grid, selections named backwards are turned round, odd sizes and export kinds are refused
+  (`sheets_grid_test.py`, 13 checks).
+- **Tempo and Clips.** A seek or bar range a trillion beats out asked for all the memory there is; one clip placed at
+  "not a number" stopped the timeline drawing. Both apps now keep every number they are given finite and within a
+  million. About 80 Tempo commands that assumed a song was open now check; a long name when renaming is reported.
+- **Smaller ones.** Money: a picture picked as a bank statement is refused with a message, and an amount too long
+  to be real is refused. Maps: a place with no position is ignored. Calendar: stepping past year 1 or 9998. Store:
+  only apps it listed are installed or opened. Settings: screen sizes, rates, window rules and game ids are checked
+  before use. Scan, Screenshot, Slides, Notes, Code and Easel: a page, item or document that isn't there.
+
+Not found by it, and still open: the frozen panes in Sheets get slow with 50 frozen rows on a 700-column sheet.
+
 **From the second run on real hardware (three screens, live session)**:
 - *The start menu opened on the wrong screen.* Its window named no screen, so the compositor chose one, often a
   screen with no dock. It is now on the dock's screen, where it grows out of the orb (`shell/qml/Shell.qml`).

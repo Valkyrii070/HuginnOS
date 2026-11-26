@@ -727,6 +727,9 @@ class Monitor(QObject):
             return
         refused = False
         for pid in pids:
+            # (only one real process at a time: to the system, 0 and below mean "a whole group" or "everything of yours")
+            if isinstance(pid, bool) or not isinstance(pid, (int, float)) or int(pid) < 2:
+                continue
             try:
                 os.kill(int(pid), sig)
             except ProcessLookupError:
@@ -759,10 +762,10 @@ class Monitor(QObject):
     def setNice(self, pid: int, nice: int) -> None:
         """Its priority: 10 (in the background, gives way to everything else) or 0 (normal). Raising it again needs
         nothing; going above normal would need the system's password, so it isn't offered."""
-        if self._demo:
+        if self._demo or pid < 2:
             return
         try:
-            os.setpriority(os.PRIO_PROCESS, pid, nice)
+            os.setpriority(os.PRIO_PROCESS, pid, max(0, min(19, nice)))
         except PermissionError:
             self.failed.emit("Its priority can only go back to normal with the system's password.")
         except OSError:

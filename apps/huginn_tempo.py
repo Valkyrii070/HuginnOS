@@ -11,7 +11,9 @@ Recording: notes from the on-screen keyboard, the computer keyboard (musical typ
 MIDI devices, /dev/snd/midiC*D*), and sound from the microphone.
 """
 import copy
+import functools
 import json
+import math
 import os
 import re
 import threading
@@ -259,6 +261,16 @@ class Player:
         self.live = [v for v in self.live if prefix and not v["id"].startswith(prefix)]
 
 
+def finite(command):
+    """A command's numbers are always real ones of a sane size: "not a number" becomes 0, and nothing is further out
+    than a million. (A place a billion beats away would have the app lay out, or render, more than memory holds.)"""
+    @functools.wraps(command)
+    def inner(self, *args):
+        args = [(0.0 if not math.isfinite(a) else max(-1e6, min(1e6, a))) if isinstance(a, float) else a for a in args]
+        return command(self, *args)
+    return inner
+
+
 class Tempo(QObject):
     changed = Signal()
     clockChanged = Signal()
@@ -425,7 +437,7 @@ class Tempo(QObject):
 
     @Slot(str)
     def rename(self, name: str) -> None:
-        name = re.sub(r"\s+", " ", re.sub(r"[\\/:*?\"<>|]+", " ", name or "")).strip()
+        name = re.sub(r"\s+", " ", re.sub(r"[\\/:*?\"<>|]+", " ", name or "")).strip()[:120].strip()
         if not name or self._p is None:
             return
         if not self._demo and self._folder is not None:
@@ -433,7 +445,11 @@ class Tempo(QObject):
             if target.exists():
                 self.said.emit("There's a song with that name already.", True)
                 return
-            os.replace(self._folder, target)
+            try:
+                os.replace(self._folder, target)
+            except OSError as err:
+                self.said.emit(f"Couldn't rename it: {err.strerror or err}", True)
+                return
             self._folder = target
         self._p["name"] = name
         self._keep()
@@ -542,6 +558,8 @@ class Tempo(QObject):
     @Slot(str, result="QVariantMap")
     def region(self, rid: str) -> dict:
         """One region with its notes, for the editors."""
+        if self._p is None:                                         # no song is open
+            return {}
         r = self._r(rid)
         if not r:
             return {}
@@ -563,6 +581,8 @@ class Tempo(QObject):
 
     @Slot(str, result="QVariantList")
     def smartControls(self, tid: str) -> list:
+        if self._p is None:                                         # no song is open
+            return []
         t = self._t(tid)
         if not t:
             return []
@@ -609,8 +629,13 @@ class Tempo(QObject):
     def setMaster(self, key: str, value) -> None:
         if self._p is None:
             return
+        if not isinstance(value, (list, dict)):
+            try:
+                value = float(value)
+            except (TypeError, ValueError):
+                return
         self._before(("master", key))
-        self._p.setdefault("master", {})[key] = float(value) if not isinstance(value, (list, dict)) else value
+        self._p.setdefault("master", {})[key] = value
         self._keep()
 
     # ---------------------------------------------------------------- tempo and time-signature changes
@@ -624,12 +649,13 @@ class Tempo(QObject):
         return list(self._mm().sig_at(self._pos)) if self._p else [4, 4]
 
     @Slot(float, float, result="QVariantList")
+    @finite
     def bars(self, b0: float, b1: float) -> list:
         """The bar lines between two beats: [beat, its number, its signature where it changes (else "")]."""
         if self._p is None:
             return []
         out, last = [], None
-        for b, n, sig in self._mm().bars(max(0.0, b1)):
+        for b, n, sig in self._mm().bars(max(0.0, min(100000.0, b1))):
             mark = f"{sig[0]}/{sig[1]}" if (last is not None and list(sig) != last) else ""
             last = list(sig)
             if b >= b0 - 1e-6:
@@ -637,6 +663,7 @@ class Tempo(QObject):
         return out
 
     @Slot(float, float, int, result="QVariantList")
+    @finite
     def tempoCurve(self, b0: float, b1: float, steps: int) -> list:
         """[beat, bpm] along the song, for drawing the tempo line."""
         if self._p is None or steps < 2:
@@ -647,8 +674,11 @@ class Tempo(QObject):
         return [[b, round(tm.tempo_at(b), 2)] for b in pts]
 
     @Slot(float)
+    @finite
     def setTempoHere(self, bpm: float) -> None:
         """The tempo display: changes the tempo playing where the playhead is (a change's, or the song's own)."""
+        if self._p is None:                                         # no song is open
+            return
         changes = (self._p or {}).get("tempoChanges") or []
         here = [i for i, c in enumerate(changes) if float(c["beat"]) <= self._pos + 1e-6]
         if here:
@@ -657,6 +687,7 @@ class Tempo(QObject):
             self.setSong("tempo", bpm)
 
     @Slot(float, result=int)
+    @finite
     def addTempoChange(self, beat: float) -> int:
         """A tempo change at a beat (the nearest), at the tempo already there; its place in the list."""
         if self._p is None:
@@ -673,6 +704,8 @@ class Tempo(QObject):
 
     @Slot(int, str, "QVariant")
     def setTempoChange(self, index: int, key: str, value) -> None:
+        if self._p is None:                                         # no song is open
+            return
         changes = (self._p or {}).get("tempoChanges") or []
         if not 0 <= index < len(changes) or key not in ("bpm", "beat", "glide"):
             return
@@ -692,6 +725,8 @@ class Tempo(QObject):
 
     @Slot(int)
     def removeTempoChange(self, index: int) -> None:
+        if self._p is None:                                         # no song is open
+            return
         changes = (self._p or {}).get("tempoChanges") or []
         if 0 <= index < len(changes):
             self._before()
@@ -699,6 +734,7 @@ class Tempo(QObject):
             self._keep()
 
     @Slot(float, int, int)
+    @finite
     def setSignatureAt(self, beat: float, num: int, den: int) -> None:
         """The time signature from the bar a beat is in onwards (the song's own from the first bar)."""
         if self._p is None or not (1 <= int(num) <= 32 and int(den) in (1, 2, 4, 8, 16, 32)):
@@ -714,7 +750,10 @@ class Tempo(QObject):
         self._keep()
 
     @Slot(float)
+    @finite
     def removeSignatureAt(self, beat: float) -> None:
+        if self._p is None:                                         # no song is open
+            return
         changes = (self._p or {}).get("sigChanges") or []
         keep = [c for c in changes if abs(float(c["beat"]) - float(beat)) > 1e-6]
         if len(keep) != len(changes):
@@ -749,6 +788,8 @@ class Tempo(QObject):
 
     @Slot(str)
     def removeTrack(self, tid: str) -> None:
+        if self._p is None:
+            return
         self._before()
         for o in self._p["tracks"]:                            # taking a stack away keeps its tracks
             if o.get("output") == tid:
@@ -800,6 +841,8 @@ class Tempo(QObject):
     @Slot(str)
     def freezeTrack(self, tid: str) -> None:
         """Freeze: the track's instrument and effects drawn once, played from the file (light on the computer)."""
+        if self._p is None:                                         # no song is open
+            return
         t = self._t(tid)
         if t is None or t["kind"] == "stack":
             return
@@ -818,6 +861,8 @@ class Tempo(QObject):
 
     @Slot(str)
     def unfreezeTrack(self, tid: str) -> None:
+        if self._p is None:                                         # no song is open
+            return
         t = self._t(tid)
         if t is not None and t.get("frozen"):
             self._before()
@@ -827,6 +872,8 @@ class Tempo(QObject):
     @Slot(str)
     def bounceTrack(self, tid: str) -> None:
         """Bounce in place: the track's sound (instrument and effects) on a new audio track; the original is muted."""
+        if self._p is None:                                         # no song is open
+            return
         t = self._t(tid)
         if t is None or t["kind"] == "stack":
             return
@@ -856,6 +903,8 @@ class Tempo(QObject):
 
     @Slot(str, int)
     def moveTrack(self, tid: str, to: int) -> None:
+        if self._p is None:
+            return
         tr = self._p["tracks"]
         i = next((k for k, t in enumerate(tr) if t["id"] == tid), -1)
         if i >= 0 and 0 <= to < len(tr) and to != i:
@@ -865,6 +914,8 @@ class Tempo(QObject):
 
     @Slot(str, str, "QVariant")
     def setTrack(self, tid: str, key: str, value) -> None:
+        if self._p is None:                                         # no song is open
+            return
         t = self._t(tid)
         if not t or key not in ("name", "volume", "pan", "mute", "solo", "arm", "reverb", "echo", "colour", "lane", "open"):
             return
@@ -890,6 +941,8 @@ class Tempo(QObject):
 
     @Slot(str, str)
     def setInstrument(self, tid: str, inst: str) -> None:
+        if self._p is None:                                         # no song is open
+            return
         t = self._t(tid)
         if not t or inst not in se.INSTRUMENTS:
             return
@@ -902,7 +955,10 @@ class Tempo(QObject):
         self._keep()
 
     @Slot(str, str, float)
+    @finite
     def setSmart(self, tid: str, key: str, value: float) -> None:
+        if self._p is None:                                         # no song is open
+            return
         t = self._t(tid)
         if not t:
             return
@@ -915,6 +971,8 @@ class Tempo(QObject):
 
     @Slot(str, str)
     def addEffect(self, tid: str, kind: str) -> None:
+        if self._p is None:                                         # no song is open
+            return
         t = self._t(tid) if tid != "master" else self._p.setdefault("master", {})
         if t is None or kind not in se.EFFECTS:
             return
@@ -924,6 +982,8 @@ class Tempo(QObject):
 
     @Slot(str, int, str, "QVariant")
     def setEffect(self, tid: str, index: int, key: str, value) -> None:
+        if self._p is None:                                         # no song is open
+            return
         t = self._t(tid) if tid != "master" else self._p.get("master", {})
         fx = (t or {}).get("effects", [])
         if not 0 <= index < len(fx):
@@ -938,6 +998,8 @@ class Tempo(QObject):
 
     @Slot(str, int)
     def removeEffect(self, tid: str, index: int) -> None:
+        if self._p is None:                                         # no song is open
+            return
         t = self._t(tid) if tid != "master" else self._p.get("master", {})
         if t and 0 <= index < len(t.get("effects", [])):
             self._before()
@@ -959,6 +1021,8 @@ class Tempo(QObject):
 
     @Slot(str, result="QVariantList")
     def effectsOf(self, tid: str) -> list:
+        if self._p is None:                                         # no song is open
+            return []
         t = self._t(tid) if tid != "master" else (self._p or {}).get("master", {})
         out = []
         for f in (t or {}).get("effects", []):
@@ -1009,6 +1073,8 @@ class Tempo(QObject):
     @Slot(str, int, result="QVariantMap")
     def pluginValues(self, tid: str, index: int) -> dict:
         """Where a plugin's knobs are now: an effect's (its place) or the instrument's (-1), defaults filled in."""
+        if self._p is None:                                         # no song is open
+            return {}
         t = self._t(tid) if tid != "master" else (self._p or {}).get("master", {})
         if not t:
             return {}
@@ -1024,6 +1090,8 @@ class Tempo(QObject):
 
     @Slot(str, result="QVariantList")
     def pluginControls(self, uri: str) -> list:
+        if self._p is None:                                         # no song is open
+            return []
         if not uri or se.lv2 is None or self._plugin_state != "ready":
             return []
         if uri not in self._plugin_controls:
@@ -1035,6 +1103,8 @@ class Tempo(QObject):
 
     @Slot(str, result="QVariantList")
     def pluginPresets(self, uri: str) -> list:
+        if self._p is None:                                         # no song is open
+            return []
         if not uri or se.lv2 is None or self._plugin_state != "ready":
             return []
         try:
@@ -1045,6 +1115,8 @@ class Tempo(QObject):
     @Slot(str, str)
     def addPlugin(self, tid: str, uri: str) -> None:
         """A plugin effect at the end of a track's (or a stack's, or the master's) effects."""
+        if self._p is None:                                         # no song is open
+            return
         t = self._t(tid) if tid != "master" else self._p.setdefault("master", {})
         info = self._plugin_info(uri)
         if t is None or not info or info["kind"] != "effect":
@@ -1055,6 +1127,8 @@ class Tempo(QObject):
 
     @Slot(str, str)
     def usePluginInstrument(self, tid: str, uri: str) -> None:
+        if self._p is None:                                         # no song is open
+            return
         t = self._t(tid)
         info = self._plugin_info(uri)
         if not t or not info or info["kind"] != "instrument":
@@ -1071,6 +1145,8 @@ class Tempo(QObject):
     @Slot(str, int, str, "QVariant")
     def setPluginParam(self, tid: str, index: int, symbol: str, value) -> None:
         """A plugin's knob: an effect's (its place in the list) or the instrument's (-1)."""
+        if self._p is None:                                         # no song is open
+            return
         value = value.toVariant() if hasattr(value, "toVariant") else value
         try:
             value = float(value)
@@ -1094,6 +1170,8 @@ class Tempo(QObject):
     @Slot(str, int, result=str)
     def pluginPreset(self, tid: str, index: int) -> str:
         """The preset a plugin is set to, as long as no knob has been turned since."""
+        if self._p is None:                                         # no song is open
+            return ""
         t = self._t(tid) if tid != "master" else (self._p or {}).get("master", {})
         if not t:
             return ""
@@ -1102,6 +1180,8 @@ class Tempo(QObject):
 
     @Slot(str, int, str)
     def applyPluginPreset(self, tid: str, index: int, name: str) -> None:
+        if self._p is None:                                         # no song is open
+            return
         t = self._t(tid) if tid != "master" else (self._p or {}).get("master", {})
         if not t:
             return
@@ -1142,6 +1222,8 @@ class Tempo(QObject):
     @Slot(str, result="QVariantList")
     def automatable(self, tid: str) -> list:
         """Every knob of a track that can be drawn over time, for the lane's menu."""
+        if self._p is None:                                         # no song is open
+            return []
         t = self._t(tid)
         if not t:
             return []
@@ -1162,6 +1244,8 @@ class Tempo(QObject):
 
     @Slot(str, str, "QVariantList")
     def setAutomation(self, tid: str, param: str, points) -> None:
+        if self._p is None:                                         # no song is open
+            return
         t = self._t(tid)
         if not t or self._param_range(t, param) is None:
             return
@@ -1180,6 +1264,8 @@ class Tempo(QObject):
     # ---- audio regions: gain, fades, reverse, transpose, following the tempo
     @Slot(str, str, "QVariant")
     def setRegion(self, rid: str, key: str, value) -> None:
+        if self._p is None:                                         # no song is open
+            return
         r = self._r(rid)
         if not r:
             return
@@ -1278,6 +1364,8 @@ class Tempo(QObject):
 
     @Slot(str, int)
     def chooseTake(self, rid: str, k: int) -> None:
+        if self._p is None:                                         # no song is open
+            return
         r = self._r(rid)
         if not r or not 0 <= k < len(r.get("takes") or []):
             return
@@ -1291,8 +1379,11 @@ class Tempo(QObject):
         self._keep()
 
     @Slot(str, float, float, int)
+    @finite
     def compTake(self, rid: str, b0: float, b1: float, k: int) -> None:
         """Use take k from b0 to b1 (beats into the region): swipe across the best bit of each take."""
+        if self._p is None:                                         # no song is open
+            return
         r = self._r(rid)
         if not r or not 0 <= k < len(r.get("takes") or []):
             return
@@ -1326,6 +1417,8 @@ class Tempo(QObject):
     @Slot(str)
     def flattenTakes(self, rid: str) -> None:
         """Keep what plays now (the take or the comp) and let the other takes go."""
+        if self._p is None:                                         # no song is open
+            return
         r = self._r(rid)
         if not r or not r.get("takes"):
             return
@@ -1345,6 +1438,8 @@ class Tempo(QObject):
     @Slot("QVariantList", result=str)
     def makeStack(self, tids) -> str:
         """The tracks given play into a new stack (a bus with its own effects and fader), shown above them."""
+        if self._p is None:
+            return ""
         tids = tids.toVariant() if hasattr(tids, "toVariant") else list(tids)
         members = [t for t in self._p["tracks"] if t["id"] in tids and t["kind"] != "stack"]
         if not members:
@@ -1366,6 +1461,8 @@ class Tempo(QObject):
     @Slot(str, str)
     def setOutput(self, tid: str, sid: str) -> None:
         """Send a track into a stack ("" for straight to the master), moving it under the stack."""
+        if self._p is None:                                         # no song is open
+            return
         t = self._t(tid)
         if not t or t["kind"] == "stack" or (sid and (self._t(sid) or {}).get("kind") != "stack"):
             return
@@ -1385,6 +1482,8 @@ class Tempo(QObject):
     @Slot(str, str)
     def duckUnder(self, tid: str, key: str) -> None:
         """This track dips whenever the `key` track plays (a compressor listening to it): the bass under the kick."""
+        if self._p is None:                                         # no song is open
+            return
         t, k = self._t(tid), self._t(key)
         if not t or not k or tid == key:
             return
@@ -1438,6 +1537,8 @@ class Tempo(QObject):
     @Slot(str, int, "QVariant")
     def setPad(self, tid: str, pitch: int, url) -> None:
         """A sound of your own on one drum of a kit."""
+        if self._p is None:                                         # no song is open
+            return
         t = self._t(tid)
         if not t or se.settings(t.get("instrument") or {}).get("engine") != "kit":
             return
@@ -1450,6 +1551,8 @@ class Tempo(QObject):
 
     @Slot(str, int)
     def clearPad(self, tid: str, pitch: int) -> None:
+        if self._p is None:                                         # no song is open
+            return
         t = self._t(tid)
         pads = ((t or {}).get("instrument") or {}).get("pads") or {}
         if str(pitch) in pads:
@@ -1458,7 +1561,10 @@ class Tempo(QObject):
             self._keep()
 
     @Slot(str, str, float)
+    @finite
     def setSampler(self, tid: str, key: str, value: float) -> None:
+        if self._p is None:                                         # no song is open
+            return
         t = self._t(tid)
         if t and key in ("root",) and (t.get("instrument") or {}).get("id") == "sampler":
             self._before(("sampler", tid, key))
@@ -1467,6 +1573,8 @@ class Tempo(QObject):
 
     @Slot(str, str)
     def setSamplerMode(self, tid: str, mode: str) -> None:
+        if self._p is None:                                         # no song is open
+            return
         t = self._t(tid)
         if t and mode in ("held", "oneshot") and (t.get("instrument") or {}).get("id") == "sampler":
             self._before()
@@ -1477,6 +1585,8 @@ class Tempo(QObject):
     @Slot(str, str, str, "QVariant")
     def setMidiFx(self, tid: str, which: str, key: str, value) -> None:
         """The arpeggiator ("arp": on, mode, rate, octaves, gate) or chord trigger ("chord": on, shape)."""
+        if self._p is None:                                         # no song is open
+            return
         t = self._t(tid)
         if not t or which not in ("arp", "chord") or t["kind"] in ("audio", "stack"):
             return
@@ -1508,6 +1618,7 @@ class Tempo(QObject):
         return sorted((self._p or {}).get("sections", []), key=lambda x: x["start"])
 
     @Slot(str, float, float, result=str)
+    @finite
     def addSection(self, name: str, start: float, length: float) -> str:
         if self._p is None:
             return ""
@@ -1534,6 +1645,8 @@ class Tempo(QObject):
 
     @Slot(str, str, "QVariant")
     def setSection(self, sid: str, key: str, value) -> None:
+        if self._p is None:                                         # no song is open
+            return
         sec = self._sec(sid)
         if not sec or key not in ("name", "length"):
             return
@@ -1551,6 +1664,8 @@ class Tempo(QObject):
     @Slot(str)
     def removeSection(self, sid: str) -> None:
         """Just the marker: the music stays."""
+        if self._p is None:                                         # no song is open
+            return
         if self._sec(sid):
             self._before()
             self._p["sections"] = [x for x in self._p["sections"] if x["id"] != sid]
@@ -1571,6 +1686,8 @@ class Tempo(QObject):
     @Slot(str, result=str)
     def duplicateSection(self, sid: str) -> str:
         """The section again, straight after it: everything after moves along to make room."""
+        if self._p is None:                                         # no song is open
+            return ""
         sec = self._sec(sid)
         if not sec:
             return ""
@@ -1594,6 +1711,8 @@ class Tempo(QObject):
     @Slot(str)
     def deleteSection(self, sid: str) -> None:
         """The section and its music go, and the rest of the song closes up."""
+        if self._p is None:                                         # no song is open
+            return
         sec = self._sec(sid)
         if not sec:
             return
@@ -1610,6 +1729,8 @@ class Tempo(QObject):
     @Slot(str, int)
     def moveSection(self, sid: str, to: int) -> None:
         """Put the section at another place in the order of sections (its music goes with it)."""
+        if self._p is None:
+            return
         secs = sorted(self._p.get("sections", []), key=lambda x: x["start"])
         sec = self._sec(sid)
         if not sec or not 0 <= to < len(secs) or secs.index(sec) == to:
@@ -1660,6 +1781,8 @@ class Tempo(QObject):
 
     @Slot(str, str, "QVariant")
     def setDrummer(self, tid: str, key: str, value) -> None:
+        if self._p is None:                                         # no song is open
+            return
         t = self._t(tid)
         if not t or t["kind"] != "drummer":
             return
@@ -1670,7 +1793,10 @@ class Tempo(QObject):
         self._keep()
 
     @Slot(str, float, float, result=str)
+    @finite
     def addRegion(self, tid: str, start: float, length: float) -> str:
+        if self._p is None:                                         # no song is open
+            return ""
         t = self._t(tid)
         if not t or t["kind"] == "audio":
             return ""
@@ -1685,6 +1811,7 @@ class Tempo(QObject):
         return r["id"]
 
     @Slot(str, str, float, result=str)
+    @finite
     def addLoop(self, loop_id: str, tid: str, start: float) -> str:
         """A loop at `start` on a track (a new track for it when tid is empty or the track holds something else)."""
         lp = next((x for x in se.LOOPS if x[0] == loop_id), None)
@@ -1709,6 +1836,8 @@ class Tempo(QObject):
     @Slot(str)
     def previewLoop(self, loop_id: str) -> None:
         """Hear a loop on its own (again stops it)."""
+        if self._p is None:                                         # no song is open
+            return
         if any(v["id"].startswith("preview") for v in self._player.live):
             self._player.stop_live("preview")
             return
@@ -1722,7 +1851,10 @@ class Tempo(QObject):
         self._player.play_live("preview", audio * 0.8)
 
     @Slot(str, str, float)
+    @finite
     def moveRegion(self, rid: str, tid: str, start: float) -> None:
+        if self._p is None:                                         # no song is open
+            return
         r = self._r(rid)
         t = self._t(tid) or self._t(r["track"] if r else "")
         if not r or not t:
@@ -1738,7 +1870,10 @@ class Tempo(QObject):
         self._keep()
 
     @Slot(str, float)
+    @finite
     def resizeRegion(self, rid: str, length: float) -> None:
+        if self._p is None:                                         # no song is open
+            return
         r = self._r(rid)
         if r:
             self._before(("resize", rid))
@@ -1750,6 +1885,8 @@ class Tempo(QObject):
 
     @Slot(str, int)
     def setLoops(self, rid: str, n: int) -> None:
+        if self._p is None:                                         # no song is open
+            return
         r = self._r(rid)
         if r:
             self._before(("loops", rid))
@@ -1757,8 +1894,11 @@ class Tempo(QObject):
             self._keep()
 
     @Slot(str, float, result=str)
+    @finite
     def splitRegion(self, rid: str, at: float) -> str:
         """Cut a region in two at song time `at` (beats)."""
+        if self._p is None:                                         # no song is open
+            return ""
         r = self._r(rid)
         if not r or not r["start"] < at < r["start"] + r["length"]:
             return ""
@@ -1782,6 +1922,8 @@ class Tempo(QObject):
 
     @Slot(str, result=str)
     def duplicateRegion(self, rid: str) -> str:
+        if self._p is None:                                         # no song is open
+            return ""
         r = self._r(rid)
         if not r:
             return ""
@@ -1796,6 +1938,8 @@ class Tempo(QObject):
 
     @Slot(str)
     def removeRegion(self, rid: str) -> None:
+        if self._p is None:                                         # no song is open
+            return
         if self._r(rid):
             self._before()
             self._p["regions"] = [r for r in self._p["regions"] if r["id"] != rid]
@@ -1805,6 +1949,8 @@ class Tempo(QObject):
 
     @Slot(str)
     def selectRegion(self, rid: str) -> None:
+        if self._p is None:                                         # no song is open
+            return
         self._sel_region = rid
         r = self._r(rid)
         if r:
@@ -1822,7 +1968,10 @@ class Tempo(QObject):
         return r, r.setdefault("notes", [])
 
     @Slot(str, float, int, float, int, result=int)
+    @finite
     def addNote(self, rid: str, t: float, pitch: int, d: float, vel: int) -> int:
+        if self._p is None:                                         # no song is open
+            return 0
         self._before()
         r, notes = self._notes(rid)
         if r is None:
@@ -1834,7 +1983,10 @@ class Tempo(QObject):
         return len(notes) - 1
 
     @Slot(str, int, float, int)
+    @finite
     def moveNote(self, rid: str, i: int, t: float, pitch: int) -> None:
+        if self._p is None:                                         # no song is open
+            return
         self._before(("note", rid, i, "move"))
         r, notes = self._notes(rid)
         if notes is None or not 0 <= i < len(notes):
@@ -1846,7 +1998,10 @@ class Tempo(QObject):
             self._audition(r["track"], int(pitch), notes[i].get("v", 100))
 
     @Slot(str, int, float)
+    @finite
     def resizeNote(self, rid: str, i: int, d: float) -> None:
+        if self._p is None:                                         # no song is open
+            return
         self._before(("note", rid, i, "size"))
         r, notes = self._notes(rid)
         if notes is not None and 0 <= i < len(notes):
@@ -1855,6 +2010,8 @@ class Tempo(QObject):
 
     @Slot(str, int)
     def removeNote(self, rid: str, i: int) -> None:
+        if self._p is None:                                         # no song is open
+            return
         self._before()
         r, notes = self._notes(rid)
         if notes is not None and 0 <= i < len(notes):
@@ -1864,6 +2021,8 @@ class Tempo(QObject):
     @Slot(str, int, int)
     def toggleStep(self, rid: str, pitch: int, step: int) -> None:
         """The drum grid: a sixteenth note on or off."""
+        if self._p is None:                                         # no song is open
+            return
         self._before()
         r, notes = self._notes(rid)
         if r is None:
@@ -1878,7 +2037,10 @@ class Tempo(QObject):
         self._keep()
 
     @Slot(str, float, float)
+    @finite
     def quantize(self, rid: str, grid: float, strength: float = 1.0) -> None:
+        if self._p is None:                                         # no song is open
+            return
         self._before()
         r, notes = self._notes(rid)
         if notes is None or grid <= 0:
@@ -1924,6 +2086,8 @@ class Tempo(QObject):
     @Slot(str, "QVariant")
     def setMastering(self, key: str, value) -> None:
         """On or off (to hear the difference); a new character or loudness is worked out again from the same mix."""
+        if self._p is None:                                         # no song is open
+            return
         m = ((self._p or {}).get("master") or {}).get("mastering")
         if not m:
             return
@@ -1945,6 +2109,8 @@ class Tempo(QObject):
 
     @Slot()
     def removeMastering(self) -> None:
+        if self._p is None:                                         # no song is open
+            return
         if ((self._p or {}).get("master") or {}).get("mastering"):
             self._before()
             self._p["master"].pop("mastering")
@@ -1957,6 +2123,8 @@ class Tempo(QObject):
     @Slot(str)
     def analyzePitch(self, rid: str) -> None:
         """Find the notes in a recording (in the background), to put them in tune."""
+        if self._p is None:                                         # no song is open
+            return
         r = self._r(rid)
         if r is None or r.get("kind") != "audio" or rid in self._busy:
             return
@@ -1988,7 +2156,10 @@ class Tempo(QObject):
         threading.Thread(target=work, daemon=True).start()
 
     @Slot(str, float)
+    @finite
     def setTuneAmount(self, rid: str, amount: float) -> None:
+        if self._p is None:                                         # no song is open
+            return
         r = self._r(rid)
         if r is not None and r.get("tune"):
             self._before(("tune", rid))
@@ -1996,8 +2167,11 @@ class Tempo(QObject):
             self._keep()
 
     @Slot(str, int, float)
+    @finite
     def moveTuneNote(self, rid: str, index: int, to: float) -> None:
         """A found note put on a pitch (a whole semitone), or back to following the key (to < 0)."""
+        if self._p is None:                                         # no song is open
+            return
         r = self._r(rid)
         notes = ((r or {}).get("tune") or {}).get("notes") or []
         if 0 <= index < len(notes):
@@ -2012,6 +2186,8 @@ class Tempo(QObject):
     def notesToMidi(self, rid: str) -> str:
         """The notes found in a recording, as a MIDI region on a new instrument track under it (where they were
         tuned to, when they were). Returns the new region's id."""
+        if self._p is None:                                         # no song is open
+            return ""
         r = self._r(rid)
         tune = (r or {}).get("tune") or {}
         if r is None or not tune.get("notes"):
@@ -2067,6 +2243,8 @@ class Tempo(QObject):
     @Slot(str)
     def legato(self, rid: str) -> None:
         """Each note held until the next one starts (chords together); the last keeps its length."""
+        if self._p is None:                                         # no song is open
+            return
         self._before()
         r, notes = self._notes(rid)
         if r is None or not notes:
@@ -2081,6 +2259,8 @@ class Tempo(QObject):
 
     @Slot(str)
     def resetTune(self, rid: str) -> None:
+        if self._p is None:                                         # no song is open
+            return
         r = self._r(rid)
         if r is not None and r.get("tune"):
             self._before()
@@ -2089,8 +2269,11 @@ class Tempo(QObject):
 
     # ---------------------------------------------------------------- groove and controllers
     @Slot(str, str, float)
+    @finite
     def setGroove(self, rid: str, key: str, value: float) -> None:
         """A region's swing (50–75 %), the grid it swings (1/8 or 1/16) and how human it plays (0–1), as it plays."""
+        if self._p is None:                                         # no song is open
+            return
         r = self._r(rid)
         if r is None or r.get("kind") == "audio" or key not in ("swing", "swingGrid", "humanize"):
             return
@@ -2105,9 +2288,12 @@ class Tempo(QObject):
         self._keep()
 
     @Slot(str, str, float, float)
+    @finite
     def drawControl(self, rid: str, kind: str, t: float, value: float) -> None:
         """A point of a controller drawn in a region (sustain: down or up; bend: −1 to 1; mod wheel: 0 to 1), replacing
         one close by."""
+        if self._p is None:                                         # no song is open
+            return
         r = self._r(rid)
         if r is None or r.get("kind") == "audio" or kind not in ("sustain", "bend", "mod"):
             return
@@ -2121,6 +2307,8 @@ class Tempo(QObject):
 
     @Slot(str, str)
     def clearControl(self, rid: str, kind: str) -> None:
+        if self._p is None:                                         # no song is open
+            return
         r = self._r(rid)
         if r is not None and (r.get("cc") or {}).get(kind):
             self._before()
@@ -2129,6 +2317,8 @@ class Tempo(QObject):
 
     @Slot(str, int, int)
     def setVelocity(self, rid: str, index: int, vel: int) -> None:
+        if self._p is None:                                         # no song is open
+            return
         r, notes = self._notes(rid)
         if notes is not None and 0 <= index < len(notes):
             self._before(("vel", rid, index))
@@ -2137,6 +2327,8 @@ class Tempo(QObject):
 
     @Slot(str, int)
     def transpose(self, rid: str, semis: int) -> None:
+        if self._p is None:                                         # no song is open
+            return
         self._before()
         r, notes = self._notes(rid)
         if notes is not None:
@@ -2196,6 +2388,8 @@ class Tempo(QObject):
 
     @Slot()
     def stop(self) -> None:
+        if self._p is None:                                         # no song is open
+            return
         if self._recording:
             self._finish_recording()
         if self._playing:
@@ -2208,15 +2402,21 @@ class Tempo(QObject):
 
     @Slot()
     def toggle(self) -> None:
+        if self._p is None:                                         # no song is open
+            return
         self.stop() if self._playing else self.play()
 
     @Slot(float)
+    @finite
     def seek(self, beats: float) -> None:
+        if self._p is None:                                         # no song is open
+            return
         was = self._playing
         if was:
             self._player.stop()
             self._playing = False
-        self._pos = max(0.0, float(beats))
+        # (never past any song's end: playing from a place a million bars out would ask for all the memory there is)
+        self._pos = max(0.0, min(100000.0, float(beats))) if math.isfinite(beats) else 0.0
         if was:
             self.play()
         self.clockChanged.emit()
@@ -2255,8 +2455,9 @@ class Tempo(QObject):
 
     @Slot(int, int)
     def noteOn(self, pitch: int, vel: int) -> None:
-        if self._p is None:
+        if self._p is None or not 0 <= pitch <= 127:
             return
+        vel = max(1, min(127, vel))
         t = self._target_track()
         if t is None or pitch in self._held:
             return
@@ -2277,6 +2478,8 @@ class Tempo(QObject):
 
     @Slot(int)
     def noteOff(self, pitch: int) -> None:
+        if self._p is None:                                         # no song is open
+            return
         held = self._held.pop(pitch, None)
         t = self._target_track()
         rel = float(se.settings((t or {}).get("instrument") or {}).get("release", 0.3)) if t else 0.3
@@ -2555,6 +2758,8 @@ class Tempo(QObject):
     # ---------------------------------------------------------------- undo
     @Slot()
     def undo(self) -> None:
+        if self._p is None:                                         # no song is open
+            return
         if self._undo:
             self._redo.append(copy.deepcopy(self._p))
             self._p = self._undo.pop()
@@ -2563,6 +2768,8 @@ class Tempo(QObject):
 
     @Slot()
     def redo(self) -> None:
+        if self._p is None:                                         # no song is open
+            return
         if self._redo:
             self._undo.append(copy.deepcopy(self._p))
             self._p = self._redo.pop()

@@ -583,7 +583,7 @@ class Running(QObject):
 
     def start(self, kvm: bool, boot_cd: bool) -> None:
         if self.m.get("tpm") and shutil.which("swtpm"):
-            (self.folder / "tpm").mkdir(exist_ok=True)
+            (self.folder / "tpm").mkdir(parents=True, exist_ok=True)
             self.tpm = QProcess(self)
             self.tpm.start("swtpm", ["socket", "--tpmstate", f"dir={self.folder / 'tpm'}", "--ctrl", f"type=unixio,path={self.run / 'swtpm.sock'}",
                                      "--tpm2", "--terminate"])
@@ -812,6 +812,8 @@ class Machines(QObject):
     def remove(self, mid: str) -> str:
         if mid in self._running:
             return "Shut it down first."
+        if not any(m["id"] == mid for m in self._list):             # only a machine from the list: its id names a folder
+            return ""
         self._list = [m for m in self._list if m["id"] != mid]
         if not self._demo:
             shutil.rmtree(HOME_DIR / mid, ignore_errors=True)

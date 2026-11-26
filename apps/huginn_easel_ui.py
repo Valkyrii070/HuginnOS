@@ -627,6 +627,8 @@ class Easel(QObject):
 
     @Slot(str, result=bool)
     def saveAs(self, path: str) -> bool:
+        if self.doc is None:
+            return False
         path = path.replace("file://", "")
         if not path.endswith(".easel"):
             path += ".easel"

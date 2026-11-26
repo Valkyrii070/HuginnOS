@@ -8,6 +8,7 @@ bindings the viewer still shows the exact frame under the playhead, rendered by 
 import copy
 import hashlib
 import json
+import functools
 import math
 import os
 import re
@@ -1817,6 +1818,16 @@ except ImportError:                                           # pragma: no cover
 
 
 # ============================================================================================ the app
+def finite(command):
+    """A command's numbers are always real ones of a sane size: "not a number" becomes 0, and nothing is further out
+    than a million (seconds: eleven days). One clip placed at "not a number" would stop the whole timeline drawing."""
+    @functools.wraps(command)
+    def inner(self, *args):
+        args = [(0.0 if not math.isfinite(a) else max(-1e6, min(1e6, a))) if isinstance(a, float) else a for a in args]
+        return command(self, *args)
+    return inner
+
+
 class Clips(QObject):
     changed = Signal()
     pickChanged = Signal()          # picking a clip mustn't rebuild the timeline (a drag that starts with the pick would break)
@@ -2300,8 +2311,9 @@ class Clips(QObject):
     lengthText = Property(str, lambda self: timecode(total(self._p), int(self._p.get("fps", 30))), notify=changed)
 
     @Slot(float, result=str)
+    @finite
     def clockOf(self, seconds: float) -> str:
-        seconds = max(0.0, float(seconds))
+        seconds = max(0.0, float(seconds)) if math.isfinite(seconds) else 0.0
         return f"{seconds:.1f} s" if seconds < 60 else clock(seconds)
     frame = Property(int, lambda self: self._frame_no, notify=frameChanged)
     playing = Property(bool, lambda self: self._engine.playing, notify=frameChanged)
@@ -2340,6 +2352,7 @@ class Clips(QObject):
         self.pickChanged.emit()
 
     @Slot(float)
+    @finite
     def seek(self, t: float) -> None:
         was = self._engine.playing
         if was:
@@ -2365,6 +2378,7 @@ class Clips(QObject):
         self.seek(nxt)
 
     @Slot(float)
+    @finite
     def setZoom(self, z: float) -> None:
         self._zoom = max(4.0, min(400.0, z))
         self.changed.emit()
@@ -2507,6 +2521,7 @@ class Clips(QObject):
         return new["id"]
 
     @Slot(str, str, float, result=str)
+    @finite
     def place(self, mid: str, tid: str, at: float) -> str:
         """Put library item `mid` on track `tid` at `at` seconds (snapped). "" when done, else why not."""
         m = media_of(self._p, mid)
@@ -2541,6 +2556,7 @@ class Clips(QObject):
         return ""
 
     @Slot(str, str, float, result=bool)
+    @finite
     def move(self, cid: str, tid: str, at: float) -> bool:
         c = self._c(cid)
         t = track_of(self._p, tid)
@@ -2565,6 +2581,7 @@ class Clips(QObject):
         return True
 
     @Slot(str, str, float, bool, result=bool)
+    @finite
     def trim(self, cid: str, edge: str, t: float, ripple: bool) -> bool:
         """Drag one end of a clip to timeline time `t`. With ripple on, what's after it on the track moves too."""
         c = self._c(cid)
@@ -2724,6 +2741,7 @@ class Clips(QObject):
         self._keep()
 
     @Slot(str, str, float)
+    @finite
     def setKey(self, cid: str, prop: str, value: float) -> None:
         """A keyframe for `prop` (opacity, scale, x, y, volume) at the playhead, inside the clip."""
         c = self._c(cid)
@@ -2750,6 +2768,7 @@ class Clips(QObject):
             self._keep()
 
     @Slot(str, str, float, result=str)
+    @finite
     def setTransition(self, cid: str, kind: str, length: float) -> str:
         """A transition from clip `cid` into the one right after it on the same track ("" kind removes it)."""
         c = self._c(cid)
@@ -2788,6 +2807,7 @@ class Clips(QObject):
         return note
 
     @Slot(str, float, result=str)
+    @finite
     def addTitle(self, style: str, at: float) -> str:
         at = self._head if at < 0 else at
         self._before()
@@ -2854,6 +2874,7 @@ class Clips(QObject):
         self._keep()
 
     @Slot(float)
+    @finite
     def removeMarker(self, t: float) -> None:
         self._before()
         self._p["markers"] = [m for m in self._p["markers"] if abs(m["t"] - t) > 0.01]
@@ -3027,6 +3048,7 @@ class Clips(QObject):
 
     # ---------------------------------------------------------------- round three: following something that moves
     @Slot(str, float, float, float, float)
+    @finite
     def trackMotion(self, cid: str, x: float, y: float, w: float, h: float) -> None:
         """Follow the box (fractions of the picture) from the playhead to the clip's end, in the background."""
         c = self._c(cid)
@@ -3162,7 +3184,10 @@ class Clips(QObject):
 
     @Slot("QVariantList", result="QVariantList")
     def curveSamples(self, points) -> list:
-        return curve_samples(points.toVariant() if hasattr(points, "toVariant") else points)
+        try:
+            return curve_samples(points.toVariant() if hasattr(points, "toVariant") else points)
+        except (KeyError, IndexError, TypeError, ValueError):       # not a curve's points
+            return []
 
     @Slot(result=str)
     def speechTool(self) -> str:
@@ -3174,6 +3199,7 @@ class Clips(QObject):
 
     # ---------------------------------------------------------------- round two: steadying shaky footage
     @Slot(str, float)
+    @finite
     def stabilise(self, cid: str, strength: float) -> None:
         """Steady a shaky clip. The preview steadies it roughly at once; a careful two-pass copy is made in the
         background and used as soon as it's ready (by the viewer and the export)."""
@@ -3717,6 +3743,7 @@ class Clips(QObject):
         return 1 + [p[0] for p in pts].index(s)
 
     @Slot(str, int, float)
+    @finite
     def setSegmentSpeed(self, cid: str, k: int, speed: float) -> None:
         """Speed of one stretch (0: from the clip's start, or the whole clip when it has no ramp)."""
         c = self._rampable(cid)
@@ -3760,6 +3787,7 @@ class Clips(QObject):
         self._grow(c, {"holds": sorted(holds)})
 
     @Slot(str, int, float)
+    @finite
     def setHold(self, cid: str, k: int, seconds: float) -> None:
         c = self._rampable(cid)
         holds = copy.deepcopy(sorted((c or {}).get("holds") or []))
@@ -3838,6 +3866,7 @@ class Clips(QObject):
         threading.Thread(target=work, daemon=True).start()
 
     @Slot(str, float, float)
+    @finite
     def pickKeyColour(self, cid: str, fx: float, fy: float) -> None:
         """Key out the colour at a point of the picture (a small patch's middle, so noise doesn't decide)."""
         c = self._keyable(cid)
@@ -3881,6 +3910,7 @@ class Clips(QObject):
         self._keep()
 
     @Slot(str, float, float, float, float)
+    @finite
     def placeShape(self, cid: str, x: float, y: float, w: float, h: float) -> None:
         """Where the shape is and how big (fractions of the clip's picture), from dragging it in the viewer."""
         c = self._c(cid)
@@ -4160,6 +4190,7 @@ class Clips(QObject):
 
     # ---------------------------------------------------------------- slip, and cutting out the pauses
     @Slot(str, float, result=str)
+    @finite
     def slip(self, cid: str, seconds: float) -> str:
         """Slide the footage inside a clip: it stays where it is and as long, showing `seconds` of the timeline
         later footage (or earlier, below zero). Returns why not, or ""."""

@@ -256,7 +256,8 @@ class Lens(QObject):
 
     @Slot(str)
     def search(self, text: str) -> None:
-        text = " ".join(text.split())[:400]
+        # (text read off the screen must never reach the browser as one of its options: no leading dash)
+        text = " ".join(text.split())[:400].lstrip("-\u2013\u2014 ")
         if text:
             self._start(browser_command(text))
 

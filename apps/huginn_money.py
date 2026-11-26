@@ -60,6 +60,8 @@ def parse_amount(text: str) -> int:
         decimal = ""
     whole, _, frac = s.rpartition(decimal) if decimal else (s, "", "")
     whole = re.sub(r"[.,]", "", whole) or "0"
+    if len(whole) > 13:                                             # more than any account holds, and than the window can show
+        raise ValueError("too large a number")
     cents = int(whole) * 100 + int((frac + "00")[:2] if frac else 0)
     return -cents if negative else cents
 
@@ -552,6 +554,9 @@ class Money(QObject):
             return
         try:
             rows = read_ofx(text) if re.search(r"(?i)<OFX>|OFXHEADER", text[:3000]) else read_csv(text)
+        except csv.Error:                                           # a picture, say, picked by mistake
+            self.said.emit("That file isn't a bank statement Money can read (CSV, OFX or QFX).", True)
+            return
         except ValueError as err:
             self.said.emit(str(err), True)
             return

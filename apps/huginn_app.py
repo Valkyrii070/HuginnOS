@@ -2822,14 +2822,20 @@ class Calendar(QObject):
 
     @Slot(int)
     def stepWeek(self, weeks: int) -> None:
-        self._selected += dt.timedelta(days=7 * weeks)
+        try:
+            self._selected += dt.timedelta(days=7 * max(-520, min(520, weeks)))
+        except OverflowError:                                  # the calendar ends at the years 1 and 9999
+            return
         self._year, self._month = self._selected.year, self._selected.month
         self.changed.emit()
 
     @Slot(int)
     def step(self, months: int) -> None:
-        m = self._month - 1 + months
-        self._year, self._month = self._year + m // 12, m % 12 + 1
+        m = self._month - 1 + max(-1200, min(1200, months))
+        year = self._year + m // 12
+        if not 1 <= year <= 9998:                              # (past either end the month's days can't be worked out,
+            return                                             #  and the calendar stayed broken until it was closed)
+        self._year, self._month = year, m % 12 + 1
         self.changed.emit()
 
     @Slot()
@@ -2840,7 +2846,13 @@ class Calendar(QObject):
 
     @Slot(str)
     def select(self, iso: str) -> None:
-        self._selected = dt.date.fromisoformat(iso)
+        try:
+            picked = dt.date.fromisoformat(iso)
+        except (TypeError, ValueError):
+            return
+        if not 1 <= picked.year <= 9998:
+            return
+        self._selected = picked
         self._year, self._month = self._selected.year, self._selected.month
         self.changed.emit()
 
@@ -3032,6 +3044,9 @@ class Notes(QObject):
         old = getattr(self, "_styler", None)
         if old is not None:
             old.setDocument(None)
+        if quick_document is None or not hasattr(quick_document, "textDocument"):
+            self._styler = None
+            return
         self._styler = NoteStyler(quick_document.textDocument(), accent, dim)
 
     @Slot(str)
@@ -4567,7 +4582,7 @@ class Capture(QObject):
         """choose=False: the whole screen. choose=True: the desktop asks which window or area."""
         self._busy = True
         self.changed.emit()
-        QTimer.singleShot(max(0, delay) * 1000 + 250, lambda: self._grab(choose))
+        QTimer.singleShot(max(0, min(60, delay)) * 1000 + 250, lambda: self._grab(choose))
 
     def _grab(self, choose: bool) -> None:
         if os.environ.get("WAYLAND_DISPLAY"):
@@ -4615,7 +4630,7 @@ class Capture(QObject):
 
     @Slot("QDBusMessage")
     def portalReply(self, message) -> None:
-        args = message.arguments()
+        args = message.arguments() if message is not None else []
         code = args[0] if args else 2
         uri = args[1].get("uri", "") if len(args) > 1 and code == 0 and isinstance(args[1], dict) else ""
         if uri:
@@ -5363,6 +5378,8 @@ class Store(QObject):
 
     # -- actions -----------------------------------------------------------------------------------
     def _run(self, app_id: str, verb: str, args: list) -> None:
+        if app_id not in self._apps:                        # not in the catalogue (an old page after the list was read again):
+            return                                          # nothing is handed to flatpak that the store didn't list itself
         if self._busy:                                      # one at a time: the rest wait their turn, in order
             if app_id != self._busy and all(q[0] != app_id for q in self._queue):
                 self._queue.append((app_id, verb, args))
@@ -5471,7 +5488,7 @@ class Store(QObject):
             parts = [p for p in shlex.split(self._web[app_id]["exec"]) if not p.startswith("%")]
             if parts:
                 subprocess.Popen(parts, start_new_session=True)
-        elif self._flatpak:
+        elif self._flatpak and re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_-]*(\.[A-Za-z0-9_-]+)+", app_id or ""):   # an app's id, never an option
             subprocess.Popen([self._flatpak, "run", app_id], start_new_session=True)
 
 

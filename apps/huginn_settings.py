@@ -1844,6 +1844,8 @@ class SystemSettings(QObject):
 
     @Slot(str, str)
     def setResolution(self, name: str, size: str) -> None:
+        if not re.fullmatch(r"\d{2,5}x\d{2,5}", size or ""):       # "1920x1080", as the list gives it
+            return
         w, h = (int(x) for x in size.split("x"))
         mode = best_mode(self._screen(name).get("modes", []), w, h)
         self._act("displays", lambda: self._kscreen(f"output.{name}.mode.{mode or size}", what="Changing the resolution"),
@@ -1852,6 +1854,11 @@ class SystemSettings(QObject):
     @Slot(str, str)
     def setRate(self, name: str, hz: str) -> None:
         scr = self._screen(name)
+        try:
+            if not 1 <= float(hz) <= 1000:
+                return
+        except (TypeError, ValueError):
+            return
         mode = best_mode(scr.get("modes", []), scr.get("w", 0), scr.get("h", 0), float(hz))
         self._act("displays", lambda: self._kscreen(f"output.{name}.mode.{mode}", what="Changing the refresh rate"),
                   demo_change=lambda s: [x.update(hz=float(hz)) for x in s["screens"] if x["name"] == name])
@@ -1929,7 +1936,9 @@ class SystemSettings(QObject):
     @Slot(str, "QVariant")
     def setWindowRule(self, app: str, rule) -> None:
         """An app's rule: {screen, space, maximise, ontop} (what else it says by hand, size or position, is kept)."""
-        rule = rule.toVariant() if hasattr(rule, "toVariant") else dict(rule or {})
+        rule = rule.toVariant() if hasattr(rule, "toVariant") else rule
+        if not isinstance(rule, dict):
+            return
         app = app.strip().removesuffix(".desktop")
         if not app:
             return
@@ -2499,6 +2508,8 @@ class SystemSettings(QObject):
             self.said.emit("Steam would ask about uninstalling it now.", False)
             return
         import huginn_storage
+        if not str(appid).isdigit():                              # Steam's games go by number
+            return
         why = huginn_storage.steam_uninstall(appid)
         self.said.emit(why or "Steam is asking about it: answer there, then come back here.", bool(why))
 
@@ -2854,7 +2865,9 @@ class SystemSettings(QObject):
         """Save a live wallpaper made in Settings (ident "" for a new one), copying in its picture or video; use it on
         the desktop too if `use`. Returns its id at once (the copying goes on in the background)."""
         import huginn_looks as hl
-        spec = spec.toVariant() if hasattr(spec, "toVariant") else dict(spec or {})
+        spec = spec.toVariant() if hasattr(spec, "toVariant") else spec
+        if not isinstance(spec, dict):
+            return ""
         try:
             ident = ident or hl._slug(hl.clean_spec(spec)["name"])
             folder = hl.live_folder(ident)

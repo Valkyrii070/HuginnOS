@@ -625,6 +625,8 @@ def download_local(ident: str, progress, stopped=lambda: False) -> str:
 
 
 def remove_local(ident: str) -> None:
+    if not any(m["id"] == ident for m in LOCAL_MODELS):             # only a model from the list: its name is a folder's
+        return
     stop_local()
     shutil.rmtree(MODELS_DIR / ident, ignore_errors=True)
 
@@ -639,8 +641,11 @@ def touch_used() -> None:
 
 def _alive(st: dict) -> bool:
     try:
-        os.kill(int(st.get("pid", 0)), 0)
-    except (OSError, ValueError):
+        pid = int(st.get("pid", 0))
+        if pid < 2:                                                 # (0 would be "this app and its group": always there)
+            return False
+        os.kill(pid, 0)
+    except (OSError, ValueError, TypeError):
         return False
     try:
         with urllib.request.urlopen(f"http://127.0.0.1:{st['port']}/health", timeout=2) as r:   # noqa: S310
@@ -699,8 +704,10 @@ def _start_local(cfg: dict, ident: str) -> dict:
 def stop_local() -> None:
     try:
         st = json.loads(SERVER_STATE.read_text(encoding="utf-8"))
-        os.kill(int(st.get("supervisor", 0)), signal.SIGTERM)
-    except (OSError, ValueError):
+        pid = int(st.get("supervisor", 0))
+        if pid > 1:                                                 # (0 or less would stop this app, or everything of yours)
+            os.kill(pid, signal.SIGTERM)
+    except (OSError, ValueError, TypeError, AttributeError):
         pass
 
 

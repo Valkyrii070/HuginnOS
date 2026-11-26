@@ -579,7 +579,8 @@ class Slides(FileList):
 
     def _ids(self, ids) -> list:
         ids = ids.toVariant() if hasattr(ids, "toVariant") else ids
-        return [it for it in self._slide["items"] if it["id"] in set(ids or [])]
+        ids = {i for i in ids if isinstance(i, str)} if isinstance(ids, (list, tuple, set)) else set()
+        return [it for it in self._slide["items"] if it["id"] in ids]
 
     @Slot(str, str, result=str)
     def addItem(self, kind: str, arg: str) -> str:
@@ -772,7 +773,7 @@ class Slides(FileList):
     def placeItems(self, rects) -> None:
         """Several items' new boxes at once (a group sized): [{id, x, y, w, h}]."""
         rects = rects.toVariant() if hasattr(rects, "toVariant") else rects
-        todo = [(self._find(r.get("id", "")), r) for r in rects or [] if isinstance(r, dict)]
+        todo = [(self._find(r.get("id", "")), r) for r in (rects if isinstance(rects, list) else []) if isinstance(r, dict)]
         todo = [(it, r) for it, r in todo if it is not None and not it.get("locked")]
         if not todo:
             return
@@ -966,6 +967,8 @@ class Slides(FileList):
     # ------------------------------------------------------------------ text
     @Slot("QVariant")
     def attachEditor(self, quick_doc) -> None:
+        if not hasattr(quick_doc, "textDocument"):
+            return
         self._edit_quick = quick_doc
         self._edit_doc = quick_doc.textDocument()
         self._edit_doc.setIndentWidth(sm.INDENT)

@@ -636,8 +636,8 @@ class Scan(QObject):
     @Slot(int, str)
     def setMode(self, i: int, mode: str) -> None:
         if mode in dict(MODES):
-            targets = range(len(self._doc["pages"])) if i < 0 else [i]
-            for k in targets:
+            count = len(self._doc["pages"])
+            for k in (range(count) if i < 0 else [i] if i < count else []):
                 self._doc["pages"][k]["mode"] = mode
             self._choice["clean"] = mode
             self._keep()

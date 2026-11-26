@@ -70,7 +70,7 @@ class Area:
 
 def col_name(c: int) -> str:
     out = ""
-    c += 1
+    c = max(0, c) + 1                                               # (a column before A has no name, and would never finish)
     while c:
         c, rem = divmod(c - 1, 26)
         out = chr(65 + rem) + out

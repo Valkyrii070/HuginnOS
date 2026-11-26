@@ -752,10 +752,22 @@ class Maps(Worker):
 
     @Slot("QVariantMap")
     def show(self, place) -> None:
-        self.moved.emit(float(place["lat"]), float(place["lon"]), 15)
+        if self._a_place(place):
+            self.moved.emit(float(place["lat"]), float(place["lon"]), 15)
+
+    @staticmethod
+    def _a_place(place) -> bool:
+        """A place has a name and somewhere on the map: nothing else is shown or kept."""
+        try:
+            return bool(str(place["name"])) and -90 <= float(place["lat"]) <= 90 and -180 <= float(place["lon"]) <= 180
+        except (KeyError, TypeError, ValueError):
+            return False
 
     @Slot("QVariantMap")
     def keep(self, place) -> None:
+        if not self._a_place(place):
+            return
+        place = {"name": str(place["name"]), "detail": str(place.get("detail", "")), "lat": float(place["lat"]), "lon": float(place["lon"])}
         if not any(abs(p["lat"] - place["lat"]) < 1e-5 and abs(p["lon"] - place["lon"]) < 1e-5 for p in self._saved):
             self._saved.append({k: place[k] for k in ("name", "detail", "lat", "lon")})
             self._keep()

@@ -1313,7 +1313,8 @@ def run_backup(source: Path, dest: str, keep: int = 30, progress=None, stopped=N
         return result
     source = Path(os.path.abspath(source))
     inside = os.path.relpath(os.path.abspath(dest), source)
-    skip = tuple(skip) + ((inside, inside + "/*") if not inside.startswith("..") and inside != "." else ())
+    # (backups kept in a folder of the home are left out of the copy; the folder's other files are not)
+    skip = tuple(skip) + ("Huginn Backups", "Huginn Backups/*", "*/Huginn Backups", "*/Huginn Backups/*")
     if inside == ".":
         result["error"] = "A backup can't be kept in the folder it is backing up."
         return result
@@ -1655,12 +1656,20 @@ class Backup(QObject):
 
     @Slot(str)
     def openSnapshot(self, path: str) -> None:
+        if path and not any(b["path"] == path for b in self._history()):
+            return                                                  # only a backup from the list is opened
         self._snap, self._rel = path, ""
         self.changed.emit()
 
+    @staticmethod
+    def _within(rel: str) -> str:
+        """A place inside a backup, tidied: "" for one that would step out of it."""
+        parts = [p for p in rel.split("/") if p and p != "."]
+        return "" if ".." in parts else "/".join(parts)
+
     @Slot(str)
     def openFolder(self, rel: str) -> None:
-        self._rel = rel.strip("/")
+        self._rel = self._within(rel)
         self.changed.emit()
 
     @Slot()
@@ -1709,7 +1718,8 @@ class Backup(QObject):
     def restore(self, rel: str) -> None:
         """Bring one file or folder back from the open backup. Nothing is ever replaced: if the original is still
         there, what comes back sits beside it with the backup's date in its name."""
-        if not self._snap or self._busy or self._demo:
+        rel = self._within(rel)
+        if not self._snap or not rel or self._busy or self._demo:
             return
         src = Path(self._snap) / rel
         target = self._source / rel
@@ -2159,6 +2169,12 @@ class Shelf(QObject):
         src, new = Path(path), new.strip()
         if not new or "/" in new or new in (".", ".."):
             return "That name won't do."
+        try:                                                        # only something Camera took (inside its own folders)
+            there = src.resolve()
+            if not there.is_file() or not any(there.is_relative_to(f.resolve()) for f in self._folders):
+                return ""
+        except OSError:
+            return ""
         target = src.with_name(new + src.suffix)
         if target == src:
             return ""
@@ -2173,10 +2189,13 @@ class Shelf(QObject):
 
     @Slot(str)
     def remove(self, path: str) -> None:
-        """To the Trash, so it can be brought back."""
+        """To the Trash, so it can be brought back. Only a picture or video Camera took (one inside its own folders)."""
         try:
+            there = Path(path).resolve()
+            if not there.is_file() or not any(there.is_relative_to(f.resolve()) for f in self._folders):
+                return
             from huginn_app import move_to_trash
-            move_to_trash(path)
+            move_to_trash(str(there))
         except (OSError, ImportError) as err:
             self.failed.emit(f"Couldn't move it to the Trash: {getattr(err, 'strerror', None) or err}")
         self.changed.emit()

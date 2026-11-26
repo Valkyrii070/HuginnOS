@@ -2063,6 +2063,8 @@ def advice(sky: Sky) -> str:
     @Slot(str, result=str)
     def discard(self, rel: str) -> str:
         """Throw away the changes to a file (the window asks first). A new file goes to the Trash instead."""
+        if self._root is None:
+            return ""
         change = next((c for c in self._changes if c["path"] == rel), None)
         if change and change["kind"] == "new":
             return self.remove(str(self._root / rel))
@@ -2445,7 +2447,7 @@ def advice(sky: Sky) -> str:
 
     def _guess_definition(self, d: Doc, line: int, col: int) -> None:
         lines = d.text.split("\n")
-        if line >= len(lines):
+        if not 0 <= line < len(lines):
             return
         text = lines[line]
         m = next((m for m in re.finditer(r"[A-Za-z_][A-Za-z0-9_]*", text) if m.start() <= col <= m.end()), None)
@@ -2954,6 +2956,8 @@ def advice(sky: Sky) -> str:
         typed at all of them is one step too."""
         if 0 <= i < len(self._docs):
             edits = [list(e) for e in (edits.toVariant() if hasattr(edits, "toVariant") else edits)]
+            if any(len(e) != 3 for e in edits):
+                return
             if not self._doc_edit(self._docs[i], edits, qt_offsets=True, join=join):
                 self._edit_text(i, edits)
 

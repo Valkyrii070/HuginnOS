@@ -1778,6 +1778,8 @@ class Mail(QObject):
             self.changed.emit()
             return
         line = self._line()
+        if line is None:                                       # no account (it was just removed): nothing to open
+            return
         rows = line.store.run("SELECT seen, body FROM messages WHERE folder = ? AND uid = ?", (folder, uid))
         if not rows:
             self._open = ""
@@ -1797,6 +1799,8 @@ class Mail(QObject):
                 if m["uid"] == uid and m["folder"] == folder:
                     m[column] = int(on)
             self.changed.emit()
+            return
+        if self._line() is None:
             return
         self._line().store.run(f"UPDATE messages SET {column} = ? WHERE folder = ? AND uid = ?", (int(on), folder, uid))
         self.changed.emit()
@@ -1826,6 +1830,8 @@ class Mail(QObject):
             self.changed.emit()
             return
         line = self._line()
+        if line is None:
+            return
         dest = (line.store.run("SELECT name FROM folders WHERE role = ?", (role,)) or [{"name": ""}])[0]["name"]
         if not dest:
             self.failed.emit(f"This account has no {word} mailbox.")
@@ -2044,6 +2050,8 @@ class Mail(QObject):
     @Slot(str)
     def removeAccount(self, ident: str) -> None:
         """Take an account off this computer. Nothing on the server is touched."""
+        if not any(a.get("id") == ident for a in self._accounts):  # only an account Mail has: the name goes into file patterns
+            return                                                 # below, where "*" would have meant every account's mail
         line = self._lines.pop(ident, None)
         if line:
             line.stop()

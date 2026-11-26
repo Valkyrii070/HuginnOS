@@ -203,6 +203,8 @@ def transcribe(wav: Path, model: Path, language: str = "auto") -> str:
 def _running_pid():
     try:
         pid = int(runtime_file().read_text().strip())
+        if pid < 2:                                                 # never "the whole group" or "everything of yours"
+            return None
         os.kill(pid, 0)
         return pid
     except (OSError, ValueError):

@@ -7,6 +7,7 @@ arithmetic is huginn_sheet_engine's. Files: Huginn's own .hsheet (JSON), CSV, an
 """
 import copy
 import csv
+import functools
 import io
 import json
 import math
@@ -150,6 +151,31 @@ class Heads(QAbstractTableModel):
 
 
 # ------------------------------------------------------------------------------------------------ Sheets
+def on_grid(command):
+    """The cells a command names are always ones the grid has: a place before A1, or past the last row or column, is
+    brought to the nearest cell. (The window never asks for one; a slip elsewhere must not cost the sheet.)"""
+    names = command.__code__.co_varnames[1:command.__code__.co_argcount]
+    rows = [i for i, name in enumerate(names) if name in ("r", "r0", "r1", "tr")]
+    cols = [i for i, name in enumerate(names) if name in ("c", "c0", "c1", "tc")]
+
+    @functools.wraps(command)
+    def inner(self, *args):
+        args = list(args)
+        for i in rows:
+            if i < len(args):
+                args[i] = max(0, min(self.rows - 1, int(args[i])))
+        for i in cols:
+            if i < len(args):
+                args[i] = max(0, min(self.cols - 1, int(args[i])))
+        for low, high in (("r0", "r1"), ("c0", "c1")):               # a selection is named from its top left
+            if low in names and high in names:
+                i, j = names.index(low), names.index(high)
+                if j < len(args) and args[i] > args[j]:
+                    args[i], args[j] = args[j], args[i]
+        return command(self, *args)
+    return inner
+
+
 class Sheets(FileList):
     NATIVE, OWN, VIA_BRIDGE, MODERN, STEM = (".hsheet", ".csv"), (".xlsx",), (".ods", ".xls"), "xlsx", "Untitled Sheet"
     MAX_SHEETS = 64
@@ -179,7 +205,7 @@ class Sheets(FileList):
     # ------------------------------------------------------------------ what QML sees
     @property
     def sh(self) -> dict:
-        return self.book.sheets[self._at]
+        return self.book.sheets[max(0, min(self._at, len(self.book.sheets) - 1))]
 
     sheetNames = Property("QVariantList", lambda self: [s["name"] for s in self.book.sheets], notify=sheetsChanged)
     sheetIndex = Property(int, lambda self: self._at, notify=sheetsChanged)
@@ -240,8 +266,8 @@ class Sheets(FileList):
     @Slot(int)
     def growTo(self, row: int) -> None:
         """The view came near the last row or column: more of them."""
-        if row > self.rows - 60:
-            self.rows = row + 500
+        if row > self.rows - 60 and self.rows < se.MAX_ROWS:
+            self.rows = min(se.MAX_ROWS, row + 500)
             self._panes()
 
     @Slot(int)
@@ -313,11 +339,13 @@ class Sheets(FileList):
         return next((m for m in spans if m[0] <= r <= m[2] and m[1] <= c <= m[3]), None)
 
     @Slot(int, int, result="QVariantList")
+    @on_grid
     def mergeAt(self, r: int, c: int) -> list:
         m = self.merge_at(r, c)
         return list(m) if m else []
 
     @Slot(int, int, int, int, result="QVariantList")
+    @on_grid
     def mergeBounds(self, r0: int, c0: int, r1: int, c1: int) -> list:
         """The selection grown until no merged cell is cut by its edges."""
         spans = self.merges()
@@ -332,6 +360,7 @@ class Sheets(FileList):
         return [r0, c0, r1, c1]
 
     @Slot(int, int, int, int, result=str)
+    @on_grid
     def mergeCells(self, r0: int, c0: int, r1: int, c1: int) -> str:
         """Merge and centre, as Excel's button: one cell over these, keeping the first cell's value (the others'
         values go, as in Excel), centred. Returns what to tell the person, or ''."""
@@ -352,6 +381,7 @@ class Sheets(FileList):
         return f"Merged. Only the first cell's value is kept ({len(lost)} other {'value' if len(lost) == 1 else 'values'} went)." if lost else ""
 
     @Slot(int, int, int, int, result=bool)
+    @on_grid
     def unmergeCells(self, r0: int, c0: int, r1: int, c1: int) -> bool:
         merges = self.sh.get("merges") or []
         kept = [t for t in merges if not ((m := parse_span(t)) and m[2] >= r0 and m[0] <= r1 and m[3] >= c0 and m[1] <= c1)]
@@ -363,16 +393,19 @@ class Sheets(FileList):
         return True
 
     @Slot(int, int, result=str)
+    @on_grid
     def raw(self, r: int, c: int) -> str:
         return self.sh["raw"].get((r, c), "")
 
     @Slot(int, int, result="QVariantMap")
+    @on_grid
     def fmtAt(self, r: int, c: int) -> dict:
         f = dict(self.fmt_of(r, c))
         f.setdefault("num", "General")
         return f
 
     @Slot(int, int, result=str)
+    @on_grid
     def name(self, r: int, c: int) -> str:
         return a1(r, c)
 
@@ -383,6 +416,7 @@ class Sheets(FileList):
         return [max((k[0] for k in keys), default=0), max((k[1] for k in keys), default=0)]
 
     @Slot(int, int, int, int, result="QVariantList")
+    @on_grid
     def edge(self, r: int, c: int, dr: int, dc: int) -> list:
         """Ctrl+arrow: to the edge of the block of filled cells (or the next filled cell, or the sheet's edge)."""
         raw = self.sh["raw"]
@@ -444,6 +478,7 @@ class Sheets(FileList):
 
     # ------------------------------------------------------------------ typing
     @Slot(int, int, str)
+    @on_grid
     def put(self, r: int, c: int, text: str) -> None:
         text = text.rstrip("\n")
         if text.startswith("=") and len(text) > 1:
@@ -476,6 +511,7 @@ class Sheets(FileList):
             self.sh["raw"].pop((r, c), None)
 
     @Slot(int, int, int, int, str)
+    @on_grid
     def clear(self, r0: int, c0: int, r1: int, c1: int, what: str = "contents") -> None:
         keys = [k for k in list(self.sh["raw"]) + list(self.sh["fmt"]) if r0 <= k[0] <= r1 and c0 <= k[1] <= c1]
         if not keys:
@@ -490,6 +526,7 @@ class Sheets(FileList):
 
     # ------------------------------------------------------------------ formatting
     @Slot(int, int, int, int, str, "QVariant")
+    @on_grid
     def setFormat(self, r0: int, c0: int, r1: int, c1: int, key: str, value) -> None:
         """b, i, u, s (toggles: value true/false), color, fill ("" clears), align (left/center/right/""), wrap, num
         (a number format code), places (+1/-1), size, font."""
@@ -523,6 +560,7 @@ class Sheets(FileList):
 
     # ------------------------------------------------------------------ copy, cut, paste, fill
     @Slot(int, int, int, int, bool, result=str)
+    @on_grid
     def copy(self, r0: int, c0: int, r1: int, c1: int, cut: bool = False) -> str:
         """What's selected, kept for pasting (formulas move, formats come too); returns it as text for other apps."""
         cells = {(r - r0, c - c0): (self.sh["raw"].get((r, c), ""), copy.deepcopy(self.sh["fmt"].get((r, c)))) for r in range(r0, r1 + 1) for c in range(c0, c1 + 1)}
@@ -532,6 +570,7 @@ class Sheets(FileList):
         return text
 
     @Slot(int, int, int, int, str, result="QVariantList")
+    @on_grid
     def paste(self, r: int, c: int, r1: int, c1: int, text: str) -> list:
         """Paste at (r, c): what was copied here (its formulas moved), or text from another app (tabs or commas
         between cells). A selection that's a whole number of copies wide and tall gets it repeated. Returns the cells
@@ -570,6 +609,7 @@ class Sheets(FileList):
         return [r, c, r + max(0, len(rows) - 1), c + max(0, max((len(x) for x in rows), default=1) - 1)]
 
     @Slot(int, int, int, int, int, int)
+    @on_grid
     def fill(self, r0: int, c0: int, r1: int, c1: int, tr: int, tc: int) -> None:
         """The fill handle dragged from the selection (r0..r1, c0..c1) to (tr, tc): down, up, right or left."""
         self._keep("fill")
@@ -608,6 +648,7 @@ class Sheets(FileList):
                 self.sh["fmt"].pop(k, None)
 
     @Slot(int, int, int, int, result="QVariantList")
+    @on_grid
     def autoSum(self, r0: int, c0: int, r1: int, c1: int) -> list:
         """Σ: under (or beside) the selection, a SUM of the numbers above it; one cell alone gets the run of numbers
         above (or to its left). Returns the cell to show."""
@@ -634,11 +675,11 @@ class Sheets(FileList):
     @Slot(str, int, int)
     def insert(self, axis: str, at: int, count: int) -> None:
         """Put in `count` rows (axis 'r') or columns ('c') before `at`."""
-        self._move(axis, at, max(1, count))
+        self._move(axis, max(0, min(se.MAX_ROWS, at)), max(1, min(10000, count)))
 
     @Slot(str, int, int)
     def remove(self, axis: str, at: int, count: int) -> None:
-        self._move(axis, at, -max(1, count))
+        self._move(axis, max(0, min(se.MAX_ROWS, at)), -max(1, min(10000, count)))
 
     def _move(self, axis: str, at: int, count: int) -> None:
         self._keep("rows" if axis == "r" else "columns")
@@ -727,17 +768,20 @@ class Sheets(FileList):
                 for x in self.sh.get("checks") or []]
 
     @Slot(int, int, result="QVariantMap")
+    @on_grid
     def checkAt(self, r: int, c: int) -> dict:
         x = self.check_at(r, c)
         return {} if x is None else {"id": x["id"], "range": list(x["range"]), "kind": x["kind"], "items": ", ".join(x["items"]), "source": x["source"],
                                      "op": x["op"], "a": x["a"], "b": x["b"], "stop": x["stop"], "what": checks_.describe(x)}
 
     @Slot(int, int, result="QVariantList")
+    @on_grid
     def choicesAt(self, r: int, c: int) -> list:
         x = self.check_at(r, c)
         return checks_.choices(self.book, self._at, x) if x else []
 
     @Slot(int, int, int, int, str, str, str, str, str, bool, result=str)
+    @on_grid
     def setCheck(self, r0: int, c0: int, r1: int, c1: int, kind: str, items: str, op: str, a: str, b: str, stop: bool) -> str:
         """What may go in these cells: kind list (items: 'Yes, No' or a range such as E1:E5), whole, decimal, date or
         length, with op and a (and b). It takes the place of any check these cells had. Returns why not, or ''."""
@@ -783,6 +827,7 @@ class Sheets(FileList):
         return n
 
     @Slot(int, int, int, int, result=int)
+    @on_grid
     def clearChecks(self, r0: int, c0: int, r1: int, c1: int) -> int:
         if not any(not (x["range"][2] < r0 or x["range"][0] > r1 or x["range"][3] < c0 or x["range"][1] > c1) for x in self.sh.get("checks") or []):
             return 0
@@ -793,11 +838,13 @@ class Sheets(FileList):
 
     # ------------------------------------------------------------------ notes on cells
     @Slot(int, int, result="QVariantMap")
+    @on_grid
     def noteAt(self, r: int, c: int) -> dict:
         n = (self.sh.get("notes") or {}).get((r, c))
         return {} if not n else {"text": n["text"], "by": n.get("by", ""), "when": n.get("when", 0), "where": a1(r, c)}
 
     @Slot(int, int, str)
+    @on_grid
     def setNote(self, r: int, c: int, text: str) -> None:
         """A note on a cell ('' takes it off)."""
         notes = self.sh.setdefault("notes", {})
@@ -824,6 +871,7 @@ class Sheets(FileList):
         return out
 
     @Slot(int, int, int, int, str, str, str, int, str, result=str)
+    @on_grid
     def addRule(self, r0: int, c0: int, r1: int, c1: int, kind: str, a: str, b: str, n: int, style: str) -> str:
         """Colour the cells between (r0, c0) and (r1, c1) by a rule (huginn_sheet_rules); it goes first. Returns why
         not, or ""."""
@@ -866,6 +914,7 @@ class Sheets(FileList):
             self._done()
 
     @Slot(int, int, int, int, result=int)
+    @on_grid
     def clearRules(self, r0: int, c0: int, r1: int, c1: int) -> int:
         """Take off the rules that touch these cells; returns how many."""
         rules = self.sh.get("rules") or []
@@ -880,6 +929,7 @@ class Sheets(FileList):
     PIVOT_FNS = {"sum": ("SUMIFS", "Sum"), "count": ("COUNTIFS", "Count"), "average": ("AVERAGEIFS", "Average"), "min": ("MINIFS", "Smallest"), "max": ("MAXIFS", "Largest")}
 
     @Slot(int, int, int, int, result="QVariantList")
+    @on_grid
     def headings(self, r0: int, c0: int, r1: int, c1: int) -> list:
         """The first row of a block, as the names of its columns: [{col, name}]."""
         return [{"col": c, "name": self.shown(r0, c) or f"Column {se.col_name(c)}"} for c in range(c0, c1 + 1)]
@@ -974,6 +1024,7 @@ class Sheets(FileList):
         return raw, fmt, widths
 
     @Slot(int, int, int, int, int, int, int, str, result=str)
+    @on_grid
     def makePivot(self, r0: int, c0: int, r1: int, c1: int, rows: int, cols: int, values: int, fn: str) -> str:
         """A summary of a block (its first row the column names) on a new sheet: a row for each name in one column,
         optionally a column for each name in another, and the sum (or count, average, smallest, largest) of a third.
@@ -1021,18 +1072,21 @@ class Sheets(FileList):
 
     # ------------------------------------------------------------------ sizes
     @Slot(int, result=float)
+    @on_grid
     def colWidth(self, c: int) -> float:
         return float(self.sh["widths"].get(c, COL_W))
 
     @Slot(int, result=float)
+    @on_grid
     def rowHeight(self, r: int) -> float:
         if self._hidden(r):
             return 0.0
         return float(self.sh["heights"].get(r, ROW_H))
 
     @Slot(int, float)
+    @on_grid
     def setColWidth(self, c: int, w: float) -> None:
-        w = max(24.0, min(1200.0, round(w)))
+        w = max(24.0, min(1200.0, round(w))) if math.isfinite(w) else float(COL_W)
         if self.sh["widths"].get(c) != w:
             self.sh["widths"][c] = w
             self.gridChanged.emit()
@@ -1040,8 +1094,9 @@ class Sheets(FileList):
                 self.touch()
 
     @Slot(int, float)
+    @on_grid
     def setRowHeight(self, r: int, h: float) -> None:
-        h = max(14.0, min(600.0, round(h)))
+        h = max(14.0, min(600.0, round(h))) if math.isfinite(h) else float(ROW_H)
         if self.sh["heights"].get(r) != h:
             self.sh["heights"][r] = h
             self.gridChanged.emit()
@@ -1049,6 +1104,7 @@ class Sheets(FileList):
                 self.touch()
 
     @Slot(int)
+    @on_grid
     def fitColumn(self, c: int) -> None:
         """A column as wide as what's in it (double-click its edge)."""
         fm = QFontMetrics(QFont("Inter", 10))
@@ -1064,6 +1120,7 @@ class Sheets(FileList):
 
     # ------------------------------------------------------------------ sorting and filtering
     @Slot(int, int, int, int, int, bool, bool)
+    @on_grid
     def sort(self, r0: int, c0: int, r1: int, c1: int, key: int, descending: bool, header: bool) -> None:
         """Sort the rows of a block by one of its columns (numbers before text, empty last), formats going along."""
         if header:
@@ -1105,6 +1162,7 @@ class Sheets(FileList):
         self._done()
 
     @Slot(int, int, int, int, result="QVariantList")
+    @on_grid
     def dataBlock(self, r: int, c: int, r1: int, c1: int) -> list:
         """The block of filled cells round (r, c) when only one cell is chosen (Ctrl+A, sorting, filters, charts)."""
         if (r, c) != (r1, c1):
@@ -1131,6 +1189,7 @@ class Sheets(FileList):
         return [top, left, bottom, right]
 
     @Slot(int, int, int, int)
+    @on_grid
     def setFilter(self, r0: int, c0: int, r1: int, c1: int) -> None:
         """Turn the filter on for a block (its first row has the arrows), or off when it's on."""
         if self.sh.get("filter"):
@@ -1156,6 +1215,7 @@ class Sheets(FileList):
         return False
 
     @Slot(int, result="QVariantList")
+    @on_grid
     def filterValues(self, c: int) -> list:
         flt = self.sh.get("filter")
         if not flt:
@@ -1171,6 +1231,7 @@ class Sheets(FileList):
         return [{"value": t, "label": t or "(empty)", "shown": t not in hidden} for t in seen[:500]]
 
     @Slot(int, "QVariantList")
+    @on_grid
     def setFilterHidden(self, c: int, values) -> None:
         values = values.toVariant() if hasattr(values, "toVariant") else values
         flt = self.sh.get("filter")
@@ -1191,6 +1252,7 @@ class Sheets(FileList):
         return [dict(ch) for ch in self.sh["charts"]]
 
     @Slot(str, int, int, int, int, float, float, result=str)
+    @on_grid
     def addChart(self, kind: str, r0: int, c0: int, r1: int, c1: int, x: float, y: float) -> str:
         r0, c0, r1, c1 = self.dataBlock(r0, c0, r1, c1)
         if (r0, c0) == (r1, c1):
@@ -1242,6 +1304,7 @@ class Sheets(FileList):
 
     # ------------------------------------------------------------------ find
     @Slot(str, int, int, bool, bool, result="QVariantList")
+    @on_grid
     def find(self, text: str, r: int, c: int, backwards: bool, case: bool) -> list:
         if not text:
             return []
@@ -1278,6 +1341,7 @@ class Sheets(FileList):
 
     # ------------------------------------------------------------------ the status line
     @Slot(int, int, int, int, result=str)
+    @on_grid
     def summary(self, r0: int, c0: int, r1: int, c1: int) -> str:
         if (r0, c0) == (r1, c1):
             return ""
@@ -1464,7 +1528,7 @@ class Sheets(FileList):
     def export(self, kind: str) -> str:
         """csv (the sheet in front, as shown) | xlsx (every sheet: formulas with their results, formats, widths,
         frozen panes, charts) | pdf (the sheet in front, on pages)."""
-        if self._path is None:
+        if self._path is None or kind not in ("csv", "xlsx", "pdf"):
             return ""
         self.save()
         try:
