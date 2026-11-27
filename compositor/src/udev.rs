@@ -560,6 +560,7 @@ pub fn run_udev() {
                 if let Err(err) = libinput_context.resume() {
                     error!("Failed to resume libinput context: {:?}", err);
                 }
+                let mut waiting = Vec::new();
                 for (node, backend) in data
                     .backend_data
                     .backends
@@ -577,11 +578,21 @@ pub fn run_udev() {
                         .lock()
                         .activate(false)
                         .expect("failed to activate drm backend");
+                    if !backend.waiting.is_empty() {
+                        // in front for the first time (started behind the sign-in screen): the card is ours now
+                        if let Err(err) = backend.drm_output_manager.device_mut().reset_state() {
+                            warn!(?err, "couldn't reset the card's state");
+                        }
+                        waiting.extend(backend.waiting.drain(..).map(|w| (node, w)));
+                    }
                     if let Some(lease_global) = backend.leasing_global.as_mut() {
                         lease_global.resume::<HuginnState<UdevData>>();
                     }
                     data.handle
                         .insert_idle(move |data| data.render(node, None, data.clock.now()));
+                }
+                for (node, w) in waiting {
+                    data.build_output(node, &w.connector, w.crtc, w.mode, w.output, w.global);
                 }
             }
         })
@@ -915,8 +926,20 @@ impl Drop for SurfaceData {
     }
 }
 
+/// A screen found while this session's terminal wasn't in front (signing in starts the session behind the sign-in
+/// screen): its output exists for clients from the start, and it is set up for drawing when the session comes to the
+/// front, since nothing about the card's state can be changed until then.
+struct Waiting {
+    connector: connector::Info,
+    crtc: crtc::Handle,
+    mode: smithay::reexports::drm::control::Mode,
+    output: Output,
+    global: GlobalId,
+}
+
 struct BackendData {
     surfaces: HashMap<crtc::Handle, SurfaceData>,
+    waiting: Vec<Waiting>,
     non_desktop_connectors: Vec<(connector::Handle, crtc::Handle)>,
     leasing_global: Option<DrmLeaseState>,
     active_leases: Vec<DrmLease>,
@@ -1035,7 +1058,10 @@ impl HuginnState<UdevData> {
 
         let fd = DrmDeviceFd::new(DeviceFd::from(fd));
 
-        let (drm, notifier) = DrmDevice::new(fd.clone(), true).map_err(DeviceAddError::DrmDevice)?;
+        // Started behind the sign-in screen: the card belongs to the sign-in screen until this session is in front,
+        // so its state is left alone now and reset then (ActivateSession).
+        let in_front = self.backend_data.session.is_active();
+        let (drm, notifier) = DrmDevice::new(fd.clone(), in_front).map_err(DeviceAddError::DrmDevice)?;
         let gbm = GbmDevice::new(fd).map_err(DeviceAddError::GbmDevice)?;
 
         let registration_token = self
@@ -1138,6 +1164,7 @@ impl HuginnState<UdevData> {
                 non_desktop_connectors: Vec::new(),
                 render_node,
                 surfaces: HashMap::new(),
+                waiting: Vec::new(),
                 leasing_global: DrmLeaseState::new::<HuginnState<UdevData>>(&self.display_handle, &node)
                     .inspect_err(|err| {
                         warn!(?err, "Failed to initialize drm lease global for: {}", node);
@@ -1158,9 +1185,6 @@ impl HuginnState<UdevData> {
         } else {
             return;
         };
-
-        let render_node = device.render_node.unwrap_or(self.backend_data.primary_gpu);
-        let mut renderer = self.backend_data.gpus.single_renderer(&render_node).unwrap();
 
         let output_name = format!("{}-{}", connector.interface().as_str(), connector.interface_id());
         info!(?crtc, "Trying to setup connector {}", output_name,);
@@ -1270,6 +1294,35 @@ impl HuginnState<UdevData> {
                 crtc,
                 device_id: node,
             });
+
+            if !self.backend_data.session.is_active() {
+                info!(name = output.name(), "set up for drawing once this session is in front");
+                device.waiting.push(Waiting { connector: connector.clone(), crtc, mode: drm_mode, output: output.clone(), global });
+                self.restore_display(&output);
+                return;
+            }
+            self.build_output(node, &connector, crtc, drm_mode, output, global);
+        }
+    }
+
+    /// Sets a screen up for drawing (its DRM output and compositor) and starts drawing on it.
+    fn build_output(
+        &mut self,
+        node: DrmNode,
+        connector: &connector::Info,
+        crtc: crtc::Handle,
+        drm_mode: smithay::reexports::drm::control::Mode,
+        output: Output,
+        global: GlobalId,
+    ) {
+        {
+            let Some(device) = self.backend_data.backends.get_mut(&node) else {
+                self.display_handle.remove_global::<HuginnState<UdevData>>(global);
+                return;
+            };
+            let render_node = device.render_node.unwrap_or(self.backend_data.primary_gpu);
+            let mut renderer = self.backend_data.gpus.single_renderer(&render_node).unwrap();
+            let drm_device = device.drm_output_manager.device();
 
             #[cfg(feature = "debug")]
             let fps_element = self.backend_data.fps_texture.clone().map(FpsElement::new);
@@ -1387,6 +1440,13 @@ impl HuginnState<UdevData> {
         } else if let Some(surface) = device.surfaces.remove(&crtc) {
             self.space.unmap_output(&surface.output);
             self.space.refresh();
+        } else if let Some(pos) = device.waiting.iter().position(|w| w.crtc == crtc) {
+            let w = device.waiting.remove(pos);
+            w.output.leave_all();
+            self.display_handle.remove_global::<HuginnState<UdevData>>(w.global);
+            self.space.unmap_output(&w.output);
+            self.space.refresh();
+            return;
         }
 
         let render_node = device.render_node.unwrap_or(self.backend_data.primary_gpu);
