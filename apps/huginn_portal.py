@@ -12,9 +12,13 @@ with Huginn's own windows:
     Access          "Allow <app> to …?" with the app's own choices (huginn_portal_ask.Prompt)
     Open With       the apps that can open a file or a link, the last one used already picked
 
+    Inhibit         keep the screen on or the computer awake while an app asks (huginn_portal_more.py)
+    Background      start an App Store app at sign-in (huginn_portal_more.py)
+
 Settings (dark or light, accent, contrast) are answered by huginn_portal_settings.py, which stays running; screen
-sharing stays KDE's (PipeWire). Qt apps reach the portal through KDE's integration (PLASMA_INTEGRATION_USE_PORTAL),
-GTK apps through GTK_USE_PORTAL / GDK_DEBUG=portals, Flatpak and Snap apps always.
+sharing is xdg-desktop-portal-wlr's (PipeWire, from Huginn's compositor), printing and the rest GTK's portal's. Qt apps
+reach the portal through qt6ct (its dialogs set to the portal's), GTK apps through GTK_USE_PORTAL /
+GDK_DEBUG=portals, Flatpak and Snap apps always.
 
     python3 huginn_portal.py                 the backend (D-Bus activated as org.freedesktop.impl.portal.desktop.huginn)
     python3 huginn_portal.py --demo [what]   one window on its own: open, save, access, apps, shot or colour
@@ -685,6 +689,8 @@ def main() -> int:
         conn = Gio.bus_get_sync(Gio.BusType.SESSION, None)
         shot = Shot(conn)
         portal = Portal(chooser, conn, prompt, shot)
+        from huginn_portal_more import Keeper                # keeping the screen on, and starting at sign-in
+        keeper = Keeper(conn)
         got = conn.call_sync("org.freedesktop.DBus", "/org/freedesktop/DBus", "org.freedesktop.DBus", "RequestName",
                              GLib.Variant("(su)", (BUS_NAME, 4)), GLib.VariantType("(u)"), 0, 5000, None)
         if got.unpack()[0] not in (1, 4):                  # someone else is already the file chooser
@@ -695,7 +701,7 @@ def main() -> int:
     app.setDesktopFileName("huginn-files-chooser")          # Files' colour, but not mistaken for the Files app
     if portal is not None:
         idle = QTimer(interval=600000)                   # leaves after ten quiet minutes; the portal starts it again
-        idle.timeout.connect(lambda: app.quit() if portal.current is None and not portal.queue else None)
+        idle.timeout.connect(lambda: app.quit() if portal.current is None and not portal.queue and not keeper.busy() else None)
         idle.start()
     pump = QTimer(interval=30)
     pump.timeout.connect(lambda: GLib.MainContext.default().iteration(False))

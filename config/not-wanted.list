@@ -29,3 +29,10 @@ plasma-session-wayland
 kscreen
 # Papirus: replaced by Huginn's own icon theme (2026-11-19)
 papirus-icon-theme
+# KDE's desktop portal and its integration for Qt apps: Huginn's portal and GTK's answer apps, and qt6ct carries
+# Huginn's look and Open and Save windows to Qt apps (2026-11-27)
+xdg-desktop-portal-kde
+plasma-integration
+kde-cli-tools
+kio-extras
+kde-config-gtk-style

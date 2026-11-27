@@ -3065,14 +3065,19 @@ class SystemSettings(QObject):
     # -------------------------------------------------------------- Appearance: icons and pointers
     @Slot(str)
     def setIconTheme(self, ident: str) -> None:
-        """An icon theme for everything: Huginn's own apps and shell (at once), KDE's and Qt's apps (kdeglobals),
-        GTK's (GNOME's setting)."""
+        """An icon theme for everything: Huginn's own apps and shell (at once), Qt's apps (qt6ct) and those built on
+        KDE's libraries (kdeglobals), GTK's (GNOME's setting)."""
         import huginn_looks as hl
         if not hl.theme_folders(ident):
             return
 
         def work():
             kconfig_write(CONFIG / "kdeglobals", ["Icons"], "Theme", ident)
+            try:                                                 # Qt apps (their platform theme, qt6ct)
+                import huginn_look
+                huginn_look.write_qt6ct(ident)
+            except Exception:                                    # noqa: BLE001
+                pass
             if HAVE("gsettings"):
                 RUN(["gsettings", "set", "org.gnome.desktop.interface", "icon-theme", ident], None, 5)
             return "Some apps show the new icons after they're opened again."

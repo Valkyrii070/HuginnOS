@@ -6,7 +6,7 @@ colour is, and whether to use high contrast or less motion. This answers from Hu
 the shell and every Huginn app read (~/.config/huginn-shell/settings.json) — and tells them the moment one changes.
 It is small (no window, no Qt) and stays running while you're signed in, so a change reaches apps right away.
 
-KDE's settings backend comes after this one (huginn-portals.conf), so anything Huginn has no opinion on still has an
+GTK's settings backend comes after this one (huginn-portals.conf), so anything Huginn has no opinion on still has an
 answer; where both have one, Huginn's wins.
 """
 import argparse

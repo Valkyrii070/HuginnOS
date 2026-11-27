@@ -21,38 +21,25 @@ rm -f /usr/share/wayland-sessions/huginnos-preview.desktop /usr/share/xdg-deskto
 chmod 755 /usr/bin/huginn-session /usr/bin/huginn-session-preview /usr/libexec/huginn-session-apps
 test -f /usr/share/huginn-shell/huginn_compositor.py
 test -f /usr/share/huginn-shell/qml/Compositor.qml
-# The desktop portal: Open and Save, screenshots and colours, "Allow …?", Open With and settings are Huginn's own.
+# The desktop portal: Open and Save, screenshots and colours, "Allow …?", Open With, keeping the screen on,
+# starting at sign-in and settings are Huginn's own.
 test -f /usr/share/xdg-desktop-portal/huginn-portals.conf
 test -f /usr/share/xdg-desktop-portal/portals/huginn.portal
 test -f /usr/share/xdg-desktop-portal/portals/huginn-settings.portal
 test -f /usr/share/huginn-apps/qml/PortalPrompt.qml
 test -f /usr/share/huginn-apps/qml/PortalShot.qml
-# KDE's backend answers what Huginn's own and xdg-desktop-portal-wlr (screen sharing) don't. It is started through a
-# small wrapper (it once told it "KDE" in the KWin session, which is gone); its own D-Bus file is set aside
-# (dpkg-divert, so package updates keep to the side).
-kde_portal=$(dpkg -L xdg-desktop-portal-kde | grep '/libexec/xdg-desktop-portal-kde$' | head -n1)
-test -x "$kde_portal"
-cat > /usr/libexec/huginn-portal-kde <<EOF2
-#!/bin/sh
-# KDE's portal backend in Huginn's session: see /usr/share/xdg-desktop-portal/huginn-portals.conf.
-exec $kde_portal "\$@"
-EOF2
-chmod 755 /usr/libexec/huginn-portal-kde
+test -f /usr/share/huginn-apps/huginn_portal_more.py
+# GTK's backend answers what Huginn's own and xdg-desktop-portal-wlr (screen sharing) don't: printing, email, your
+# name and picture. KDE's backend is gone; on a system that had it, its wrapper, the set-aside D-Bus file and the
+# systemd drop-in are put back as they were (nothing asks for it any more, so it never starts).
+test -f /usr/share/xdg-desktop-portal/portals/gtk.portal
+rm -f /usr/libexec/huginn-portal-kde
+rm -rf /usr/lib/systemd/user/plasma-xdg-desktop-portal-kde.service.d
 svc=/usr/share/dbus-1/services/org.freedesktop.impl.portal.desktop.kde.service
-dpkg-divert --local --rename --divert "$svc.kde-original" --add "$svc"
-cat > "$svc" <<'EOF2'
-[D-BUS Service]
-Name=org.freedesktop.impl.portal.desktop.kde
-Exec=/usr/libexec/huginn-portal-kde
-SystemdService=plasma-xdg-desktop-portal-kde.service
-EOF2
-mkdir -p /usr/lib/systemd/user/plasma-xdg-desktop-portal-kde.service.d
-cat > /usr/lib/systemd/user/plasma-xdg-desktop-portal-kde.service.d/huginn.conf <<'EOF2'
-# Huginn: started by systemd, KDE's portal backend goes through the same wrapper (see /usr/libexec/huginn-portal-kde).
-[Service]
-ExecStart=
-ExecStart=/usr/libexec/huginn-portal-kde
-EOF2
+if dpkg-divert --list "$svc" | grep -q .; then
+    rm -f "$svc"
+    dpkg-divert --local --rename --remove "$svc"
+fi
 # The installation drive signs in to Huginn's session, not Plasma's (casper would pick Plasma).
 chmod 755 /usr/libexec/huginn-live-session
 systemctl enable huginn-live-session.service

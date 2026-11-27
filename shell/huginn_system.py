@@ -935,15 +935,23 @@ for (var i = 0; i < all.length; i++) {{ var win = all[i]; if (String(win.interna
         self._bt = {"present": bool(self._bt_path), "on": on}
         self.changed.emit()
 
+    NIGHT = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "kwinrc"
+
     def _read_night(self) -> None:
-        if not self.sb:
-            return
-        running = self._get(self.sb, "org.kde.KWin", "/org/kde/KWin/NightLight", "org.kde.KWin.NightLight", "available", None)
-        if running is None:
-            self._night = {"available": False, "on": False}
-            return
-        on = bool(self._get(self.sb, "org.kde.KWin", "/org/kde/KWin/NightLight", "org.kde.KWin.NightLight", "enabled", False))
-        self._night = {"available": bool(running) and bool(shutil.which("kwriteconfig6")), "on": on}
+        """Night light is Huginn's session daemon's (huginn_sessiond.night_light): Settings › Displays keeps it in
+        [NightColor] of kwinrc (the name it has had since KWin), and the daemon follows that file."""
+        on = False
+        try:
+            group = ""
+            for line in self.NIGHT.read_text(encoding="utf-8").splitlines():
+                t = line.strip()
+                if t.startswith("["):
+                    group = t
+                elif group == "[NightColor]" and t.startswith("Active="):
+                    on = t.split("=", 1)[1].strip() == "true"
+        except OSError:
+            pass
+        self._night = {"available": not self._demo, "on": on}
 
     @Slot()
     def refreshPanel(self) -> None:
@@ -1162,11 +1170,30 @@ for (var i = 0; i < all.length; i++) {{ var win = all[i]; if (String(win.interna
     def setNightLight(self, on: bool) -> None:
         self._night = dict(self._night, on=on)
         self.changed.emit()
-        if self._demo or not shutil.which("kwriteconfig6"):
+        if self._demo:
             return
-        subprocess.run(["kwriteconfig6", "--file", "kwinrc", "--group", "NightColor", "--key", "Active", "true" if on else "false"], check=False)
-        if self.sb:
-            self.sb.call("org.kde.KWin", "/KWin", "org.kde.KWin", "reconfigure", None, None, 0, 3000, None, None)
+        try:
+            lines = self.NIGHT.read_text(encoding="utf-8").splitlines()
+        except OSError:
+            lines = []
+        start = next((i for i, line in enumerate(lines) if line.strip() == "[NightColor]"), -1)
+        value = "Active=" + ("true" if on else "false")
+        if start < 0:
+            lines += (["" ] if lines and lines[-1].strip() else []) + ["[NightColor]", value]
+        else:
+            end = next((i for i in range(start + 1, len(lines)) if lines[i].strip().startswith("[")), len(lines))
+            hit = next((i for i in range(start + 1, end) if lines[i].strip().startswith("Active=")), -1)
+            if hit >= 0:
+                lines[hit] = value
+            else:
+                lines.insert(start + 1, value)
+        try:
+            self.NIGHT.parent.mkdir(parents=True, exist_ok=True)
+            tmp = self.NIGHT.with_name(".kwinrc.saving")
+            tmp.write_text("\n".join(lines) + "\n", encoding="utf-8")
+            os.replace(tmp, self.NIGHT)                  # (the session daemon sees ~/.config change, and follows)
+        except OSError:
+            pass
 
     # ------------------------------------------------------------------ keyboard layouts, the screen reader, the bell
     layoutsChanged = Signal()

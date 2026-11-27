@@ -1727,16 +1727,23 @@ The goal is a desktop that is Huginn's from the first screen to the last. Where 
   - Screenshots for apps: the screen holds still, drag the part to share or take it all; a quiet screenshot first
     asks "Allow …?" once. Colour picking: the screen holds still with a magnifier (`apps/huginn_portal_ask.py`).
   - "Allow <app> to …?" (camera, screenshots, running in the background…) and **Open With**.
+  - Keeping the screen on or the computer awake while an app asks (a film, a call, a game): the screen through the
+    session daemon (`org.freedesktop.ScreenSaver`), sleep through logind, let go when the app is done; and App Store
+    apps asking to start at sign-in (an entry in `~/.config/autostart` that Startup Apps lists)
+    (`apps/huginn_portal_more.py`).
   - Settings apps read: dark or light, the realm's accent, contrast, less motion, fonts (`apps/huginn_portal_settings.py`,
-    a small resident process, so a change reaches every app at once). KDE's settings come after Huginn's.
-  - Still KDE's: **screen sharing and recording** (PipeWire). KDE's backend only offers it, and KWin only allows it,
-    when told it's in KDE and when KWin knows the installed apps: Huginn's session now starts it through
-    `/usr/libexec/huginn-portal-kde` and sets `XDG_MENU_PREFIX=plasma-`. (Before, screen sharing was missing in
-    Huginn's session.)
+    a small resident process, so a change reaches every app at once). GTK's settings come after Huginn's.
+  - **Screen sharing and recording** (PipeWire): xdg-desktop-portal-wlr, from Huginn's compositor.
+  - What's left goes to **GTK's portal** (printing, email, your name and picture, web apps added to the start menu).
+    KDE's portal is gone (2026-11-27), and with it the wrapper that started it in Huginn's session.
+- **Qt apps that aren't Huginn's** get their platform theme from qt6ct (`QT_QPA_PLATFORMTHEME=qt6ct`): its settings,
+  written by `apps/huginn_look.py`, name the Kvantum style, the icon theme chosen in Settings, Inter, and the portal's
+  Open and Save (Huginn's own). KDE's integration (plasma-integration), KIO's extras and KDE's command-line tools are
+  gone, and the session calls itself `Huginn` alone (it was `Huginn:KDE`, so Qt and other apps took it for KDE).
 - **Everyone else's apps wear the realm** (`apps/huginn_look.py`, run by the shell at sign-in and on every change):
-  Qt and KDE apps get a Kvantum style generated from the tokens (KvAdapta's shapes, Huginn's colours, all four realms
-  dark and light) and the realm's KDE colours; GTK 3/4 apps get Breeze-GTK in Huginn's colours, and libadwaita apps
-  its named colours. Inter is the font everywhere. Icons are Huginn's own theme (see "Icons and looks"); Papirus is gone.
+  Qt apps get a Kvantum style generated from the tokens (KvAdapta's shapes, Huginn's colours, all four realms dark and
+  light), and apps built on KDE's libraries (from the App Store) the realm's colours in kdeglobals; GTK 3/4 apps get
+  Breeze-GTK in Huginn's colours, and libadwaita apps its named colours. Inter is the font everywhere. Icons are Huginn's own theme (see "Icons and looks"); Papirus is gone.
 - **The compositor**: being replaced with Huginn's own, in Rust on Smithay (see "Huginn's own compositor" below): it
   is now the session **"Huginn OS (own compositor, preview)"**. The earlier preview in Python
   (`shell/huginn_compositor.py`, `shell/qml/Compositor.qml`, inside cage) is what the notes below describe; it stays

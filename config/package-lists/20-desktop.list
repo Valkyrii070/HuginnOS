@@ -1,17 +1,20 @@
 # The compositor is Huginn's own (54-huginn-compositor.list), for the desktop and for the sign-in screen alike, and
 # so is the sign-in service (apps/huginn_signind.py): KWin, Plasma and SDDM are not in the image.
 xwayland
-xdg-desktop-portal-kde
+# The desktop portal: Huginn's own answers apps' questions (huginn-portals.conf); GTK's answers what's left
+# (printing, email, your name and picture). KDE's is gone.
+xdg-desktop-portal-gtk
 xdg-user-dirs
-# Once brought in by Plasma's workspace, still used: KDE's look and file dialogs for Qt apps (QT_QPA_PLATFORMTHEME=kde),
-# location for Weather and Maps (the Privacy settings), screen makers' names in Displays.
-plasma-integration
+# Qt apps that aren't Huginn's: their style (Kvantum, below), icons and fonts, and Open and Save through the portal
+# (Huginn's own), from qt6ct's settings (huginn_look.py writes them; QT_QPA_PLATFORMTHEME=qt6ct). KDE's
+# integration (plasma-integration) is gone.
+qt6ct
+qt6-xdgdesktopportal-platformtheme
+# Location for Weather and Maps (the Privacy settings), screen makers' names in Displays.
 geoclue-2.0
 hwdata
 # Shell services. Notifications, power, the hardware keys, Wi‑Fi passwords and Bluetooth pairing are Huginn's own
 # session daemon (apps/huginn_sessiond.py); Plasma's (plasma-nm, plasma-pa, powerdevil, bluedevil) are not-wanted.
-kde-cli-tools
-kio-extras
 libnotify-bin
 wireplumber
 bluez
@@ -19,7 +22,6 @@ upower
 # Theming
 breeze
 breeze-gtk-theme
-kde-config-gtk-style
 qt6-style-kvantum
 qt-style-kvantum-themes
 # Icons: Huginn's own theme (scripts/make-icons.py, in the overlay), with Breeze's underneath for anything it doesn't draw

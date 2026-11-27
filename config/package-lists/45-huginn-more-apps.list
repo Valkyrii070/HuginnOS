@@ -14,7 +14,6 @@ qt6-location-plugins
 qml6-module-qtpositioning
 # Screenshot's "Record a Video" (the desktop's screen-sharing service, PipeWire, and the video writer)
 python3-gi
-xdg-desktop-portal-kde
 gstreamer1.0-tools
 gstreamer1.0-pipewire
 gstreamer1.0-plugins-good

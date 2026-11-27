@@ -2,8 +2,10 @@
 # Runs inside KWin: start the session services, then the shell. The session ends when the shell exits.
 # With --services (Huginn's own compositor starts it once it's listening): the services only, since the shell is
 # drawn inside the compositor.
-dbus-update-activation-environment --systemd WAYLAND_DISPLAY DISPLAY XDG_CURRENT_DESKTOP XDG_SESSION_DESKTOP XDG_MENU_PREFIX QT_QPA_PLATFORM \
-    QT_QPA_PLATFORMTHEME PLASMA_INTEGRATION_USE_PORTAL GTK_USE_PORTAL GDK_DEBUG
+dbus-update-activation-environment --systemd WAYLAND_DISPLAY DISPLAY XDG_CURRENT_DESKTOP XDG_SESSION_DESKTOP QT_QPA_PLATFORM \
+    QT_QPA_PLATFORMTHEME GTK_USE_PORTAL GDK_DEBUG
+# (left by sessions before KDE's integration went: apps started by systemd mustn't look for Plasma's menu)
+systemctl --user unset-environment XDG_MENU_PREFIX PLASMA_INTEGRATION_USE_PORTAL 2>/dev/null
 # Desktop, Documents, Downloads, Pictures… in the home folder (and in the user's language), as other desktops make
 # them from their autostart folder, which this session doesn't run.
 command -v xdg-user-dirs-update >/dev/null && xdg-user-dirs-update
