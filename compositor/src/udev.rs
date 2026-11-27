@@ -591,6 +591,9 @@ pub fn run_udev() {
                 for (node, w) in waiting {
                     data.build_output(node, &w.connector, w.crtc, w.mode, w.output, w.global);
                 }
+                // coming to the front is someone at the computer: the idle time (the screen lock, the screen going
+                // off) counts from now, not from a session started behind the sign-in screen minutes ago
+                data.touched();
             }
         })
         .unwrap();
