@@ -10,6 +10,7 @@ work out in the stopped program. What the program prints shows in the Debug cons
 """
 import json
 import os
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -52,6 +53,93 @@ def adapter_for(lang: str, file: str, root: Path, program: str = "", python: str
             raise LookupError("program")
         return (["gdb", "-q", "-i", "dap"], {"program": program, "args": [], "cwd": str(root), "stopAtBeginningOfMainSubprogram": False}, "GDB")
     raise ValueError(f"Code can't debug {lang or 'this kind of file'} yet. Run it instead (Ctrl+F5).")
+
+
+# ---------------------------------------------------------------- attaching to a program that is already running
+def processes(limit: int = 400) -> list:
+    """The user's own running programs, newest first: [{pid, name, command, kind}] where kind is "python" (debugpy can
+    attach) or "native" (GDB can). Code itself, its helpers and kernel threads are left out."""
+    me, uid, out = os.getpid(), os.getuid(), []
+    try:
+        pids = sorted((int(n) for n in os.listdir("/proc") if n.isdigit()), reverse=True)
+    except OSError:
+        return out
+    for pid in pids:
+        if pid == me or pid == os.getppid():
+            continue
+        base = f"/proc/{pid}"
+        try:
+            if os.stat(base).st_uid != uid:
+                continue
+            raw = Path(base, "cmdline").read_bytes()
+            if not raw:
+                continue                                           # a kernel thread, or one that has gone
+            args = [a.decode("utf-8", "replace") for a in raw.rstrip(b"\0").split(b"\0")]
+            name = Path(base, "comm").read_text(encoding="utf-8", errors="replace").strip()
+            try:
+                exe = os.path.basename(os.readlink(base + "/exe"))
+            except OSError:
+                exe = os.path.basename(args[0])
+        except (OSError, ValueError):
+            continue
+        if "debugpy" in " ".join(args[:6]) or (exe == "gdb" and "dap" in args) or "huginn_app.py" in " ".join(args[:3]):
+            continue
+        kind = "python" if re.match(r"python(\d+(\.\d+)?)?$", exe) else "native"
+        out.append({"pid": pid, "name": name, "command": " ".join(" ".join(args).split())[:300], "kind": kind})
+        if len(out) >= limit:
+            break
+    return out
+
+
+def ptrace_note() -> str:
+    """Why attaching to a running program may be refused on this system ("" when nothing stands in the way)."""
+    try:
+        scope = int(Path("/proc/sys/kernel/yama/ptrace_scope").read_text().strip())
+    except (OSError, ValueError):
+        return ""
+    if scope >= 2:
+        return "This system lets only an administrator attach to running programs (kernel.yama.ptrace_scope is 2 or more)."
+    if scope == 1:
+        return ("This system only lets a program be attached to by the one that started it (kernel.yama.ptrace_scope is 1, Ubuntu's default). "
+                "To allow it until the next restart, run in a terminal:  sudo sysctl kernel.yama.ptrace_scope=0")
+    return ""
+
+
+def attach_for(kind: str, pid: int = 0, host: str = "", port: int = 0, program: str = "", mappings: list = (), python: str = "python3") -> tuple:
+    """(adapter command, attach arguments, name) for a running program: by process number, or one waiting on a port
+    (debugpy's --listen; gdbserver). `mappings` are [(folder here, the same folder where the program runs)]."""
+    if kind == "python":
+        if not has_debugpy(python):
+            raise ValueError("Debugging Python needs debugpy (the python3-debugpy package).")
+        args = {"type": "python", "request": "attach", "name": "Huginn Code", "justMyCode": False, "redirectOutput": True}
+        if port:
+            # A program started with "python3 -m debugpy --listen PORT" has its own adapter waiting on that port:
+            # Code talks to it there (huginn_lsp_tcp.py carries the conversation; this computer only).
+            if (host or "127.0.0.1") not in ("127.0.0.1", "localhost", "::1"):
+                raise ValueError(f"Code attaches to debugpy on this computer only. For {host}, open that computer over SSH (Remote), or forward its port here with ssh -L.")
+            args["connect"] = {"host": "127.0.0.1", "port": int(port)}
+            if mappings:
+                args["pathMappings"] = [{"localRoot": str(here), "remoteRoot": str(there)} for here, there in mappings]
+            return ([python, str(Path(__file__).resolve().with_name("huginn_lsp_tcp.py")), "127.0.0.1", str(int(port))], args, "debugpy")
+        elif pid > 1:
+            args["processId"] = int(pid)
+        else:
+            raise ValueError("Which program? It needs a process number, or the port debugpy is listening on.")
+        if mappings:
+            args["pathMappings"] = [{"localRoot": str(here), "remoteRoot": str(there)} for here, there in mappings]
+        return ([python, "-m", "debugpy.adapter"], args, "debugpy")
+    if not gdb_has_dap():
+        raise ValueError("Debugging compiled programs needs GDB 14 or later (the gdb package).")
+    args = {}
+    if port:
+        args["target"] = f"{host or '127.0.0.1'}:{int(port)}"
+    elif pid > 1:
+        args["pid"] = int(pid)
+    else:
+        raise ValueError("Which program? It needs a process number, or the address gdbserver is listening on.")
+    if program:
+        args["program"] = program
+    return (["gdb", "-q", "-i", "dap"], args, "GDB")
 
 
 class DapClient(QObject):
@@ -127,6 +215,7 @@ class Debugger(QObject):
         super().__init__(parent)
         self._client = None
         self._state, self._adapter, self._reason = "idle", "", ""
+        self._there, self._here = (lambda p: p), (lambda p: p)
         self._frames, self._frame, self._thread = [], -1, 0
         self._rows, self._open = [], set()
         self._console = []
@@ -139,6 +228,7 @@ class Debugger(QObject):
     # -------------------------------------------------------------- what the window shows
     state = Property(str, lambda self: self._state, notify=changed)
     active = Property(bool, lambda self: self._state != "idle", notify=changed)
+    attached = Property(bool, lambda self: self._state != "idle" and getattr(self, "_request", "launch") == "attach", notify=changed)
     adapter = Property(str, lambda self: self._adapter, notify=changed)
     reason = Property(str, lambda self: self._reason, notify=changed)
     frames = Property("QVariantList", lambda self: self._frames, notify=changed)
@@ -179,12 +269,19 @@ class Debugger(QObject):
         self.printed.emit()
 
     # -------------------------------------------------------------- starting and stopping
-    def start(self, argv: list, launch: dict, name: str, cwd: str) -> None:
+    def start(self, argv: list, launch: dict, name: str, cwd: str, request: str = "launch", what: str = "", helper=None, after: list = (), paths=None) -> None:
+        """Start a program under the debugger ("launch"), or join one already running ("attach": stopping the
+        debugger then leaves the program running). `helper` is a process that must live as long as the session (the
+        ssh that runs the program on another computer); `after` are commands for the debugger's own prompt once it
+        has joined (GDB's "set substitute-path …"). `paths` is (there, here): two functions turning a file's path
+        on this computer into its path where the debugger runs (another computer, a container) and back."""
         self.stop(quiet=True)
         self._console, self._frames, self._rows, self._open = [], [], [], set()
         self._adapter, self._state, self._reason, self._configured = name, "starting", "", False
-        self._launch = (argv, launch, name, cwd)
-        self._say(f"Starting {launch.get('program', '')} with {name}…", "info")
+        self._launch = (argv, launch, name, cwd, request, what, None, tuple(after), paths)
+        self._there, self._here = paths or ((lambda p: p), (lambda p: p))
+        self._request, self._helper, self._after, self._joined = request, helper, list(after), False
+        self._say((f"Attaching to {what or 'the program'} with {name}…" if request == "attach" else f"Starting {what or launch.get('program', '')} with {name}…"), "info")
         self._client = DapClient(argv, cwd, self)
         self._client.event.connect(self._event)
         self._client.gone.connect(self._ended)
@@ -197,7 +294,16 @@ class Debugger(QObject):
         if error:
             self._fail(f"The debugger didn't start: {error}")
             return
-        self._client.request("launch", self._launch[1], lambda b, e: self._fail(f"The program didn't start: {e}") if e else None)
+        attach = self._request == "attach"
+
+        def started(body, error):
+            if error:
+                self._fail((f"Couldn't attach: {error}" + (". " + ptrace_note() if "ptrace" in str(error).lower() or "permitted" in str(error).lower() else "")) if attach
+                           else f"The program didn't start: {error}")
+                return
+            for line in self._after:                                   # (GDB's own commands, at its prompt)
+                self._client.request("evaluate", {"expression": line, "context": "repl"}, lambda b, e: None)
+        self._client.request(self._request, self._launch[1], started)
 
     def _configure(self) -> None:
         for path in list(self._breakpoints):
@@ -214,7 +320,7 @@ class Debugger(QObject):
             if not error:
                 self._verified[path] = {b.get("line", 0) - 1: bool(b.get("verified")) for b in body.get("breakpoints", [])}
                 self.changed.emit()
-        self._client.request("setBreakpoints", {"source": {"path": path, "name": Path(path).name}, "breakpoints": [{"line": l + 1} for l in lines],
+        self._client.request("setBreakpoints", {"source": {"path": self._there(path) or path, "name": Path(path).name}, "breakpoints": [{"line": l + 1} for l in lines],
                                                 "lines": [l + 1 for l in lines]}, got)
 
     def _fail(self, text: str) -> None:
@@ -228,23 +334,37 @@ class Debugger(QObject):
             client, self._client = self._client, None
             client.gone.disconnect()
             try:
-                client.request("disconnect", {"terminateDebuggee": True})
+                client.request("disconnect", {"terminateDebuggee": getattr(self, "_request", "launch") != "attach"})      # (a program you joined is left running)
                 client.proc.waitForBytesWritten(300)
             except RuntimeError:
                 pass
             client.stop()
             client.deleteLater()
             if not quiet:
-                self._say("Stopped.", "info")
+                self._say("Detached: the program is still running." if getattr(self, "_request", "launch") == "attach" else "Stopped.", "info")
+        self._end_helper()
         self._state, self._frames, self._rows, self._where, self._frame = "idle", [], [], ("", -1), -1
         self.changed.emit()
 
     @Slot()
     def restart(self) -> None:
-        if self._launch:
-            self.start(*self._launch)
+        if self._launch and getattr(self, "_request", "launch") == "launch":
+            self.start(*self._launch[:4], paths=self._launch[8])
+
+    def _end_helper(self) -> None:
+        helper, self._helper = getattr(self, "_helper", None), None
+        if helper is not None:
+            try:
+                helper.terminate()
+                helper.wait(2)
+            except Exception:                                         # noqa: BLE001 (gone already, or not ours to wait for)
+                try:
+                    helper.kill()
+                except Exception:                                     # noqa: BLE001
+                    pass
 
     def _ended(self) -> None:
+        self._end_helper()
         if self._client is not None:
             self._client.deleteLater()
             self._client = None
@@ -257,6 +377,17 @@ class Debugger(QObject):
         if name == "initialized":
             self._configure()
         elif name == "stopped":
+            if getattr(self, "_request", "launch") == "attach" and not getattr(self, "_joined", False) and body.get("reason") not in ("breakpoint", "step", "exception", "pause", "function breakpoint"):
+                # GDB holds a program still when it joins it. Its breakpoints can be placed now that the program's
+                # own files are known, and then it is let go on.
+                self._joined = True
+                for path in list(self._breakpoints):
+                    self._send_breakpoints(path)
+                self._thread = body.get("threadId") or self._thread or 1
+                self._client.request("continue", {"threadId": self._thread}, lambda b, e: None)
+                self._state = "running"
+                self.changed.emit()
+                return
             self._state = "stopped"
             self._reason = {"breakpoint": "Paused at a breakpoint", "step": "Paused after a step", "exception": "Paused on an exception",
                             "pause": "Paused", "entry": "Paused at the start", "function breakpoint": "Paused at a breakpoint"}.get(body.get("reason", ""), "Paused")
@@ -293,6 +424,8 @@ class Debugger(QObject):
             frames = []
             for f in body.get("stackFrames", []):
                 src = f.get("source") or {}
+                if src.get("path"):
+                    src = dict(src, path=self._here(src["path"]) or src["path"])       # (a file over there that isn't in the project keeps its own path)
                 frames.append({"id": f.get("id"), "name": f.get("name", "?"), "file": src.get("path", ""), "short": Path(src.get("path", "") or src.get("name", "")).name,
                                "line": max(0, int(f.get("line", 1)) - 1)})
             self._frames = frames

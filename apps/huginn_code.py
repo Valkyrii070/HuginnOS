@@ -22,8 +22,11 @@ from PySide6.QtQuick import QQuickImageProvider
 
 import huginn_build as hb
 import huginn_code_more as more
+import huginn_container as hc
 import huginn_debug as hd
 import huginn_emmet as emmet
+import huginn_extensions as hx
+import huginn_notebook as nbk
 import huginn_remote as hr
 import huginn_vscode as vsc
 
@@ -58,7 +61,7 @@ LANGS = {
            "csharp", [["omnisharp", "-lsp"]]),
     "Shell": ((".sh", ".bash", ".zsh", ".bashrc", ".profile", ".zshrc"), "#", None, "if then else elif fi for while until do done case esac in function return exit export local readonly set unset echo cd source shift",
               "shellscript", [["bash-language-server", "start"]]),
-    "JSON": ((".json", ".jsonc", ".hsheet", ".hslides", ".code-workspace", ".uproject", ".uplugin"), "", None, "true false null", "json", [["vscode-json-languageserver", "--stdio"]]),
+    "JSON": ((".json", ".jsonc", ".hsheet", ".hslides", ".code-workspace", ".uproject", ".uplugin", ".ipynb"), "", None, "true false null", "json", [["vscode-json-languageserver", "--stdio"]]),
     "YAML": ((".yml", ".yaml"), "#", None, "true false null yes no on off", "yaml", [["yaml-language-server", "--stdio"]]),
     "TOML": ((".toml",), "#", None, "true false", "toml", [["taplo", "lsp", "stdio"]]),
     "Settings": ((".conf", ".ini", ".cfg", ".desktop", ".service", ".list", ".env", ".properties", ".gitignore", ".gitattributes", ".editorconfig"), "#", None, "true false yes no on off", "ini", []),
@@ -1008,9 +1011,19 @@ class Code(QObject):
         self._results_title = ""
         self._remote_poll = QTimer(self, interval=1000)
         self._remote_poll.timeout.connect(self._remote_check)
+        self._box, self._box_cfg, self._box_tries, self._home_there = None, None, 0, {}
+        self._roots, self._shut_roots, self._space_file = [], set(), ""      # a workspace's folders (the first is where it is remembered), the ones folded shut, its .code-workspace file
+        self._kernels = {}                                           # {a notebook's path: the Python running its cells}
+        self._nb_later = QTimer(self, interval=400, singleShot=True)
+        self._nb_later.timeout.connect(self._nb_flush_all)
+        self._nb_tell = QTimer(self, interval=60, singleShot=True)   # (a cell printing fast doesn't redraw the window per line)
+        self._nb_tell.timeout.connect(self._nb_told)
+        self._nb_dirty_tabs = set()
+        self._box_poll = QTimer(self, interval=1500)
+        self._box_poll.timeout.connect(self._box_check)
         self._auto_save = QTimer(self, interval=1000, singleShot=True)
         self._auto_save.timeout.connect(lambda: self.autoSave("delay"))
-        self._build = hb.Builder(self, save_all=lambda: self.saveAll(), env_path=EXTRA_BIN, known=lambda: self._vs_vars(), remote=lambda: self._remote_of())
+        self._build = hb.Builder(self, save_all=lambda: self.saveAll(), env_path=EXTRA_BIN, known=lambda: self._vs_vars(), remote=lambda: self._place())
         self._build.goTo.connect(lambda path, line, col: self.openFile(path, True, line, col))
         self._build.said.connect(self.said.emit)
         self._build.finished.connect(self._built)
@@ -1035,6 +1048,7 @@ class Code(QObject):
         self._tell.timeout.connect(self._tell_brought)
         from PySide6.QtCore import QCoreApplication
         if QCoreApplication.instance():
+            QCoreApplication.instance().aboutToQuit.connect(self._nb_quit)
             QCoreApplication.instance().aboutToQuit.connect(self._stash_now)
             QCoreApplication.instance().aboutToQuit.connect(self._keep)        # (where the cursor was in each file goes with it)
         self._load_state()
@@ -1079,7 +1093,7 @@ class Code(QObject):
         self._wrap = self.setting("editor.wordWrap") == "on"
         self._minimap = bool(self.setting("editor.minimap.enabled"))
         self._hide = [k for k, v in self.setting("files.exclude").items() if v] + [p for p in vsc.excluded(self._proj) if p not in self.setting("files.exclude")]
-        ASSOCIATIONS[:] = vsc.associations(dict(self._user, **self._proj), LANGS)
+        ASSOCIATIONS[:] = vsc.associations(dict(self._user, **self._proj), LANGS) + list(self._ext_data()["types"])      # (your own come first)
 
     def _set_user(self, key: str, value) -> None:
         value = vsc.clean(key, value)
@@ -1156,6 +1170,107 @@ class Code(QObject):
         self._keep()
         self.changed.emit()
 
+    # ---------------------------------------------------------------- extensions (huginn_extensions.py says what they can be)
+    def _ext_data(self) -> dict:
+        if getattr(self, "_ext", None) is None:
+            self._ext = hx.gather(LANGS)
+        return self._ext
+
+    def _ext_changed(self) -> None:
+        self._ext = None
+        self._apply_settings()
+        self._read_project()
+        self.keysChanged.emit()
+        self.changed.emit()
+
+    extensions = Property("QVariantList", lambda self: [{k: v for k, v in row.items() if k != "manifest"} for row in hx.installed()], notify=changed)
+    extensionThemes = Property("QVariantList", lambda self: list(self._ext_data()["themes"]), notify=changed)
+    extensionCommands = Property("QVariantList", lambda self: list(self._ext_data()["commands"]), notify=changed)
+    extensionsFound = Signal("QVariantList", str)            # what the registry answered, or why it didn't
+
+    @Slot(str, result=str)
+    def installExtension(self, path: str) -> str:
+        """Install a .vsix file (or an extension's folder). Returns what happened, in words; "" for nothing typed."""
+        if not path.strip():
+            return ""
+        try:
+            row = hx.install(path)
+        except ValueError as err:
+            return str(err)
+        self._ext_changed()
+        return f"Installed “{row['name']}”: {row['takes']}." + (f" Left out: {row['leaves']}." if row["leaves"] else "")
+
+    @Slot(str)
+    def removeExtension(self, ident: str) -> None:
+        if hx.remove(ident):
+            if self._theme.get("ext") == ident:
+                self.clearTheme()
+            self._ext_changed()
+
+    @Slot(str, bool)
+    def setExtensionOn(self, ident: str, on: bool) -> None:
+        if any(row["id"] == ident for row in hx.installed()):
+            hx.set_on(ident, on)
+            self._ext_changed()
+
+    @Slot(str, str, result=str)
+    def useExtensionTheme(self, ident: str, label: str) -> str:
+        row = next((t for t in self._ext_data()["themes"] if t["ext"] == ident and t["label"] == label), None)
+        if row is None:
+            return "That theme isn't installed any more."
+        why = self.importTheme(row["path"])
+        if not why:
+            self._theme = dict(self._theme, name=label, ext=ident)
+            self._set_user("workbench.colorTheme", label)
+            self._keep()
+            self.changed.emit()
+        return why
+
+    @Slot(int)
+    def runExtensionCommand(self, index: int) -> None:
+        """An extension's own command: its line, with ${file} and the rest filled in, typed into the terminal."""
+        rows = self._ext_data()["commands"]
+        if 0 <= index < len(rows):
+            missing = []
+            known = {k: shlex.quote(str(v)) for k, v in self._vs_vars().items()}       # (a file's name is one word to the shell, whatever is in it)
+            line = vsc.substitute(rows[index]["run"], known, None, missing)
+            if missing:
+                self.said.emit(f"“{rows[index]['title']}” asks for {missing[0]}, which Code can't answer.", True)
+                return
+            self.run(line)
+
+    @Slot(str)
+    def searchExtensions(self, query: str) -> None:
+        """Ask the Open VSX registry; the answer comes back as extensionsFound."""
+        if self._demo:
+            self.extensionsFound.emit([], "")
+            return
+
+        def go():
+            try:
+                rows, why = hx.search(query), ""
+            except ValueError as err:
+                rows, why = [], str(err)
+            self._back.emit(lambda: self.extensionsFound.emit(rows, why))
+        threading.Thread(target=go, daemon=True).start()
+
+    @Slot(str, str)
+    def fetchExtension(self, namespace: str, name: str) -> None:
+        """Fetch an extension from Open VSX and install its data part."""
+        if self._demo:
+            self.said.emit(f"Would fetch {namespace}.{name} from Open VSX.", False)
+            return
+        self.said.emit(f"Fetching {namespace}.{name}…", False)
+
+        def go():
+            try:
+                row = hx.fetch(namespace, name)
+                text, bad = f"Installed “{row['name']}”: {row['takes']}." + (f" Left out: {row['leaves']}." if row["leaves"] else ""), False
+            except ValueError as err:
+                text, bad = str(err), True
+            self._back.emit(lambda: (None if bad else self._ext_changed(), self.said.emit(text, bad)))
+        threading.Thread(target=go, daemon=True).start()
+
     vscodeFolder = Property(str, lambda self: str(vsc.user_dir() or ""), notify=changed)
 
     @Slot(result=str)
@@ -1198,6 +1313,7 @@ class Code(QObject):
         """{command name: key sequence} for the commands whose shortcut isn't Code's own: VS Code's, when that keymap is
         chosen, and over those the ones you set yourself ("" takes a command's shortcut away)."""
         preset = dict(vsc.VSCODE_KEYMAP) if self.setting("huginn.keymap") == "VS Code" else {}
+        preset.update(self._ext_data()["keys"])                    # (an extension's key bindings; your own lie over them)
         own = self._user.get("huginn.keys")
         preset.update({str(k): str(v) for k, v in own.items() if isinstance(v, str)} if isinstance(own, dict) else {})
         return preset
@@ -1259,11 +1375,18 @@ class Code(QObject):
     def _keep(self) -> None:
         if self._demo:
             return
-        if self._root:
-            self._state.setdefault("projects", {})[str(self._root)] = {"open": [d.path for d in self._docs], "at": self._at, "dirs": sorted(self._open_dirs)[:200],
-                                                                    "places": {p: a for p, a in self._places.items() if p.startswith(str(self._root))},
-                                                                    "breakpoints": {k: v for k, v in self._dbg.all_breakpoints().items() if k.startswith(str(self._root))}}
-        self._state.update(recent=self._recent, size=self._size, wrap=self._wrap, minimap=self._minimap, last=str(self._root) if self._root else "", theme=self._theme)
+        first = self._roots[0] if self._roots else self._root       # (a workspace is remembered under its first folder)
+        if first:
+            inside = tuple(str(r) for r in (self._roots or [first]))
+            self._state.setdefault("projects", {})[str(first)] = {"open": [d.path for d in self._docs], "at": self._at, "dirs": sorted(self._open_dirs)[:200],
+                                                                 "places": {p: a for p, a in self._places.items() if p.startswith(inside)},
+                                                                 "breakpoints": {k: v for k, v in self._dbg.all_breakpoints().items() if k.startswith(inside)}}
+            spaces = self._state.setdefault("spaces", {}) if isinstance(self._state.get("spaces", {}), dict) else {}
+            if len(self._roots) > 1:
+                spaces[str(first)] = [str(r) for r in self._roots[1:]]
+            else:
+                spaces.pop(str(first), None)
+        self._state.update(recent=self._recent, size=self._size, wrap=self._wrap, minimap=self._minimap, last=(self._space_file if self._space_file and Path(self._space_file).is_file() else str(first)) if first else "", theme=self._theme)
         try:
             STATE.parent.mkdir(parents=True, exist_ok=True)
             tmp = STATE.with_suffix(".saving")
@@ -1274,7 +1397,7 @@ class Code(QObject):
 
     def _restore_last(self, keep_docs: bool = True) -> None:
         last = self._state.get("last")
-        if last and Path(last).is_dir():
+        if last and (Path(last).is_dir() or (last.endswith(".code-workspace") and Path(last).is_file())):
             self.openFolder(last, restore=keep_docs)
 
     def _demo_fill(self) -> None:
@@ -1351,12 +1474,25 @@ def advice(sky: Sky) -> str:
             if not folders:
                 self.said.emit("That workspace file names no folder.", True)
                 return
-            if len(folders) > 1:
-                self.said.emit(f"That workspace has {len(folders)} folders. Code opens one at a time: this is the first, {Path(folders[0]).name}.", False)
-            root = Path(folders[0])
+            there = [f for f in folders if Path(f).is_dir()]
+            if not there:
+                self.said.emit("None of that workspace's folders are there any more.", True)
+                return
+            if len(there) < len(folders):
+                self.said.emit(f"{len(folders) - len(there)} of that workspace's folders {'is' if len(folders) - len(there) == 1 else 'are'}n't there any more, and left out.", False)
+            extra, space_file = [Path(f) for f in there[1:]], str(root)
+            root = Path(there[0])
+        else:
+            extra, space_file = None, ""
         if not root.is_dir():
             self.said.emit("That folder isn't there any more.", True)
             return
+        if extra is None and root in self._roots and len(self._roots) > 1:      # one of the open workspace's own folders: work in it
+            self._set_active(root)
+            return
+        if extra is None:                                          # a folder that was a workspace when it was last open is one again
+            kept = (self._state.get("spaces") or {}).get(str(root)) if isinstance(self._state.get("spaces"), dict) else None
+            extra = [Path(f) for f in (kept if isinstance(kept, list) and restore else []) if isinstance(f, str) and Path(f).is_dir() and Path(f) != root][:15]
         if self._root and root != self._root:
             if any(d.dirty for d in self._docs):
                 self.said.emit("Save or close your changed files first.", True)
@@ -1364,8 +1500,11 @@ def advice(sky: Sky) -> str:
             self._keep()                                           # (the folder being left: its tabs and where the cursor was in each)
             self._close_all()
         self._root = root
+        self._roots = [root] + [f for f in dict.fromkeys(extra) if f != root]
+        self._shut_roots, self._space_file = set(), space_file
         self._space = space
         self._read_project()
+        self._box_found()
         self._recent = [str(root)] + [r for r in self._recent if r != str(root)]
         del self._recent[10:]
         saved = self._state.get("projects", {}).get(str(root), {}) if restore else {}
@@ -1388,9 +1527,11 @@ def advice(sky: Sky) -> str:
         self.changed.emit()
 
     def _close_all(self) -> None:
+        self._nb_flush_all()
         self._stash_now()
         for d in self._docs:
             self._lsp_close(d)
+            self._nb_end(d.path)
         self._docs, self._at = [], -1
         for s in self._servers.values():
             if s:                                             # (None: a language whose server wouldn't start)
@@ -1404,6 +1545,8 @@ def advice(sky: Sky) -> str:
             return
         self._close_all()
         self._root, self._tree, self._branch, self._changes, self._git = None, [], "", [], False
+        self._roots, self._shut_roots, self._space_file = [], set(), ""
+        self._box = None
         self._space = {}
         self._read_project()
         self._build.set_root(None)
@@ -1421,27 +1564,38 @@ def advice(sky: Sky) -> str:
                 for k in range(1, len(parts)):
                     status.setdefault("/".join(parts[:k]) + "/", "inside")
 
-            def walk(folder: Path, depth: int) -> None:
+            def walk(folder: Path, depth: int, top: Path) -> None:
                 try:
                     entries = sorted(os.scandir(folder), key=lambda e: (not e.is_dir(follow_symlinks=False), e.name.lower()))
                 except OSError:
                     return
+                mine = top == self._root                      # (Git's marks are the working folder's)
                 for e in entries:
-                    if e.name == ".git" or (self._hide and vsc.is_excluded(os.path.relpath(e.path, self._root), self._hide)):
+                    if e.name == ".git" or (self._hide and vsc.is_excluded(os.path.relpath(e.path, top), self._hide)):
                         continue
                     try:
                         is_dir = e.is_dir()
                     except OSError:                           # a link that leads nowhere sensible (through a file, round in a ring)
                         is_dir = False
-                    rel = os.path.relpath(e.path, self._root)
+                    rel = os.path.relpath(e.path, top)
                     open_ = is_dir and e.path in self._open_dirs
                     rows.append({"path": e.path, "name": e.name, "depth": depth, "dir": is_dir, "open": open_, "rel": rel,
-                                 "git": status.get(rel + "/" if is_dir else rel, ""), "dim": e.name.startswith(".") or e.name in HEAVY,
+                                 "git": status.get(rel + "/" if is_dir else rel, "") if mine else "", "dim": e.name.startswith(".") or e.name in HEAVY,
                                  "lang": "" if is_dir else language_of(e.name)})
                     if open_:
-                        walk(Path(e.path), depth + 1)
-            walk(self._root, 0)
-            dirs = [str(self._root)] + sorted(d for d in self._open_dirs if d.startswith(str(self._root)))
+                        walk(Path(e.path), depth + 1, top)
+            many = len(self._roots) > 1
+            names = self._root_names()
+            for top in (self._roots if many else [self._root]):
+                if many:                                          # a workspace: each folder under its own heading
+                    shut = str(top) in self._shut_roots
+                    rows.append({"path": str(top), "name": next((n for n, r in names.items() if r == top), top.name), "depth": 0, "dir": True, "open": not shut, "rel": "", "git": "",
+                                 "dim": False, "lang": "", "root": True, "active": top == self._root})
+                    if shut:
+                        continue
+                walk(top, 1 if many else 0, top)
+            tops = [str(r) for r in (self._roots if many else [self._root])]
+            dirs = tops + sorted(d for d in self._open_dirs if d.startswith(tuple(tops)))
             old = set(self._watch.directories()) | set(self._watch.files())
             if old:
                 self._watch.removePaths(list(old))
@@ -1469,6 +1623,10 @@ def advice(sky: Sky) -> str:
 
     @Slot(str)
     def toggle(self, path: str) -> None:
+        if len(self._roots) > 1 and any(str(r) == path for r in self._roots):      # a workspace folder's heading folds it
+            self._shut_roots ^= {path}
+            self._build_tree()
+            return
         if path in self._open_dirs:
             self._open_dirs = {d for d in self._open_dirs if not (d == path or d.startswith(path + os.sep))}
         else:
@@ -1622,6 +1780,7 @@ def advice(sky: Sky) -> str:
         self._lint_python(d)
         if focus:
             self._at = idx
+            self._follow(d.path)
         elif self._at < 0:
             self._at = 0
         self.changed.emit()
@@ -1634,6 +1793,7 @@ def advice(sky: Sky) -> str:
     def select(self, i: int) -> None:
         if 0 <= i < len(self._docs):
             self._at = i
+            self._follow(self._docs[i].path)
             self.changed.emit()
             self._keep()
 
@@ -1643,8 +1803,10 @@ def advice(sky: Sky) -> str:
         if not 0 <= i < len(self._docs):
             return ""
         d = self._docs[i]
+        self._nb_flush(d)
         if d.dirty and not force:
             return "dirty"
+        self._nb_end(d.path)
         self._lsp_close(d)
         self._stash_drop(d)                                   # closed without saving: you said to let it go
         if not d.path.startswith("untitled:"):
@@ -1740,6 +1902,7 @@ def advice(sky: Sky) -> str:
         if not 0 <= i < len(self._docs):
             return "failed"
         d = self._docs[i]
+        self._nb_flush(d)
         if d.read_only:
             self.said.emit(d.why or "This file is read only.", True)
             return "failed"
@@ -1817,6 +1980,7 @@ def advice(sky: Sky) -> str:
     def reload(self, i: int) -> None:
         if 0 <= i < len(self._docs):
             d = self._docs[i]
+            d.nb_stale = False                                     # (a notebook's cells are read again from what is on disk)
             try:
                 d.load()
             except OSError:
@@ -1939,7 +2103,7 @@ def advice(sky: Sky) -> str:
     def _tab(self, d: Doc) -> dict:
         return {"path": d.path, "name": Path(d.path).name, "dirty": d.dirty, "lang": d.lang, "readOnly": d.read_only, "why": d.why,
                 "rel": os.path.relpath(d.path, self._root) if self._root and d.path.startswith(str(self._root)) else d.path,
-                "errors": sum(1 for p in d.problems if p["severity"] == 1), "binary": d.binary}
+                "errors": sum(1 for p in d.problems if p["severity"] == 1), "binary": d.binary, "notebook": d.path.lower().endswith(".ipynb") and not d.binary}
 
     def _get_status(self) -> dict:
         d = self._docs[self._at] if 0 <= self._at < len(self._docs) else None
@@ -2076,12 +2240,190 @@ def advice(sky: Sky) -> str:
             old.setDocument(None)
         d.styler = CodeStyler(doc_obj.textDocument(), d.lang, colours)
 
+    @Slot("QVariantMap")
+    def styleCell(self, payload) -> None:
+        """Colour a notebook cell's text (its own small document) as a language."""
+        payload = dict(payload)
+        doc_obj, colours, lang = payload.get("doc"), dict(payload.get("colours") or {}), str(payload.get("lang") or "Python")
+        if doc_obj is None or lang not in LANGS:
+            return
+        td = doc_obj.textDocument()
+        key = id(td)
+        stylers = self.__dict__.setdefault("_cell_stylers", {})
+        old = stylers.pop(key, None)
+        if old is not None:
+            try:
+                old.setDocument(None)
+            except RuntimeError:
+                pass
+        stylers[key] = CodeStyler(td, lang, colours)
+        td.destroyed.connect(lambda *_a, k=key: stylers.pop(k, None))
+
     # ---------------------------------------------------------------- finding things
-    def _all_files(self) -> list:
+    def _files_of(self, root) -> list:
+        found = list_files(root) if root else []
+        return [f for f in found if not vsc.is_excluded(f, self._hide)] if self._hide else found
+
+    def _active_files(self) -> list:
+        """The working folder's files, each named from the folder."""
         if self._files_cache is None:
-            found = list_files(self._root) if self._root else []
-            self._files_cache = [f for f in found if not vsc.is_excluded(f, self._hide)] if self._hide else found
+            self._files_cache = self._files_of(self._root)
         return self._files_cache
+
+    def _all_files(self) -> list:
+        """Every file quick open and search can name: the folder's, or in a workspace each folder's under its name
+        ("engine/src/a.c")."""
+        if len(self._roots) < 2:
+            return self._active_files()
+        if getattr(self, "_space_cache", None) is None or self._files_cache is None:
+            self._space_cache = [f"{name}/{f}" for name, root in self._root_names().items() for f in (self._active_files() if root == self._root else self._files_of(root))]
+        return self._space_cache
+
+    # ---------------------------------------------------------------- a workspace: several folders open at once
+    # One of them is the working folder: Git, Build, Run, the debugger, tasks and the project's settings are its.
+    # It follows the file you are in. The Files list shows them all; quick open and search look in them all.
+    def _root_names(self) -> dict:
+        """{the name a folder goes by: the folder}; two folders of one name get their parent's name too."""
+        out = {}
+        for r in self._roots:
+            name = r.name or str(r)
+            if name in out or sum(1 for x in self._roots if x.name == r.name) > 1:
+                name = f"{r.parent.name}-{r.name}" if r.parent.name else name
+            while name in out:
+                name += "-"
+            out[name] = r
+        return out
+
+    def _abs(self, rel: str) -> Path:
+        """A file as quick open and search name it, as a full path."""
+        if len(self._roots) > 1:
+            head, _, rest = rel.partition("/")
+            root = self._root_names().get(head)
+            if root is not None:
+                return root / rest
+        return self._root / rel
+
+    def _name_of(self, path: str) -> str:
+        """A full path as quick open and search name it."""
+        if len(self._roots) > 1:
+            for name, root in self._root_names().items():
+                if path.startswith(str(root) + os.sep):
+                    return f"{name}/{os.path.relpath(path, root)}"
+        return os.path.relpath(path, self._root) if self._root else path
+
+    def _follow(self, path: str) -> None:
+        """Make the workspace folder a file lives in the working folder (the deepest one, if they nest)."""
+        if len(self._roots) > 1:
+            inside = [r for r in self._roots if path.startswith(str(r) + os.sep)]
+            if inside:
+                self._set_active(max(inside, key=lambda r: len(str(r))))
+
+    def _set_active(self, root: Path) -> None:
+        if root == self._root or root not in self._roots:
+            return
+        if self._dbg.active or self._build.running:                # (what is running belongs to the folder it was started in)
+            return
+        self._root = root
+        self._files_cache = None
+        self._read_project()
+        self._box_found()
+        self._build_tree()
+        self.refreshGit()
+        self._build.set_root(root)
+        self.changed.emit()
+
+    def _get_folders(self) -> list:
+        names = self._root_names()
+        return [{"path": str(r), "name": n, "active": r == self._root} for n, r in names.items()] if len(self._roots) > 1 else []
+    folders = Property("QVariantList", _get_folders, notify=changed)
+    workspaceFile = Property(str, lambda self: self._space_file, notify=changed)
+
+    @Slot(str, result=str)
+    def addFolder(self, path: str) -> str:
+        """Add a folder beside the open one: the two (or more) are a workspace. "" when added, else why not."""
+        if not path.strip():
+            return ""
+        folder = Path(path.replace("file://", "").strip()).expanduser()
+        try:
+            folder = folder.resolve()
+        except (OSError, RuntimeError):
+            return "That folder isn't there."
+        if not folder.is_dir():
+            return "That folder isn't there."
+        if not self._root:
+            self.openFolder(str(folder))
+            return ""
+        if self._remote_of()[0] or self._remote_of(folder)[0]:
+            return "A folder on another computer is opened on its own."
+        if folder in self._roots:
+            return "That folder is already in the workspace."
+        if len(self._roots) >= 16:
+            return "A workspace holds up to 16 folders."
+        self._roots = (self._roots or [self._root]) + [folder]
+        self._space_cache = None
+        self._build_tree()
+        self._keep()
+        self.changed.emit()
+        return ""
+
+    @Slot(str, result=str)
+    def removeFolder(self, path: str) -> str:
+        """Take a folder out of the workspace (its files stay where they are). "" when done, else why not."""
+        folder = next((r for r in self._roots if str(r) == path), None)
+        if folder is None or len(self._roots) < 2:
+            return "That folder isn't one of the workspace's."
+        others = [r for r in self._roots if r != folder]
+        own = lambda d: d.path.startswith(str(folder) + os.sep) and not any(d.path.startswith(str(o) + os.sep) and len(str(o)) > len(str(folder)) for o in others)      # noqa: E731
+        if any(d.dirty for d in self._docs if own(d)):
+            return "Save or close its changed files first."
+        if (self._dbg.active or self._build.running) and folder == self._root:
+            return "Something is running in that folder. Stop it first."
+        was_first = folder == self._roots[0]
+        for i in reversed([i for i, d in enumerate(self._docs) if own(d)]):
+            self.close(i, True)
+        if was_first and isinstance(self._state.get("spaces"), dict):
+            self._state["spaces"].pop(str(folder), None)
+        self._roots = others
+        self._shut_roots.discard(path)
+        self._space_cache = None
+        if folder == self._root:
+            self._set_active(others[0])
+        self._build_tree()
+        self._keep()
+        self.changed.emit()
+        return ""
+
+    @Slot(str, result=str)
+    def saveWorkspace(self, path: str) -> str:
+        """Write the workspace as a .code-workspace file (VS Code's own), folders named from where the file is when
+        they are beside or under it. "" when written, else why not."""
+        if len(self._roots) < 2:
+            return "One folder isn't a workspace: add another first."
+        target = Path(path.replace("file://", "").strip()).expanduser()
+        if not path.strip():
+            return ""
+        if target.is_dir():
+            target = target / (self._roots[0].name + ".code-workspace")
+        if target.suffix != ".code-workspace":
+            target = target.with_name(target.name + ".code-workspace")
+        rows = []
+        for r in self._roots:
+            try:
+                rel = os.path.relpath(r, target.parent)
+            except ValueError:
+                rel = str(r)
+            rows.append({"path": rel if not rel.startswith(".." + os.sep + "..") else str(r)})
+        old = vsc.load_jsonc(target) if target.is_file() else None
+        data = dict(old if isinstance(old, dict) else {}, folders=rows)
+        data.setdefault("settings", dict(self._space) if self._space else {})
+        try:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(json.dumps(data, indent=4) + "\n", encoding="utf-8")
+        except OSError as err:
+            return f"Couldn't write {target.name}: {err.strerror or err}"
+        self._space_file = str(target)
+        self.changed.emit()
+        return ""
 
     # ---------------------------------------------------------------- another computer, over SSH
     def _remote_of(self, root=None) -> tuple:
@@ -2173,6 +2515,353 @@ def advice(sky: Sky) -> str:
         if term is not None:
             getattr(term, "type_when_ready", term._send)((hr.shell_command(remote) + "\r").encode())
 
+    # ---------------------------------------------------------------- notebooks (.ipynb): cells over the file's own text
+    # The file's text stays what is saved, undone-to and compared; the cells are a way to see and change it. A change
+    # to a cell is kept in the cells first and written into the text a moment later (and always before a save).
+    nbChanged = Signal(int)
+
+    def _nb(self, i: int) -> tuple:
+        """(the document, its cells) for a notebook tab; the cells are None when the text isn't a notebook."""
+        if not 0 <= i < len(self._docs) or not self._docs[i].path.lower().endswith(".ipynb"):
+            return None, None
+        d = self._docs[i]
+        if getattr(d, "nb_stale", False) or (getattr(d, "nb", None) is not None and getattr(d, "nb_text", None) == d.text):
+            return d, d.nb
+        try:
+            d.nb, d.nb_why = nbk.parse(d.text), ""
+        except ValueError as err:
+            d.nb, d.nb_why = None, str(err)
+        d.nb_text, d.nb_stale = d.text, False
+        return d, d.nb
+
+    def _nb_flush(self, d) -> None:
+        """Write the cells into the document's text, if they have changed since."""
+        if getattr(d, "nb_stale", False) and getattr(d, "nb", None) is not None and d in self._docs:
+            d.nb_stale = False
+            text = nbk.dump(d.nb)
+            d.nb_text = text
+            self.edit(self._docs.index(d), text)
+            d.nb_text = d.text
+
+    def _nb_flush_all(self) -> None:
+        for d in list(self._docs):
+            self._nb_flush(d)
+
+    def _nb_touch(self, d, tell: bool = True) -> None:
+        d.nb_stale = True
+        self._nb_later.start()
+        if tell:
+            self._nb_dirty_tabs.add(d.path)
+            self._nb_tell.start()
+
+    def _nb_told(self) -> None:
+        paths, self._nb_dirty_tabs = self._nb_dirty_tabs, set()
+        for i, d in enumerate(self._docs):
+            if d.path in paths:
+                self.nbChanged.emit(i)
+
+    def _nb_end(self, path: str) -> None:
+        k = self._kernels.pop(path, None)
+        if k is not None:
+            k.stop()
+            k.deleteLater()
+
+    def _nb_quit(self) -> None:
+        self._nb_flush_all()
+        for path in list(self._kernels):
+            self._nb_end(path)
+
+    def _nb_cell(self, d, cell_id: str):
+        return next((c for c in d.nb["cells"] if c["id"] == cell_id), None) if getattr(d, "nb", None) else None
+
+    @Slot(int, result="QVariantMap")
+    def notebook(self, i: int) -> dict:
+        """What the window draws for a notebook tab."""
+        d, nb = self._nb(i)
+        if d is None:
+            return {"ok": False, "why": "", "cells": []}
+        if nb is None:
+            return {"ok": False, "why": d.nb_why, "cells": []}
+        k = self._kernels.get(d.path)
+        running, queued = (k.running, k.queued) if k else ("", [])
+        return {"ok": True, "why": "", "busy": bool(running), "alive": bool(k and k.alive), "python": (k.about.get("python", "") if k else ""),
+                "cells": [{"id": c["id"], "kind": c["kind"], "source": c["source"], "count": c["count"] or 0, "outputs": nbk.shown(c["outputs"]),
+                           "state": "running" if c["id"] == running else "queued" if c["id"] in queued else ""} for c in nb["cells"]]}
+
+    @Slot(int)
+    def nbFlush(self, i: int) -> None:
+        if 0 <= i < len(self._docs):
+            self._nb_flush(self._docs[i])
+
+    @Slot(int, str, str)
+    def nbSetSource(self, i: int, cell_id: str, text: str) -> None:
+        d, nb = self._nb(i)
+        c = self._nb_cell(d, cell_id) if nb else None
+        if c is not None and c["source"] != text:
+            c["source"] = text.replace("\r\n", "\n").replace("\r", "\n")
+            self._nb_touch(d, tell=False)                          # (the window already shows what was typed)
+
+    @Slot(int, int, str, result=str)
+    def nbAdd(self, i: int, at: int, kind: str) -> str:
+        """A new cell at a place (past the end: last). Returns its id."""
+        d, nb = self._nb(i)
+        if not nb or d.read_only:
+            return ""
+        c = nbk.new_cell(kind)
+        nb["cells"].insert(max(0, min(at, len(nb["cells"]))), c)
+        self._nb_touch(d)
+        return c["id"]
+
+    @Slot(int, str)
+    def nbRemove(self, i: int, cell_id: str) -> None:
+        d, nb = self._nb(i)
+        c = self._nb_cell(d, cell_id) if nb else None
+        if c is not None and not d.read_only:
+            nb["cells"].remove(c)
+            if not nb["cells"]:
+                nb["cells"].append(nbk.new_cell())
+            self._nb_touch(d)
+
+    @Slot(int, str, int)
+    def nbMove(self, i: int, cell_id: str, by: int) -> None:
+        d, nb = self._nb(i)
+        c = self._nb_cell(d, cell_id) if nb else None
+        if c is not None and not d.read_only:
+            at = nb["cells"].index(c)
+            to = max(0, min(len(nb["cells"]) - 1, at + by))
+            if to != at:
+                nb["cells"].insert(to, nb["cells"].pop(at))
+                self._nb_touch(d)
+
+    @Slot(int, str, str)
+    def nbKind(self, i: int, cell_id: str, kind: str) -> None:
+        d, nb = self._nb(i)
+        c = self._nb_cell(d, cell_id) if nb else None
+        if c is not None and kind in nbk.KINDS and c["kind"] != kind and not d.read_only:
+            c.update(kind=kind, outputs=[], count=None)
+            self._nb_touch(d)
+
+    def _nb_kernel(self, d):
+        k = self._kernels.get(d.path)
+        if k is None:
+            folder = str(Path(d.path).parent) if not d.path.startswith("untitled:") else str(self._root or Path.home())
+            k = self._kernels[d.path] = nbk.Kernel(folder, parent=self)
+            k.said.connect(lambda msg, path=d.path: self._nb_said(path, msg))
+            k.idle.connect(lambda path=d.path: self._nb_dirty_tabs.add(path) or self._nb_tell.start())
+            k.gone.connect(lambda why, path=d.path: (self._nb_dirty_tabs.add(path), self._nb_tell.start(), self.said.emit(why, True) if why and "couldn't be started" in why else None))
+        return k
+
+    def _nb_said(self, path: str, msg: dict) -> None:
+        d = next((x for x in self._docs if x.path == path), None)
+        c = self._nb_cell(d, str(msg.get("id", ""))) if d is not None else None
+        if c is None:
+            return
+        if msg.get("type") == "done":
+            if msg.get("count"):
+                c["count"] = msg["count"]
+        else:
+            nbk.add_output(c, msg)
+        self._nb_touch(d)
+
+    @Slot(int, str)
+    def nbRun(self, i: int, cell_id: str) -> None:
+        """Run a cell: its old output goes, and what it prints, its last line's value and its figures come under it."""
+        d, nb = self._nb(i)
+        c = self._nb_cell(d, cell_id) if nb else None
+        if c is None or c["kind"] != "code" or self._demo:
+            return
+        k = self._nb_kernel(d)
+        if c["id"] == k.running or c["id"] in k.queued:
+            return
+        c["outputs"], c["count"] = [], None
+        why = nbk.not_python(c["source"])
+        if why:
+            nbk.add_output(c, {"type": "error", "ename": "NotPython", "evalue": why, "traceback": [why]})
+        elif c["source"].strip():
+            k.run(c["id"], c["source"])
+        self._nb_touch(d)
+
+    @Slot(int)
+    def nbRunAll(self, i: int) -> None:
+        d, nb = self._nb(i)
+        for c in (nb["cells"] if nb else []):
+            if c["kind"] == "code":
+                self.nbRun(i, c["id"])
+
+    @Slot(int)
+    def nbInterrupt(self, i: int) -> None:
+        d, _nb = self._nb(i)
+        if d is not None and d.path in self._kernels:
+            self._kernels[d.path].interrupt()
+            self._nb_touch(d)
+
+    @Slot(int)
+    def nbRestart(self, i: int) -> None:
+        """End the notebook's Python: every name is forgotten; the outputs stay until cells are run again."""
+        d, _nb = self._nb(i)
+        if d is not None:
+            self._nb_end(d.path)
+            self._nb_dirty_tabs.add(d.path)
+            self._nb_tell.start()
+
+    @Slot(int)
+    def nbClear(self, i: int) -> None:
+        d, nb = self._nb(i)
+        if nb and not d.read_only:
+            for c in nb["cells"]:
+                c["outputs"], c["count"] = [], None
+            self._nb_touch(d)
+
+    # ---------------------------------------------------------------- a dev container (.devcontainer/devcontainer.json)
+    def _place(self) -> tuple:
+        """(the door, what is behind it, the folder here) when the project runs somewhere else: huginn_remote and a
+        computer reached over SSH, or huginn_container and a started dev container. Else (None, None, None)."""
+        remote, mount = self._remote_of()
+        if remote:
+            return hr, remote, mount
+        if self._box and self._root and self._box.get("root") == str(self._root):
+            return hc, self._box, str(self._root)
+        return None, None, None
+
+    def _place_paths(self) -> tuple:
+        """Two functions for the debugger: a file's path here as it is there, and back."""
+        door, what, mount = self._place()
+        if not what:
+            return None
+        home = ""
+        if door is hr and not hr.remote_root(what).startswith("/"):  # the folder there is named from the home folder: ask once where that is
+            key = what["spec"]
+            if key not in self._home_there:
+                code, out = hr.probe(what, "pwd")
+                self._home_there[key] = out.splitlines()[-1] if code == 0 and out.startswith("/") else ""
+            home = self._home_there[key]
+
+        def there(path: str) -> str:
+            p = door.to_remote(what, mount, path)
+            if home and p != path and not p.startswith("/"):
+                return home if p == "." else f"{home}/{p}"
+            return p
+
+        def here(path: str) -> str:
+            if home and (path == home or path.startswith(home + "/")):
+                return door.to_local(what, mount, path[len(home) + 1:]) if path != home else mount
+            return door.to_local(what, mount, path)
+        return there, here
+
+    def _get_container(self) -> dict:
+        root = self._root
+        path = hc.find_config(root) if root and not self._remote_of()[0] else None
+        if path is None:
+            return {"has": False}
+        try:
+            stamp = (str(path), path.stat().st_mtime_ns)
+        except OSError:
+            return {"has": False}
+        if getattr(self, "_box_seen", (None,))[0] != stamp:              # (read again only when the file changes: this is asked for often)
+            seen = {"has": True, "file": str(path), "engine": hc.engine(), "title": "", "asks": [], "problem": ""}
+            try:
+                cfg = hc.read(root)
+                seen.update(title=cfg["title"], asks=hc.asks(cfg), workspace=cfg["workspace"])
+            except ValueError as err:
+                seen["problem"] = str(err)
+            if not seen["engine"] and not seen["problem"]:
+                seen["problem"] = "Containers need Docker or Podman. Podman is the simple one (the podman package, in App Store): it needs no background service."
+            self._box_seen = (stamp, seen)
+        return dict(self._box_seen[1], running=bool(self._box and self._box.get("root") == str(root)), starting=self._box_poll.isActive())
+    container = Property("QVariantMap", _get_container, notify=changed)
+
+    def _box_found(self) -> None:
+        """When a folder opens: is its container already running (started earlier, or by another program)?"""
+        self._box = None
+        root, eng = self._root, hc.engine()
+        if not root or not eng or self._demo or hc.find_config(root) is None or self._remote_of()[0]:
+            return
+        try:
+            cfg = hc.read(root)
+        except ValueError:
+            return
+        box = hc.where(eng, cfg)
+        if hc.state(box) == "running":
+            self._box = box
+
+    @Slot(result=str)
+    def containerOpen(self) -> str:
+        """Start the project's container (building its image first when it has a Dockerfile) and work inside it.
+        The lines are typed into the terminal, where the engine shows what it is doing. "" when under way."""
+        root = self._root
+        if not root:
+            return "Open the project's folder first."
+        try:
+            cfg = hc.read(root)
+        except ValueError as err:
+            return str(err)
+        eng = hc.engine()
+        if not eng:
+            return "Containers need Docker or Podman (the podman package is the simple one)."
+        if self._demo:
+            self.said.emit(f"Would start the container “{cfg['title']}” with {eng}.", False)
+            return ""
+        box = hc.where(eng, cfg)
+        now = hc.state(box)
+        if now == "running":
+            self._box = box
+            self.changed.emit()
+            return ""
+        term = self._get_term()
+        if term is None:
+            return "The terminal couldn't be opened, and that is where the container is started."
+        send = getattr(term, "type_when_ready", term._send)
+        for line in hc.start_lines(eng, cfg, exists=now == "stopped"):
+            send((line + "\r").encode())
+        self._box_cfg, self._box_tries = box, 0
+        self._box_poll.start()
+        self.changed.emit()
+        return ""
+
+    def _box_check(self) -> None:
+        box = self._box_cfg
+        self._box_tries += 1
+        if box and hc.state(box) == "running":
+            self._box_poll.stop()
+            self._box, self._box_cfg = box, None
+            self.changed.emit()
+            self.said.emit(f"Working in the container “{box['label']}”. Run, Build and the debugger happen inside it; the terminal here is still this computer (Container: Open a Shell for one inside).", False)
+        elif not box or self._box_tries > 1200:                      # (a first image can take a long while to fetch)
+            self._box_poll.stop()
+            self._box_cfg = None
+            self.changed.emit()
+
+    @Slot(bool)
+    def containerStop(self, remove: bool = False) -> None:
+        """Stop the container (its files are the project's own and stay). With `remove`, it is thrown away too, so
+        the next start builds it afresh."""
+        box = self._box or self._box_cfg
+        self._box_poll.stop()
+        if box is None and self._root and hc.engine():
+            try:
+                box = hc.where(hc.engine(), hc.read(self._root))
+            except ValueError:
+                box = None
+        self._box = self._box_cfg = None
+        self.changed.emit()
+        if box is None or self._demo:
+            return
+        if self._dbg.active:
+            self._dbg.stop()
+        proc = QProcess(self)
+        proc.finished.connect(lambda code, _s, b=box, p=proc: (self.said.emit((f"The container “{b['label']}” was removed." if remove else f"The container “{b['label']}” was stopped.") if code == 0
+                                                                                     else "The engine couldn't stop the container.", code != 0), p.deleteLater()))
+        proc.errorOccurred.connect(lambda _e, p=proc: p.deleteLater())
+        cmd = hc.stop_command(box, remove)
+        proc.start(cmd[0], cmd[1:])
+
+    @Slot()
+    def containerShell(self) -> None:
+        """A shell inside the container, in the terminal below."""
+        term = self._get_term() if self._box else None
+        if term is not None:
+            getattr(term, "type_when_ready", term._send)((hc.shell_command(self._box) + "\r").encode())
+
     # ---------------------------------------------------------------- what Visual Studio Code left in the project
     def _read_project(self) -> None:
         """.vscode/settings.json (a .code-workspace file's settings under it), the project's snippets and its debug
@@ -2181,7 +2870,7 @@ def advice(sky: Sky) -> str:
         self._proj = dict(getattr(self, "_space", None) or {}, **vsc.settings(root)) if root else {}
         self._apply_settings()
         more.EXTRA_SNIPPETS.clear()
-        for layer in (self._state.get("snippets") if isinstance(self._state.get("snippets"), dict) else {}, vsc.project_snippets(root, LANGS) if root else {}):
+        for layer in (self._ext_data()["snippets"], self._state.get("snippets") if isinstance(self._state.get("snippets"), dict) else {}, vsc.project_snippets(root, LANGS) if root else {}):
             for lang, rows in layer.items():
                 if isinstance(rows, dict):
                     more.EXTRA_SNIPPETS.setdefault(lang, {}).update({k: tuple(v) for k, v in rows.items() if isinstance(v, (list, tuple)) and len(v) == 2})
@@ -2221,7 +2910,68 @@ def advice(sky: Sky) -> str:
             return
         self._launch(cfg)
 
+    # ---------------------------------------------------------------- attaching to a running program
+    askAttach = Signal(str)                              # the window shows the list of running programs (for this launch.json entry, or "")
+
+    @Slot(str, result="QVariantList")
+    def runningPrograms(self, like: str) -> list:
+        """The user's running programs, the ones matching what was typed (a name, part of the command, a number)."""
+        like = like.strip().lower()
+        rows = hd.processes()
+        return [r for r in rows if not like or like in r["name"].lower() or like in r["command"].lower() or like == str(r["pid"])][:200]
+
+    attachNote = Property(str, lambda self: hd.ptrace_note(), constant=True)
+
+    @Slot(int, str)
+    def attachTo(self, pid: int, config: str = "") -> None:
+        """Join a running program with the debugger: Python programs with debugpy, the rest with GDB. With a
+        launch.json entry's name, that entry's settings (its path mappings, its program) are used."""
+        if self._dbg.active:
+            return
+        row = next((r for r in hd.processes(4000) if r["pid"] == pid), None)
+        if row is None:
+            self.said.emit("That program isn't running any more.", True)
+            return
+        cfg = next((c for c in self._launch_list if c["name"] == config), None) if config else None
+        kind = {"python-attach": "python", "gdb-attach": "native"}.get(cfg["kind"], row["kind"]) if cfg else row["kind"]
+        try:
+            exe = os.readlink(f"/proc/{pid}/exe")
+        except OSError:
+            exe = ""
+        try:
+            argv, args, name = hd.attach_for(kind, pid=pid, program=(cfg["launch"]["program"] if cfg else "") or (exe if kind == "native" else ""),
+                                             mappings=cfg["launch"]["mappings"] if cfg else ())
+        except ValueError as err:
+            self.said.emit(str(err), True)
+            return
+        if self._demo:
+            self.said.emit(f"Would attach to {row['name']} ({pid}) with {name}.", False)
+            return
+        self._dbg.start(argv, args, name, str(self._root or Path.home()), "attach", f"{row['name']} ({pid})")
+
+    def _attach(self, cfg: dict) -> None:
+        """A launch.json entry that joins a running program."""
+        a = cfg["launch"]
+        if a["pick"]:
+            self.askAttach.emit(cfg["name"])
+            return
+        if a["pid"]:
+            self.attachTo(a["pid"], cfg["name"])
+            return
+        try:
+            argv, args, name = hd.attach_for("python" if cfg["kind"] == "python-attach" else "native", host=a["host"], port=a["port"], program=a["program"], mappings=a["mappings"])
+        except ValueError as err:
+            self.said.emit(str(err), True)
+            return
+        if self._demo:
+            self.said.emit(f"Would attach to {a['host'] or '127.0.0.1'}:{a['port']} with {name}.", False)
+            return
+        self._dbg.start(argv, args, name, str(self._root or Path.home()), "attach", f"{a['host'] or '127.0.0.1'}:{a['port']}")
+
     def _launch(self, cfg: dict) -> None:
+        if cfg["kind"].endswith("-attach"):
+            self._attach(cfg)
+            return
         launch, root = dict(cfg["launch"]), self._root or Path.home()
         try:
             if cfg["kind"] == "python":
@@ -2241,14 +2991,14 @@ def advice(sky: Sky) -> str:
         if self._demo:
             self.said.emit(f"Would debug “{cfg['name']}” with {name}.", False)
             return
-        self._dbg.start(argv, launch, name, str(launch.get("cwd") or root))
+        self._debug_start(argv, launch, name, str(launch.get("cwd") or root))
 
     @Slot(str, result="QVariantList")
     def quickOpen(self, query: str) -> list:
         files = self._all_files()
         q = query.strip().replace(" ", "")
         if not q:
-            recent = [os.path.relpath(d.path, self._root) for d in self._docs if self._root and d.path.startswith(str(self._root))]
+            recent = [self._name_of(d.path) for d in self._docs if self._root and d.path.startswith(tuple(str(r) for r in (self._roots or [self._root])))]
             rest = [f for f in files if f not in recent]
             return [{"rel": f, "name": Path(f).name, "where": str(Path(f).parent) if str(Path(f).parent) != "." else ""} for f in (recent + rest)[:60]]
         scored = []
@@ -2264,7 +3014,7 @@ def advice(sky: Sky) -> str:
         if Path(rel).is_absolute():
             self.openFile(rel, True, line, col)
         elif self._root:
-            self.openFile(str(self._root / rel), True, line, col)
+            self.openFile(str(self._abs(rel)), True, line, col)
 
     @Slot(str, bool, bool, bool)
     def search(self, query: str, case: bool, regex: bool, word: bool) -> None:
@@ -2284,11 +3034,18 @@ def advice(sky: Sky) -> str:
         self._searching = True
         self.searchDone.emit()
         root, asked = self._root, query
+        tops = list(self._root_names().items()) if len(self._roots) > 1 else []
 
         def go():
-            hits = search_files(root, asked, case, regex, word)
-            if self._hide:
-                hits = [h for h in hits if not vsc.is_excluded(h["path"], self._hide)]
+            if tops:                                               # a workspace: every folder, each file named under its folder
+                hits = []
+                for name, top in tops:
+                    found = search_files(top, asked, case, regex, word)
+                    hits += [dict(h, path=f"{name}/{h['path']}") for h in found if not (self._hide and vsc.is_excluded(h["path"], self._hide))]
+            else:
+                hits = search_files(root, asked, case, regex, word)
+                if self._hide:
+                    hits = [h for h in hits if not vsc.is_excluded(h["path"], self._hide)]
 
             def done():
                 if asked != self._query:
@@ -2311,7 +3068,7 @@ def advice(sky: Sky) -> str:
             return 0
         count, done = 0, set()
         for rel in sorted({h["path"] for h in self._results if h.get("path")}):
-            path = str((self._root / rel).resolve())
+            path = str(self._abs(rel).resolve())
             if path in done:                                  # (the same file reached twice, through a link)
                 continue
             done.add(path)
@@ -2798,9 +3555,9 @@ def advice(sky: Sky) -> str:
             self.said.emit(f"Would run: {command}", False)
             return
         send = getattr(term, "type_when_ready", term._send)     # (a terminal just opened isn't listening yet)
-        remote, mount = self._remote_of()
-        if remote:                                              # the project is on another computer: so is what it runs
-            send((hr.wrap(remote, command, tty=True, mount=mount) + "\r").encode("utf-8"))
+        door, remote, mount = self._place()
+        if remote:                                              # the project is on another computer or in a container: so is what it runs
+            send((door.wrap(remote, command, tty=True, mount=mount) + "\r").encode("utf-8"))
             return
         if self._root:
             send(f"cd {json.dumps(str(self._root))}\r".encode())
@@ -2994,7 +3751,7 @@ def advice(sky: Sky) -> str:
     def _word_completions(self, d: Doc, line: int, col: int) -> list:
         """Without a language server: the words already in the file that start like this one."""
         lines = d.text.split("\n")
-        here = lines[line][:col] if line < len(lines) else ""
+        here = lines[line][:max(0, col)] if 0 <= line < len(lines) else ""
         m = re.search(r"[A-Za-z_][A-Za-z0-9_]*$", here)
         prefix = m.group() if m else ""
         if len(prefix) < 2:
@@ -3782,7 +4539,7 @@ def advice(sky: Sky) -> str:
 
     def _with_snippets(self, d: Doc, line: int, col: int, items: list) -> list:
         lines = d.text.split("\n")
-        here = lines[line][:col] if line < len(lines) else ""
+        here = lines[line][:max(0, col)] if 0 <= line < len(lines) else ""
         m = re.search(r"[A-Za-z_][A-Za-z0-9_]*$", here)
         prefix = m.group() if m else ""
         if not prefix or re.search(r"[.\w]$", here[:len(here) - len(prefix)]):   # not after a dot
@@ -3801,7 +4558,7 @@ def advice(sky: Sky) -> str:
 
         def by_hand():
             lines = d.text.split("\n")
-            before = "\n".join(lines[max(0, line - 20):line] + [lines[line][:col] if line < len(lines) else ""])[-4000:]
+            before = "\n".join(lines[max(0, line - 20):line] + [lines[line][:max(0, col)] if 0 <= line < len(lines) else ""])[-4000:]
             depth, k, arg = 0, len(before) - 1, 0
             while k >= 0:
                 ch = before[k]
@@ -3865,7 +4622,7 @@ def advice(sky: Sky) -> str:
         if not self._root:
             return set()
         out = set()
-        for rel in self._all_files()[:20000]:
+        for rel in self._active_files()[:20000]:
             p = Path(rel)
             if p.suffix == ".py" and p.stem != "__init__" and len(p.parts) <= 2:
                 out.add(p.stem)
@@ -4120,9 +4877,6 @@ def advice(sky: Sky) -> str:
         if self._dbg.active:
             self._dbg.resume()
             return
-        if self._remote_of()[0]:
-            self.said.emit("Debugging on another computer isn't something Code does yet. Run (Ctrl+F5) and Build happen there.", True)
-            return
         chosen = next((c["name"] for c in self._get_launches() if c["chosen"]), "") if not program else ""
         if chosen:
             self.startLaunch(chosen)
@@ -4150,7 +4904,35 @@ def advice(sky: Sky) -> str:
         if self._demo:
             self.said.emit(f"Would debug {Path(d.path).name} with {name}.", False)
             return
-        self._dbg.start(argv, launch, name, str(root))
+        self._debug_start(argv, launch, name, str(root))
+
+    def _debug_start(self, argv: list, launch: dict, name: str, cwd: str, request: str = "launch", what: str = "") -> None:
+        """Start the debugger where the project runs: here, or on the other computer / in the container, where the
+        adapter itself is run (so the program, its libraries and its debugger are all the same machine's) and only
+        its conversation comes here."""
+        door, where, mount = self._place()
+        if not where:
+            self._dbg.start(argv, launch, name, cwd, request, what)
+            return
+        there, here = self._place_paths()
+        tool = "gdb" if name == "GDB" else "python3"
+        code, _out = door.probe(where, "command -v gdb >/dev/null" if tool == "gdb" else "python3 -c 'import debugpy'")
+        place = f"in the container “{where['label']}”" if door is hc else f"on {where['spec']}"
+        if code == 255:
+            self.said.emit(f"Couldn't reach the debugger {place}." + ("" if door is hc else " Is it still connected? (Code doesn't type passwords: the connection made in the terminal is the one reused.)"), True)
+            return
+        if code != 0:
+            self.said.emit((f"Debugging {place} needs GDB 14 or later there (the gdb package)." if tool == "gdb" else f"Debugging Python {place} needs debugpy there (python3-debugpy, or pip install debugpy)."), True)
+            return
+        launch = dict(launch)
+        for key in ("program", "cwd"):
+            if isinstance(launch.get(key), str) and launch[key]:
+                launch[key] = there(launch[key]) or launch[key]
+        if isinstance(launch.get("args"), list):
+            launch["args"] = [there(a) if isinstance(a, str) and a.startswith(str(mount)) else a for a in launch["args"]]
+        remote_argv = ["gdb", "-q", "-i", "dap"] if tool == "gdb" else ["python3", "-m", "debugpy.adapter"]
+        self._dbg.start(door.adapter_argv(where, remote_argv, there(cwd) if cwd else ""), launch, name, str(Path.home()), request,
+                        (what or Path(str(launch.get("program", ""))).name) + f" ({place})", paths=(there, here))
 
     askProgram = Signal(str)
 

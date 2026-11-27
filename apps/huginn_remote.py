@@ -131,6 +131,25 @@ def wrap(remote: dict, command: str, cwd: str = "", tty: bool = False, mount=Non
     return " ".join(shlex.quote(a) for a in ["ssh"] + opts + [remote["spec"], inner])
 
 
+def adapter_argv(remote: dict, argv: list, cwd: str = "") -> list:
+    """A debug adapter (gdb -i dap, debugpy.adapter) run on the other computer, its conversation carried by ssh:
+    the program, its files and the debugger are all over there, and only the talk comes here."""
+    there = cwd or remote_root(remote)
+    inner = " ".join(shlex.quote(a) for a in argv)
+    inner = f"cd {shlex.quote(there)} && exec {inner}" if there != "." else f"exec {inner}"
+    return ["ssh"] + ssh_options(remote) + ["-o", "BatchMode=yes", "-T", remote["spec"], inner]
+
+
+def probe(remote: dict, command: str, timeout: int = 15) -> tuple:
+    """(exit code, what it printed) for a short question asked of the other computer (never stops to ask)."""
+    import subprocess
+    try:
+        done = subprocess.run(["ssh"] + ssh_options(remote) + ["-o", "BatchMode=yes", "-T", remote["spec"], command], capture_output=True, text=True, timeout=timeout)
+        return done.returncode, (done.stdout or "").strip()
+    except (OSError, subprocess.SubprocessError):
+        return 255, ""
+
+
 def shell_command(remote: dict) -> str:
     """A shell over there, in the project's folder."""
     there = remote_root(remote)

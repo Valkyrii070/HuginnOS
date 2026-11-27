@@ -971,8 +971,56 @@ presses in the window. The SSH part ran for real against an SSH server on the bu
 localhost only, removed afterwards): mount, read and write through it, build there with the error landing on its
 line here, fix, build, disconnect; without such a server the test says so and skips that part. Not checked: a
 password prompt in the terminal (the test used a key), another real machine, and a real VS Code installation's
-folder (a made one stood in). Not taken: extensions, multi-root workspaces, notebooks, dev containers, attaching a
-debugger, and inlay hints between words.
+folder (a made one stood in). Not taken then: extensions, multi-root workspaces, notebooks, dev containers,
+attaching a debugger (round nine, next), and inlay hints between words.
+
+**Code, round nine: the six things round eight left.** What each one is, and where it stops.
+
+- **Attach to a running program** ("Debug: Attach to a Running Program…", `apps/huginn_debug.py`). A list of your own
+  running programs, found by name, command or number; Python ones are joined with debugpy, anything else with GDB.
+  Detaching leaves the program running. launch.json's attach entries work: pick a process, a process number, or a
+  port a program's own debugpy listens on (`python3 -m debugpy --listen 5678 app.py`), with path mappings. If the
+  kernel forbids attaching (Ubuntu's ptrace setting), Code says so and names the setting; it does not change it.
+- **Debugging where the project runs** (over SSH, and in a container). The debugger itself (gdb, debugpy) is run on
+  the other computer through the same ssh connection, or inside the container through the engine's exec, so the
+  program, its libraries and its debugger are one machine's; only the conversation comes here, and file paths are
+  translated both ways so breakpoints set in the files here stop there. The other side needs gdb 14+ or debugpy.
+- **Dev containers** (`apps/huginn_container.py`; "Container: Open This Project in Its Container…"). Reads
+  `.devcontainer/devcontainer.json` (image or Dockerfile build, workspace folder, user, environment, ports opened on
+  this computer only, mounts, run arguments, the create and start commands) and runs it with Docker or Podman. The
+  folder is shared in, so files are edited here as always; Run, Build, the debugger and "Open a Shell Inside" happen
+  in the container. Before the first start a sheet lists, in words, everything the file will do on this computer
+  (a privileged container is said loudly), because a project's devcontainer.json is someone else's instructions.
+  Not done, and said so: Dev Container Features, Docker Compose projects. Neither engine is preinstalled.
+- **Extensions** (`apps/huginn_extensions.py`; "Extensions…"). A VS Code extension is data (colour themes,
+  snippets, file types, key bindings) and usually also a program for VS Code's own extension host. That program
+  cannot run outside VS Code, so Code takes the data and says plainly what it left out; a package that is only a
+  program is refused with that reason. From a .vsix, only package.json and the data files it names are unpacked:
+  no program is written to disk and nothing in a package is run. Search and install from Open VSX (open-vsx.org,
+  https only, that host only). Code's own extensions have the same shape and may add commands, which are lines for
+  the terminal (`contributes.huginnCommands`), run only when picked, with `${file}` filled in as one shell word.
+- **Notebooks** (`apps/huginn_notebook.py`, `apps/huginn_nb_kernel.py`, `apps/qml/NotebookView.qml`). An .ipynb
+  opens as cells: Python with its output under it (text, errors, tables, pictures, matplotlib figures), and Markdown
+  between. Shift+Enter runs a cell and moves on; Run All, Stop, Restart, Clear Outputs. The file stays Jupyter's
+  format 4 with everything Code doesn't use kept, so Jupyter, VS Code and GitHub read what Code saved; "As JSON"
+  shows the file's own text. Cells are run by a plain Python Code starts itself (the project's .venv when there is
+  one): no Jupyter, no ipykernel. That is also the limit: IPython's `%magics` and `!shell` lines aren't Python and
+  are declined in words, `input()` isn't answered, there are no widgets, and other languages' kernels aren't run.
+- **Workspaces of several folders.** A .code-workspace file opens all its folders (before: the first only), and
+  "Workspace: Add a Folder…" makes one by hand; "Save as a .code-workspace File…" writes VS Code's own file. The
+  Files list has a heading per folder; quick open and search look in all of them. One folder is the working folder,
+  marked with a dot: Git, Build, Run, the debugger, tasks and .vscode settings are its, and it follows the file you
+  are in. That is the difference from VS Code, which shows every folder's Git at once.
+
+`code_round9_test.py`: 157 checks. For real: attaching to a running Python program (by process and by port) and to
+a compiled one, stopping at a breakpoint and leaving it running; debugging a Python and a C program on an SSH
+server (the build machine's own, throwaway key, localhost) with breakpoints, variables and stepping; notebooks end
+to end including a stopped cell and a crashed Python. With a stand-in: the container engine (a script named docker
+that runs commands in a linked folder: build, run, exec, the debugger inside, stop, remove) and the Open VSX
+registry (a local server). Not checked: real Docker or Podman, the real open-vsx.org, a second real machine, a
+remote debugger behind a password prompt, and matplotlib figures (not installed where the tests ran). The new
+sheets, the notebook view and the workspace headings were also opened in the real window with real key presses.
+Also fixed, found by the fuzz: completion asked for a line below zero raised an error.
 
 **The "grub>" prompt after installing** (seen on real hardware; `search --file` and `configfile` by hand started the
 system, so the menu was fine and the pointer to it was not). GRUB finds its menu through a small pointer file that

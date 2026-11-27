@@ -174,6 +174,14 @@ GlassWindow {
         { name: "Split the Editor", key: "Ctrl+\\", run: function () { win.toggleSplit() } },
         { name: "Toggle the Minimap", key: "", run: function () { Backend.setMinimap(!Backend.minimap) } },
         { name: "Show the Debug Console", key: "", run: function () { win.bottom = "debug"; win.term = true } },
+        { name: "Extensions…", key: "", run: function () { win.ask("extensions") } },
+        { name: "Workspace: Add a Folder…", key: "", run: function () { win.browseAt = Backend.root ? Backend.root.replace(/\/[^\/]+\/?$/, "") || "/" : Backend.home; win.ask("open", { add: true }) } },
+        { name: "Workspace: Save as a .code-workspace File…", key: "", run: function () { if (Backend.folders.length) win.ask("space", { now: Backend.workspaceFile || (Backend.folders[0].path + ".code-workspace") }); else toast.say("One folder isn't a workspace: add another first.", true) } },
+        { name: "Debug: Attach to a Running Program…", key: "", run: function () { win.attachAsk("") } },
+        { name: "Container: Open This Project in Its Container…", key: "", run: function () { win.containerAsk() } },
+        { name: "Container: Open a Shell Inside", key: "", run: function () { if (Backend.container.running) { win.bottom = "terminal"; win.term = true; Backend.containerShell() } else toast.say("No container is running for this project.", true) } },
+        { name: "Container: Stop", key: "", run: function () { if (Backend.container.running || Backend.container.starting) Backend.containerStop(false); else toast.say("No container is running for this project.", true) } },
+        { name: "Container: Stop and Remove (rebuilt at the next start)", key: "", run: function () { if (Backend.container.has) Backend.containerStop(true); else toast.say("This project has no devcontainer.json.", true) } },
         { name: "Remote: Open a Folder on Another Computer (SSH)…", key: "", run: function () { win.ask("remote", { now: "" }) } },
         { name: "Remote: Open a Shell There", key: "", run: function () { if (Backend.remote.spec) { win.bottom = "terminal"; win.term = true; Backend.remoteShell() } else toast.say("This project isn't on another computer.", true) } },
         { name: "Remote: Disconnect", key: "", run: function () { if (Backend.remote.spec) Backend.remoteDisconnect(); else toast.say("This project isn't on another computer.", true) } },
@@ -289,6 +297,11 @@ GlassWindow {
     function buildIt() { showBuild(); bld.runDefault() }
     function runTask(id) { showBuild(); bld.run(id) }
     function runIt() { bottom = "terminal"; term = true; Backend.run(""); Qt.callLater(function () { termKeys.forceActiveFocus() }) }
+    function attachAsk(config) { if (dbg.active) { toast.say("The debugger is busy. Stop it first.", true); return } ask("attach", { config: config || "" }) }
+    function containerAsk() { var c = Backend.container
+        if (!c.has) { toast.say("This project has no .devcontainer/devcontainer.json.", true); return }
+        if (c.running) { toast.say("Already working in its container.", false); return }
+        ask("container") }
     function debugIt() { if (dbg.active) { dbg.resume(); return } bottom = "debug"; term = true; Backend.startDebug("") }
     // ---- back and forward through the places you've been (a jump of more than a few lines, or to another file, is a place)
     property var trail: []
@@ -321,6 +334,7 @@ GlassWindow {
                 win.lastCurrent = Backend.current }
             if (win.split && (win.otherTab < 0 || win.otherTab >= Backend.tabs.length || win.otherTab === Backend.current)) win.split = false }
         function onAskProgram(guess) { win.ask("debugprog", { now: guess }) }
+        function onAskAttach(config) { win.attachAsk(config) }
         function onAskUnreal() { win.ask("unreal", { now: Backend.build.unrealRoot || (Backend.home + "/UnrealEngine") }) } }
     function startFind(rep) {
         finding = true; replacing = rep
@@ -366,6 +380,8 @@ GlassWindow {
             for (i = 0; i < commands.length; i++) if (commands[i].name.toLowerCase().indexOf(q) >= 0 && (!commands[i].ai || win.aiOn)) out.push({ label: commands[i].name, detail: win.keyOf(commands[i]), act: "cmd", n: i })
             var ls = Backend.launches, ts = win.bld.tasks
             for (i = 0; i < ls.length; i++) if (("debug: " + ls[i].name).toLowerCase().indexOf(q) >= 0) out.push({ label: "Debug: " + ls[i].name, detail: ls[i].ok ? "launch.json" : "can't start here", act: "launch", name: ls[i].name })
+            var xs = Backend.extensionCommands
+            for (i = 0; i < xs.length; i++) if (xs[i].title.toLowerCase().indexOf(q) >= 0) out.push({ label: xs[i].title, detail: "from " + xs[i].from, act: "ext", n: i })
             for (i = 0; i < ts.length; i++) if (("task: " + ts[i].name).toLowerCase().indexOf(q) >= 0) out.push({ label: "Task: " + ts[i].name, detail: ts[i].detail, act: "task", id: ts[i].id })
             return out
         }
@@ -387,6 +403,7 @@ GlassWindow {
         palOpen = false
         if (!row) return
         if (row.act === "cmd") commands[row.n].run()
+        else if (row.act === "ext") { bottom = "terminal"; term = true; Backend.runExtensionCommand(row.n) }
         else if (row.act === "launch") { bottom = "debug"; term = true; Backend.startLaunch(row.name) }
         else if (row.act === "task") runTask(row.id)
         else if (row.act === "file") Backend.openRel(row.rel, -1, 0)
@@ -539,13 +556,15 @@ GlassWindow {
             Rectangle { x: win.menuFor ? Math.min(win.menuFor.x, win.width - width - 8) : 0; y: win.menuFor ? Math.min(win.menuFor.y, win.height - height - 8) : 0; width: 210; height: menuCol.height + 12; radius: 12
                 color: Theme.t.menu_bg; border.width: 1; border.color: Theme.t.menu_border
                 Column { id: menuCol; x: 6; y: 6; width: parent.width - 12
-                    Repeater { model: !win.menuFor ? [] : win.menuFor.root ? ["New File Here", "New Folder Here", "Open Terminal Here", "Copy Path", "Show in Files"]
+                    Repeater { model: !win.menuFor ? [] : win.menuFor.root ? ["New File Here", "New Folder Here", "Open Terminal Here", "Copy Path", "Show in Files", "Add a Folder to the Workspace…"].concat(win.menuFor.space ? ["Remove from the Workspace"] : [])
                                    : win.menuFor.dir ? ["New File Here", "New Folder Here", "Open Terminal Here", "Copy Path", "Rename…", "Show in Files", "Move to Trash"]
                                    : ["Open", "Open Terminal Here", "Copy Path", "Rename…", "Show in Files", "Move to Trash"]
                         Pressable { required property string modelData; width: menuCol.width; height: 32; radius: 8; color: hovered ? Theme.t.hover : "transparent"
                             // what was picked is read first: clearing menuFor empties this Repeater, which ends this row (and
                             // with it modelData, win and Backend here), so every item used to do nothing
                             onClicked: { var f = win.menuFor, what = modelData
+                                if (what === "Add a Folder to the Workspace…") { win.menuFor = null; win.browseAt = f.path.replace(/\/[^\/]+\/?$/, "") || "/"; win.ask("open", { add: true }); return }
+                                if (what === "Remove from the Workspace") { win.menuFor = null; var no = Backend.removeFolder(f.path); if (no) toast.say(no, true); return }
                                 if (what === "Open") Backend.openFile(f.path)
                                 else if (what === "New File Here") win.ask("new", { folder: f.path, dir: false })
                                 else if (what === "New Folder Here") win.ask("new", { folder: f.path, dir: true })
@@ -562,13 +581,13 @@ GlassWindow {
             Rectangle { anchors.fill: parent; radius: win.r; color: "#77000000"; MouseArea { anchors.fill: parent; acceptedButtons: Qt.AllButtons; onClicked: if (win.sheet && win.sheet.kind !== "dirty") win.sheet = null } }
             Rectangle { id: card; anchors.centerIn: parent; radius: 18; color: Theme.t.menu_bg; border.width: 1; border.color: Theme.t.menu_border
                 readonly property string kind: win.sheet ? win.sheet.kind : ""
-                width: kind === "diff" ? win.width - 120 : kind === "settings" || kind === "keys" ? Math.min(win.width - 80, 760) : kind === "open" || kind === "langs" || kind === "branches" || kind === "history" ? 560 : 470
-                height: kind === "diff" ? win.height - 100 : kind === "settings" || kind === "keys" ? win.height - 90 : kind === "open" || kind === "langs" || kind === "branches" || kind === "history" ? Math.min(win.height - 80, 560) : kind === "dirty" || kind === "clash" || kind === "trash" || kind === "discard" ? 170 : kind === "remote" ? 290 : 200
+                width: kind === "diff" ? win.width - 120 : kind === "settings" || kind === "keys" ? Math.min(win.width - 80, 760) : kind === "open" || kind === "langs" || kind === "branches" || kind === "history" || kind === "attach" || kind === "container" ? 560 : kind === "extensions" ? Math.min(win.width - 80, 720) : 470
+                height: kind === "diff" ? win.height - 100 : kind === "settings" || kind === "keys" || kind === "extensions" ? win.height - 90 : kind === "open" || kind === "langs" || kind === "branches" || kind === "history" || kind === "attach" ? Math.min(win.height - 80, 560) : kind === "container" ? Math.min(win.height - 80, 440) : kind === "dirty" || kind === "clash" || kind === "trash" || kind === "discard" ? 170 : kind === "remote" ? 290 : 200
                 MouseArea { anchors.fill: parent }
                 Label { x: 24; y: 20; width: parent.width - 48; elide: Text.ElideMiddle; font.pixelSize: 17; font.weight: Font.DemiBold
-                    text: ({ "open": "Open a folder", "dirty": "Save changes to “" + (win.sheet ? win.sheet.name : "") + "”?", "clash": "This file changed on disk",
+                    text: ({ "open": win.sheet && win.sheet.add ? "Add a folder to the workspace" : "Open a folder", "space": "Save the workspace as a file", "dirty": "Save changes to “" + (win.sheet ? win.sheet.name : "") + "”?", "clash": "This file changed on disk",
                              "new": win.sheet && win.sheet.dir ? "New folder" : "New file", "rename": "Rename “" + (win.sheet ? win.sheet.name : "") + "”",
-                             "trash": "Move “" + (win.sheet ? win.sheet.name : "") + "” to the Trash?", "renamesym": "Rename “" + (win.sheet ? win.sheet.name : "") + "” everywhere", "debugprog": "Which program should be debugged?", "unreal": "Where is Unreal Engine?", "theme": "Which theme file?", "remote": "Open a folder on another computer", "aiask": win.sheet && win.sheet.mode === "write" ? "What should it write?" : "How should it change?", "run": "What Run does", "discard": "Throw away the changes to “" + (win.sheet ? win.sheet.rel : "") + "”?",
+                             "trash": "Move “" + (win.sheet ? win.sheet.name : "") + "” to the Trash?", "renamesym": "Rename “" + (win.sheet ? win.sheet.name : "") + "” everywhere", "debugprog": "Which program should be debugged?", "unreal": "Where is Unreal Engine?", "theme": "Which theme file?", "remote": "Open a folder on another computer", "attach": "Attach the debugger to a running program", "extensions": "Extensions", "container": "Open this project in its container", "aiask": win.sheet && win.sheet.mode === "write" ? "What should it write?" : "How should it change?", "run": "What Run does", "discard": "Throw away the changes to “" + (win.sheet ? win.sheet.rel : "") + "”?",
                              "langs": win.sheet && win.sheet.mode === "new" ? "New file in…" : "Languages", "branches": "Branches", "settings": "Settings", "keys": "Keyboard Shortcuts", "history": "History of “" + (win.sheet ? win.sheet.name : "") + "”",
                              "diff": (win.sheet ? win.sheet.rel : "") + (win.sheet && win.sheet.staged ? "  ·  staged" : "") })[card.kind] || "" }
                 // ---- Settings: Code's own, kept in its settings.json under VS Code's names; a project's .vscode/settings.json lies over them
@@ -604,11 +623,85 @@ GlassWindow {
                     Seg { text: "Keyboard Shortcuts…"; onClicked: win.ask("keys") }
                     Seg { text: "settings.json"; tip: "Open Code's settings file to edit by hand"; tipAbove: true; onClicked: { win.sheet = null; Backend.openSettingsFile() } }
                     Seg { text: "Import a Theme…"; onClicked: win.ask("theme", { now: "" }) }
+                    Seg { text: "Extensions…"; onClicked: win.ask("extensions") }
                     Seg { visible: Backend.vscodeFolder !== ""; text: "Bring from VS Code"; tip: "Your snippets, settings and key bindings, from " + Backend.vscodeFolder; tipAbove: true; onClicked: toast.say(Backend.importFromVSCode(), false) } }
                 // the computers you've opened before, and the ones ~/.ssh/config names
                 Flow { visible: card.kind === "remote" && Backend.remoteHosts.length > 0; x: 24; y: 176; width: parent.width - 48; height: 50; clip: true; spacing: 6
                     Repeater { model: card.kind === "remote" ? Backend.remoteHosts.slice(0, 8) : []
                         Seg { required property string modelData; text: modelData; onClicked: nameBox.text = modelData } } }
+                // ---- Extensions: what is installed, a .vsix to install, and the Open VSX registry to look in
+                Item { id: extPage; objectName: "extPage"; visible: card.kind === "extensions"; x: 24; y: 56; width: parent.width - 48; height: parent.height - 56 - 66
+                    property var found: []
+                    property string why: ""
+                    property bool looking: false
+                    property bool store: false                       // looking in the registry, not at what is installed
+                    onVisibleChanged: if (visible) { store = false; found = []; why = ""; extFind.text = "" }
+                    Connections { target: Backend; function onExtensionsFound(rows, why) { extPage.found = rows; extPage.why = why; extPage.looking = false } }
+                    Row { id: extTop; width: parent.width; height: 30; spacing: 6
+                        Seg { text: "Installed"; on: !extPage.store; onClicked: extPage.store = false }
+                        Seg { text: "Open VSX"; on: extPage.store; tip: "The open registry of VS Code extensions (open-vsx.org)"; onClicked: { extPage.store = true; if (!extPage.found.length && !extPage.looking) { extPage.looking = true; Backend.searchExtensions("") } } }
+                        Field { id: extFind; objectName: "extFind"; width: parent.width - 240; placeholder: extPage.store ? "Search Open VSX: a theme, a language, snippets…" : "A .vsix file to install: /home/you/Downloads/theme.vsix"
+                            onAccepted: extPage.go() }
+                        Seg { text: extPage.store ? "Search" : "Install"; onClicked: extPage.go() } }
+                    function go() { if (store) { looking = true; why = ""; Backend.searchExtensions(extFind.text) }
+                        else { var said = Backend.installExtension(extFind.text); if (said) { toast.say(said, said.indexOf("Installed") !== 0); if (said.indexOf("Installed") === 0) extFind.text = "" } } }
+                    Label { y: 38; width: parent.width; wrapMode: Text.WordWrap; secondary: true; font.pixelSize: 11
+                        text: "Code uses the parts of a VS Code extension that are data: colour themes, snippets, file types, key bindings. An extension's program runs only inside VS Code itself, so Code leaves that part out and says so." }
+                    ListView { id: extList; objectName: "extList"; visible: !extPage.store; y: 78; width: parent.width; height: parent.height - 78; clip: true; boundsBehavior: Flickable.StopAtBounds; spacing: 4
+                        model: card.kind === "extensions" ? Backend.extensions : []
+                        delegate: Rectangle { id: extRow; required property var modelData; width: extList.width - 6; height: extCol.height + 16; radius: 10; color: Qt.alpha(Theme.t.text, 0.04)
+                            readonly property var themes: Backend.extensionThemes.filter(function (t) { return t.ext === extRow.modelData.id })
+                            Column { id: extCol; x: 12; y: 8; width: parent.width - 24; spacing: 3
+                                Item { width: parent.width; height: 24
+                                    Label { width: parent.width - 170; elide: Text.ElideRight; anchors.verticalCenter: parent.verticalCenter; font.weight: Font.DemiBold; opacity: extRow.modelData.on ? 1 : 0.5
+                                        text: extRow.modelData.name + (extRow.modelData.version ? "  " + extRow.modelData.version : "") }
+                                    Row { anchors.right: parent.right; spacing: 4
+                                        Seg { text: extRow.modelData.on ? "On" : "Off"; on: extRow.modelData.on; onClicked: Backend.setExtensionOn(extRow.modelData.id, !extRow.modelData.on) }
+                                        Seg { text: "Remove"; onClicked: Backend.removeExtension(extRow.modelData.id) } } }
+                                Label { visible: text !== ""; width: parent.width; elide: Text.ElideRight; maximumLineCount: 2; wrapMode: Text.WordWrap; secondary: true; font.pixelSize: 12; text: extRow.modelData.about }
+                                Label { width: parent.width; wrapMode: Text.WordWrap; font.pixelSize: 11; secondary: true
+                                    text: "In use: " + extRow.modelData.takes + (extRow.modelData.leaves ? "   ·   Left out: " + extRow.modelData.leaves : "") }
+                                Flow { visible: extRow.themes.length > 0 && extRow.modelData.on; width: parent.width; spacing: 4
+                                    Repeater { model: extRow.themes
+                                        Seg { required property var modelData; text: modelData.label; on: Backend.theme.name === modelData.label && Backend.theme.ext === modelData.ext
+                                            onClicked: { var no = Backend.useExtensionTheme(modelData.ext, modelData.label); if (no) toast.say(no, true) } } } } } } }
+                    Label { visible: !extPage.store && extList.count === 0; anchors.centerIn: parent; width: parent.width - 80; wrapMode: Text.WordWrap; horizontalAlignment: Text.AlignHCenter; secondary: true
+                        text: "No extensions yet. Look in Open VSX, or give a .vsix file above." }
+                    ListView { id: vsxList; objectName: "vsxList"; visible: extPage.store; y: 78; width: parent.width; height: parent.height - 78; clip: true; boundsBehavior: Flickable.StopAtBounds; spacing: 2
+                        model: extPage.found
+                        delegate: Pressable { id: vsxRow; required property var modelData; width: vsxList.width - 6; height: 50; radius: 10; color: hovered ? Theme.t.hover : "transparent"
+                            Label { x: 12; y: 7; width: parent.width - 130; elide: Text.ElideRight; font.weight: Font.DemiBold; text: vsxRow.modelData.title + "   " + vsxRow.modelData.namespace + "." + vsxRow.modelData.name }
+                            Label { x: 12; y: 27; width: parent.width - 130; elide: Text.ElideRight; font.pixelSize: 11; secondary: true; text: vsxRow.modelData.about }
+                            Seg { anchors { right: parent.right; rightMargin: 8; verticalCenter: parent.verticalCenter } text: "Install"; onClicked: Backend.fetchExtension(vsxRow.modelData.namespace, vsxRow.modelData.name) } } }
+                    Label { visible: extPage.store && vsxList.count === 0; anchors.centerIn: parent; width: parent.width - 80; wrapMode: Text.WordWrap; horizontalAlignment: Text.AlignHCenter; secondary: true
+                        text: extPage.looking ? "Asking the registry…" : extPage.why ? extPage.why : "Nothing found." } }
+                // ---- attach: your running programs; pick one and the debugger joins it (it keeps running when you detach)
+                Field { id: attachFilter; objectName: "attachFilter"; visible: card.kind === "attach"; x: 24; y: 56; width: parent.width - 48; placeholder: "Find by name, command or number"
+                    onVisibleChanged: if (visible) { text = ""; focusIn(); card.attachTick++ } }
+                property int attachTick: 0
+                Timer { interval: 2500; repeat: true; running: card.kind === "attach"; onTriggered: card.attachTick++ }
+                property var attachRows: card.kind === "attach" && attachTick >= 0 ? Backend.runningPrograms(attachFilter.text) : []
+                ListView { id: attachList; objectName: "attachList"; visible: card.kind === "attach"; x: 12; y: 98; width: parent.width - 24; height: parent.height - 98 - (Backend.attachNote ? 104 : 66); clip: true; boundsBehavior: Flickable.StopAtBounds
+                    model: card.attachRows
+                    delegate: Pressable { id: attachRow; required property var modelData; width: attachList.width - 6; height: 44; radius: 10; color: hovered ? Theme.t.hover : "transparent"
+                        onClicked: { var c = win.sheet.config; win.sheet = null; win.bottom = "debug"; win.term = true; Backend.attachTo(modelData.pid, c) }
+                        Label { x: 12; y: 5; width: parent.width - 150; elide: Text.ElideRight; font.weight: Font.DemiBold; text: attachRow.modelData.name }
+                        Label { x: 12; y: 24; width: parent.width - 150; elide: Text.ElideMiddle; font.pixelSize: 11; font.family: win.mono; secondary: true; text: attachRow.modelData.command }
+                        Label { anchors { right: parent.right; rightMargin: 12; verticalCenter: parent.verticalCenter } font.pixelSize: 11; secondary: true
+                            text: (attachRow.modelData.kind === "python" ? "Python · " : "") + attachRow.modelData.pid } } }
+                Label { visible: card.kind === "attach" && attachList.count === 0; anchors.centerIn: parent; secondary: true; text: attachFilter.text ? "None of your running programs match." : "None of your programs are running." }
+                Label { visible: card.kind === "attach" && Backend.attachNote !== ""; x: 24; anchors { bottom: parent.bottom; bottomMargin: 62 } width: parent.width - 48; wrapMode: Text.WordWrap; maximumLineCount: 2; elide: Text.ElideRight; font.pixelSize: 11; secondary: true; text: Backend.attachNote }
+                // ---- a dev container: what the project's devcontainer.json will do here, before it does it
+                Flickable { visible: card.kind === "container"; x: 24; y: 56; width: parent.width - 48; height: parent.height - 56 - 66; clip: true; contentHeight: boxCol.height; boundsBehavior: Flickable.StopAtBounds
+                    Column { id: boxCol; width: parent.width - 8; spacing: 6
+                        Label { width: parent.width; wrapMode: Text.WordWrap; secondary: true; font.pixelSize: 12
+                            text: card.kind !== "container" ? "" : Backend.container.problem ? Backend.container.problem
+                                : "“" + Backend.container.title + "”, with " + (Backend.container.engine === "podman" ? "Podman" : "Docker") + ". Your files stay in this folder and are edited here; Run, Build and the debugger happen inside the container. Its devcontainer.json is the project's own instructions, so read what it will do:" }
+                        Repeater { model: card.kind === "container" && !Backend.container.problem ? Backend.container.asks : []
+                            Row { required property string modelData; width: boxCol.width; spacing: 8
+                                Label { text: "•"; secondary: true }
+                                Label { width: parent.width - 20; wrapMode: Text.WrapAnywhere; font.pixelSize: 12; font.family: modelData.indexOf("Run inside") === 0 || modelData.indexOf("Extra options") === 0 ? win.mono : Theme.t.font
+                                    color: modelData.indexOf("PRIVILEGED") >= 0 || modelData.indexOf("NOT done") === 0 ? win.delInk : Theme.t.text; text: modelData } } } } }
                 // ---- a file's history: a copy kept at every save; pick one to see what changed since, and go back to it if you like
                 ListView { id: fileHist; objectName: "historyList"; visible: card.kind === "history"; x: 16; y: 58; width: parent.width - 32; height: parent.height - 58 - 66; clip: true; boundsBehavior: Flickable.StopAtBounds
                     model: card.kind === "history" ? win.sheet.rows : []
@@ -695,14 +788,15 @@ GlassWindow {
                 Label { visible: ["dirty", "clash", "trash", "discard"].indexOf(card.kind) >= 0; x: 24; y: 52; width: parent.width - 48; wrapMode: Text.WordWrap; secondary: true
                     text: card.kind === "dirty" ? "If you don't save, your changes are lost." : card.kind === "clash" ? "Something else changed it since you opened it. Keep yours (overwrite) or take what's on disk?"
                         : card.kind === "trash" ? "You can put it back from the Trash in Files." : "This can't be undone: the file goes back to how it was at the last commit." }
-                TextBox { id: nameBox; objectName: "nameBox"; visible: ["new", "rename", "run", "renamesym", "debugprog", "aiask", "unreal", "theme", "remote"].indexOf(card.kind) >= 0; x: 24; y: 58; width: parent.width - 48; mono: card.kind === "run" || card.kind === "renamesym" || card.kind === "debugprog" || card.kind === "unreal" || card.kind === "remote"
+                TextBox { id: nameBox; objectName: "nameBox"; visible: ["new", "rename", "run", "renamesym", "debugprog", "aiask", "unreal", "theme", "remote", "space"].indexOf(card.kind) >= 0; x: 24; y: 58; width: parent.width - 48; mono: card.kind === "run" || card.kind === "renamesym" || card.kind === "debugprog" || card.kind === "unreal" || card.kind === "remote"
                     placeholder: card.kind === "remote" ? "astrid@build-box:/srv/game" : card.kind === "theme" ? "for example: /home/you/Downloads/monokai-color-theme.json" : card.kind === "unreal" ? "for example: /home/you/UnrealEngine" : card.kind === "run" ? "for example: python3 -m aurora" : card.kind === "renamesym" ? "new name" : card.kind === "debugprog" ? "build/myprogram" : card.kind === "aiask" ? (win.sheet && win.sheet.mode === "write" ? "for example: a function that reads a CSV file into a list of dicts" : "for example: add error handling") : card.kind === "new" ? (win.sheet && win.sheet.dir ? "folder name" : "name.py, or folder/name.py") : ""
                     onAccepted: sheetOk.clicked() }
                 Label { visible: card.kind === "aiask"; x: 24; y: 100; width: parent.width - 48; wrapMode: Text.WordWrap; secondary: true; font.pixelSize: 11
                     text: (win.sheet && win.sheet.mode === "write" ? "Written in " + (win.tab && win.tab.lang ? win.tab.lang : "this file's language") + ", at the cursor"
                            : "On what's selected, or the whole file") + ". Huginn AI shows it first; nothing changes until you say so." }
-                Label { visible: card.kind === "run" || card.kind === "debugprog" || card.kind === "renamesym" || card.kind === "unreal" || card.kind === "theme" || card.kind === "remote"; x: 24; y: 100; width: parent.width - 48; wrapMode: Text.WordWrap; secondary: true; font.pixelSize: 11
-                    text: card.kind === "remote" ? "Who, which computer, and the folder there (over SSH; the other computer needs nothing installed). Its files open here as if they were on this one; Run and Build happen there. If ssh needs a password, it asks in the terminal: Code never sees it." : card.kind === "theme" ? "A VS Code colour theme is a .json file (inside a theme extension, in its themes folder). Code takes its editor and syntax colours; the rest of the window keeps the system's look." : card.kind === "unreal" ? "The folder that holds Engine/ and Setup.sh: the one Epic's download unpacks to, or your clone of its source after Setup.sh and make. Code remembers it for every project." : card.kind === "run" ? "Kept in the project as .huginn-run, so it travels with it." : card.kind === "debugprog" ? "The program you built, with debugging information (gcc -g, cargo build). Kept in the project as .huginn-debug."
+                Label { visible: card.kind === "run" || card.kind === "debugprog" || card.kind === "renamesym" || card.kind === "unreal" || card.kind === "theme" || card.kind === "remote" || card.kind === "space"; x: 24; y: 100; width: parent.width - 48; wrapMode: Text.WordWrap; secondary: true; font.pixelSize: 11
+                    text: card.kind === "space" ? "Where to write the .code-workspace file. It is VS Code's own format: opening it there, or here, opens these folders together."
+                        : card.kind === "remote" ? "Who, which computer, and the folder there (over SSH; the other computer needs nothing installed). Its files open here as if they were on this one; Run and Build happen there. If ssh needs a password, it asks in the terminal: Code never sees it." : card.kind === "theme" ? "A VS Code colour theme is a .json file (inside a theme extension, in its themes folder). Code takes its editor and syntax colours; the rest of the window keeps the system's look." : card.kind === "unreal" ? "The folder that holds Engine/ and Setup.sh: the one Epic's download unpacks to, or your clone of its source after Setup.sh and make. Code remembers it for every project." : card.kind === "run" ? "Kept in the project as .huginn-run, so it travels with it." : card.kind === "debugprog" ? "The program you built, with debugging information (gcc -g, cargo build). Kept in the project as .huginn-debug."
                         : "Every place it's used changes, in every file (the language helper finds them). Open files change but aren't saved." }
                 // the folder picker
                 Item { visible: card.kind === "open"; x: 16; y: 54; width: parent.width - 32; height: parent.height - 120
@@ -736,14 +830,16 @@ GlassWindow {
                 Row { anchors { right: parent.right; rightMargin: 20; bottom: parent.bottom; bottomMargin: 18 } spacing: 8
                     Btn { visible: card.kind === "dirty"; text: "Don't Save"; onClicked: { var t = win.sheet.tab; win.sheet = null; Backend.close(t, true) } }
                     Btn { visible: card.kind === "new" && !(win.sheet && win.sheet.dir); text: "In a Language…"; onClicked: win.ask("langs", { mode: "new" }) }
-                    Btn { text: card.kind === "diff" || card.kind === "branches" || card.kind === "settings" || card.kind === "keys" || card.kind === "history" || card.kind === "langs" && win.sheet.mode !== "new" ? "Done" : "Cancel"; onClicked: win.sheet = null }
+                    Btn { text: card.kind === "diff" || card.kind === "branches" || card.kind === "settings" || card.kind === "keys" || card.kind === "history" || card.kind === "extensions" || card.kind === "langs" && win.sheet.mode !== "new" ? "Done" : "Cancel"; onClicked: win.sheet = null }
                     Btn { visible: card.kind === "diff" && !!win.sheet.restore; text: "Go Back to This Version"; onClicked: { var r = win.sheet.restore; win.sheet = null; if (Backend.historyRestore(r.tab, r.id)) toast.say("That version is in the editor. Save to keep it; undo brings back what was here.", false) } }
                     Btn { visible: card.kind === "diff" && !win.sheet.staged && !!win.sheet.canStage; text: "Stage"; onClicked: { Backend.stage(win.sheet.rel); win.sheet = null } }
                     Btn { visible: card.kind === "clash"; text: "Take Theirs"; onClicked: { var t = win.sheet.tab; win.sheet = null; Backend.reload(t) } }
-                    Btn { id: sheetOk; visible: card.kind !== "diff" && card.kind !== "langs" && card.kind !== "branches" && card.kind !== "settings" && card.kind !== "keys" && card.kind !== "history"; primary: card.kind !== "trash" && card.kind !== "discard"; danger: card.kind === "trash" || card.kind === "discard"
-                        text: ({ "open": "Open This Folder", "dirty": "Save", "clash": "Keep Mine", "new": "Make", "rename": "Rename", "trash": "Move to Trash", "run": "Use It", "discard": "Throw Away", "renamesym": "Rename", "debugprog": "Debug", "aiask": "Ask", "unreal": "Use This Folder", "theme": "Use This Theme", "remote": "Connect" })[card.kind] || "OK"
+                    Btn { id: sheetOk; visible: card.kind !== "diff" && card.kind !== "langs" && card.kind !== "branches" && card.kind !== "settings" && card.kind !== "keys" && card.kind !== "history" && card.kind !== "attach" && card.kind !== "extensions" && !(card.kind === "container" && Backend.container.problem); primary: card.kind !== "trash" && card.kind !== "discard"; danger: card.kind === "trash" || card.kind === "discard"
+                        text: ({ "open": win.sheet && win.sheet.add ? "Add This Folder" : "Open This Folder", "space": "Write It", "dirty": "Save", "clash": "Keep Mine", "new": "Make", "rename": "Rename", "trash": "Move to Trash", "run": "Use It", "discard": "Throw Away", "renamesym": "Rename", "debugprog": "Debug", "aiask": "Ask", "unreal": "Use This Folder", "theme": "Use This Theme", "remote": "Connect", "container": "Start It" })[card.kind] || "OK"
                         onClicked: {
                             var s = win.sheet, why = ""
+                            if (s.kind === "open" && s.add) { var why = Backend.addFolder(win.browseAt); if (why) { toast.say(why, true); return } win.sheet = null; return }
+                            if (s.kind === "space") { var bad = Backend.saveWorkspace(nameBox.text); if (bad) { toast.say(bad, true); return } win.sheet = null; toast.say("The workspace was written to " + Backend.workspaceFile + ".", false); return }
                             if (s.kind === "open") { win.sheet = null; Backend.openFolder(win.browseAt); return }
                             if (s.kind === "dirty") { if (Backend.save(s.tab, false) === "") { win.sheet = null; Backend.close(s.tab, true) } return }
                             if (s.kind === "clash") { win.sheet = null; Backend.save(s.tab, true); return }
@@ -756,12 +852,13 @@ GlassWindow {
                             else if (s.kind === "remote") { var bad = Backend.remoteConnect(nameBox.text); if (bad) { toast.say(bad, true); return } win.sheet = null; win.bottom = "terminal"; win.term = true; return }
                             else if (s.kind === "theme") { var no = Backend.importTheme(nameBox.text); if (no) { toast.say(no, true); return } win.sheet = null; return }
                             else if (s.kind === "unreal") { var why = Backend.build.setUnreal(nameBox.text); if (why) { toast.say(why, true); return } win.sheet = null; win.showBuild(); return }
+                            else if (s.kind === "container") { var no = Backend.containerOpen(); if (no) { toast.say(no, true); return } win.sheet = null; win.bottom = "terminal"; win.term = true; return }
                             else if (s.kind === "debugprog") { win.sheet = null; win.bottom = "debug"; win.term = true; Backend.startDebug(nameBox.text); return }
                             else if (s.kind === "aiask") { var said = nameBox.text.trim(); if (!said) return; win.sheet = null; win.aiCode(s.mode, said); return }
                             if (why) toast.say(why, true); else win.sheet = null } } } } }
     ]
     onSheetChanged: if (sheet && ["new", "rename", "run", "renamesym", "debugprog", "aiask", "unreal", "theme", "remote"].indexOf(sheet.kind) >= 0) {
-        nameBox.text = sheet.kind === "rename" || sheet.kind === "renamesym" ? sheet.name : sheet.kind === "run" || sheet.kind === "debugprog" || sheet.kind === "unreal" || sheet.kind === "theme" || sheet.kind === "remote" ? (sheet.now || "") : ""; nameBox.focusIn(); nameBox.input.selectAll() }
+        nameBox.text = sheet.kind === "rename" || sheet.kind === "renamesym" ? sheet.name : sheet.kind === "run" || sheet.kind === "debugprog" || sheet.kind === "unreal" || sheet.kind === "theme" || sheet.kind === "remote" || sheet.kind === "space" ? (sheet.now || "") : ""; nameBox.focusIn(); nameBox.input.selectAll() }
 
     // ================================================================ the side island
     Rectangle { id: sideBox; visible: win.side; x: 12; y: 64; width: win.sideW; height: parent.height - y - 12; radius: 18; color: Theme.t.island; border.width: 1; border.color: Theme.t.islandLine; clip: true
@@ -775,7 +872,7 @@ GlassWindow {
         // ---- files
         Item { visible: win.panel === "files"; x: 0; y: 52; width: parent.width; height: parent.height - 52
             Row { x: 14; width: parent.width - 28; height: 28; spacing: 4
-                Label { width: parent.width - 96; elide: Text.ElideRight; anchors.verticalCenter: parent.verticalCenter; text: (Backend.rootName || "No folder").toUpperCase(); font.pixelSize: 11; font.weight: Font.Bold; font.letterSpacing: 1; secondary: true }
+                Label { width: parent.width - 96; elide: Text.ElideRight; anchors.verticalCenter: parent.verticalCenter; text: (Backend.folders.length ? "Workspace · " + Backend.folders.length + " folders" : Backend.rootName || "No folder").toUpperCase(); font.pixelSize: 11; font.weight: Font.Bold; font.letterSpacing: 1; secondary: true }
                 Seg { visible: !!Backend.root; icon: "plus"; tip: "New file"; onClicked: win.ask("new", { folder: Backend.root, dir: false }) }
                 Seg { visible: !!Backend.root; icon: "folder"; tip: "New folder"; onClicked: win.ask("new", { folder: Backend.root, dir: true }) } }
             // a right-click on the list's empty space, or on its heading, is the project folder's own menu
@@ -787,11 +884,14 @@ GlassWindow {
                     readonly property bool on: !!win.tab && win.tab.path === modelData.path
                     color: on ? Qt.alpha(Theme.t.accent, 0.2) : hovered ? Theme.t.hover : "transparent"
                     onClicked: modelData.dir ? Backend.toggle(modelData.path) : Backend.openFile(modelData.path)
+                    readonly property bool isTop: !!modelData.root                 // a workspace folder's heading
                     MouseArea { anchors.fill: parent; acceptedButtons: Qt.RightButton
-                        onClicked: function (m) { var p = row.mapToItem(win.contentItem, m.x, m.y); win.menuFor = { path: row.modelData.path, name: row.modelData.name, dir: row.modelData.dir, x: p.x, y: p.y } } }
+                        onClicked: function (m) { var p = row.mapToItem(win.contentItem, m.x, m.y); win.menuFor = { path: row.modelData.path, name: row.modelData.name, dir: row.modelData.dir, root: row.isTop, space: row.isTop, x: p.x, y: p.y } } }
+                    Rectangle { visible: row.isTop && !!row.modelData.active; anchors { right: parent.right; rightMargin: 9; verticalCenter: parent.verticalCenter } width: 7; height: 7; radius: 4; color: Theme.t.accent }
                     Text { x: 8 + row.modelData.depth * 14; width: 12; anchors.verticalCenter: parent.verticalCenter; text: row.modelData.dir ? (row.modelData.open ? "▾" : "▸") : ""; color: Theme.t.text_secondary; font.pixelSize: 11 }
                     Rectangle { visible: !row.modelData.dir; x: 11 + row.modelData.depth * 14; anchors.verticalCenter: parent.verticalCenter; width: 7; height: 7; radius: 2; color: win.langInk(row.modelData.lang) }
-                    Label { x: 24 + row.modelData.depth * 14; width: parent.width - x - 24; elide: Text.ElideRight; anchors.verticalCenter: parent.verticalCenter; text: row.modelData.name; font.pixelSize: 12
+                    Label { x: 24 + row.modelData.depth * 14; width: parent.width - x - 24; elide: Text.ElideRight; anchors.verticalCenter: parent.verticalCenter; text: row.isTop ? row.modelData.name.toUpperCase() : row.modelData.name
+                        font.pixelSize: row.isTop ? 11 : 12; font.weight: row.isTop ? Font.Bold : Font.Normal; font.letterSpacing: row.isTop ? 0.8 : 0
                         opacity: row.modelData.dim ? 0.55 : 1; color: row.modelData.git && row.modelData.git !== "inside" ? win.gitInk(row.modelData.git) : Theme.t.text }
                     Label { anchors { right: parent.right; rightMargin: 8; verticalCenter: parent.verticalCenter } text: win.gitLetter(row.modelData.git); font.pixelSize: 11; font.weight: Font.Bold; color: win.gitInk(row.modelData.git) } }
                 Column { visible: !Backend.root; anchors.centerIn: parent; spacing: 10; width: parent.width - 40
@@ -1004,6 +1104,13 @@ GlassWindow {
                 property var peekAt: null                    // {path, name, line, first, text}: a definition shown here
                 Timer { id: hintTick; interval: 500; onTriggered: if (Backend.options.inlay && v.visible) Backend.inlayHints(v.index, v.topLine, v.lineAt(v.row(v.topLine) + Math.ceil(scroll.height / Math.max(1, edit.cursorRectangle.height)) + 2)) }
                 readonly property var info: (index >= 0 && index < Backend.tabs.length && Backend.tabs[index]) || ({})
+                // ---- a notebook (.ipynb) is shown as cells over its text; "As JSON" shows the text itself
+                property bool rawNb: false
+                readonly property bool nbOn: !!info.notebook && !rawNb
+                onNbOnChanged: if (!nbOn && info.notebook) { Backend.nbFlush(index); reload() }      // (the text was changed through the cells: take it again)
+                Loader { id: nbLoader; active: v.nbOn; anchors.fill: parent; z: 30
+                    sourceComponent: NotebookView { tab: v.index; host: win; readOnly: !!v.info.readOnly; onWantsRaw: v.rawNb = true } }
+                Seg { visible: !!v.info.notebook && v.rawNb; z: 31; anchors { right: parent.right; rightMargin: 120; top: parent.top; topMargin: 8 } text: "As a Notebook"; on: true; onClicked: v.rawNb = false }
                 function reload() { loading = true; var at = edit.cursorPosition; known = Backend.textOf(index); edit.text = known; edit.cursorPosition = Math.min(at, edit.length); loading = false; hid = []; foldTick.restart(); hintTick.restart(); restyle(); refresh() }
                 function restyle() { Backend.style(index, { doc: edit.textDocument, colours: win.colours() }) }
                 readonly property string look: (win.themed ? win.vsTheme.name : "") + (win.codeDark ? "/dark" : "/light")       // another theme, or light to dark: colour the text again
@@ -1478,7 +1585,7 @@ GlassWindow {
                                 width: moreL.width + 12; height: 18; radius: 6; color: Qt.alpha(Theme.t.accent, 0.18)
                                 Label { id: moreL; anchors.centerIn: parent; text: "+" + parent.more + (parent.more === 1 ? " line" : " lines") + " · Tab"; font.pixelSize: 10; color: Theme.t.accent } } }
                         onTextChanged: {
-                            if (v.loading || text === v.known) return      // colouring touches the text too: only real typing counts
+                            if (v.loading || text === v.known || v.nbOn) return      // colouring touches the text too: only real typing counts (and a notebook's cells own its text)
                             if (v.snip && !v.multiBusy) v.snipShift(length - v.snip.len)
                             if (!v.multiBusy && v.extra.length) v.extra = []
                             conflictTick.restart(); stickyTick.restart(); decoTick.restart(); foldTick.restart(); hintTick.restart()
@@ -1866,6 +1973,11 @@ GlassWindow {
                 Row { id: rmRow; x: 6; spacing: 5; anchors.verticalCenter: parent.verticalCenter
                     Rectangle { width: 7; height: 7; radius: 4; anchors.verticalCenter: parent.verticalCenter; color: Backend.remote.connected ? win.addInk : win.delInk }
                     Label { font.pixelSize: 11; text: "SSH: " + (Backend.remote.spec || "") + (Backend.remote.connected ? "" : "  (not connected)") } } }
+            Pressable { objectName: "containerPill"; visible: !!Backend.container.has && !Backend.remote.spec; width: bxRow.width + 12; height: 24; radius: 12
+                color: hovered ? Theme.t.hover : !!Backend.container.running ? Qt.alpha(Theme.t.accent, 0.16) : "transparent"; onClicked: !!Backend.container.running ? win.openPalette(">Container") : win.containerAsk()
+                Row { id: bxRow; x: 6; spacing: 5; anchors.verticalCenter: parent.verticalCenter
+                    Rectangle { visible: !!Backend.container.running || !!Backend.container.starting; width: 7; height: 7; radius: 4; anchors.verticalCenter: parent.verticalCenter; color: Backend.container.running ? win.addInk : Theme.t.text_secondary }
+                    Label { font.pixelSize: 11; text: Backend.container.running ? "Container: " + Backend.container.title : Backend.container.starting ? "Container: starting…" : "Open in Container" } } }
             Pressable { objectName: "buildPill"; visible: win.bld.running || win.bld.errors + win.bld.warnings > 0; width: bpRow.width + 12; height: 24; radius: 12; color: hovered ? Theme.t.hover : "transparent"; onClicked: win.showBuild()
                 Row { id: bpRow; x: 6; spacing: 5; anchors.verticalCenter: parent.verticalCenter
                     Rectangle { width: 7; height: 7; radius: 4; anchors.verticalCenter: parent.verticalCenter; color: win.bld.running ? win.modInk : win.bld.errors ? win.delInk : "#E3B341" }

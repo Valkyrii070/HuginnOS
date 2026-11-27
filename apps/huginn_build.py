@@ -522,7 +522,7 @@ class Builder(QObject):
         self._problems, self._seen, self._state, self._tail, self._stopped = [], set(), {}, "", False
         self._save_all, self._env_path, self._at = save_all, list(env_path), -1
         self._known = known                      # () -> what ${file} and the rest stand for now (for .vscode/tasks.json)
-        self._remote = remote                    # () -> (remote, mount) when the project is on another computer (huginn_remote)
+        self._remote = remote                    # () -> (huginn_remote or huginn_container, what, mount) when the project runs somewhere else
         self._lines = Lines(self)
         self._pending = []
         self._flush = QTimer(self, interval=60, singleShot=True)
@@ -618,14 +618,13 @@ class Builder(QObject):
         self._task, self._problems, self._seen, self._state, self._tail, self._stopped = task, [], set(), {}, "", False
         self._pending, self._at = [], -1
         self._lines.clear()
-        command, remote, mount = task["command"], None, None
+        command, door, remote, mount = task["command"], None, None, None
         if self._remote:
-            remote, mount = self._remote()
-        if remote:                                                   # over ssh, in the folder there; its paths come back as ours
-            import huginn_remote
-            command = huginn_remote.wrap(remote, command, mount=mount)
-            self._state["there"] = (huginn_remote, remote, mount)
-        self._lines.add([{"text": "$ " + task["command"] + (f"     (on {remote['spec']})" if remote else ""), "kind": "command", "path": "", "line": 0, "col": 0}])
+            door, remote, mount = self._remote()
+        if remote:                                                   # over ssh or in a container, in the folder there; its paths come back as ours
+            command = door.wrap(remote, command, mount=mount)
+            self._state["there"] = (door, remote, mount)
+        self._lines.add([{"text": "$ " + task["command"] + (f"     ({'in' if door.__name__ == 'huginn_container' else 'on'} {remote['spec']})" if remote else ""), "kind": "command", "path": "", "line": 0, "col": 0}])
         self._status, self._started = "Running…", time.time()
         proc = QProcess(self)
         proc.setWorkingDirectory(str(self._root / task["cwd"]) if task.get("cwd") else str(self._root))

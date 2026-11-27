@@ -253,7 +253,8 @@ def launches(root, known: dict = None, config: dict = None) -> list:
         if isinstance(over, dict):
             row = dict(row, **over)
         missing = []
-        cfg = substitute({k: v for k, v in row.items() if k not in ("linux", "windows", "osx", "presentation")}, known, config, missing)
+        row = {k: ("${pick}" if isinstance(v, str) and v.strip() in ("${command:pickProcess}", "${command:pickRemoteProcess}", "${command:PickProcess}") else v) for k, v in row.items()}
+        cfg = substitute({k: v for k, v in row.items() if k not in ("linux", "windows", "osx", "presentation")}, dict(known, pick="${pick}"), config, missing)
         kind_in, request = str(cfg.get("type", "")), str(cfg.get("request", "launch"))
         cwd = str(cfg.get("cwd") or root)
         env = {str(k): str(v) for k, v in cfg.get("env", {}).items()} if isinstance(cfg.get("env"), dict) else {}
@@ -263,8 +264,28 @@ def launches(root, known: dict = None, config: dict = None) -> list:
         kind, launch, why = "", {}, ""
         if missing:
             why = "needs " + ", ".join("${" + m + "}" for m in missing[:3]) + ", which Code can't answer"
+        elif request == "attach" and kind_in in PYTHON_TYPES + GDB_TYPES:
+            # join a program that is running: by its process number (asked for when the file says "pick"), or where
+            # debugpy or gdbserver is listening
+            python = kind_in in PYTHON_TYPES
+            connect = cfg.get("connect") if isinstance(cfg.get("connect"), dict) else {}
+            host, port = str(connect.get("host") or cfg.get("host") or ""), connect.get("port") or cfg.get("port") or 0
+            if not python and isinstance(cfg.get("miDebuggerServerAddress"), str) and ":" in cfg["miDebuggerServerAddress"]:
+                host, _, port = cfg["miDebuggerServerAddress"].rpartition(":")
+            pid = cfg.get("processId", cfg.get("pid", 0))
+            pick = pid == "${pick}"
+            try:
+                port, pid = int(port or 0), (0 if pick else int(pid or 0))
+            except (TypeError, ValueError):
+                port, pid = 0, 0
+            maps = [(str(m.get("localRoot", "")), str(m.get("remoteRoot", ""))) for m in cfg.get("pathMappings", []) if isinstance(m, dict)] if isinstance(cfg.get("pathMappings"), list) else []
+            if not (port or pid or pick):
+                why = "names no process and no port to attach to"
+            else:
+                kind = "python-attach" if python else "gdb-attach"
+                launch = {"pid": pid, "pick": pick, "host": host, "port": port, "program": str(cfg.get("program") or ""), "mappings": maps}
         elif request != "launch":
-            why = "attaching to a running program isn't something Code does yet"
+            why = f"“{request}” isn't a way of starting Code knows"
         elif kind_in in PYTHON_TYPES:
             kind = "python"
             launch = {"type": "python", "request": "launch", "name": str(cfg["name"]), "cwd": cwd, "console": "internalConsole", "args": args, "env": env,

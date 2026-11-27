@@ -110,7 +110,7 @@ ok("Python: a module, and arguments given as one string", G["Module"]["launch"].
 ok("C and C++ (cppdbg) go to GDB, with stop-at-entry and its own form of environment", G["Native"]["kind"] == "gdb" and G["Native"]["launch"]["program"] == f"{proj}/build/game"
    and G["Native"]["launch"]["stopAtBeginningOfMainSubprogram"] is True and G["Native"]["launch"]["env"] == {"LD": "x"})
 ok("CodeLLDB's go to GDB too, with their Linux form", G["LLDB"]["kind"] == "gdb" and G["LLDB"]["launch"]["args"] == ["--linux"])
-ok("what Code can't start says why", not G["Attach"]["kind"] and G["Attach"]["why"] and not G["Browser"]["kind"] and "chrome" in G["Browser"]["why"] and not G["Empty"]["kind"] and "no program" in G["Empty"]["why"])
+ok("what Code can't start says why (joining a running program is round nine's)", G["Attach"]["kind"].endswith("-attach") and not G["Browser"]["kind"] and "chrome" in G["Browser"]["why"] and not G["Empty"]["kind"] and "no program" in G["Empty"]["why"])
 
 # ---------------------------------------------------------------------------------------------------- settings.json
 S = {"editor.tabSize": 2, "editor.insertSpaces": True, "files.eol": "\r\n", "files.trimTrailingWhitespace": False, "editor.formatOnSave": True, "editor.rulers": [80, {"column": 120}, "x", 9999],
@@ -223,7 +223,7 @@ ok("an .editorconfig lies over the project's settings", b"x = 1\n" in (proj / "s
 names = lambda lang, pre: [x["label"] for x in more.snippet_items(lang, pre)]              # noqa: E731
 ok("the project's snippets are offered in their language", names("GDScript", "si") == ["sig", "signal"] or "sig" in names("GDScript", "si"), names("GDScript", "si"))
 ok("its debug configurations are listed; the first that can start is what F5 uses", [(x["name"], x["ok"], x["chosen"]) for x in c.launches][:3] == [("Game", True, True), ("Module", True, False), ("Native", True, False)]
-   and not c.launches[4]["ok"] and c.launches[4]["why"], c.launches)
+   and not c.launches[5]["ok"] and c.launches[5]["why"], c.launches)
 k = len(said); c.startLaunch("Browser")
 ok("one that can't start says why", any("chrome" in s for s in said[k:]) and not c.debug.active, said[k:])
 k = len(said); c.startLaunch("Native")
@@ -274,7 +274,7 @@ c2 = hc.Code()
 ok("all of it is there the next time Code starts", c2.size == 15 and vsc.value("editor.tabSize", c2._user) == 2 and "ifmain" in [x["label"] for x in more.snippet_items("Python", "if")],
    (c2.size, c2._user, [x["label"] for x in more.snippet_items("Python", "if")]))
 c.openFolder(str(ws)); spin(200)
-ok("a .code-workspace file opens its first folder, with its settings under the project's", str(c._root) == str(proj) and any("2 folders" in s for s in said), said[-3:])
+ok("a .code-workspace file opens its first folder, with its settings under the project's", str(c._root) == str(proj) and len(c.folders) == 2, (c.folders, said[-3:]))
 c.closeFolder(); spin(100)
 ok("with the folder closed, the project's settings, tasks and debug configurations are gone", c.launches == [] and b.tasks == [] and c._proj == {} and c.setting("editor.tabSize") == 2)
 
@@ -465,8 +465,7 @@ if reach:                                                          # (a test SSH
     b.again(); wait(lambda: not b.running, 90)
     made = subprocess.run(["ssh", "-o", "BatchMode=yes", "testbox", "remote-proj/prog"], capture_output=True, text=True, timeout=30).stdout
     ok("fixed here and saved, it builds there, and the program made there runs there", b.status.startswith("Done") and made == "hi\n", (b.status, made))
-    k = len(said); c.startDebug("")
-    ok("debugging there is refused in words, not tried here", any("another computer" in x for x in said[k:]) and not c.debug.active)
+    # (debugging on the other computer is round nine's: code_round9_test.py)
     c.remoteDisconnect(); spin(200)
     ok("disconnecting closes the folder and lets the mount go", c._root is None and not hr.is_mounted(mount) and any("Disconnected from testbox" in x for x in said[-3:]), said[-3:])
 else:
