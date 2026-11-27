@@ -44,3 +44,7 @@ kde-style-breeze
 kde-style-breeze-data
 kwin-style-breeze
 breeze-wallpaper
+# KDE Connect: Phone has its own link now (apps/huginn_phoned.py, KDE Connect's protocol), and the desktop theme it
+# brought along (2026-11-27)
+kdeconnect
+plasma-desktoptheme

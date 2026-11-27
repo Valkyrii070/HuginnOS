@@ -1,6 +1,6 @@
 #!/bin/sh
-# Programs that work behind Huginn's own apps stay out of the start menu and Search: KDE Connect (behind Phone),
-# FreeRDP (behind Screen Sharing and Machines), Calf and setBfree (Tempo's instruments and effects) and Kvantum's
+# Programs that work behind Huginn's own apps stay out of the start menu and Search: KDE Connect's windows (on a
+# system that had it before Phone's own link), FreeRDP (behind Screen Sharing and Machines), Calf and setBfree (Tempo's instruments and effects) and Kvantum's
 # manager (Huginn dresses Qt apps itself). Each gets a copy in /usr/local/share/applications, which comes before
 # /usr/share's, with NoDisplay=true: they still run, open files and start as before, and package updates don't undo it.
 # On update: run

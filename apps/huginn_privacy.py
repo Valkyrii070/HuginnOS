@@ -43,6 +43,8 @@ def app_name(pid: int) -> str:
             return {"recorder": "Voice Recorder", "screenshot": "Screenshot", "print": "Print & Scan", "store": "App Store", "monitor": "System Monitor"}.get(argv[i + 1], argv[i + 1].title())
         if a.endswith("safari_browser.py"):
             return "Huginn"
+        if a.endswith("huginn_phoned.py"):
+            return "Phone"
         if a.endswith(".py") and i > 0:
             return Path(a).stem.replace("huginn_", "").replace("_", " ").title()
     base = os.path.basename(argv[0])
@@ -383,7 +385,7 @@ if QObject is not object:
 
         def _get_network(self) -> list:
             if self._demo:
-                rows = {"Huginn": 186, "Mail": 6, "Steam": 14, "Feeds": 23, "Weather": 1, "Discord": 9, "KDE Connect": 1}
+                rows = {"Huginn": 186, "Mail": 6, "Steam": 14, "Feeds": 23, "Weather": 1, "Discord": 9, "Phone": 1}
                 return [{"name": k, "places": v, "share": v / 186, "ips": []} for k, v in sorted(rows.items(), key=lambda kv: -kv[1])]
             try:
                 net = json.loads(NET.read_text(encoding="utf-8"))

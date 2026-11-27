@@ -2,11 +2,12 @@
 
 A shortcut is a trigger and a list of steps. Ones you start yourself can sit in the apps menu; the others are
 watched for by a small helper that starts with your session (python3 huginn_shortcuts.py agent) and checks, every
-few seconds, the clock, plugged-in drives, your phone (KDE Connect), the Wi-Fi network and the battery. Everything
+few seconds, the clock, plugged-in drives, your phone (Phone's link), the Wi-Fi network and the battery. Everything
 runs as you, on this computer; nothing is sent anywhere.
 
     python3 huginn_shortcuts.py agent        the watcher (one per session)
     python3 huginn_shortcuts.py run ID       run one shortcut now"""
+import ast
 import configparser
 import datetime as dt
 import fcntl
@@ -90,14 +91,14 @@ def removable_mounts() -> dict:
 
 
 def phones() -> set:
-    tool = shutil.which("kdeconnect-cli")
-    if not tool:
-        return set()
+    """The names of paired phones in reach, from Phone's link (huginn_phoned.py); nothing if it isn't running."""
     try:
-        out = subprocess.run([tool, "--list-available", "--name-only"], capture_output=True, text=True, timeout=8).stdout
-    except (OSError, subprocess.SubprocessError):
+        out = subprocess.run(["gdbus", "call", "--session", "--dest", "org.huginn.Phone", "--object-path", "/org/huginn/Phone", "--method",
+                              "org.huginn.Phone.Devices"], capture_output=True, text=True, timeout=8).stdout.strip()
+        devices = json.loads(ast.literal_eval(out)[0]) if out else []
+    except (OSError, subprocess.SubprocessError, ValueError, SyntaxError, IndexError, TypeError):
         return set()
-    return {line.strip() for line in out.splitlines() if line.strip()}
+    return {str(d.get("name")) for d in devices if isinstance(d, dict) and d.get("paired") and d.get("here")}
 
 
 def wifi_name() -> str:
@@ -425,7 +426,7 @@ STARTERS = [
      "about": "At ten every night, the sound goes down."},
     {"name": "Phone's here", "colour": "#5EEAD4", "glyph": "phone", "when": {"kind": "phone", "name": ""},
      "steps": [{"do": "notify", "title": "{phone} connected", "text": "Files and the clipboard can go across now."}],
-     "about": "A notice when your phone (with KDE Connect) comes within reach."},
+     "about": "A notice when your phone (paired in Phone) comes within reach."},
     {"name": "Save the battery", "colour": "#FB7185", "glyph": "wifi", "when": {"kind": "battery", "below": 15},
      "steps": [{"do": "volume", "level": 0}, {"do": "notify", "title": "Battery low", "text": "Sound muted to save power. Plug in soon."}],
      "about": "Below 15%, mute and say so."},

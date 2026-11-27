@@ -8,7 +8,7 @@ Where it hears about things:
   * the camera, the microphone and your screen: the Privacy Report's watcher (~/.local/state/huginn/privacy-now.json);
   * files still arriving in Downloads;
   * Calendar: an event starting within 10 minutes;
-  * a call on your phone, through KDE Connect.
+  * a call on your phone, through Phone's link (the KDE Connect app on the phone).
 
 The rules, as decided with the mockups:
   * the most important thing gets the island; up to two more wait beside it in bubbles; clicking a bubble swaps it in;
@@ -23,8 +23,6 @@ import datetime as dt
 import json
 import os
 import re
-import shutil
-import subprocess
 import sys
 import time
 from pathlib import Path
@@ -40,7 +38,7 @@ LIVE_XML = """<node><interface name="org.huginn.Live">
 </interface></node>"""
 ROOT, PLAYER = "org.mpris.MediaPlayer2", "org.mpris.MediaPlayer2.Player"
 MPRIS = "org.mpris.MediaPlayer2."
-PHONE = "org.kde.kdeconnect.device.telephony"
+PHONE = "org.huginn.Phone"                                  # Phone's link (apps/huginn_phoned.py)
 
 RANK = {"call": 0, "alarm": 1, "playing": 2, "timer": 3, "paused": 3.5, "event": 4, "progress": 5}
 PRIVACY = ("screen", "camera", "mic")
@@ -143,7 +141,7 @@ class Live(QObject):
             self._bus.signal_subscribe(None, "org.freedesktop.DBus.Properties", "PropertiesChanged", "/org/mpris/MediaPlayer2", None,
                                        Gio.DBusSignalFlags.NONE, self._on_props)
             self._bus.signal_subscribe(None, PLAYER, "Seeked", "/org/mpris/MediaPlayer2", None, Gio.DBusSignalFlags.NONE, self._on_seeked)
-            self._bus.signal_subscribe(None, PHONE, "callReceived", None, None, Gio.DBusSignalFlags.NONE, self._on_phone)
+            self._bus.signal_subscribe(PHONE, PHONE, "Call", "/org/huginn/Phone", None, Gio.DBusSignalFlags.NONE, self._on_phone)
             self._bus.call("org.freedesktop.DBus", "/org/freedesktop/DBus", "org.freedesktop.DBus", "ListNames", None, GLib.VariantType("(as)"),
                            Gio.DBusCallFlags.NONE, 2000, None, self._listed, None)
         for interval, fn in ((1500, self._read_privacy), (2000, self._read_downloads), (30000, self._read_calendar), (10000, self._arrange),
@@ -248,10 +246,11 @@ class Live(QObject):
             self._arrange()
         elif ident.startswith("call:"):
             if action == "silence" and self._bus:
-                self._bus.call("org.kde.kdeconnect", item["path"], PHONE, "sendMutePacket", None, None, Gio.DBusCallFlags.NONE, 2000, None, None, None)
-            elif action.startswith("reply:") and shutil.which("kdeconnect-cli"):
-                subprocess.Popen(["kdeconnect-cli", "-d", item["device"], "--destination", item["number"], "--send-sms", action[6:]],
-                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                self._bus.call(PHONE, "/org/huginn/Phone", PHONE, "Mute", GLib.Variant("(s)", (item["device"],)), None, Gio.DBusCallFlags.NONE, 4000,
+                               None, None, None)
+            elif action.startswith("reply:") and self._bus and item.get("number"):
+                self._bus.call(PHONE, "/org/huginn/Phone", PHONE, "SendSms", GLib.Variant("(sss)", (item["device"], item["number"], action[6:])), None,
+                               Gio.DBusCallFlags.NONE, 8000, None, None, None)
                 item["replied"] = action[6:]
                 self._arrange()
             else:
@@ -596,14 +595,12 @@ class Live(QObject):
         if old or found:
             self._arrange()
 
-    def _on_phone(self, _c, _s, path, _i, _sig, params) -> None:
-        event, number, name = params.unpack()
+    def _on_phone(self, _c, _s, _path, _i, _sig, params) -> None:
+        device, event, number, name = params.unpack()
         ident = "call:" + (number or name or "unknown")
         if event == "ringing":
-            parts = path.strip("/").split("/")
-            device = parts[-2] if len(parts) >= 2 else ""
             self._items[ident] = {"id": ident, "kind": "call", "app": "Phone", "title": name or number or "Unknown caller", "sub": "Calling · your phone",
-                                  "number": number, "device": device, "path": path, "glyph": "phone", "tone": TONES["call"], "since": time.time(),
+                                  "number": number, "device": device, "glyph": "phone", "tone": TONES["call"], "since": time.time(),
                                   "initials": initials(name or number), "replies": ["Can't talk now", "I'll call you back soon"],
                                   "actions": [{"id": "silence", "label": "Silence", "glyph": "mute"}, {"id": "open", "label": "Phone", "glyph": "phone"}]}
             QTimer.singleShot(60000, lambda: self._end_call(ident))

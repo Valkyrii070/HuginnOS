@@ -1,5 +1,3 @@
-# Phone (pairing with a phone)
-kdeconnect
 # Print & Scan (printers that need no driver appear by themselves; network and USB scanners)
 cups
 cups-browsed

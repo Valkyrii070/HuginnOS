@@ -330,7 +330,7 @@ system already does; when that thing isn't installed or reachable the app says s
 | App | What it does | What it leans on | Not yet |
 |---|---|---|---|
 | Reminders | Lists; Today, Scheduled, All, Flagged, Done; a new one typed as you'd say it ("Call Sam tomorrow 9am", "rent 1 dec", "in 2 weeks at noon"); notes, repeats (ticking one off moves it to next time); details sheet. The shell announces a reminder when it comes due whether or not the app is open. Calendar shows reminders that have a day; Notes ("remind me about this line") and Mail ("remind me about this") add to it; the dock shows how many are due Search across every list; put one off (an hour, this evening, tomorrow, next week) | Nothing: one JSON file, locked while written | Subtasks, sharing a list, snoozing from the notification itself, location-based |
-| Phone | Devices near you; pair (confirmed on the phone), send files (also "Send to Phone" in Files), send the clipboard, send a note or a web address (a link opens on the phone), ring a lost phone, ping, battery level | KDE Connect (`kdeconnect-cli`); the phone needs its free app, same network | Reading and answering texts, notifications from the phone shown here, browsing the phone's files, using the phone as a remote |
+| Phone | Devices near you; pair (a code on both screens to compare), send files (also "Send to Phone" in Files), send the clipboard, send a note or a web address (a link opens on the phone), ring a lost phone, ping, battery level; from the phone: its notifications (with their buttons and replies), calls (in the island), files, links, words and its clipboard | Huginn's own link, `apps/huginn_phoned.py` (KDE Connect's protocol); the phone needs the free KDE Connect app, same network | Reading whole text conversations, browsing the phone's files, using the phone as a remote or to control music here |
 | Print & Scan | Printers with their state and the usual one; print a file with copies, both sides, page ranges, paper size, black-only, sideways, fill-the-page ("Print…" in Files); the queue, with cancel. Scanners: scan pages one after another in colour or grey at three qualities, drop a bad page, save all as one PDF at the paper's true size in Documents/Scans, then send it by Mail | CUPS (`lpstat`, `lp`) and SANE (`scanimage`); driverless network and USB devices appear by themselves | Adding a printer that needs a driver or an address typed in, which tray, ink levels, document feeders and both-sides scanning, text recognition (OCR) |
 | Maps | A map you can drag and zoom; search for a place or address; kept places; directions by car, bike or foot with the route drawn and each turn written out; km or miles; opens `geo:` links. Huginn never works out where you are | OpenStreetMap: its tile, search (Nominatim) and routing servers. These are run by volunteers for light use: for a distro with many users, point `/etc/huginn/maps.json` at your own (`{"tiles": …, "search": …, "driving": …, "cycling": …, "walking": …}`) | Offline maps, public transport, live traffic, "where am I", satellite pictures |
 | Podcasts | Follow shows by name or feed address; episodes newest first; play, skip back 15 / forward 30, seek; playing speed (0.8× to 2×); keep an episode in `~/Podcasts` to play offline; remembers where you stopped and what you've played; checks for new episodes | Each show's own feed. Finding a show by name asks Apple's public podcast directory (only the words typed are sent) | A queue, chapters, keeping new episodes automatically, playing on in the background with the window closed |
@@ -389,9 +389,9 @@ What was and wasn't tested (102 + 32 checks, plus every screen rendered in dark 
 
 - Reminders: everything, including the typed-line parser (16 phrasings), two windows at once, and the links to
   Calendar and Notes. The shell's announcement was tested as a function; the notification itself appearing was not.
-- Phone, Print & Scan: against stand-ins for `kdeconnect-cli`, `lpstat`/`lp`/`cancel` and `scanimage` that answer in
-  the real tools' formats as I know them. **No real phone, printer or scanner.** The first thing to check on real
-  hardware is whether those formats match; KDE Connect also needs ports 1714-1764 open if a firewall is on.
+- Print & Scan: against stand-ins for `lpstat`/`lp`/`cancel` and `scanimage` that answer in the real tools' formats
+  as I know them. **No real printer or scanner.** The first thing to check on real hardware is whether those formats
+  match. (Phone: see "Phone's own link" below; it needs UDP 1716 and TCP 1716-1764 open if a firewall is on.)
 - Maps, Podcasts: against a small web server on localhost answering in the shapes of Nominatim, OSRM, Apple's
   directory and an RSS feed. **No live server**, and the map tiles have never been seen drawing (the sandbox is
   offline). The map uses Qt's own map component with OpenStreetMap's tile server set as a custom host.
@@ -1716,6 +1716,40 @@ checks). Two things in this test machine stand in for a real computer's: the EFI
 FAT in its kernel), and GRUB's which-disk questions are answered for it (no partition devices). Not tested here:
 real disks and a real ISO, BIOS installs, an encrypted system starting, Secure Boot with Microsoft's keys, and Wi‑Fi.
 
+## Phone's own link (2026-11-27)
+
+Phone no longer needs KDE Connect's desktop program: `apps/huginn_phoned.py` speaks its protocol (version 8) itself,
+so the free KDE Connect app on Android or iPhone (and GSConnect, and KDE Connect on other computers) pairs with Huginn
+OS directly. It starts with the session (and by D-Bus when Phone asks): `org.huginn.Phone` at `/org/huginn/Phone`.
+
+- **Finding each other**: a greeting by UDP on port 1716, to every network the computer is on (again when it joins
+  a new one, and when Phone opens or you press Look again), and straight to paired phones' last addresses. A phone
+  that isn't paired is greeted back so that it connects (then its certificate is seen before anything is trusted);
+  a paired one is connected to.
+- **Trust**: each side has its own certificate (an EC key in `~/.config/huginn/phone`, private to you); everything
+  goes over TLS. Pairing shows the same 8-character code on both screens (KDE Connect's: both public keys and the
+  request's time, hashed) and pins the phone's certificate; a device claiming a paired id with another certificate is
+  refused, and so is any payload from one. Before pairing nothing it sends is acted on. A request from a clock more
+  than 30 minutes out is refused with a reason; one not answered in 30 seconds runs out. Pair or Not Now from the
+  notification or in Phone.
+- **From the phone**: its battery (and a word when it runs low); calls to the island (Silence, a text back); its
+  notifications in Huginn's, with their buttons and inline reply, cleared on one side when cleared on the other (what
+  was already on the phone when it connected isn't shown again); files to Downloads (never over another file; one
+  that stops short isn't kept); web addresses opened (anything else only copied); words and its clipboard copied;
+  "ring my computer".
+- **To the phone**: files, words, a web address, the clipboard, ping, ring it, silence a call, a text message.
+- **Coming from KDE Connect**: the first time, a computer that had it brings its id, key and paired phones along, so
+  phones paired before stay paired. `kdeconnect` is in not-wanted.list; on a system updated from before, it stays
+  installed but nothing starts it.
+- **Not carried over yet**: the phone as a remote (mouse, keyboard, slides), controlling music here from the phone,
+  browsing the phone's files, whole text conversations, running commands.
+- Tested: `phone_test.py` (84) against a stand-in phone written from the protocol (TLS the other way round, pairing
+  both ways, payloads on ports of their own, a wrong certificate, a clock out, the timeout), a second copy of the link
+  (a paired computer, found by its greeting and connected to), KDE Connect's files coming along, and the D-Bus service
+  with its signals; `phone_real_check.py` (22, as root) against **KDE Connect's own daemon** (`kdeconnectd` 25.12, as
+  Ubuntu ships it) across two network namespaces: they find each other, pair both ways with the same code, ping,
+  words and a file each way, ring, reconnect both ways round, and unpair. **Not tried with a real phone.**
+
 ## Not yet our own
 
 The goal is a desktop that is Huginn's from the first screen to the last. Where it stands:
@@ -1968,7 +2002,7 @@ camera and microphone, and the two-players rule), then built:
   Music, Podcasts and Media Player now publish them; the Huginn browser and Spotify-like apps already do), apps that
   report over `org.huginn.Live` on the session bus (`apps/huginn_live.py`: Clock's timer, App Store installs,
   Screenshot's recording), the Privacy Report's watcher (screen, camera, microphone), files arriving in Downloads,
-  Calendar events starting within 10 minutes, and calls through KDE Connect.
+  Calendar events starting within 10 minutes, and calls on your phone (Phone's link, `org.huginn.Phone`).
 - **The rules**: one island for the most important thing (a call, a timer or alarm going off, something playing, a
   timer counting down, an event, downloads and installs); up to two more as round bubbles beside it, a "+N" when
   there's more; clicking a bubble or scrolling swaps it in. The screen, camera and microphone aren't in that order:
@@ -1981,7 +2015,7 @@ camera and microphone, and the two-players rule), then built:
   screen, camera or microphone; and below, everything else going on. Calls and alarms open it by themselves. The
   play/pause key works on whatever it shows (the session daemon asks the island first). All of it follows Reduce
   Motion.
-- **Calls through KDE Connect**: the computer can't answer or decline a phone call, so the island offers Silence,
+- **Calls on your phone** (the KDE Connect app on it): the computer can't answer or decline a phone call, so the island offers Silence,
   quick text replies and Phone. Apps that can answer (a calling app reporting `kind: "call"` with Answer/Decline) get
   those buttons.
 - Tested: the rules on their own; a real session bus with two player processes and a reporting app (what wins, the

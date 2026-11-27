@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """More Huginn apps: Phone, Print & Scan, Maps, Podcasts, Books, Translate.
 
-Each is a thin, honest front for something the system already does well (KDE Connect, CUPS, SANE, OpenStreetMap,
+Each is a thin, honest front for something that does the work well (Huginn's phone link, CUPS, SANE, OpenStreetMap,
 podcast feeds, EPUB files, Argos Translate). Where the thing underneath isn't installed or isn't reachable, the app
 says so in plain words instead of pretending.
 """
@@ -109,28 +109,38 @@ class Worker(QObject):
 
 # =================================================================================================== Phone
 class Phone(Worker):
-    """Your phone, through KDE Connect: send files and the clipboard both ways, ring it, see its battery.
-    The phone needs the KDE Connect app and the same network; pairing is confirmed on the phone."""
+    """Your phone, through Huginn's own link (huginn_phoned.py, which speaks KDE Connect's protocol): send files, words,
+    a web address and the clipboard, ring it, see its battery, pair and unpair. The phone needs the free KDE Connect
+    app and the same network; pairing shows a code on both screens to compare."""
     changed = Signal()
     said = Signal(str, bool)
-    TOOL = "kdeconnect-cli"
+    LINK = Path(__file__).resolve().parent / "huginn_phoned.py"
 
     def __init__(self, demo: bool = False, target=None):
         super().__init__()
         self._demo, self._devices, self._picked, self._busy = demo, [], "", False
-        self._ready = demo or shutil.which(self.TOOL) is not None
+        self._ready = demo or self.LINK.is_file()
         self._waiting = self._paths(target)
+        self._bus = None
         if demo:
-            self._devices = [{"id": "a1", "name": "Astrid's Pixel", "paired": True, "here": True, "battery": 82, "charging": False},
-                             {"id": "b2", "name": "Old tablet", "paired": True, "here": False, "battery": -1, "charging": False},
-                             {"id": "c3", "name": "Sam's phone", "paired": False, "here": True, "battery": -1, "charging": False}]
+            self._devices = [{"id": "a1", "name": "Astrid's Pixel", "paired": True, "here": True, "battery": 82, "charging": False, "pairing": "", "key": ""},
+                             {"id": "b2", "name": "Old tablet", "paired": True, "here": False, "battery": -1, "charging": False, "pairing": "", "key": ""},
+                             {"id": "c3", "name": "Sam's phone", "paired": False, "here": True, "battery": -1, "charging": False, "pairing": "asking", "key": "4F1A9C2E"}]
             self._picked = "a1"
             return
+        try:
+            from gi.repository import Gio
+            self._bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
+            self._bus.signal_subscribe("org.huginn.Phone", "org.huginn.Phone", None, "/org/huginn/Phone", None, Gio.DBusSignalFlags.NONE,
+                                       lambda *_a: self._back.emit(self.refresh))
+        except Exception:
+            self._ready = False
         self._tick = QTimer(self)
         self._tick.setInterval(5000)
         self._tick.timeout.connect(self.refresh)
         self._tick.start()
         self.refresh()
+        self.bg(lambda: self._call("Refresh"))                    # say hello on the network: phones nearby answer
 
     @staticmethod
     def _paths(target) -> list:
@@ -142,25 +152,12 @@ class Phone(Worker):
                 return []
         return [text] if text and os.path.isfile(text) else []
 
-    @staticmethod
-    def read_list(text: str) -> list:
-        """`kdeconnect-cli -l` prints "- Name: id (paired and reachable)" per device."""
-        out = []
-        for line in text.splitlines():
-            m = re.match(r"^\s*-\s+(.*?):\s+([A-Za-z0-9_\-]{6,})\s+\(([^)]*)\)\s*$", line)
-            if m:
-                state = m.group(3).lower()
-                out.append({"id": m.group(2), "name": m.group(1), "paired": "paired" in state and "unpaired" not in state, "here": "reachable" in state and "unreachable" not in state,
-                            "battery": -1, "charging": False})
-        return out
-
-    def _battery(self, ident: str) -> tuple:
-        def ask(what):
-            code, out = run(["gdbus", "call", "--session", "--dest", "org.kde.kdeconnect", "--object-path", f"/modules/kdeconnect/devices/{ident}/battery",
-                             "--method", "org.freedesktop.DBus.Properties.Get", "org.kde.kdeconnect.device.battery", what], 4)
-            return out if code == 0 else ""
-        level = re.search(r"<(?:int32 )?(-?\d+)>", ask("charge"))
-        return (int(level.group(1)) if level else -1), "true" in ask("isCharging")
+    def _call(self, method: str, sig: str = "", args: tuple = (), timeout: int = 20000):
+        """A call to the link (D-Bus starts it if it isn't running); its answer, or None."""
+        from gi.repository import Gio, GLib
+        out = self._bus.call_sync("org.huginn.Phone", "/org/huginn/Phone", "org.huginn.Phone", method, GLib.Variant(f"({sig})", args) if sig else None,
+                                  None, Gio.DBusCallFlags.NONE, timeout, None)
+        return out.unpack() if out is not None else None
 
     @Slot()
     def refresh(self) -> None:
@@ -169,16 +166,11 @@ class Phone(Worker):
         self._busy = True
 
         def work():
-            code, out = run([self.TOOL, "-l"], 8)
-            devices = self.read_list(out) if code == 0 else []
-            for d in devices:
-                if d["paired"] and d["here"]:
-                    d["battery"], d["charging"] = self._battery(d["id"])
-            return devices
+            return json.loads(self._call("Devices")[0])
 
         def then(devices):
             self._busy = False
-            if isinstance(devices, Exception):
+            if isinstance(devices, Exception) or not isinstance(devices, list):
                 return
             if devices != self._devices:
                 self._devices = devices
@@ -206,37 +198,52 @@ class Phone(Worker):
         self._picked = ident
         self.changed.emit()
 
-    def _act(self, args: list, good: str, ident: str = None) -> None:
+    def _act(self, method: str, sig: str = "", args: tuple = (), ident: str = None, then=None, timeout: int = 20000) -> None:
         ident = ident or self._picked
         if self._demo or not ident:
             self.said.emit("This is the preview: nothing is sent." if self._demo else "Choose a device first.", self._demo is False)
             return
 
-        def then(result):
-            code, out = result if not isinstance(result, Exception) else (1, str(result))
-            self.said.emit(good if code == 0 else (out.strip().splitlines() or ["That didn't work."])[-1][:160], code != 0)
+        def done(result):
+            ok, msg = result if isinstance(result, tuple) else (False, "Phone's link didn't answer.")
+            self.said.emit(msg, not ok)
+            if then:
+                then(ok)
             self.refresh()
-        self.bg(lambda: run([self.TOOL, "-d", ident] + args, 20), then)
+        self.bg(lambda: tuple(self._call(method, "s" + sig, (ident,) + args, timeout)), done)
 
     @Slot(str)
     def pair(self, ident: str) -> None:
-        self._act(["--pair"], "Asked to pair. Accept it on the phone.", ident)
+        self._act("Pair", ident=ident)
 
     @Slot(str)
     def unpair(self, ident: str) -> None:
-        self._act(["--unpair"], "Unpaired.", ident)
+        self._act("Unpair", ident=ident)
+
+    @Slot(str)
+    def accept(self, ident: str) -> None:
+        self._act("Answer", "b", (True,), ident)
+
+    @Slot(str)
+    def decline(self, ident: str) -> None:
+        self._act("Answer", "b", (False,), ident)
 
     @Slot()
     def ring(self) -> None:
-        self._act(["--ring"], "Ringing it.")
+        self._act("Ring")
 
     @Slot()
     def ping(self) -> None:
-        self._act(["--ping-msg", "Hello from Huginn"], "Sent a ping.")
+        self._act("Ping", "s", ("Hello from Huginn",))
 
     @Slot()
     def sendClipboard(self) -> None:
-        self._act(["--send-clipboard"], "Clipboard sent to the phone.")
+        from PySide6.QtGui import QGuiApplication
+        text = QGuiApplication.clipboard().text() if not self._demo else ""
+        if not text and not self._demo:
+            self.said.emit("There's nothing on the clipboard to send.", True)
+            return
+        self._act("SendClipboard", "s", (text,))
 
     @Slot(str)
     def sendText(self, text: str) -> None:
@@ -245,29 +252,21 @@ class Phone(Worker):
         if not text:
             return
         link = re.fullmatch(r"https?://\S+", text) is not None
-        self._act(["--share", text] if link else ["--share-text", text[:4000]], "The link is opening on the phone." if link else "Sent to the phone.")
+        self._act("SendUrl" if link else "SendText", "s", (text if link else text[:4000],))
 
     @Slot("QVariantList")
     def sendFiles(self, paths) -> None:
         files = [QUrl(str(p)).toLocalFile() if str(p).startswith("file:") else str(p) for p in paths]
         files = [f for f in files if os.path.isfile(f)]
-        ident = self._picked
-        if self._demo or not ident or not files:
-            self.said.emit("This is the preview: nothing is sent." if self._demo else "Choose a device and a file first.", not self._demo)
+        if not self._demo and not files:
+            self.said.emit("Choose a file first.", True)
             return
 
-        def work():
-            for f in files:
-                code, out = run([self.TOOL, "-d", ident, "--share", f], 60)
-                if code != 0:
-                    return f"“{Path(f).name}” didn't go: " + ((out.strip().splitlines() or ["no reason given"])[-1][:120])
-            return ""
-
-        def then(why):
-            self._waiting = [] if not why else self._waiting
-            self.said.emit(str(why) if why else (f"Sent “{Path(files[0]).name}”." if len(files) == 1 else f"Sent {len(files)} files."), bool(why))
-            self.changed.emit()
-        self.bg(work, then)
+        def then(ok):
+            if ok:
+                self._waiting = []
+                self.changed.emit()
+        self._act("SendFiles", "as", (files,), then=then, timeout=3600 * 1000)
 
     @Slot()
     def sendWaiting(self) -> None:

@@ -41,10 +41,10 @@ GlassWindow {
     // ---------------- nothing to talk to
     Column { visible: !Backend.ready || Backend.devices.length === 0; anchors.centerIn: parent; spacing: 10; width: 440
         Glyph { name: "phone"; size: 54; ink: Theme.t.accent; anchors.horizontalCenter: parent.horizontalCenter }
-        Label { anchors.horizontalCenter: parent.horizontalCenter; font.pixelSize: 20; font.weight: Font.DemiBold; text: Backend.ready ? "Looking for your phone…" : "KDE Connect isn't installed" }
+        Label { anchors.horizontalCenter: parent.horizontalCenter; font.pixelSize: 20; font.weight: Font.DemiBold; text: Backend.ready ? "Looking for your phone…" : "Phone's link is missing" }
         Label { width: parent.width; wrapMode: Text.WordWrap; horizontalAlignment: Text.AlignHCenter; secondary: true
             text: Backend.ready ? "Install the free KDE Connect app on the phone (Android or iPhone), put both on the same Wi-Fi, and open it. The phone will appear here."
-                                : "Phone works through KDE Connect, which this computer doesn't have. Install the kdeconnect package and open Phone again." } }
+                                : "Phone talks to your phone through Huginn's phone link, which this computer doesn't have. An update puts it back." } }
 
     // ---------------- the phone, and what you can do to it
     component Orb: Item { id: orb; property string icon: ""; property string label: ""; property string hint: ""; signal clicked(); width: 150; height: 96
@@ -77,10 +77,16 @@ GlassWindow {
             Row { visible: win.live; width: parent.width; spacing: 8
                 TextBox { id: words; objectName: "words"; width: parent.width - 88; placeholder: "A note or a web address to send"; onAccepted: { Backend.sendText(text); text = "" } }
                 Btn { width: 80; text: "Send"; onClicked: { Backend.sendText(words.text); words.text = "" } } }
-            Label { visible: !win.live; width: parent.width; wrapMode: Text.WordWrap; horizontalAlignment: Text.AlignHCenter; secondary: true
-                text: !win.dev.paired ? "Pairing lets the two trust each other. You confirm it on the phone; nothing is shared before that." : "Open KDE Connect on the phone and make sure both are on the same network." }
+            Label { visible: !win.live && !win.dev.pairing; width: parent.width; wrapMode: Text.WordWrap; horizontalAlignment: Text.AlignHCenter; secondary: true
+                text: !win.dev.paired ? "Pairing lets the two trust each other. Both screens show a code to compare; nothing is shared before that." : "Open KDE Connect on the phone and make sure both are on the same network." }
+            // pairing: the code both screens show, to compare
+            Column { visible: !!win.dev.pairing; width: parent.width; spacing: 6
+                Label { anchors.horizontalCenter: parent.horizontalCenter; secondary: true; text: win.dev.pairing === "asking" ? (win.dev.name || "It") + " wants to pair. Check it shows" : "Accept it on " + (win.dev.name || "the phone") + ". Both should show" }
+                Label { visible: !!win.dev.key; anchors.horizontalCenter: parent.horizontalCenter; text: (win.dev.key || "").split("").join(" "); font.pixelSize: 26; font.weight: Font.Bold; font.family: "monospace"; color: Theme.t.accent } }
             Row { anchors.horizontalCenter: parent.horizontalCenter; spacing: 8
-                Btn { visible: !win.dev.paired && !!win.dev.here; primary: true; text: "Pair"; onClicked: Backend.pair(win.dev.id) }
+                Btn { visible: win.dev.pairing === "asking"; primary: true; text: "Pair"; onClicked: Backend.accept(win.dev.id) }
+                Btn { visible: win.dev.pairing === "asking"; text: "Not Now"; onClicked: Backend.decline(win.dev.id) }
+                Btn { visible: !win.dev.paired && !!win.dev.here && !win.dev.pairing; primary: true; text: "Pair"; onClicked: Backend.pair(win.dev.id) }
                 Btn { visible: !!win.dev.paired; height: 26; text: "Unpair"; onClicked: Backend.unpair(win.dev.id) } }
             Label { visible: win.live; width: parent.width; wrapMode: Text.WordWrap; horizontalAlignment: Text.AlignHCenter; secondary: true; font.pixelSize: 11; text: "Files the phone sends arrive in Downloads." } } }
 }

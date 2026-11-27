@@ -55,7 +55,7 @@ KNOWN = {
     "earlyoom": ("earlyoom", "Stops the biggest program if memory runs out"),
     "gnome-keyring-daemon": ("Keyring", "Keeps passwords for apps"),
     "kwalletd6": ("KWallet", "Keeps passwords for apps"),
-    "kdeconnectd": ("KDE Connect", "Your phone, linked to the computer"),
+    "huginn-phoned": ("Phone's link", "Your phone, linked to the computer (KDE Connect's protocol)"),
     "llama-server": ("Huginn AI's model", "The model on this computer, answering questions"),
     "gamemoded": ("GameMode", "Gives games the processor while they run"),
     "steamwebhelper": ("Steam's web views", "Part of Steam"),

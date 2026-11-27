@@ -32,6 +32,9 @@ fi
 # the system's own entries that are for this desktop and that Huginn doesn't do another way; each one's first minute is
 # measured for System Monitor › Startup (huginn_autostart.py).
 (sleep 4; python3 /usr/share/huginn-apps/huginn_autostart.py run) &
+# Phone's link (huginn_phoned.py): KDE Connect's protocol, Huginn's own, so the KDE Connect app on a phone finds this
+# computer, and its calls, notifications and files come through, whether or not Phone is open.
+(sleep 5; python3 /usr/share/huginn-apps/huginn_phoned.py) &
 # Clipboard history's watcher (Super+V): while history is off (it starts off) a change costs a tiny shell and nothing
 # is kept; turned on, the newest 50 things you copy are kept, never a password.
 command -v wl-paste >/dev/null && python3 /usr/share/huginn-apps/huginn_clipboard.py watch &
