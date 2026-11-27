@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
-"""Huginn's look for everyone else's apps: the realm's colours, and dark or light, for Qt and KDE apps (a Kvantum
-widget style and a KDE colour scheme) and for GTK apps (Breeze-GTK with Huginn's colours, libadwaita's named colours).
+"""Huginn's look for everyone else's apps: the realm's colours, and dark or light, for Qt apps (a Kvantum widget style,
+and a colour scheme for apps built on KDE's libraries) and for GTK apps (Huginn's own GTK 3 theme in the realm's
+colours, libadwaita's named colours).
 
 The shell calls apply() when it starts and whenever the realm, dark or contrast changes; the themes themselves are
 generated from the design tokens at build time (tokens/gen_theme.py) into:
 
     /usr/share/Kvantum/Huginn<Realm><Mode>/          Qt widget style (kdeglobals: widgetStyle=kvantum)
     /usr/share/color-schemes/Huginn<Realm><Mode>.colors
-    /usr/share/huginn-os/gtk/Huginn<Realm><Mode>.css           libadwaita
-    /usr/share/huginn-os/gtk/Huginn<Realm><Mode>-breeze.css    Breeze-GTK
+    /usr/share/huginn-os/gtk/Huginn<Realm><Mode>.css           libadwaita (GTK 4)
+    /usr/share/huginn-os/gtk/Huginn<Realm><Mode>-gtk3.css      Huginn's GTK 3 theme (/usr/share/themes/Huginn)
 
 Per user it writes ~/.config/Kvantum/kvantum.kvconfig, ~/.config/qt6ct/qt6ct.conf (Qt apps' platform theme: the
 Kvantum style, the icon theme, Huginn's fonts, Open and Save through the portal), the colour scheme into kdeglobals
@@ -29,6 +30,7 @@ import sys
 from pathlib import Path
 
 CONFIG = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config")
+DATA = Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local/share")
 STATE = Path(os.environ.get("XDG_STATE_HOME") or Path.home() / ".local/state") / "huginn" / "look"
 SHARE = Path(os.environ.get("HUGINN_LOOK_SHARE") or "/usr/share")
 MARK = "/* Huginn OS: written by huginn_look.py. Delete this line to keep your own changes. */"
@@ -57,6 +59,19 @@ def _write(path: Path, text: str) -> bool:
         return True
     except OSError:
         return False
+
+
+def _copy_tree(src: Path, dst: Path) -> None:
+    """A copy kept up to date (only what's newer is copied)."""
+    try:
+        for f in src.rglob("*"):
+            if f.is_file():
+                to = dst / f.relative_to(src)
+                if not to.exists() or to.stat().st_mtime < f.stat().st_mtime:
+                    to.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(f, to)
+    except OSError:
+        pass
 
 
 def _ours(path: Path) -> bool:
@@ -185,7 +200,7 @@ def _run(cmd: list) -> None:
 def apply(realm: str, dark: bool, contrast: bool = False, force: bool = False) -> bool:
     """Put the realm's look in place for this user. Returns False when it was already in place."""
     name = name_for(realm, dark)
-    stamp = f"{name} contrast={contrast}"
+    stamp = f"{name} contrast={contrast} gtk=huginn"            # (a new part of the look: in place once more)
     changed = write_qt6ct()                                     # (each time: systems from before qt6ct need it once)
     if not force:
         try:
@@ -213,24 +228,23 @@ def apply(realm: str, dark: bool, contrast: bool = False, force: bool = False) -
         for kind in ("0", "2"):                                 # the palette; the style
             _run(["dbus-send", "--session", "--type=signal", "/KGlobalSettings", "org.kde.KGlobalSettings.notifyChange",
                   f"int32:{kind}", "int32:0"])
-    # GTK 3 and 4: Breeze-GTK in Huginn's colours; libadwaita's named colours for GTK 4
+    # GTK 3: Huginn's own theme (Adwaita's shapes) in the realm's colours; GTK 4: libadwaita's named colours
+    _copy_tree(SHARE / "themes" / "Huginn", DATA / "themes" / "Huginn")   # (App Store apps see this copy, not /usr/share)
     gtk = SHARE / "huginn-os" / "gtk"
-    breeze = gtk / f"{name}-breeze.css"
-    adw = gtk / f"{name}.css"
-    if breeze.exists():
-        colours = breeze.read_text(encoding="utf-8")
-        adw_text = adw.read_text(encoding="utf-8") if adw.exists() else ""
-        for version, text in (("gtk-3.0", colours), ("gtk-4.0", colours + "\n" + adw_text)):
-            folder = CONFIG / version
-            _write(folder / "colors.css", text)
-            if _ours(folder / "gtk.css"):
-                _write(folder / "gtk.css", f"{MARK}\n@import 'colors.css';\n")
-            _ini(folder / "settings.ini", {"gtk-theme-name": "HighContrast" if contrast else "Breeze",
-                                           "gtk-application-prefer-dark-theme": "true" if dark else "false",
-                                           "gtk-font-name": "Inter Variable 10"})
+    three, adw = gtk / f"{name}-gtk3.css", gtk / f"{name}.css"
+    theme = "HighContrast" if contrast else "Huginn"
+    for version, source, named in (("gtk-3.0", three, theme), ("gtk-4.0", adw, "HighContrast" if contrast else "Default")):
+        if not source.exists():
+            continue
+        folder = CONFIG / version
+        _write(folder / "colors.css", source.read_text(encoding="utf-8"))
+        if _ours(folder / "gtk.css"):
+            _write(folder / "gtk.css", f"{MARK}\n@import 'colors.css';\n")
+        _ini(folder / "settings.ini", {"gtk-theme-name": named, "gtk-application-prefer-dark-theme": "true" if dark else "false",
+                                       "gtk-font-name": "Inter Variable 10"})
     # GTK on Wayland reads GNOME's interface settings (dconf) rather than settings.ini
     iface = "org.gnome.desktop.interface"
-    _run(["gsettings", "set", iface, "gtk-theme", "HighContrast" if contrast else "Breeze"])
+    _run(["gsettings", "set", iface, "gtk-theme", theme])
     _run(["gsettings", "set", iface, "color-scheme", "prefer-dark" if dark else "prefer-light"])
     _run(["gsettings", "set", iface, "font-name", "Inter Variable 10"])
     _write(STATE, stamp + "\n")

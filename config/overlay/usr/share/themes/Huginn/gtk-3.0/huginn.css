@@ -1,0 +1,99 @@
+/* Huginn's colours on Adwaita's GTK 3 drawing: the surfaces, controls and selections that carry colour. The colours
+   are named (@huginn_*: colors-light.css, colors-dark.css, and each person's ~/.config/gtk-3.0/colors.css). */
+
+/* GTK 3's own names, for apps that draw with them */
+@define-color theme_bg_color @huginn_window;
+@define-color theme_fg_color @huginn_text;
+@define-color theme_base_color @huginn_view;
+@define-color theme_text_color @huginn_text;
+@define-color theme_selected_bg_color @huginn_accent;
+@define-color theme_selected_fg_color @huginn_on_accent;
+@define-color theme_unfocused_bg_color @huginn_window;
+@define-color theme_unfocused_fg_color @huginn_text;
+@define-color theme_unfocused_base_color @huginn_view;
+@define-color theme_unfocused_selected_bg_color @huginn_accent;
+@define-color theme_unfocused_selected_fg_color @huginn_on_accent;
+@define-color borders @huginn_border;
+@define-color unfocused_borders @huginn_border;
+@define-color error_color @huginn_danger;
+@define-color accent_color @huginn_accent;
+@define-color accent_bg_color @huginn_accent;
+@define-color accent_fg_color @huginn_on_accent;
+
+/* surfaces */
+window, .background, dialog, messagedialog .dialog-vbox { background-color: @huginn_window; color: @huginn_text; }
+.background:backdrop { background-color: @huginn_window; color: alpha(@huginn_text, 0.7); }
+.view, iconview, textview text, treeview.view, .content-view, viewport.view, list, listview, scrolledwindow > viewport > list,
+calendar, .frame > list { background-color: @huginn_view; color: @huginn_text; }
+treeview.view header button { background-image: none; background-color: @huginn_window; color: @huginn_soft; border-color: @huginn_border; }
+.sidebar, stacksidebar, stacksidebar list, placessidebar, placessidebar list, .navigation-sidebar { background-color: @huginn_sidebar; color: @huginn_text; }
+headerbar, .titlebar:not(headerbar), .titlebar headerbar, headerbar.titlebar {
+    background-image: none; background-color: @huginn_header; color: @huginn_text; border-color: @huginn_border; box-shadow: none; }
+headerbar:backdrop, .titlebar:not(headerbar):backdrop { background-image: none; background-color: @huginn_window; }
+headerbar .title, headerbar .subtitle { color: @huginn_text; }
+menubar, .menubar { background-color: @huginn_window; color: @huginn_text; box-shadow: inset 0 -1px @huginn_border; }
+toolbar, .toolbar, actionbar, searchbar, .inline-toolbar, .search-bar { background-color: @huginn_window; color: @huginn_text; border-color: @huginn_border; }
+statusbar { background-color: @huginn_window; color: @huginn_soft; }
+separator, .separator { background-color: @huginn_border; color: @huginn_border; }
+frame > border, .frame, scrolledwindow.frame, popover.background > box { border-color: @huginn_border; }
+
+/* controls */
+button { background-image: none; background-color: @huginn_card; color: @huginn_text; border-color: @huginn_border;
+         box-shadow: none; text-shadow: none; -gtk-icon-shadow: none; }
+button:hover { background-image: none; background-color: mix(@huginn_card, @huginn_text, 0.08); }
+button:active, button:checked { background-image: none; background-color: mix(@huginn_card, @huginn_text, 0.16); color: @huginn_text; }
+button:disabled { background-image: none; background-color: mix(@huginn_card, @huginn_window, 0.5); color: alpha(@huginn_text, 0.4); }
+button:backdrop { background-image: none; }
+button.flat, button.titlebutton, headerbar button.flat, .inline-toolbar button { background-color: transparent; border-color: transparent; }
+button.flat:hover, button.titlebutton:hover { background-color: alpha(@huginn_text, 0.08); }
+button.suggested-action, button.default:not(.flat), .default button.suggested-action {
+    background-image: none; background-color: @huginn_accent; color: @huginn_on_accent; border-color: @huginn_accent; }
+button.suggested-action:hover { background-color: mix(@huginn_accent, @huginn_text, 0.12); }
+button.destructive-action { background-image: none; background-color: @huginn_danger; color: #FFFFFF; border-color: @huginn_danger; }
+entry, spinbutton:not(.vertical), combobox entry { background-image: none; background-color: @huginn_view; color: @huginn_text;
+    border-color: @huginn_border; box-shadow: none; }
+entry:focus, spinbutton:focus, spinbutton:not(.vertical):focus { border-color: @huginn_accent; box-shadow: inset 0 0 0 1px @huginn_accent; }
+entry:disabled { background-color: @huginn_window; color: alpha(@huginn_text, 0.4); }
+entry image { color: @huginn_soft; }
+switch { background-image: none; background-color: mix(@huginn_card, @huginn_text, 0.12); border-color: @huginn_border; }
+switch:checked { background-color: @huginn_accent; border-color: @huginn_accent; color: @huginn_on_accent; }
+switch slider { background-image: none; background-color: #FFFFFF; border-color: alpha(#000000, 0.2); box-shadow: none; }
+check, radio { background-image: none; background-color: @huginn_view; border-color: @huginn_border; color: @huginn_on_accent; box-shadow: none; }
+check:checked, check:indeterminate, radio:checked, radio:indeterminate { background-image: none; background-color: @huginn_accent;
+    border-color: @huginn_accent; color: @huginn_on_accent; }
+check:hover, radio:hover { background-image: none; }
+scale trough, progressbar trough, levelbar trough { background-image: none; background-color: mix(@huginn_card, @huginn_text, 0.1); border-color: @huginn_border; }
+scale highlight, progressbar progress, levelbar block.filled { background-image: none; background-color: @huginn_accent; border-color: @huginn_accent; }
+scale slider { background-image: none; background-color: #FFFFFF; border-color: alpha(#000000, 0.25); }
+scrollbar { background-color: transparent; border-color: transparent; }
+scrollbar slider { background-color: alpha(@huginn_text, 0.4); }
+scrollbar slider:hover { background-color: alpha(@huginn_text, 0.6); }
+notebook > header { background-color: @huginn_window; border-color: @huginn_border; }
+notebook > header tab { color: @huginn_soft; }
+notebook > header tab:checked { color: @huginn_text; }
+notebook > header.top tab:checked { box-shadow: inset 0 -3px @huginn_accent; }
+notebook > header.bottom tab:checked { box-shadow: inset 0 3px @huginn_accent; }
+notebook > header.left tab:checked { box-shadow: inset -3px 0 @huginn_accent; }
+notebook > header.right tab:checked { box-shadow: inset 3px 0 @huginn_accent; }
+notebook > stack:not(:only-child) { background-color: @huginn_view; }
+combobox button.combo { background-image: none; background-color: @huginn_card; }
+spinbutton button { background-color: transparent; border-color: @huginn_border; }
+
+/* menus, pop-ups, tooltips */
+menu, .menu, .context-menu, popover.background, popover.menu, .csd popover.background, .csd menu { background-color: @huginn_menu; color: @huginn_text;
+    border-color: @huginn_border; }
+menu menuitem, .menu menuitem { color: @huginn_text; }
+menu menuitem:hover, .menu menuitem:hover, menubar > menuitem:hover, popover modelbutton.flat:hover, .context-menu menuitem:hover {
+    background-color: @huginn_accent; color: @huginn_on_accent; box-shadow: none; }
+menu menuitem:disabled { color: alpha(@huginn_text, 0.4); }
+tooltip, tooltip.background, .tooltip { background-color: @huginn_tooltip; color: @huginn_text; border: 1px solid @huginn_border; }
+tooltip * { color: @huginn_text; }
+
+/* what's chosen */
+*:selected, selection, *:selected:focus, row:selected, treeview.view:selected, iconview:selected, .view:selected,
+textview text selection, label selection, entry selection, flowbox flowboxchild:selected, calendar:selected {
+    background-color: @huginn_accent; color: @huginn_on_accent; }
+row:hover:not(:selected) { background-color: alpha(@huginn_text, 0.05); }
+*:link, button:link, button:visited, label > link { color: @huginn_accent; }
+.error, label.error { color: @huginn_danger; }
+infobar.info > revealer > box, infobar.question > revealer > box { background-color: mix(@huginn_window, @huginn_accent, 0.2); color: @huginn_text; }

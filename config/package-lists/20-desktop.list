@@ -19,13 +19,15 @@ libnotify-bin
 wireplumber
 bluez
 upower
-# Theming
-breeze
-breeze-gtk-theme
+# Theming: Qt apps in a Kvantum style generated from Huginn's tokens (Kvantum isn't KDE's; KvAdapta's drawing, from
+# its themes, is what's recoloured); GTK 3 apps in Huginn's own theme (/usr/share/themes/Huginn: Adwaita's shapes,
+# which GTK carries, in the realm's colours). KDE's Breeze style and Breeze-GTK are gone.
 qt6-style-kvantum
 qt-style-kvantum-themes
-# Icons: Huginn's own theme (scripts/make-icons.py, in the overlay), with Breeze's underneath for anything it doesn't draw
+# Icons: Huginn's own theme (scripts/make-icons.py, in the overlay), with Breeze's underneath for anything it doesn't
+# draw; and Breeze's pointers (Settings › Appearance offers Huginn's own and others). Artwork, kept as it is.
 breeze-icon-theme
+breeze-cursor-theme
 fonts-inter-variable
 fonts-jetbrains-mono
 fonts-noto-core

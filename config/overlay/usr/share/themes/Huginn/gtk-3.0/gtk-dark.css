@@ -1,0 +1,4 @@
+/* Huginn OS's look for GTK 3 apps, dark: see gtk.css. */
+@import url("resource:///org/gtk/libgtk/theme/Adwaita/gtk-contained-dark.css");
+@import url("colors-dark.css");
+@import url("huginn.css");

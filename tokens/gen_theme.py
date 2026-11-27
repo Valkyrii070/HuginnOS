@@ -6,7 +6,7 @@ Usage: gen_theme.py <tokens.json> <output-dir> [<Kvantum themes folder>]
 Writes, for every realm x {Light, Dark}:
   color-schemes/Huginn<Realm><Mode>.colors   KDE colour scheme (KDE and Qt apps' colours)
   gtk/Huginn<Realm><Mode>.css                named colours for libadwaita (GTK 4)
-  gtk/Huginn<Realm><Mode>-breeze.css         Breeze-GTK's named colours (GTK 3 and plain GTK 4 apps)
+  gtk/Huginn<Realm><Mode>-gtk3.css           the colours of Huginn's own GTK 3 theme (/usr/share/themes/Huginn)
   kvantum/Huginn<Realm><Mode>/               a Kvantum widget style for Qt apps (when the Kvantum themes folder is
                                              given: KvAdapta's drawing, recoloured with the realm and the mode)
 and once:
@@ -134,49 +134,18 @@ def rgba_css(value: str, alpha: float) -> str:
     return f"rgba({r}, {g}, {b}, {alpha})"
 
 
-def breeze_css(base: dict, tones: dict, danger: str, caution: str, dark: bool) -> str:
-    """Breeze-GTK reads its colours from these names (as KDE's GTK module writes them); Huginn writes its own."""
+def gtk3_css(base: dict, tones: dict, danger: str, dark: bool) -> str:
+    """The colours Huginn's GTK 3 theme (/usr/share/themes/Huginn: Adwaita's shapes) draws with; huginn_look.py puts
+    the realm's and mode's into ~/.config/gtk-3.0/colors.css, which comes after the theme's own and so wins."""
     accent = tones["accent"]
     on_accent = "#0B1512" if luminance(accent) > 0.35 else "#FFFFFF"
-    win, view, text, soft = base["window"], base["view"], base["text"], base["text_secondary"]
-    button = hexa(base["capsule"], win)
-    border = hexa(base["menu_border"])
-    success = "#3DD68C" if dark else "#1B8A55"
-    dim = lambda c: rgba_css(c, 0.35)                                  # noqa: E731
-    c = {
-        "theme_fg_color": text, "theme_text_color": text, "theme_bg_color": win, "theme_base_color": view,
-        "theme_view_hover_decoration_color": accent, "theme_hovering_selected_bg_color": accent,
-        "theme_selected_bg_color": accent, "theme_selected_fg_color": on_accent, "theme_view_active_decoration_color": accent,
-        "insensitive_selected_bg_color": dim(accent), "insensitive_bg_color": mix(win, text, 0.06), "insensitive_fg_color": dim(text),
-        "insensitive_base_color": dim(text), "insensitive_base_fg_color": dim(text), "insensitive_selected_fg_color": dim(on_accent),
-        "insensitive_unfocused_bg_color": mix(win, text, 0.06), "insensitive_unfocused_fg_color": dim(text),
-        "insensitive_unfocused_selected_bg_color": dim(accent), "insensitive_unfocused_selected_fg_color": dim(on_accent),
-        "insensitive_borders": dim(border), "borders": border, "unfocused_borders": border, "unfocused_insensitive_borders": dim(border),
-        "content_view_bg": view, "print_paper_backdrop": "#FFFFFF",
-        "link_color": accent, "link_visited_color": mix(accent, soft, 0.5),
-        "error_color": danger, "error_color_backdrop": danger, "error_color_insensitive": dim(danger), "error_color_insensitive_backdrop": dim(danger),
-        "warning_color": caution, "warning_color_backdrop": caution, "warning_color_insensitive": dim(caution), "warning_color_insensitive_backdrop": dim(caution),
-        "success_color": success, "success_color_backdrop": success, "success_color_insensitive": dim(success), "success_color_insensitive_backdrop": dim(success),
-        "theme_button_background_normal": button, "theme_button_background_backdrop": button,
-        "theme_button_background_insensitive": mix(win, text, 0.04), "theme_button_background_backdrop_insensitive": mix(win, text, 0.04),
-        "theme_button_decoration_focus": accent, "theme_button_decoration_focus_backdrop": accent,
-        "theme_button_decoration_focus_insensitive": dim(accent), "theme_button_decoration_focus_backdrop_insensitive": dim(accent),
-        "theme_button_decoration_hover": accent, "theme_button_decoration_hover_backdrop": accent,
-        "theme_button_decoration_hover_insensitive": dim(accent), "theme_button_decoration_hover_backdrop_insensitive": dim(accent),
-        "theme_button_foreground_normal": text, "theme_button_foreground_backdrop": text,
-        "theme_button_foreground_insensitive": dim(text), "theme_button_foreground_backdrop_insensitive": dim(text),
-        "theme_button_foreground_active": on_accent, "theme_button_foreground_active_backdrop": on_accent,
-        "theme_button_foreground_active_insensitive": dim(on_accent), "theme_button_foreground_active_backdrop_insensitive": dim(on_accent),
-        "theme_titlebar_background": tones["tint_b"], "theme_titlebar_background_light": tones["tint_a"], "theme_titlebar_background_backdrop": win,
-        "theme_titlebar_foreground": text, "theme_titlebar_foreground_backdrop": soft,
-        "theme_titlebar_foreground_insensitive": dim(text), "theme_titlebar_foreground_insensitive_backdrop": dim(soft),
-        "theme_unfocused_fg_color": text, "theme_unfocused_text_color": text, "theme_unfocused_bg_color": win, "theme_unfocused_base_color": view,
-        "theme_unfocused_selected_bg_color_alt": accent, "theme_unfocused_selected_bg_color": rgba_css(accent, 0.5),
-        "theme_unfocused_selected_fg_color": on_accent, "theme_unfocused_view_bg_color": mix(view, win, 0.5), "theme_unfocused_view_text_color": dim(text),
-        "tooltip_background": base["tooltip_bg"], "tooltip_border": border, "tooltip_text": text,
-    }
-    lines = ["/* Huginn's colours for Breeze-GTK (generated by tokens/gen_theme.py). */"]
-    lines += [f"@define-color {k}_breeze {v};" for k, v in c.items()]
+    win = base["window"]
+    c = {"window": win, "view": base["view"], "text": base["text"], "soft": base["text_secondary"],
+         "header": tones["tint_b"], "sidebar": tones["tint_a"], "card": hexa(base["capsule"], win),
+         "border": hexa(base["menu_border"], win), "menu": hexa(base["menu_bg"], win), "tooltip": hexa(base["tooltip_bg"], win),
+         "accent": accent, "on_accent": on_accent, "danger": danger}
+    lines = ["/* Huginn's colours for its GTK 3 theme (generated by tokens/gen_theme.py). */"]
+    lines += [f"@define-color huginn_{k} {v};" for k, v in c.items()]
     return "\n".join(lines) + "\n"
 
 
@@ -290,7 +259,7 @@ def main() -> int:
             danger = tokens["danger"][mode]
             (out / "color-schemes" / f"{name}.colors").write_text(color_scheme(name, base, tones, danger), encoding="utf-8")
             (out / "gtk" / f"{name}.css").write_text(gtk_css(base, tones, danger, tokens["radius"]), encoding="utf-8")
-            (out / "gtk" / f"{name}-breeze.css").write_text(breeze_css(base, tones, danger, tokens["caution"][mode], mode == "dark"), encoding="utf-8")
+            (out / "gtk" / f"{name}-gtk3.css").write_text(gtk3_css(base, tones, danger, mode == "dark"), encoding="utf-8")
             if kv_src is not None:
                 kvantum(name, base, tones, danger, mode == "dark", kv_src, out)
             # Contrast gate: body text on window >= 7, secondary >= 4.5, accent as text on view >= 3.

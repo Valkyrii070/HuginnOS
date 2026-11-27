@@ -1742,8 +1742,12 @@ The goal is a desktop that is Huginn's from the first screen to the last. Where 
   gone, and the session calls itself `Huginn` alone (it was `Huginn:KDE`, so Qt and other apps took it for KDE).
 - **Everyone else's apps wear the realm** (`apps/huginn_look.py`, run by the shell at sign-in and on every change):
   Qt apps get a Kvantum style generated from the tokens (KvAdapta's shapes, Huginn's colours, all four realms dark and
-  light), and apps built on KDE's libraries (from the App Store) the realm's colours in kdeglobals; GTK 3/4 apps get
-  Breeze-GTK in Huginn's colours, and libadwaita apps its named colours. Inter is the font everywhere. Icons are Huginn's own theme (see "Icons and looks"); Papirus is gone.
+  light), and apps built on KDE's libraries (from the App Store) the realm's colours in kdeglobals. GTK 3 apps get
+  Huginn's own theme (`/usr/share/themes/Huginn`: Adwaita's shapes, which GTK carries, with Huginn's colours on every
+  surface, control and selection; the realm's and mode's colours come from `~/.config/gtk-3.0/colors.css`, generated
+  as `Huginn<Realm><Mode>-gtk3.css`, and a copy in `~/.local/share/themes` lets App Store apps wear it too), and
+  libadwaita apps its named colours. Breeze's Qt style and Breeze-GTK are gone (2026-11-27); Breeze's icons (under
+  Huginn's) and pointers stay, as artwork. Inter is the font everywhere. Icons are Huginn's own theme (see "Icons and looks"); Papirus is gone.
 - **The compositor**: being replaced with Huginn's own, in Rust on Smithay (see "Huginn's own compositor" below): it
   is now the session **"Huginn OS (own compositor, preview)"**. The earlier preview in Python
   (`shell/huginn_compositor.py`, `shell/qml/Compositor.qml`, inside cage) is what the notes below describe; it stays

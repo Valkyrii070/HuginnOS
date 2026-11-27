@@ -141,6 +141,30 @@ check("…Kvantum, the chosen icon theme, Open and Save through the portal, Hugi
 check("…and what the person set in qt6ct stays", "wheel_scroll_lines=7" in text)
 check("…a new icon theme reaches it", hl.write_qt6ct("Huginn") and "icon_theme=Huginn" in qt.read_text())
 
+# GTK apps: Huginn's own GTK 3 theme in the realm's colours, in place of Breeze-GTK
+share = home / "share"
+(share / "huginn-os/gtk").mkdir(parents=True)
+subprocess.run([sys.executable, str(KIT / "tokens/gen_theme.py"), str(KIT / "tokens/tokens.json"), str(home / "gen")], capture_output=True)
+for f in (home / "gen/gtk").glob("*.css"):
+    (share / "huginn-os/gtk" / f.name).write_text(f.read_text())
+theme_src = KIT / "config/overlay/usr/share/themes/Huginn"
+(share / "themes").mkdir()
+os.symlink(theme_src, share / "themes/Huginn")
+hl.SHARE, hl.DATA = share, home / ".local/share"
+hl.STATE = home / ".local/state/huginn/look"
+hl._run = lambda cmd: None
+check("the look is put in place", hl.apply("muspelheim", True, False))
+g3, g4 = home / ".config/gtk-3.0", home / ".config/gtk-4.0"
+check("GTK 3: Huginn's theme, the realm's colours where they win", "gtk-theme-name=Huginn" in (g3 / "settings.ini").read_text()
+      and "@define-color huginn_accent #FF8C50;" in (g3 / "colors.css").read_text() and "@import 'colors.css';" in (g3 / "gtk.css").read_text(),
+      ((g3 / "settings.ini").read_text(), (g3 / "colors.css").read_text()[:200]))
+check("GTK 4: GTK's own theme, libadwaita's colours, nothing of Breeze's", "gtk-theme-name=Default" in (g4 / "settings.ini").read_text()
+      and "accent_bg_color" in (g4 / "colors.css").read_text() and "_breeze" not in (g4 / "colors.css").read_text())
+check("…and the theme copied where App Store apps can see it", (home / ".local/share/themes/Huginn/gtk-3.0/huginn.css").is_file())
+check("the theme's own files: both modes, Adwaita's drawing underneath",
+      all((theme_src / "gtk-3.0" / f).is_file() for f in ("gtk.css", "gtk-dark.css", "huginn.css", "colors-light.css", "colors-dark.css"))
+      and "gtk-contained-dark.css" in (theme_src / "gtk-3.0/gtk-dark.css").read_text())
+
 # the control centre's night light: Huginn's own (the session daemon follows kwinrc's [NightColor])
 import huginn_system as hsys  # noqa: E402
 rc = home / ".config/kwinrc"

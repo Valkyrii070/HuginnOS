@@ -5446,8 +5446,7 @@ class Store(QObject):
         wanted = []
         if name.startswith("org.kde.Platform") and branch:
             wanted.append(f"org.kde.KStyle.Kvantum//{branch}")
-        if name.startswith(("org.gnome.Platform", "org.freedesktop.Platform", "org.kde.Platform")):
-            wanted.append("org.gtk.Gtk3theme.Breeze")
+        # (GTK 3 apps find Huginn's own theme in ~/.local/share/themes, which the system-wide override lets them read)
         # Steam: the performance overlay (MangoHud) as the Vulkan layer its sandbox can see; Games' profiles turn it
         # on for a game with MANGOHUD=1 in its launch options (the system's mangohud isn't inside Steam's sandbox)
         # And gamescope's, whose WSI layer gives games HDR (and better frame pacing) in Game Mode (huginn-game-session)

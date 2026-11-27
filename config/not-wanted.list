@@ -36,3 +36,11 @@ plasma-integration
 kde-cli-tools
 kio-extras
 kde-config-gtk-style
+# KDE's Breeze style for Qt and for GTK, and what came with it: Kvantum and Huginn's own GTK 3 theme do their work
+# (Breeze's icons and pointers stay: 20-desktop.list) (2026-11-27)
+breeze
+breeze-gtk-theme
+kde-style-breeze
+kde-style-breeze-data
+kwin-style-breeze
+breeze-wallpaper
