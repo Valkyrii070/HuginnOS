@@ -56,7 +56,7 @@ TRIES_BEFORE_WAITING = 5          # wrong passwords in a row for one name before
 FIRST_WAIT, LONGEST_WAIT = 30, 600
 GREETER_LEAVES_WITHIN = 12.0      # after a right password: its wake, then it must be gone (slow computers take a while to close it)
 READY_MOST = 8.0                  # a session started behind the sign-in screen: how long it may take to be ready before it's shown anyway
-GREETER_AFTER_GO = 6.0            # ...and how long the sign-in screen's last picture is kept for its first frame, at most
+GREETER_AFTER_GO = 15.0           # ...and how long the sign-in screen's last picture is kept for its first frame, at most
 GREETER_QUICK, GREETER_GIVES_UP = 20.0, 4   # a greeter that ends this soon, this many times running: something's broken
 AUTOLOGIN_QUICK = 10.0            # a by-itself sign-in that ends this soon isn't tried again
 WRONG = "Wrong password."
@@ -975,7 +975,7 @@ def worker(fd: int) -> int:
                 shown = show_screen(vt)
                 send({"shown": shown})
                 if shown:
-                    drawn_by = time.monotonic() + 5
+                    drawn_by = time.monotonic() + 14
         elif asked:
             time.sleep(0.2)
         if asked and stop_at is None:

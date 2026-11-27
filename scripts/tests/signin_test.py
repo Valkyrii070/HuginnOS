@@ -368,7 +368,7 @@ c.sendall(b'{"op": "leaving"}\n')
 b.spin(2, lambda: "shown astrid" in b.log())
 b.spin(0.5)
 check("a desktop that never says it has drawn: the greeter's last picture stays a while", b.svc.greeter is not None, b.log())
-b.clock[0] += 7
+b.clock[0] += 16
 check("…but not for ever", b.spin(3, lambda: b.svc.greeter is None and "stopped huginn-greeter" in b.log()), b.log())
 check("…and the sign-in screen doesn't come back over the desktop", b.log().count("started huginn-greeter") == 1 and b.svc.session is not None, b.log())
 for w in [b.svc.session]:

@@ -1564,13 +1564,17 @@ SDDM is not in the image. What stands between the computer starting and somebody
 black screen between them:
 
 1. Right password: the person's service manager (`user@UID.service`) is started, the session opens on its own
-   terminal (above) and its compositor starts there unseen; the greeter plays its wake and says `leaving`, keeping
-   its last picture.
-2. The shell writes `$XDG_RUNTIME_DIR/huginn/shell-ready` once it has loaded; the worker tells the service.
+   terminal (above) and its compositor starts there unseen; the greeter plays its wake (its top bar fades, the dock
+   stays) and says `leaving`, keeping its last picture.
+2. Unseen, the compositor leaves the graphics card alone (the sign-in screen holds it): each screen's output exists
+   from the start, so the shell lays itself out, and apps are told their frames are done twenty times a second, so
+   they draw in full. The shell writes `$XDG_RUNTIME_DIR/huginn/shell-ready` once every screen's wallpaper and the
+   arrival have drawn a frame (six seconds at most); the worker tells the service.
 3. With the wake played and the desktop ready (or eight seconds gone), the service says `go`: the worker brings that
-   terminal to the front (`VT_ACTIVATE`) and logind gives the session the graphics card.
+   terminal to the front (`VT_ACTIVATE`) and logind gives the session the graphics card. The compositor sets its
+   screens up for drawing then, without resetting the card first, and its idle time (the screen lock) starts.
 4. The sign-in screen isn't ended yet. Its last picture stays on the screen until the session's compositor has put
-   its first frame over it (it writes `$XDG_RUNTIME_DIR/huginn/drawn`; six seconds at most), then it is.
+   its first frame over it (it writes `$XDG_RUNTIME_DIR/huginn/drawn`; fifteen seconds at most), then it is.
 5. The shell's arrival waits until its terminal is the one in front (`XDG_VTNR` against
    `/sys/class/tty/tty0/active`), so it plays where it can be seen, carrying on from the sign-in screen's last
    picture.
@@ -1594,9 +1598,13 @@ person with their groups, home, environment and nothing of the service's left op
 account); the screen against the real service (`greeter_test.py`, 25 checks, with pictures), and under the real
 compositor in a window, typed into through the compositor's keyboard, through to the greeter leaving with 0; the
 update from an SDDM image and its exact undo on a clean copy of the built image.
-Not tested here: a computer actually starting with it. There is no systemd, logind, terminal or graphics card in the
-build root, so the screen being taken (VT 1), logind giving the session the graphics card, the hand-over from the
-greeter to the session, the fallback, and the first start after an update have not been seen working.
+Seen working in a virtual machine (QEMU, no 3D, an installed test system updated through Settings' way of
+staging): the update at boot, the sign-in screen, the session starting unseen on tty2, the wake, the hand-over
+in order (the sign-in screen's last picture stays up across the terminal switch until the desktop's first frame),
+the arrival and the desktop settling, and the text consoles still reachable. That machine draws
+everything in software and is far slower than a real computer (the shell takes minutes to load), so its time
+limits were stretched on the test disk to watch the order, and with the real limits it falls back as described
+above. Not seen: how smooth it looks on a real graphics card, more than one screen, and the fallback service.
 
 ## Install Huginn OS: our own installer
 
