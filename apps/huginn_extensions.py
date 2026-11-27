@@ -69,10 +69,12 @@ def _wanted(manifest: dict) -> list:
     return [w for w in dict.fromkeys(out) if w]
 
 
-def describe(manifest: dict) -> dict:
-    """What a package holds: what Code takes and what it leaves."""
+def describe(manifest: dict, have=None) -> dict:
+    """What a package holds: what Code takes and what it leaves. With `have` (the data files that are really there),
+    a theme or snippet file the manifest names but the package doesn't hold isn't counted."""
     con = manifest.get("contributes") if isinstance(manifest.get("contributes"), dict) else {}
-    count = lambda key: len([r for r in con.get(key) if isinstance(r, dict)]) if isinstance(con.get(key), list) else 0     # noqa: E731
+    there = lambda key, r: have is None or key not in ("themes", "snippets") or _safe(r.get("path") or "") in have     # noqa: E731
+    count = lambda key: len([r for r in con.get(key) if isinstance(r, dict) and there(key, r)]) if isinstance(con.get(key), list) else 0     # noqa: E731
     takes, n = [], {k: count(k) for k in ("themes", "snippets", "languages", "keybindings", "grammars", "debuggers")}
     n["huginnCommands"] = len([r for r in con.get("huginnCommands") if isinstance(r, dict) and str(r.get("title") or "").strip() and str(r.get("run") or "").strip()]) \
         if isinstance(con.get("huginnCommands"), list) else 0
@@ -128,7 +130,7 @@ def install(path, folder=None) -> dict:
     ident = ext_id(manifest)
     if not ident:
         raise ValueError("That package doesn't say who made it and what it is called, so it can't be installed.")
-    what = describe(manifest)
+    what = describe(manifest, set(files))
     if not what["useful"]:
         raise ValueError(f"“{str(manifest.get('displayName') or manifest.get('name'))[:60]}” is only a program for VS Code's own extension host: it has no themes, snippets, file types or key bindings Code could use"
                          + (f" ({what['leaves']})." if what["leaves"] else "."))
@@ -146,7 +148,11 @@ def install(path, folder=None) -> dict:
 
 
 def _row(ident: str, manifest: dict, where: Path) -> dict:
-    what = describe(manifest)
+    try:
+        have = {str(f.relative_to(where)) for f in where.rglob("*") if f.is_file()}
+    except OSError:
+        have = set()
+    what = describe(manifest, have)
     return {"id": ident, "name": str(manifest.get("displayName") or manifest.get("name") or ident)[:80], "version": str(manifest.get("version") or "")[:30],
             "publisher": str(manifest.get("publisher") or "")[:60], "about": str(manifest.get("description") or "")[:240], "takes": what["takes"], "leaves": what["leaves"],
             "folder": str(where)}

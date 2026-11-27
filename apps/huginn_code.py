@@ -2811,9 +2811,15 @@ def advice(sky: Sky) -> str:
         if term is None:
             return "The terminal couldn't be opened, and that is where the container is started."
         send = getattr(term, "type_when_ready", term._send)
-        for line in hc.start_lines(eng, cfg, exists=now == "stopped"):
+        status = hc.status_file(root)
+        try:
+            status.parent.mkdir(parents=True, exist_ok=True)
+            status.unlink(missing_ok=True)
+        except OSError:
+            status = None
+        for line in hc.start_lines(eng, cfg, exists=now == "stopped", status=status):
             send((line + "\r").encode())
-        self._box_cfg, self._box_tries = box, 0
+        self._box_cfg, self._box_tries, self._box_status = box, 0, status
         self._box_poll.start()
         self.changed.emit()
         return ""
@@ -2821,6 +2827,20 @@ def advice(sky: Sky) -> str:
     def _box_check(self) -> None:
         box = self._box_cfg
         self._box_tries += 1
+        ended = None
+        try:
+            status = getattr(self, "_box_status", None)
+            ended = int(status.read_text().strip() or "1") if status is not None and status.is_file() else None
+        except (OSError, ValueError):
+            ended = 1
+        if box and ended not in (None, 0):                           # the build or the start failed: say so now, not after a long wait
+            self._box_poll.stop()
+            self._box_cfg = None
+            self.changed.emit()
+            self.said.emit("The container didn't start. The terminal shows what the engine said.", True)
+            return
+        if box and ended is None and self._box_tries % 4:           # (still building: the engine is asked only now and then)
+            return
         if box and hc.state(box) == "running":
             self._box_poll.stop()
             self._box, self._box_cfg = box, None

@@ -214,7 +214,8 @@ B = hc.build_command("docker", cfg); R_ = hc.run_command("docker", cfg)
 ok("the image is built from its Dockerfile, with its arguments and target", B[:4] == ["docker", "build", "-t", name + "-image"] and "VARIANT=noble" in B and B[B.index("--target") + 1] == "dev" and B[-1] == str(game), B)
 ok("the container shares the folder, opens its ports on this computer only, and is kept alive", f"{game}:{WS}" in R_ and "127.0.0.1:8080:8080" in R_ and "127.0.0.1:5432:5432" in R_ and "SKY=1" in R_
    and R_[R_.index("--name") + 1] == name and "--cap-add=SYS_PTRACE" in R_ and R_[R_.index("--entrypoint") + 1] == "/bin/sh" and "--privileged" not in R_ and "-d" in R_, R_)
-ok("Podman keeps your files your own", "--userns=keep-id" in hc.run_command("podman", cfg) and "--userns=keep-id" not in R_)
+ok("Podman keeps your files your own; run by root it has no such mode and isn't asked for it", "--userns=keep-id" in hc.run_command("podman", cfg) and "--userns=keep-id" not in R_
+   and "--userns=keep-id" not in hc.run_command("podman", cfg, rootless=False))
 box = hc.where("docker", cfg)
 ok("a command inside it: as its user, in its folder, this computer's paths turned into its own", hc.wrap(box, f"python3 '{game}/src/a.py' && ls {game}", mount=game)
    == f"docker exec -u dev -w {WS} {name} sh -c " + __import__("shlex").quote(f"python3 '{WS}/src/a.py' && ls {WS}"), hc.wrap(box, f"python3 '{game}/src/a.py' && ls {game}", mount=game))
@@ -223,9 +224,9 @@ ok("paths go in and come back; one outside the shared folder has no place here",
    and hc.to_local(box, game, WS) == str(game) and hc.to_local(box, game, "/usr/include/stdio.h") == "" and hc.to_local(box, game, WS + "x/a") == "")
 ok("the debugger's adapter is run inside, its talk carried by exec", hc.adapter_argv(box, ["gdb", "-q", "-i", "dap"], WS + "/build") == ["docker", "exec", "-i", "-u", "dev", "-w", WS + "/build", name, "gdb", "-q", "-i", "dap"])
 lines = hc.start_lines("docker", cfg, exists=False)[0]
-ok("a first start: build, run, the once-only commands, the every-start ones", lines.index("docker build") < lines.index("docker run") < lines.index("make deps") < lines.index("up") and lines.endswith("echo 'The container is ready.'"), lines)
+ok("a first start: build, run, the once-only commands, the every-start ones", lines.index("docker build") < lines.index("docker run") < lines.index("make deps") < lines.index("s up'") and lines.endswith("echo 'The container is ready.'"), lines)
 again = hc.start_lines("docker", cfg, exists=True)[0]
-ok("a later start: only start, and the every-start commands", again.startswith(f"docker start {name} && ") and "build" not in again and "make deps" not in again and "up" in again, again)
+ok("a later start: only start, and the every-start commands", again.startswith(f"docker start {name} && ") and "docker build" not in again and "make deps" not in again and "s up'" in again, again)
 def refuses(text):
     d = Path(tempfile.mkdtemp(prefix="dc-", dir=home)); (d / ".devcontainer.json").write_text(text)
     try:
@@ -350,7 +351,7 @@ pack = vsix("owl.vsix", {"name": "night-owl", "publisher": "Sarah", "displayName
 row = hx.install(pack)
 there = hx.DIR / "sarah.night-owl"
 ok("a .vsix installs under its maker's and its own name", row["id"] == "sarah.night-owl" and row["name"] == "Night Owl" and row["version"] == "2.1.0" and there.is_dir(), row)
-ok("what Code takes and what it leaves are both said", row["takes"] == "4 colour themes, 2 snippet files, 2 file types, 2 key bindings" and "its program" in row["leaves"] and "syntax colouring" in row["leaves"], row)
+ok("what Code takes and what it leaves are both said", row["takes"] == "2 colour themes, 2 snippet files, 2 file types, 2 key bindings" and "its program" in row["leaves"] and "syntax colouring" in row["leaves"], row)
 ok("only its data is unpacked: no program, nothing else from the package, and nothing was run", sorted(str(f.relative_to(there)) for f in there.rglob("*") if f.is_file())
    == ["package.json", "snippets/kl.json", "snippets/py.json", "themes/light.json", "themes/night.json"] and not (Path(home) / "RAN").exists(), sorted(str(f.relative_to(there)) for f in there.rglob("*")))
 got = hx.gather(code.LANGS)
@@ -389,7 +390,7 @@ ok("switched off: listed still, but its snippets, keys and endings are gone", c.
    and code.language_of("/x/nest.pyowl") != "Python" and c.extensionThemes == [])
 c.setExtensionOn("sarah.night-owl", True)
 ok("switched on again, they are back", "owlmain" in more.EXTRA_SNIPPETS.get("Python", {}) and len(c.extensionThemes) == 2)
-ok("installing from the window: a message in words either way", c.installExtension(pack).startswith("Installed “Night Owl”: 4 colour themes") and "only a program" in c.installExtension(home + "/prog.vsix") and c.installExtension("  ") == "")
+ok("installing from the window: a message in words either way", c.installExtension(pack).startswith("Installed “Night Owl”: 2 colour themes") and "only a program" in c.installExtension(home + "/prog.vsix") and c.installExtension("  ") == "")
 c.removeExtension("sarah.night-owl")
 ok("removed: gone from the list, and the theme it gave is taken off", c.extensions == [] and c.theme == {} and not there.exists(), (c.extensions, c.theme))
 
@@ -566,6 +567,30 @@ ok("closing the notebook ends its Python", str(nbdir / "waves.ipynb") not in c._
 c.openFile(str(nbdir / "new.ipynb")); spin(100); i = tab("new.ipynb")
 first = cells()[0]["id"]; c.nbSetSource(i, first, "6 * 7"); c.nbRun(i, first); wait(done, 30)
 ok("a new, empty .ipynb is a notebook with one cell, and runs", [o["text"] for o in cells()[0]["outputs"]] == ["42"] and c.save(i, False) == "" and json.loads((nbdir / "new.ipynb").read_text())["nbformat"] == 4)
+try:
+    import matplotlib                                              # noqa: F401
+    has_plots = True
+except ImportError:
+    has_plots = False
+if has_plots:
+    fig_cell = c.nbAdd(i, 1, "code")
+    c.nbSetSource(i, fig_cell, "import matplotlib.pyplot as plt\nplt.plot([1, 4, 9, 16])\nplt.title('waves')\nplt.figure()\nplt.bar(['a', 'b'], [3, 5])")
+    c.nbRun(i, fig_cell); wait(done, 90)
+    outs = cells()[1]["outputs"]
+    pics = [o for o in outs if o["kind"] == "image"]
+    import base64
+    raw = [base64.b64decode(p_["src"].split(",", 1)[1]) for p_ in pics]
+    ok("matplotlib: the two figures a cell leaves open are shown under it as pictures, with no window asked for", len(pics) == 2 and all(r[:8] == b"\x89PNG\r\n\x1a\n" and len(r) > 3000 for r in raw)
+       and not any(o["kind"] == "error" for o in outs), [(o["kind"], o["text"][:200]) for o in outs])
+    from PySide6.QtGui import QImage
+    img = QImage.fromData(raw[0]) if raw else QImage()
+    ok("…a real picture of a sensible size, not blank", not img.isNull() and img.width() > 300 and img.height() > 200 and len({img.pixel(x, img.height() // 2) for x in range(0, img.width(), 7)}) > 1, (img.width(), img.height()))
+    c.nbRun(i, fig_cell); wait(done, 60)
+    ok("run again, it shows two figures, not four (they are closed once shown)", len([o for o in cells()[1]["outputs"] if o["kind"] == "image"]) == 2)
+    ok("saved, the pictures are in the file as Jupyter keeps them", c.save(i, False) == "" and [o["output_type"] for o in json.loads((nbdir / "new.ipynb").read_text())["cells"][1]["outputs"]].count("display_data") == 2
+       and all("image/png" in o["data"] for o in json.loads((nbdir / "new.ipynb").read_text())["cells"][1]["outputs"] if o["output_type"] == "display_data"))
+else:
+    print("(no matplotlib here: figures in notebooks are skipped)")
 close_all(); c.closeFolder()
 ok("no notebook Pythons are left running", c._kernels == {})
 

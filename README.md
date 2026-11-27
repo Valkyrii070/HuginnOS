@@ -1061,9 +1061,31 @@ a compiled one, stopping at a breakpoint and leaving it running; debugging a Pyt
 server (the build machine's own, throwaway key, localhost) with breakpoints, variables and stepping; notebooks end
 to end including a stopped cell and a crashed Python. With a stand-in: the container engine (a script named docker
 that runs commands in a linked folder: build, run, exec, the debugger inside, stop, remove) and the Open VSX
-registry (a local server). Not checked: real Docker or Podman, the real open-vsx.org, a second real machine, a
-remote debugger behind a password prompt, and matplotlib figures (not installed where the tests ran). The new
-sheets, the notebook view and the workspace headings were also opened in the real window with real key presses.
+registry (a local server). The new sheets, the notebook view and the workspace headings were also opened in the
+real window with real key presses.
+
+Then against the real things, where the build machine could reach them:
+- **Real Podman** (`code_container_real_check.py`, 16 checks; Podman 5.7 with runc, an image made from Ubuntu's
+  own packages since no registry can be reached from there). Code built the image from the project's Dockerfile
+  with its build argument, started the container, ran the create and start commands in the shared folder, ran a
+  Build inside (reading a file only the image has) with the error landing on its line here, debugged a Python file
+  inside with a breakpoint, variables and a step, found the running container again on reopening, stopped,
+  restarted without rebuilding, and removed it. Two faults only a real engine shows were fixed: Podman run by root
+  was asked for a mode only rootless Podman has (`--userns=keep-id`), and when a build failed Code went on waiting
+  with "starting…"; now the terminal's line leaves its result where Code reads it, and Code says at once that the
+  container didn't start. Not checked: rootless Podman (the build machine forbids user namespaces, so the run was
+  as root) and Docker.
+- **Real extensions** (`code_extensions_real_check.py`, 28 checks): Night Owl, Atom One Dark Theme,
+  JavaScript (ES6) code snippets and Dracula, from their makers' GitHub sources, packed as vsce packs a
+  .vsix. Every theme that ships went on with a background, text and syntax colours and the right light-or-dark;
+  the snippets arrived in JavaScript, TypeScript and the rest; only data files were unpacked. Dracula's sources hold
+  no theme file (it is built at publishing), which showed that Code counted what a manifest names instead of what a
+  package holds: it now counts what is there.
+- **matplotlib in a notebook**: two figures left open by a cell come out as two PNGs under it, not blank, closed
+  once shown, and kept in the file as Jupyter keeps them (4 checks, in `code_round9_test.py`).
+- **Still not checked: the real open-vsx.org.** The build machine's network doesn't allow that host (nor any
+  container registry), so searching and fetching have only met a local stand-in speaking Open VSX's documented
+  answers. Also unchecked: a second real machine over SSH, and a remote debugger behind a password prompt.
 Also fixed, found by the fuzz: completion asked for a line below zero raised an error.
 
 **The "grub>" prompt after installing** (seen on real hardware; `search --file` and `configfile` by hand started the

@@ -186,8 +186,11 @@ def build_command(eng: str, cfg: dict) -> list:
     return cmd + [cfg["context"]]
 
 
-def run_command(eng: str, cfg: dict) -> list:
+def run_command(eng: str, cfg: dict, rootless: bool = None) -> list:
     """The container, started in the background and kept alive, with the project's folder shared into it."""
+    if rootless is None:
+        import os
+        rootless = os.geteuid() != 0
     cmd = [eng, "run", "-d", "--name", name_for(cfg["root"]), "--label", "huginn.code.folder=" + cfg["root"], "--label", "devcontainer.local_folder=" + cfg["root"]]
     cmd += ["--mount", cfg["mount"]] if cfg["mount"] else ["-v", f"{cfg['root']}:{cfg['workspace']}"]
     cmd += ["-w", cfg["workspace"]]
@@ -205,8 +208,8 @@ def run_command(eng: str, cfg: dict) -> list:
         cmd += ["--cap-add", c]
     for s in cfg["security_opt"]:
         cmd += ["--security-opt", s]
-    if eng == "podman":
-        cmd.append("--userns=keep-id")                               # your own files stay your own, seen from inside
+    if eng == "podman" and rootless:
+        cmd.append("--userns=keep-id")                               # your own files stay your own, seen from inside (Podman run by root has no such mode)
     cmd += cfg["run_args"]
     if cfg["override"]:
         cmd += ["--entrypoint", "/bin/sh", image_for(cfg), "-c", "echo Container started; trap 'exit 0' TERM; while sleep 1 & wait $!; do :; done"]
@@ -228,9 +231,16 @@ def exec_argv(box: dict, argv: list, cwd: str = "", tty: bool = False, stdin: bo
     return cmd + ["-w", cwd or box["workspace"], box["name"]] + list(argv)
 
 
-def start_lines(eng: str, cfg: dict, exists: bool) -> list:
+def status_file(root) -> Path:
+    """Where the line typed into the terminal leaves how it ended (0: the container is up), for Code to read."""
+    import os
+    return Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache") / "huginn" / "containers" / (name_for(root) + ".status")
+
+
+def start_lines(eng: str, cfg: dict, exists: bool, status=None) -> list:
     """The lines typed into Code's terminal to bring the container up: build, run (or start again), and the
-    project's own commands inside it."""
+    project's own commands inside it. With `status` (a file), how it all ended is written there, so Code knows a
+    failed build from one still going."""
     q = lambda argv: " ".join(shlex.quote(a) for a in argv)          # noqa: E731
     box, lines = where(eng, cfg), []
     if exists:
@@ -241,7 +251,10 @@ def start_lines(eng: str, cfg: dict, exists: bool) -> list:
         lines.append(q(run_command(eng, cfg)))
         lines += [q(exec_argv(box, ["sh", "-c", c], stdin=False)) for c in cfg["created"]]
     lines += [q(exec_argv(box, ["sh", "-c", c], stdin=False)) for c in cfg["started"]]
-    return [" && ".join(lines) + " && echo 'The container is ready.'"]
+    line = " && ".join(lines) + " && echo 'The container is ready.'"
+    if status is not None:
+        line += f"; echo $? > {shlex.quote(str(status))}"
+    return [line]
 
 
 def state(box_or_eng, name: str = "") -> str:
