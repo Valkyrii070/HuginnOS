@@ -170,6 +170,13 @@ the system's own files (helpers, services, rules, the sign-in and start-up scree
 - **Checked against the image.** Run against a built image, the updater's idea of what goes where matched all 2,052
   files the image build had put in place, the generated look and settings files included; it differed only in the
   files added since, and in two stale files the build never removes.
+- **Run for real.** On a copy of the built image, its own helper asked GitHub, found the next commit, staged it in
+  4 seconds and applied it as the start-up service does in 4 more; afterwards the system matched that commit's tree
+  with nothing left to write. Go Back returned it byte for byte (one checksum over 2,000 files, before and after).
+  Then the copy was stripped of every trace of the updater, as an old installation would be, and the one-line
+  switch brought it across from GitHub. Not checked: a real start-up on real hardware (the service's ordering
+  before the sign-in screen is by systemd's rules, unrun), an installation really made from an old image, and a
+  change to the compositor's sources travelling this way.
 - **An installation from before this** has no record of what it is. One line in its Terminal brings it across
   (`scripts/switch-to-updates.sh` has the line and what it does); or install the newest image once.
 

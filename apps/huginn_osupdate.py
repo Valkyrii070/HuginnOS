@@ -705,7 +705,7 @@ def main(argv: list) -> int:
                 # the version being installed knows best how it is installed: hand over to its own copy of this
                 return subprocess.call([sys.executable, str(newer), what], env={**os.environ, "HUGINN_OSUPDATE_HANDED": "1"})
             done = apply(root, log=lambda t: print(t, flush=True))
-            print(f"Huginn OS is now {done['date']} ({done['sha'][:7]}): {done['written']} files put in place, {done['removed']} taken away."
+            print(f"Huginn OS is now {done['date']} ({done['sha'][:7]}): {done['written']} file{'' if done['written'] == 1 else 's'} put in place, {done['removed']} taken away."
                   + (f" Left alone because you changed them: {', '.join(done['kept'][:6])}." if done["kept"] else "")
                   + ("" if done["compositor"] == "replaced" else f" The compositor: {done['compositor']}.")
                   + (f" Not everything afterwards worked: {'; '.join(done['failed'][:3])}." if done["failed"] else ""))
