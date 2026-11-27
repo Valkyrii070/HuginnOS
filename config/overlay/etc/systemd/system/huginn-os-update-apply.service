@@ -3,7 +3,7 @@ Description=Put a waiting Huginn OS update in place before anyone signs in
 Documentation=file:///usr/share/huginn-apps/huginn_osupdate.py
 ConditionPathExists=/var/lib/huginn-os-update/ready
 After=local-fs.target systemd-tmpfiles-setup.service
-Before=display-manager.service sddm.service
+Before=display-manager.service huginn-signin.service sddm.service
 
 [Service]
 Type=oneshot

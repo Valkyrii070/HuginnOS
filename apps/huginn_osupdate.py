@@ -47,7 +47,7 @@ MANIFEST = "usr/share/huginn-os/files.json"
 MAX_TREE = 600 * 1024 * 1024                  # a fetched tree, packed
 MAX_FILE = 200 * 1024 * 1024                  # one file in it
 # Settings files that are yours once you (or Settings) change them: replaced only while unchanged.
-YOURS = ("etc/xdg/", "etc/sddm.conf.d/", "etc/default/", "etc/netplan/", "etc/NetworkManager/", "etc/sysctl.d/", "etc/skel/", "etc/gtk-3.0/", "etc/gtk-4.0/",
+YOURS = ("etc/xdg/", "etc/sddm.conf.d/", "etc/huginn/signin.conf", "etc/default/", "etc/netplan/", "etc/NetworkManager/", "etc/sysctl.d/", "etc/skel/", "etc/gtk-3.0/", "etc/gtk-4.0/",
          "var/lib/flatpak/overrides/")
 NEEDED = ("apps/huginn_app.py", "apps/qml", "shell/qml", "tokens/tokens.json", "tokens/gen_theme.py", "config/overlay/usr/bin/huginn-session", "config/package-lists")
 

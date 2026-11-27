@@ -1,9 +1,9 @@
 #!/bin/sh
-# The installation drive signs you in by itself (casper writes SDDM's [Autologin]); casper picks Plasma's session
-# when it's installed, so this points it at Huginn's before the sign-in screen starts.
-conf=/etc/sddm.conf
-[ -f "$conf" ] || exit 0
-if grep -q '^\[Autologin\]' "$conf"; then
-    sed -i -e '/^\[Autologin\]/,/^\[/ s/^Session=.*/Session=huginn.desktop/' "$conf"
-    grep -q '^Session=huginn.desktop' "$conf" || sed -i '/^\[Autologin\]/a Session=huginn.desktop' "$conf"
-fi
+# The installation drive signs you in by itself: casper-bottom/99huginn_session writes who (the trial account) for
+# Huginn's sign-in service. If that didn't happen (an older initramfs), it's written here, before the service starts.
+conf=/etc/huginn/signin.conf.d/05-live.conf
+[ -f "$conf" ] && exit 0
+user=$(sed -n 's/^export USERNAME="\(.*\)"$/\1/p' /etc/casper.conf 2>/dev/null | head -n 1)
+[ -n "$user" ] && getent passwd "$user" >/dev/null || exit 0
+mkdir -p /etc/huginn/signin.conf.d
+printf '[Autologin]\n# The installation drive (huginn-live-session).\nUser=%s\nSession=huginn\nRelogin=true\n' "$user" > "$conf"

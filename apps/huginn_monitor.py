@@ -31,7 +31,7 @@ from PySide6.QtGui import QDesktopServices
 HERE = Path(__file__).resolve().parent
 POINTS = 60                       # two minutes at one reading every two seconds
 SESSION = {"huginn-session", "huginn-compositor", "huginn-shell", "huginn-sessiond", "systemd", "sh", "bash", "dbus-daemon",
-           "dbus-broker", "sddm-helper", "sddm", "login", "gamescope", "gamescope-wl", "kwin_wayland", "plasmashell"}
+           "dbus-broker", "sddm-helper", "sddm", "huginn-signind", "login", "gamescope", "gamescope-wl", "kwin_wayland", "plasmashell"}
 SHELLS = {"bash", "sh", "zsh", "fish", "dash"}
 # the session's helpers: a name you can recognise and what each does
 KNOWN = {

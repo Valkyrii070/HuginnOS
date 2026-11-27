@@ -1,0 +1,15 @@
+# Signing in by itself (Settings › Users, or the installation drive): no password asked, the same session.
+auth    requisite       pam_nologin.so
+auth    required        pam_succeed_if.so user != root quiet_success
+auth    required        pam_permit.so
+@include common-account
+session [success=ok ignore=ignore module_unknown=ignore default=bad] pam_selinux.so close
+session optional        pam_keyinit.so force revoke
+session required        pam_limits.so
+session required        pam_loginuid.so
+@include common-session
+session [success=ok ignore=ignore module_unknown=ignore default=bad] pam_selinux.so open
+-session optional       pam_gnome_keyring.so auto_start
+@include common-password
+session required        pam_env.so
+session required        pam_env.so envfile=/etc/default/locale user_readenv=1

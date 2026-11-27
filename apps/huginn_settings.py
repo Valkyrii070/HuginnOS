@@ -11,7 +11,7 @@ tool would make, and a change made elsewhere shows up here:
     Keyboard & Mouse     KWin's input devices or Huginn's compositor (D-Bus), kcminputrc, kxkbrc
     Date & Time          systemd's timedated (timedatectl)
     Language             plasma-localerc (your account; huginn-session reads it), languages made with locale-gen
-    Users                AccountsService (D-Bus); signing in by itself: SDDM's [Autologin]
+    Users                AccountsService (D-Bus); signing in by itself: the sign-in service's [Autologin]
     Default Apps         mimeapps.list, ~/.config/autostart
     Printers & Scanners  CUPS (lpstat, lpadmin, lpoptions) and SANE, as Print & Scan
     Privacy & Security   ufw, Flatpak's permission store, kscreenlockerrc, ktrashrc, recently-used files (kdeglobals)
@@ -961,12 +961,12 @@ def load_users() -> dict:
             "canAutologin": os.access(SYSTEM_HELPER, os.X_OK) and bool(HAVE("pkexec"))}
 
 
-AUTOLOGIN = Path("/etc/sddm.conf.d/20-autologin.conf")
+AUTOLOGIN = Path("/etc/huginn/signin.conf.d/20-autologin.conf")
 SYSTEM_HELPER = "/usr/libexec/huginn-system-settings"       # the few system-wide changes no service makes (as root, through pkexec)
 
 
 def autologin_user() -> str:
-    """Who signs in by itself when the computer starts (SDDM's [Autologin], as the installer writes it), or ""."""
+    """Who signs in by itself when the computer starts (the sign-in service's [Autologin], as the installer writes it), or ""."""
     try:
         text = AUTOLOGIN.read_text(encoding="utf-8")
     except OSError:
@@ -1520,18 +1520,18 @@ def demo_state() -> dict:
 
 
 # ---------------------------------------------------------------------------------------------- the sign-in screen's look
-LOGIN_THEME = Path("/usr/share/sddm/themes/huginn")
-LOGIN_LOOK = "/usr/libexec/huginn-login-look"            # writes theme.conf.user as root (through Huginn's password prompt)
+LOGIN_CONF = Path("/etc/huginn/signin.conf.d")
+LOGIN_LOOK = "/usr/libexec/huginn-login-look"            # writes signin.conf.d/10-look.conf as root (through Huginn's password prompt)
 
 
 def load_look() -> dict:
-    """Which realm the sign-in screen wears (theme.conf.user wins over theme.conf, as SDDM reads them)."""
+    """Which realm the sign-in screen wears ([Look] Realm= in the sign-in service's files; later files win)."""
     realm = "aurora"
-    for name in ("theme.conf", "theme.conf.user"):
+    for f in [LOGIN_CONF.parent / "signin.conf"] + sorted(LOGIN_CONF.glob("*.conf")):
         try:
-            m = re.search(r"^realm\s*=\s*(\w+)", (LOGIN_THEME / name).read_text(encoding="utf-8"), re.M)
+            m = re.search(r"^\[Look\][^\[]*?^Realm\s*=\s*(\w+)", f.read_text(encoding="utf-8"), re.M | re.S)
             if m:
-                realm = m.group(1)
+                realm = m.group(1).lower()
         except OSError:
             pass
     import huginn_looks as hl

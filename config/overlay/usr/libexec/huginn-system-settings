@@ -1,25 +1,25 @@
 #!/bin/sh
 # Huginn OS: the few system-wide changes Settings makes that the system has no service for. Runs as root through
 # pkexec (org.huginn.system-settings), which asks for the administrator password; each takes one checked value.
-#   autologin USER | off     Users › Sign in by itself (SDDM's [Autologin], the same file the installer writes)
+#   autologin USER | off     Users › Sign in by itself (Huginn's sign-in service: the same file the installer writes)
 #   locale ll_CC             Language & Region: make a language's UTF-8 locale, so the session can use it
 #   gpu-level auto|high|low  Graphics › Performance: AMD cards' power_dpm_force_performance_level, kept in
 #                            /etc/huginn/gpu-level and set again at each start (gpu-apply, from a udev rule)
 #   gpu-apply                (udev) the kept level, onto every AMD card
 set -eu
-conf=/etc/sddm.conf.d/20-autologin.conf
+conf=/etc/huginn/signin.conf.d/20-autologin.conf
 case "${1:-}" in
     autologin)
         who="${2:-}"
         if [ "$who" = off ]; then
-            rm -f "$conf"
+            rm -f "$conf" /etc/sddm.conf.d/20-autologin.conf
             exit 0
         fi
         printf %s "$who" | grep -Eq '^[a-z_][a-z0-9_-]{0,31}$' || { echo "huginn-system-settings: not a user name: $who" >&2; exit 2; }
         uid=$(getent passwd "$who" | cut -d: -f3)
         [ -n "$uid" ] && [ "$uid" -ge 1000 ] && [ "$uid" -lt 60000 ] || { echo "huginn-system-settings: no such person: $who" >&2; exit 2; }
-        mkdir -p /etc/sddm.conf.d
-        tmp=$(mktemp /etc/sddm.conf.d/.autologin.XXXXXX)
+        mkdir -p /etc/huginn/signin.conf.d
+        tmp=$(mktemp /etc/huginn/signin.conf.d/.autologin.XXXXXX)
         printf '[Autologin]\n# Set by Settings › Users.\nUser=%s\nSession=huginn\nRelogin=false\n' "$who" > "$tmp"
         chmod 644 "$tmp"
         mv -f "$tmp" "$conf"

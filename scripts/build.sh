@@ -467,7 +467,7 @@ export FLAVOUR="$DISTRO_NAME"
 CASPER
     in_chroot locale-gen en_US.UTF-8
     in_chroot update-locale LANG=en_US.UTF-8
-    in_chroot systemctl enable NetworkManager sddm ufw
+    in_chroot systemctl enable NetworkManager ufw            # (the sign-in service: config/hooks/47-sign-in.sh)
     in_chroot systemctl set-default graphical.target
 
     # Optional hooks: config/hooks/*.sh run inside the chroot, in name order.

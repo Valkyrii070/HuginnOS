@@ -97,6 +97,113 @@ def check(user: str, password: str, service: str = "huginn-lock") -> tuple:
     return False, SAYS.get(rc, (said[-1] if said else "") or "Wrong password.")
 
 
+# ------------------------------------------------------------------------------------------- a whole sign-in (root)
+PAM_TTY, PAM_ESTABLISH_CRED, PAM_DELETE_CRED = 3, 0x0002, 0x0004
+
+
+class Session:
+    """One person's sign-in from start to finish, for Huginn's sign-in service (huginn_signind.py, as root):
+
+        s = Session("huginn-signin", "astrid")
+        ok, why = s.authenticate(password)      # their password and their account's own rules
+        ok, why = s.open({"XDG_SEAT": "seat0", ...}, tty="/dev/tty1")   # the session (logind hears of it here)
+        s.env()                                 # what PAM wants in the session's environment
+        s.close()                               # when the session is over
+
+    Not for threads: one Session in one process, used and closed by it."""
+
+    def __init__(self, service: str, user: str):
+        self.user, self.said, self._secret, self._open, self._cred = user, [], b"", False, False
+        pam, libc = _libs()
+        pam.pam_set_item.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_char_p]
+        pam.pam_putenv.argtypes = [ctypes.c_void_p, ctypes.c_char_p]
+        pam.pam_open_session.argtypes = [ctypes.c_void_p, ctypes.c_int]
+        pam.pam_close_session.argtypes = [ctypes.c_void_p, ctypes.c_int]
+        pam.pam_getenvlist.argtypes = [ctypes.c_void_p]
+        pam.pam_getenvlist.restype = ctypes.POINTER(ctypes.c_void_p)
+        libc.free.argtypes = [ctypes.c_void_p]
+
+        def conv(n, messages, responses, _data):
+            replies = libc.calloc(n, ctypes.sizeof(PamResponse))   # PAM frees these itself
+            if not replies:
+                return 5
+            out = ctypes.cast(replies, ctypes.POINTER(PamResponse))
+            for i in range(n):
+                m = messages[i].contents
+                if m.msg_style in (PAM_PROMPT_ECHO_OFF, PAM_PROMPT_ECHO_ON):
+                    out[i].resp = libc.strdup(self._secret)
+                elif m.msg and m.msg_style in (PAM_ERROR_MSG, PAM_TEXT_INFO):
+                    self.said.append(m.msg.decode("utf-8", "replace"))
+            responses[0] = out
+            return PAM_SUCCESS
+
+        self._cb = CONV(conv)                                      # kept: PAM calls it for as long as the handle lives
+        self._talk = PamConv(self._cb, None)
+        self._h = ctypes.c_void_p()
+        self._rc = pam.pam_start(service.encode(), user.encode(), ctypes.byref(self._talk), ctypes.byref(self._h))
+        self.started = self._rc == PAM_SUCCESS
+
+    def _why(self, rc: int) -> str:
+        return SAYS.get(rc, (self.said[-1] if self.said else "") or "That didn't work.")
+
+    def authenticate(self, password: str) -> tuple:
+        """Their password (or none, for a service that asks for none), then whether the account may sign in now."""
+        if not self.started:
+            return False, "The password can't be checked right now."
+        pam, _libc = _libs()
+        self._secret = password.encode("utf-8")
+        try:
+            rc = pam.pam_authenticate(self._h, 0)
+            if rc == PAM_SUCCESS:
+                rc = pam.pam_acct_mgmt(self._h, 0)
+        finally:
+            self._secret = b""
+        self._rc = rc
+        return (True, "") if rc == PAM_SUCCESS else (False, self._why(rc))
+
+    def open(self, env: dict, tty: str = "") -> tuple:
+        """Opens the session: credentials, then every `session` module (pam_systemd tells logind, from `env`)."""
+        pam, _libc = _libs()
+        if tty:
+            pam.pam_set_item(self._h, PAM_TTY, tty.encode())
+        for k, v in env.items():
+            pam.pam_putenv(self._h, f"{k}={v}".encode())
+        rc = pam.pam_setcred(self._h, PAM_ESTABLISH_CRED)
+        self._cred = rc == PAM_SUCCESS
+        if rc == PAM_SUCCESS:
+            rc = pam.pam_open_session(self._h, 0)
+            self._open = rc == PAM_SUCCESS
+        self._rc = rc
+        return (True, "") if rc == PAM_SUCCESS else (False, self._why(rc))
+
+    def env(self) -> dict:
+        """PAM's environment for the session (XDG_RUNTIME_DIR and XDG_SESSION_ID from logind, the locale, …)."""
+        pam, libc = _libs()
+        out, lst = {}, pam.pam_getenvlist(self._h)
+        i = 0
+        while lst and lst[i]:
+            k, _, v = ctypes.cast(lst[i], ctypes.c_char_p).value.decode("utf-8", "replace").partition("=")
+            out[k] = v
+            libc.free(lst[i])
+            i += 1
+        if lst:
+            libc.free(ctypes.cast(lst, ctypes.c_void_p))
+        return out
+
+    def close(self) -> None:
+        pam, _libc = _libs()
+        if not self.started:
+            return
+        if self._open:
+            self._rc = pam.pam_close_session(self._h, 0)
+            self._open = False
+        if self._cred:
+            pam.pam_setcred(self._h, PAM_DELETE_CRED)
+            self._cred = False
+        pam.pam_end(self._h, self._rc)
+        self.started = False
+
+
 if __name__ == "__main__":                                         # huginn_pam.py USER  (password on stdin)
     import sys
     ok, why = check(sys.argv[1], sys.stdin.readline().rstrip("\n"), *(sys.argv[2:3]))

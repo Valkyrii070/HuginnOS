@@ -1,0 +1,30 @@
+#!/bin/sh
+# The sign-in screen's own session, as the huginn-greeter account (huginn-signind starts it): Huginn's compositor on
+# the computer's screens with nobody's session in it, and the greeter drawn on top. When the greeter leaves (somebody's
+# password was right, and its wake has played) everything here ends, and the person's session takes the screen.
+export XDG_CURRENT_DESKTOP=Huginn XDG_SESSION_DESKTOP=huginn
+export QT_QPA_PLATFORM=wayland
+export XCURSOR_THEME=breeze_cursors XCURSOR_SIZE=24
+[ -n "$XDG_RUNTIME_DIR" ] && [ -d "$XDG_RUNTIME_DIR" ] || { echo "huginn-greeter-session: no XDG_RUNTIME_DIR (is logind running?)" >&2; exit 1; }
+if [ -z "$DBUS_SESSION_BUS_ADDRESS" ] && [ -z "$HUGINN_GREETER_INNER" ]; then
+    HUGINN_GREETER_INNER=1 exec dbus-run-session -- "$0" "$@"
+fi
+huginn-compositor &
+comp=$!
+sock=""
+i=0
+while [ $i -lt 150 ]; do                                   # up to 15 s for the screens to come up
+    kill -0 $comp 2>/dev/null || { echo "huginn-greeter-session: the compositor stopped" >&2; exit 1; }
+    for s in "$XDG_RUNTIME_DIR"/wayland-*; do
+        case "$s" in *.lock) continue ;; esac
+        [ -S "$s" ] && { sock=${s##*/}; break; }
+    done
+    [ -n "$sock" ] && break
+    sleep 0.1; i=$((i + 1))
+done
+[ -n "$sock" ] || { echo "huginn-greeter-session: the compositor never started listening" >&2; kill $comp 2>/dev/null; exit 1; }
+WAYLAND_DISPLAY="$sock" /usr/bin/python3 /usr/share/huginn-shell/huginn_greeter.py
+code=$?
+kill $comp 2>/dev/null
+wait $comp 2>/dev/null
+exit $code

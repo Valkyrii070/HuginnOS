@@ -160,10 +160,12 @@ def gather(say=print) -> dict:
     ])
     files["kernel.txt"] = run(["journalctl", "-k", "-b", "-o", "short-monotonic", "--no-pager", "-n", "4000"], 60)
     home = Path.home()
-    sess = home / ".local" / "share" / "sddm" / "wayland-session.log"
+    sess, before = home / ".local/share/huginn/session.log", home / ".local/share/huginn/session.log.1"
+    if not sess.exists():                                         # (signed in through SDDM, as older versions did)
+        sess, before = home / ".local/share/sddm/wayland-session.log", home / ".local/share/sddm/wayland-session.log.old"
     files["desktop-session.txt"] = (section("This session (the compositor, the shell and the apps)", read(sess, 6000))
-                                    + (section("The session before", read(sess.with_name("wayland-session.log.old"), 3000))
-                                       if sess.with_name("wayland-session.log.old").exists() else ""))
+                                    + (section("The session before", read(before, 3000)) if before.exists() else ""))
+    files["sign-in.txt"] = section("The sign-in service", run(["journalctl", "-b", "-u", "huginn-signin", "--no-pager", "-n", "400"], 30))
     say("Crashes")
     crashes = run(["coredumpctl", "list", "--no-pager", "--since", "-7d"])
     detail = ""

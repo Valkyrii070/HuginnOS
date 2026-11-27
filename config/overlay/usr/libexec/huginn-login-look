@@ -1,14 +1,14 @@
 #!/bin/sh
 # Huginn OS: dress the sign-in screen in a realm (Settings › Appearance › "Use on the sign-in screen").
-# Runs as root through pkexec (org.huginn.login-look); takes one realm name and writes the theme's override file.
+# Runs as root through pkexec (org.huginn.login-look); takes one realm name and writes it for the sign-in screen.
 set -eu
 case "${1:-}" in
     aurora|bifrost|muspelheim|niflheim) ;;
     *) echo "huginn-login-look: not a realm: ${1:-}" >&2; exit 2 ;;
 esac
-theme=/usr/share/sddm/themes/huginn
-[ -d "$theme" ] || { echo "huginn-login-look: the Huginn sign-in screen isn't installed" >&2; exit 1; }
-tmp=$(mktemp "$theme/.theme.conf.user.XXXXXX")
-printf '[General]\n# Set by Settings › Appearance.\nrealm=%s\n' "$1" > "$tmp"
+dir=/etc/huginn/signin.conf.d
+mkdir -p "$dir"
+tmp=$(mktemp "$dir/.look.XXXXXX")
+printf '[Look]\n# Set by Settings › Appearance.\nRealm=%s\n' "$1" > "$tmp"
 chmod 644 "$tmp"
-mv -f "$tmp" "$theme/theme.conf.user"
+mv -f "$tmp" "$dir/10-look.conf"

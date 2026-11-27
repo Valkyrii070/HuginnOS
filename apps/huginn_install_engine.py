@@ -547,16 +547,16 @@ class Engine:
                 where.mkdir(parents=True, exist_ok=True)
         self.run(["chown", "-R", f"{u['name']}:{u['name']}", f"/home/{u['name']}/.cache", f"/home/{u['name']}/.local", f"/home/{u['name']}/.var"],
                  chroot=True, check=False)
-        sddm = t / "etc/sddm.conf.d"
-        sddm.mkdir(parents=True, exist_ok=True)
-        auto = sddm / "20-autologin.conf"
+        signin = t / "etc/huginn/signin.conf.d"
+        signin.mkdir(parents=True, exist_ok=True)
+        auto = signin / "20-autologin.conf"
         if u.get("autologin"):
             auto.write_text(f"[Autologin]\nUser={u['name']}\nSession=huginn\nRelogin=false\n")
         elif auto.exists():
             auto.unlink()
-        live = t / "etc/sddm.conf"                               # casper's live sign-in setting, if it got copied
-        if live.exists() and "Autologin" in live.read_text():
-            live.unlink()
+        for live in (signin / "05-live.conf", t / "etc/sddm.conf"):   # the trial account's sign-in, if it got copied
+            if live.exists():
+                live.unlink()
         self.step("settings", 0.7)
         # the live session's own pieces don't belong on the installed system
         for rel in LIVE_ONLY:

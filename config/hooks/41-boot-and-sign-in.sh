@@ -5,7 +5,9 @@ set -e
 update-alternatives --install /usr/share/plymouth/themes/default.plymouth default.plymouth \
     /usr/share/plymouth/themes/huginn/huginn.plymouth 200
 update-alternatives --set default.plymouth /usr/share/plymouth/themes/huginn/huginn.plymouth
-# SDDM: /etc/sddm.conf.d/10-huginn.conf (from the overlay) picks the Huginn theme; make sure it's there.
+# The sign-in screen is Huginn's own now (47-sign-in.sh). SDDM's settings and its Huginn theme are still carried, and
+# only for systems installed with SDDM: there SDDM is what takes over if the new service can't start. They go once
+# the new sign-in has been seen working on real computers.
 test -f /usr/share/sddm/themes/huginn/Main.qml
 # The live wallpapers the sign-in screen and the desktop share: a compiled scene and a still for each realm.
 for realm in aurora bifrost muspelheim niflheim; do

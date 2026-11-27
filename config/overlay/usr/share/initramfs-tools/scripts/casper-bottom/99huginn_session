@@ -1,19 +1,23 @@
 #!/bin/sh
-# Live session: casper's autologin setup picks the Plasma session for SDDM. Point it at Huginn instead.
+# Live session: the trial account signs in by itself, into Huginn's session, and straight back in if the session ends
+# (signed out, or it fell over): the trial account has no password to give a sign-in screen.
 PREREQ=""
 prereqs() { echo "$PREREQ"; }
 case "$1" in
     prereqs) prereqs; exit 0 ;;
 esac
+USERNAME=""
+[ -r /root/etc/casper.conf ] && . /root/etc/casper.conf
+[ -n "$USERNAME" ] || USERNAME=$(sed -n 's/^export USERNAME="\(.*\)"$/\1/p' /etc/casper.conf 2>/dev/null | head -n 1)
+if [ -n "$USERNAME" ]; then
+    mkdir -p /root/etc/huginn/signin.conf.d
+    printf '[Autologin]\n# The installation drive (casper-bottom/99huginn_session).\nUser=%s\nSession=huginn\nRelogin=true\n' "$USERNAME" \
+        > /root/etc/huginn/signin.conf.d/05-live.conf
+fi
+# (an older arrangement: SDDM, where it's still installed)
 f=/root/etc/sddm.conf
 if [ -f "$f" ] && grep -q '^Session=' "$f"; then
     sed -i 's/^Session=.*/Session=huginn/' "$f"
-    # If the session ends (signed out, or it fell over), go straight back in. Without this the sign-in screen came up
-    # asking for a password, and the trial account hasn't got one to give.
-    if grep -q '^Relogin=' "$f"; then
-        sed -i 's/^Relogin=.*/Relogin=true/' "$f"
-    else
-        sed -i '/^Session=huginn/a Relogin=true' "$f"
-    fi
+    grep -q '^Relogin=' "$f" && sed -i 's/^Relogin=.*/Relogin=true/' "$f" || sed -i '/^Session=huginn/a Relogin=true' "$f"
 fi
 exit 0

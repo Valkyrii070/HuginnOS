@@ -1150,7 +1150,7 @@ system that is still there is left alone (`boot_pointer_test.py`, 13 checks).
   screen with no dock. It is now on the dock's screen, where it grows out of the orb (`shell/qml/Shell.qml`).
 - *Left alone, the live session ended at the sign-in screen asking for a password* the trial account doesn't have.
   The live session no longer goes to sleep by itself (`huginn_sessiond.py`), and if its session ends for any reason
-  SDDM signs straight back in (`Relogin=true`, set by `casper-bottom/99huginn_session`). What ended the session on
+  the sign-in service signs straight back in (`Relogin=true`, set by `casper-bottom/99huginn_session`). What ended the session on
   that computer isn't known: sleep is the likeliest, a crash when the screens turned off is possible.
 - *Run in Code did nothing the first time.* The command was typed into the terminal the moment its shell was
   started, and the shell throws away what arrives before its first prompt. `Shell.type_when_ready` holds it until
@@ -1469,28 +1469,71 @@ Every screen between pressing the power button and the desktop is now Huginn's o
 - **Boot screen** (Plymouth): the realm's scene, soft and dark, the mark, and a thin line of the realm's light that
   fills as the computer starts. An encrypted disk asks for its password in a glass pill where the line was. Shutting
   down shows the mark alone; updates say so, with how far along.
-- **Sign-in screen** (SDDM theme `huginn`): the live wallpaper moves behind a quiet clock. One frosted glass island
-  holds your picture in a ring of the realm's light, your name and your password, whose arrow wakes when there's
-  something to send. Everyone else waits as small orbs below it ("Someone else" types a name). The keyboard layout and
-  session are a capsule at the top right, with lists that drop down; sleep, restart and shut down a capsule at the
-  bottom right; the computer's name at the bottom left. A wrong password shakes the island, and the third says to
-  check Caps Lock and the layout. Left alone for 30 seconds, all but the clock fades and the wallpaper has the screen;
-  any key or movement brings it back, and a key goes into the password. Signing in turns the password into a line
-  of light and the scene slows toward rest.
-- **Arrival**: the desktop starts with the same island where it was (your picture, the line of light, "Welcome
-  back") over the same scene, still coming to rest. Then it fades and the bar, the dock and the widgets come in.
+- **Sign-in screen** (Huginn's own: `shell/huginn_greeter.py`, `shell/qml/GreeterView.qml`): the live wallpaper moves
+  behind a greeting and the time. You sign in in the dock: your picture, your name and your password sit where your
+  apps will be, other people are beside them (click one, or Left and Right with the field empty), then sleep, restart
+  and shut down. A quiet bar along the top has the date and time, the battery when there is one, and the session when
+  there's a choice (Game Mode). A wrong password shakes the field and says so; after five, the service makes that name
+  wait (30 seconds, doubling to ten minutes) and the wait counts down. Other screens show the wallpaper alone.
+- **The wake**: when the password is right it becomes a line of light, the dock clears to your picture, places for
+  your apps light up from the middle outwards, and the time blooms in the realm's colours and is gone. Then the
+  sign-in screen leaves and your session starts on the screen it left.
+- **Arrival** (`shell/qml/Arrival.qml`): the desktop starts with that last picture where it was (the dock, lit, your
+  picture in the middle) over the same scene, then it fades and the bar, the real dock and the widgets come in.
 - **On the desktop** the wallpaper is the same scene at rest. Settings › Appearance shows each realm's scene, keeps
   it moving on the desktop too if you like ("Live wallpaper"; never with Reduce motion), and dresses the sign-in
   screen in your realm ("Use Bifröst"), through Huginn's password prompt (`/usr/libexec/huginn-login-look`, polkit
-  action `org.huginn.login-look`, writes the theme's `theme.conf.user`).
+  action `org.huginn.login-look`, writes `/etc/huginn/signin.conf.d/10-look.conf`).
 - **Password prompts** (`apps/huginn_polkit.py`): Huginn's own polkit agent, a glass card.
 
-Tested: the scenes and stills rendered with Mesa's OpenGL (llvmpipe) on a virtual display; the sign-in screen run
-against stand-ins for everything SDDM gives a theme (38 checks: wallpaper moving and coming to rest, people, someone
-else, sessions, layouts, Caps Lock, wrong passwords, idle and waking, power); the boot screen run by Plymouth itself
-with its X11 renderer (starting, a disk password, shutting down); the shell's arrival and the Appearance page.
-Not tested here: SDDM's own greeter on 26.04 showing the theme, and how smooth the scenes are on real graphics cards
-(they are light: a few hundred operations a pixel).
+Tested: the scenes and stills rendered with Mesa's OpenGL (llvmpipe) on a virtual display; the boot screen run by
+Plymouth itself with its X11 renderer (starting, a disk password, shutting down); the shell's arrival and the
+Appearance page; the sign-in screen as below.
+Not tested here: how smooth the scenes are on real graphics cards (they are light: a few hundred operations a pixel).
+
+### The sign-in service
+
+SDDM is not in the image. What stands between the computer starting and somebody's desktop is Huginn's own
+(`apps/huginn_signind.py`, root, from `huginn-signin.service`):
+
+- It shows the sign-in screen as the `huginn-greeter` account (made by `sysusers.d/huginn-signin.conf`; no shell, no
+  password, groups `video` and `render` only): `/usr/libexec/huginn-greeter-session` runs Huginn's compositor on the
+  screens with nobody's session in it and the greeter on top.
+- The greeter can do nothing by itself. It sends a name and a password down `/run/huginn-signin/greeter.sock` (the
+  greeter account's alone, mode 600, and the service checks who is on the other end) and is told yes or no. It may
+  also ask who can sign in, and for sleep, restart or shut down (only while nobody is signed in).
+- Each sign-in is done by a worker process of its own: PAM (`/etc/pam.d/huginn-signin`: the same modules Ubuntu's
+  SDDM file names) runs there, so a module that crashes takes a worker down, not the service. On a right password the
+  worker waits for the greeter to leave (its wake; eight seconds at most, then it is closed), opens the session
+  (logind hears of it from `pam_systemd`: seat0, VT 1, class `user`, type `wayland`), becomes the person (groups,
+  gid, uid, checked afterwards) and starts `/usr/bin/huginn-session` through their login shell. The session's own
+  messages go to `~/.local/share/huginn/session.log` (the one before: `session.log.1`), which problem reports read.
+  When the session ends the worker closes the PAM session and the sign-in screen comes back.
+- Root, service accounts and accounts with no shell are refused before PAM is asked, as slowly as a wrong password.
+- Signing in by itself: `[Autologin] User= Session= Relogin=` in `/etc/huginn/signin.conf.d/*.conf` (the installer
+  and Settings › Users write `20-autologin.conf`; the installation drive writes `05-live.conf` with `Relogin=true`).
+  It uses a PAM file of its own that asks for nothing. A by-itself session that ends at once isn't tried again.
+- If the sign-in screen stops four times in quick succession the service gives up, and after three failed starts
+  in a minute `huginn-signin-fallback.service` takes over: SDDM where it is still installed (a system installed
+  before this and updated since), else a text sign-in on the first screen.
+
+How it is switched on is made of plain files, so an update can put it in place and Go Back can take it away exactly:
+`graphical.target.d/huginn-signin.conf` (Wants the service) and `sddm.service.d/huginn-signin.conf` (SDDM starts only
+when the fallback's flag exists). On a system updated from SDDM, who signs in by itself and the sign-in screen's
+realm are carried over (`config/hooks/47-sign-in.sh`), and SDDM's settings and Huginn theme are still shipped for
+that fallback alone; they go once the new sign-in has been seen working on real computers.
+
+Tested: the service's logic with stand-in workers (`scripts/tests/signin_test.py`, 64 checks: sign-in, the wait
+after wrong tries, odd and hostile requests, a stranger on the socket, workers dying, a greeter that won't leave or
+keeps dying, signing in by itself, Relogin); the workers against real PAM and real accounts as root in a throwaway
+system (`signin_real_check.py`, 38 checks: wrong and unknown names, root and shell-less accounts, becoming the
+person with their groups, home, environment and nothing of the service's left open, the log, stop, the greeter's
+account); the screen against the real service (`greeter_test.py`, 25 checks, with pictures), and under the real
+compositor in a window, typed into through the compositor's keyboard, through to the greeter leaving with 0; the
+update from an SDDM image and its exact undo on a clean copy of the built image.
+Not tested here: a computer actually starting with it. There is no systemd, logind, terminal or graphics card in the
+build root, so the screen being taken (VT 1), logind giving the session the graphics card, the hand-over from the
+greeter to the session, the fallback, and the first start after an update have not been seen working.
 
 ## Install Huginn OS: our own installer
 
@@ -2664,7 +2707,7 @@ Added:
   uaccess rule), each by its own slider; only the last value waiting goes, as monitors answer slowly. **Night light**
   "Sunset to sunrise" uses the real times, from the time zone's city (`huginn_sun.py`, zone1970.tab): nothing asks
   where the computer is.
-- **Users › Sign in by itself** (SDDM's [Autologin], the file the installer writes; through the same helper).
+- **Users › Sign in by itself** (the sign-in service's [Autologin], the file the installer writes; through the same helper).
 - **About › Name › Rename…** (hostnamed: the pretty name, and the host name made from it).
 - **Wi‑Fi & Network › DNS › Change…**: servers of your own for the network in use (NetworkManager, reapplied at once).
 - **Printers & Scanners**, a page of its own: the printers CUPS knows, which is used first, removing one, adding one

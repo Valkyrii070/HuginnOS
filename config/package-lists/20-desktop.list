@@ -1,6 +1,5 @@
-# Display manager. The compositor is Huginn's own (54-huginn-compositor.list), for the desktop and for the sign-in
-# screen alike: KWin and Plasma are no longer in the image (config/not-wanted.list).
-sddm
+# The compositor is Huginn's own (54-huginn-compositor.list), for the desktop and for the sign-in screen alike, and
+# so is the sign-in service (apps/huginn_signind.py): KWin, Plasma and SDDM are not in the image.
 xwayland
 xdg-desktop-portal-kde
 xdg-user-dirs
