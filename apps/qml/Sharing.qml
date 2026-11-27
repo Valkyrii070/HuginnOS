@@ -58,7 +58,7 @@ GlassWindow {
                 Flow { visible: Backend.screens.length > 0; width: parent.width; spacing: 6
                     Label { text: "Show "; font.pixelSize: 12; secondary: true; height: 30; verticalAlignment: Text.AlignVCenter }
                     Repeater { model: Backend.screens
-                        Seg { required property var modelData; required property int index; anchors.verticalCenter: undefined; text: modelData.name; on: Backend.monitor === index - 1; onClicked: Backend.setMonitor(index - 1) } } }
+                        Seg { required property var modelData; required property int index; anchors.verticalCenter: undefined; text: modelData.name; on: Backend.monitor === index || (Backend.monitor < 0 && index === 0); onClicked: Backend.setMonitor(index) } } }
                 Rectangle { width: parent.width; height: 40; radius: 12; color: Theme.t.group
                     Row { x: 12; spacing: 8; anchors.verticalCenter: parent.verticalCenter
                         Rectangle { width: 9; height: 9; radius: 5; color: Backend.watching.length ? "#22C55E" : Theme.t.text_secondary; anchors.verticalCenter: parent.verticalCenter }
@@ -69,7 +69,7 @@ GlassWindow {
             Btn { visible: win.on; danger: true; text: "Stop Sharing"; onClicked: Backend.stop() }
             Btn { visible: win.on; text: "New Password"; onClicked: Backend.start() } }
         Label { visible: !Backend.canShare; anchors { left: parent.left; leftMargin: 26; right: parent.right; rightMargin: 26; bottom: parent.bottom; bottomMargin: 70 } wrapMode: Text.WordWrap
-            font.pixelSize: 12; color: Theme.t.danger; text: "Sharing needs KDE's Remote Desktop server (krdp). Get it from the App Store." } }
+            font.pixelSize: 12; color: Theme.t.danger; text: "Sharing needs Huginn's own desktop session, which shares the screen itself." } }
 
     // ---------------- someone else's
     Rectangle { id: theirs; objectName: "theirs"; x: mine.x + mine.width + 12; y: 64; width: parent.width - x - 18; height: parent.height - 82; radius: 22

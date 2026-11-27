@@ -104,6 +104,9 @@ pub struct Huginn {
     /// A game fills a screen (game_mode_tick): the computer isn't idle, though a controller (which never reaches
     /// the compositor) may be all that's being touched.
     pub game_awake: bool,
+    /// Screen Sharing, while it's on (rdp.rs)
+    #[cfg(feature = "rdp")]
+    pub share: Option<crate::rdp::Share>,
 }
 
 impl std::fmt::Debug for Huginn {
@@ -186,6 +189,8 @@ impl<B: Backend + 'static> HuginnState<B> {
 
     fn tick(&mut self) {
         self.sync_toplevels();
+        #[cfg(feature = "rdp")]
+        self.share_tick();
         self.huginn.places_tick = self.huginn.places_tick.wrapping_add(1);
         if self.huginn.places_tick % 5 == 0 {
             self.note_places();
@@ -241,6 +246,17 @@ impl<B: Backend + 'static> HuginnState<B> {
             }
             Request::SetKeyboardLayout(which) => self.set_keyboard_layout(which),
             Request::SignOut => self.sign_out(),
+            #[cfg(feature = "rdp")]
+            Request::ShareStart(output, port, user, password, cert, key, tx) => {
+                let ask = crate::rdp::Ask { output, port, user, password, cert: cert.into(), key: key.into() };
+                let _ = tx.send(self.share_start(ask));
+            }
+            #[cfg(feature = "rdp")]
+            Request::ShareStop => self.share_stop(),
+            #[cfg(feature = "rdp")]
+            Request::ShareStatus(tx) => {
+                let _ = tx.send(self.share_status());
+            }
             Request::Displays(tx) => {
                 let _ = tx.send(self.displays_json());
             }

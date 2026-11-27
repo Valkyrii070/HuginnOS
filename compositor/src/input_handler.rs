@@ -63,7 +63,7 @@ use smithay::{
 impl<BackendData: Backend> HuginnState<BackendData> {
     // Allow in this method because of existing usage
     #[allow(clippy::uninlined_format_args)]
-    fn process_common_key_action(&mut self, action: KeyAction) {
+    pub(crate) fn process_common_key_action(&mut self, action: KeyAction) {
         match action {
             KeyAction::None | KeyAction::VtSwitch(_) => (),
             KeyAction::Quit => {
@@ -98,7 +98,7 @@ impl<BackendData: Backend> HuginnState<BackendData> {
     }
 
     /// A key, through sticky keys and bounce keys first (access.rs).
-    fn keyboard_key_to_action<B: InputBackend>(&mut self, evt: B::KeyboardKeyEvent) -> KeyAction {
+    pub(crate) fn keyboard_key_to_action<B: InputBackend>(&mut self, evt: B::KeyboardKeyEvent) -> KeyAction {
         let pressed = matches!(evt.state(), KeyState::Pressed);
         let code = evt.key_code();
         let release = match self.huginn.keys.key(code, pressed) {
@@ -306,7 +306,7 @@ impl<BackendData: Backend> HuginnState<BackendData> {
         }
     }
 
-    fn on_pointer_button<B: InputBackend>(&mut self, evt: B::PointerButtonEvent) {
+    pub(crate) fn on_pointer_button<B: InputBackend>(&mut self, evt: B::PointerButtonEvent) {
         let serial = SCOUNTER.next_serial();
         let button = evt.button_code();
 
@@ -640,7 +640,29 @@ impl<BackendData: Backend> HuginnState<BackendData> {
         under.map(|(s, l)| (s, l.to_f64()))
     }
 
-    fn on_pointer_axis<B: InputBackend>(&mut self, evt: B::PointerAxisEvent) {
+    /// The pointer to a place on the desktop, from afar (Screen Sharing): as an absolute move from a tablet or a
+    /// virtual machine's pointer goes, and sent once more if a menu's grab that just ended swallowed it.
+    #[cfg(feature = "rdp")]
+    pub(crate) fn pointer_to(&mut self, pos: Point<f64, Logical>, time: InputTime) {
+        let pointer = self.pointer.clone();
+        if self.huginn.wm.divider.is_some() {
+            self.divider_move(pos);
+            pointer.motion(self, None, &MotionEvent { location: pos, serial: SCOUNTER.next_serial(), time });
+            pointer.frame(self);
+            return;
+        }
+        let under = self.surface_under(pos);
+        pointer.motion(self, under, &MotionEvent { location: pos, serial: SCOUNTER.next_serial(), time });
+        pointer.frame(self);
+        let at = pointer.current_location();
+        if !pointer.is_grabbed() && ((at.x - pos.x).abs() >= 0.01 || (at.y - pos.y).abs() >= 0.01) {
+            let under = self.surface_under(pos);
+            pointer.motion(self, under, &MotionEvent { location: pos, serial: SCOUNTER.next_serial(), time });
+            pointer.frame(self);
+        }
+    }
+
+    pub(crate) fn on_pointer_axis<B: InputBackend>(&mut self, evt: B::PointerAxisEvent) {
         // Settings › Keyboard & Mouse › Scroll speed, for this device (input.rs)
         let k = crate::input::scroll_factor(&smithay::backend::input::Device::name(&evt.device()));
         let horizontal_amount = evt
@@ -1326,7 +1348,7 @@ impl HuginnState<UdevData> {
 /// Possible results of a keyboard action
 #[allow(dead_code)] // some of these are only read if udev is enabled
 #[derive(Debug)]
-enum KeyAction {
+pub(crate) enum KeyAction {
     /// Quit the compositor (Ctrl+Alt+Backspace, only with HUGINN_DEV=1)
     Quit,
     /// Switch to a text console (Ctrl+Alt+F1…)

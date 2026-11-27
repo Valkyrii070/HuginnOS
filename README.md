@@ -423,7 +423,7 @@ Eleven more, each with a layout of its own and its own colour (`tokens/tokens.js
 | Clips | "The cutting room" (see "Code and Clips Pro" below) | A multi-track video editor on MLT | MLT (`melt`, `python3-mlt`), ffmpeg |
 | Characters | "The type case": drawers on the left, a tray of characters, a big lens above | Every emoji, with skin tones and their names, and arrows, maths, money, punctuation, accented letters, Greek, shapes and signs; search by name; click to copy; recent and starred | Unicode's emoji list from `unicode-data`, or the copy bundled in `apps/data/emoji.json` (from [unicode-emoji-json](https://github.com/muan/unicode-emoji-json) 0.9.0, MIT, licence beside it); Python's Unicode database for the rest |
 | Fonts | "The proof sheet": a sheet of warm paper with every family setting your words on a ruled line | Your own words and size on every font; a specimen page with every style, a size waterfall and the letters; try a .ttf, .otf or a font site's .zip before installing it; install for yourself (no password) into `~/.local/share/fonts`; remove what you installed; stars; monospace view | `fontconfig` (`fc-list`, `fc-query`, `fc-cache`) |
-| Screen Sharing | "Two doors": this computer on the left, someone else's on the right | One button shares this screen with a fresh one-time password (12 letters, none that look alike), its address written large to read out over the phone, who is connected, which screen to show, a new password, and Stop. Sharing never outlives the window. Any Remote Desktop app can connect (Windows' own, Microsoft's Windows App on a Mac or phone, FreeRDP). The other door opens another computer's screen, remembering addresses and names but never passwords | KDE's RDP server `krdpserver` (`krdp`), FreeRDP's viewer `sdl-freerdp` (`freerdp-sdl`) |
+| Screen Sharing | "Two doors": this computer on the left, someone else's on the right | One button shares this screen with a fresh one-time password (12 letters, none that look alike), its address written large to read out over the phone, who is connected, which screen to show, a new password, and Stop. Sharing never outlives the window. Any Remote Desktop app can connect (Windows' own, Microsoft's Windows App on a Mac or phone, FreeRDP). The other door opens another computer's screen, remembering addresses and names but never passwords | Huginn's compositor's own RDP server (`compositor/src/rdp.rs`, IronRDP), FreeRDP's viewer `sdl-freerdp` (`freerdp-sdl`) |
 | Help | "The field guide": one big question in the middle, guides on shelves with each app's icon, and the window turns the colour of the app you're reading about | 48 short guides (`apps/help/*.md`), one per app plus "Getting started" and "What goes online", searchable in your own words, each with a button that opens its app. `huginn_app.py help mail` opens straight at Mail's | Nothing |
 
 New glyphs (`chat`, `bolt`, `wallet`, `smile`, `type`, `help`) are drawn in both `Glyph.qml` files, the eleven icons in
@@ -459,13 +459,9 @@ What was and wasn't tested (all on this sandbox, every screen rendered in dark a
 - **Characters, Fonts, Screen Sharing, Help** (74 checks + 45 on-screen): Unicode's emoji-test format and the bundled
   list, tones, copying and the clipboard; Fonts installing a real font and a font site's .zip (paths inside the zip
   are never trusted, Mac junk skipped), listed by fontconfig, then removed, with system fonts refused; Screen Sharing
-  against **stand-ins** for `krdpserver` and `sdl-freerdp` (the server's arguments, a password handed to the viewer
-  on its input so it never shows in the process list, a port already in use, a server that fails at once, sharing
-  ending with the window). **No real remote-desktop connection has been made.** The "who is connected" readout uses
-  `ss`, which the sandbox lacked, so only its reading of `ss` output was tested. `krdpserver` takes its password on
-  its command line, so while sharing it is visible to your other programs; it is a one-time password and changes
-  with every share. KDE's server streams the picture and takes mouse and keyboard; no sound. The first share asks
-  the desktop's permission. If you turn on the firewall (`ufw`, installed but off), allow port 3389.
+  against a stand-in for `sdl-freerdp` (a password handed to the viewer on its input so it never shows in the
+  process list). Sharing this screen is the compositor's own since 2026-11-27: see "Screen Sharing from the
+  compositor". If you turn on the firewall (`ufw`, installed but off), allow port 3389.
 - Help: every app has a guide and every guide's app exists (checked by the test), and the guides' button names were
   checked against the apps' own.
 
@@ -1715,6 +1711,30 @@ Norwegian, sudo, the EFI partition and the swap file. The window walked through 
 checks). Two things in this test machine stand in for a real computer's: the EFI partition goes through FUSE (no
 FAT in its kernel), and GRUB's which-disk questions are answered for it (no partition devices). Not tested here:
 real disks and a real ISO, BIOS installs, an encrypted system starting, Secure Boot with Microsoft's keys, and Wi‑Fi.
+
+## Screen Sharing from the compositor (2026-11-27)
+
+Sharing this screen no longer runs KDE's RDP server (`krdp`, now in not-wanted.list): Huginn's compositor serves it
+itself (`compositor/src/rdp.rs`, on IronRDP's server, in a thread of its own), so any Remote Desktop app (Windows'
+own, Microsoft's Windows App on a Mac or phone, FreeRDP) connects as before.
+
+- **Asked for over the bus** by Screen Sharing (`org.huginn.Compositor`: `ShareStart(screen, port, name, password,
+  certificate, key)`, `ShareStop`, `ShareStatus`), only while its window is open: the compositor stops sharing by
+  itself if the app hasn't asked how it's going for 20 seconds (it closed or crashed). The password is no longer on
+  any command line.
+- **Network Level Authentication only** (CredSSP): the one-time password is proved before anything is shown, over TLS
+  with this computer's own certificate (made the first time, `~/.local/share/huginn/sharing`, the key private to
+  you). One person at a time. IPv4 and IPv6, or IPv4 alone where IPv6 is off.
+- **The picture**: one screen (the first, or the one picked), with the pointer. After each frame the compositor draws
+  it again into a buffer of its own with a damage tracker of its own, so a picture is read back only when something
+  changed, at most 30 a second; the newest waits in one slot, so a slow connection skips pictures rather than lag,
+  and only the parts that changed go over the wire.
+- **Keys and the mouse** come back through the compositor's own input paths (an input backend of their own), so
+  shortcuts, sticky keys and the rest behave as at the computer; a text-console switch from afar is ignored.
+- **The island** says "Your screen is shared" with Stop while someone is looking (the Privacy Report's watcher only
+  sees PipeWire, which this doesn't use).
+- **Not yet**: sound, the clipboard across, sharing every screen at once (one at a time), typing from phones' on-
+  screen keyboards (they send characters, not keys).
 
 ## Phone's own link (2026-11-27)
 

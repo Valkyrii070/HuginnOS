@@ -1,9 +1,12 @@
 """Screen Sharing: let someone see and use this computer for a while, or see and use another one.
 
-Sharing runs KDE's RDP server (krdpserver, package krdp) with a fresh one-time password, only while this window is
-open. Any Remote Desktop app can connect: Huginn's own viewer, Windows' Remote Desktop Connection, Microsoft's
-Windows App on a Mac or phone. Looking at another computer runs FreeRDP's viewer (sdl-freerdp, package freerdp-sdl),
-handing it the password on stdin so it never shows up in the process list."""
+Sharing is Huginn's compositor's own RDP server (compositor/src/rdp.rs, asked over org.huginn.Compositor), with a
+fresh one-time password, only while this window is open: the password is proved before anything is shown (Network
+Level Authentication), over TLS with a certificate of this computer's own (~/.local/share/huginn/sharing). Any
+Remote Desktop app can connect: Huginn's own viewer, Windows' Remote Desktop Connection, Microsoft's Windows App on
+a Mac or phone. While someone is looking, the island says so, with Stop. Looking at another computer runs FreeRDP's
+viewer (sdl-freerdp, package freerdp-sdl), handing it the password on stdin so it never shows up in the process
+list."""
 import json
 import os
 import secrets
@@ -12,11 +15,13 @@ import socket
 import subprocess
 from pathlib import Path
 
-from PySide6.QtCore import Property, QObject, QProcess, QTimer, Signal, Slot
+from PySide6.QtCore import Property, QObject, QTimer, Signal, Slot
 from PySide6.QtGui import QGuiApplication
 from PySide6.QtNetwork import QAbstractSocket, QNetworkInterface
 
 STATE = Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local/share") / "huginn" / "sharing.json"
+TLS = STATE.parent / "sharing"                                 # cert.pem and key.pem: this computer's, for sharing
+COMPOSITOR = ("org.huginn.Compositor", "/org/huginn/Compositor", "org.huginn.Compositor")
 PORT = 3389
 LOGIN = "huginn"
 LETTERS = "abcdefghjkmnpqrstuvwxyz23456789"                     # no 0/o, 1/l/i to misread over the phone
@@ -106,6 +111,32 @@ def find_viewer() -> str:
     return ""
 
 
+def certificate(folder: Path = TLS) -> tuple:
+    """This computer's certificate for sharing (made the first time: RSA, which every Remote Desktop app takes),
+    and its key, private to you."""
+    cert, key = folder / "cert.pem", folder / "key.pem"
+    if cert.is_file() and key.is_file():
+        return cert, key
+    import datetime as dt
+    from cryptography import x509
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import rsa
+    from cryptography.x509.oid import NameOID
+    folder.mkdir(parents=True, exist_ok=True)
+    os.chmod(folder, 0o700)
+    k = rsa.generate_private_key(65537, 2048)
+    name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, socket.gethostname() or "huginn"), x509.NameAttribute(NameOID.ORGANIZATION_NAME, "Huginn OS")])
+    now = dt.datetime.now(dt.timezone.utc)
+    c = (x509.CertificateBuilder().subject_name(name).issuer_name(name).public_key(k.public_key()).serial_number(x509.random_serial_number())
+         .not_valid_before(now - dt.timedelta(days=1)).not_valid_after(now + dt.timedelta(days=3650))
+         .add_extension(x509.ExtendedKeyUsage([x509.oid.ExtendedKeyUsageOID.SERVER_AUTH]), critical=False).sign(k, hashes.SHA256()))
+    fd = os.open(key, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "wb") as f:
+        f.write(k.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption()))
+    cert.write_bytes(c.public_bytes(serialization.Encoding.PEM))
+    return cert, key
+
+
 class Sharing(QObject):
     changed = Signal()
     said = Signal(str, bool)
@@ -113,16 +144,16 @@ class Sharing(QObject):
     def __init__(self, demo: bool = False):
         super().__init__()
         self._demo = demo
-        self._server = shutil.which("krdpserver") or ""
         self._viewer = find_viewer()
-        self._proc = None
+        self._on = False
         self._password, self._port, self._monitor = "", PORT, -1
-        self._watching, self._why, self._log = [], "", ""
+        self._watching, self._why = [], ""
         self._recent = []
         self._kids = []
+        self._bus, self._live = None, None
         if demo:
-            self._server, self._viewer = "/usr/bin/krdpserver", "/usr/bin/sdl-freerdp"
-            self._password, self._watching = "k7mp-2xq9-w4rt", ["192.168.1.37"]
+            self._viewer = "/usr/bin/sdl-freerdp"
+            self._on, self._password, self._watching = True, "k7mp-2xq9-w4rt", ["192.168.1.37"]
             self._recent = [{"host": "studio-pc.local", "port": PORT, "user": "astrid", "name": "Studio PC"},
                             {"host": "192.168.1.52", "port": PORT, "user": "huginn", "name": "Mum's laptop"}]
         else:
@@ -130,9 +161,34 @@ class Sharing(QObject):
                 self._recent = json.loads(STATE.read_text(encoding="utf-8")).get("recent", [])[:8]
             except (OSError, ValueError, AttributeError):
                 pass
+            try:
+                from gi.repository import Gio
+                self._bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
+            except Exception:
+                self._bus = None
+        self._server = self._demo or self._status() is not None
         self._timer = QTimer(self)
         self._timer.setInterval(2000)
         self._timer.timeout.connect(self._look)
+
+    def _call(self, method: str, sig: str = "", args: tuple = (), timeout: int = 10000):
+        from gi.repository import Gio, GLib
+        if self._bus is None:
+            return None
+        try:
+            out = self._bus.call_sync(*COMPOSITOR, method, GLib.Variant(f"({sig})", args) if sig else None, None, Gio.DBusCallFlags.NO_AUTO_START, timeout, None)
+        except Exception:
+            return None
+        return out.unpack() if out is not None else ()
+
+    def _status(self):
+        """The compositor's word on sharing ({"on", "viewers"…}); None if it has no sharing to offer. Asking keeps
+        sharing going: if this window stops asking (it closed or crashed), the compositor stops sharing."""
+        got = self._call("ShareStatus", timeout=3000)
+        try:
+            return json.loads(got[0]) if got else None
+        except (ValueError, TypeError):
+            return None
 
     def _keep(self) -> None:
         if self._demo:
@@ -144,16 +200,40 @@ class Sharing(QObject):
             pass
 
     def _look(self) -> None:
-        now = watchers(self._port)
+        status = self._status() or {}
+        if self._on and not status.get("on"):
+            self._on, self._password = False, ""
+            self._why = "Sharing stopped."
+            self._timer.stop()
+        now = [str(v) for v in status.get("viewers", [])] if self._on else []
         if now != self._watching:
             new = [w for w in now if w not in self._watching]
             self._watching = now
-            self.changed.emit()
             for w in new:
                 self.said.emit(f"{w} is looking at your screen", False)
+        self._tell_island()
+        self.changed.emit()
+
+    def _tell_island(self) -> None:
+        """While someone is looking, the island says so, with Stop (it isn't PipeWire, so the Privacy Report's watcher
+        can't see it)."""
+        if self._demo:
+            return
+        if self._live is None:
+            try:
+                from huginn_live import LiveReport
+                self._live = LiveReport("Screen Sharing")
+                self._live.action.connect(lambda _key, what: self.stop() if what == "stop" else None)
+            except Exception:
+                return
+        if self._on and self._watching:
+            self._live.report("watching", {"kind": "screen", "title": "Your screen is shared", "sub": ", ".join(self._watching) + " can see and use it",
+                                           "glyph": "display", "actions": [{"id": "stop", "label": "Stop", "glyph": "stop", "tone": "danger"}]})
+        else:
+            self._live.end("watching")
 
     # ---------------- what QML sees
-    sharing = Property(bool, lambda self: self._demo or (self._proc is not None and self._proc.state() != QProcess.NotRunning), notify=changed)
+    sharing = Property(bool, lambda self: self._on, notify=changed)
     password = Property(str, lambda self: self._password, notify=changed)
     login = Property(str, lambda self: LOGIN, constant=True)
     port = Property(int, lambda self: self._port, notify=changed)
@@ -170,12 +250,16 @@ class Sharing(QObject):
             return [{"ip": "192.168.1.24", "kind": "Wi-Fi"}, {"ip": "100.92.14.3", "kind": "VPN"}]
         return addresses()
 
-    def _get_screens(self) -> list:
+    def _screens(self) -> list:
         app = QGuiApplication.instance()
-        screens = app.screens() if app else []
+        return app.screens() if app else []
+
+    def _get_screens(self) -> list:
+        """One screen at a time is shared: the first unless another is picked (none listed with one screen)."""
         if self._demo:
-            return [{"name": "Whole desktop"}, {"name": "Built-in screen"}, {"name": "DELL U2720Q"}]
-        return [{"name": "Whole desktop"}] + [{"name": s.model() or s.name()} for s in screens] if len(screens) > 1 else []
+            return [{"name": "Built-in screen"}, {"name": "DELL U2720Q"}]
+        screens = self._screens()
+        return [{"name": s.model() or s.name()} for s in screens] if len(screens) > 1 else []
 
     addresses = Property("QVariantList", _get_addresses, notify=changed)
     screens = Property("QVariantList", _get_screens, constant=True)
@@ -184,7 +268,7 @@ class Sharing(QObject):
     def setMonitor(self, n: int) -> None:
         self._monitor = n
         self.changed.emit()
-        if self._proc is not None:
+        if self._on:
             self.start()
 
     @Slot()
@@ -195,7 +279,7 @@ class Sharing(QObject):
             self.changed.emit()
             return
         if not self._server:
-            self._why = "Sharing needs KDE's Remote Desktop server (krdp). Get it from the App Store."
+            self._why = "Sharing needs Huginn's own desktop session, which shares the screen itself."
             self.changed.emit()
             return
         self._stop_server()
@@ -203,43 +287,31 @@ class Sharing(QObject):
             self._why = f"Something else is already using port {self._port}, so sharing can't start."
             self.changed.emit()
             return
-        self._why, self._log, self._password = "", "", one_time_password()
-        args = ["-u", LOGIN, "-p", self._password, "--port", str(self._port)]
-        if self._monitor >= 0:
-            args += ["--monitor", str(self._monitor)]
-        proc = QProcess(self)
-        proc.setProcessChannelMode(QProcess.MergedChannels)
-        proc.readyReadStandardOutput.connect(lambda: self._read(proc))
-        proc.finished.connect(lambda code, status: self._ended(proc, code))
-        proc.errorOccurred.connect(lambda err: self._ended(proc, -1) if err == QProcess.FailedToStart else None)
-        self._proc = proc
-        proc.start(self._server, args)
-        self._timer.start()
-        self.changed.emit()
-
-    def _read(self, proc: QProcess) -> None:
-        self._log = (self._log + bytes(proc.readAllStandardOutput()).decode(errors="replace"))[-4000:]
-
-    def _ended(self, proc: QProcess, code: int) -> None:
-        if proc is not self._proc:
+        try:
+            cert, key = certificate()
+        except (OSError, ImportError) as err:
+            self._why = f"Sharing's certificate couldn't be made ({err})."
+            self.changed.emit()
             return
-        self._proc = None
-        self._timer.stop()
-        self._watching = []
-        if code != 0:
-            last = [l for l in self._log.splitlines() if l.strip()][-1:] or ["it stopped straight away"]
-            self._why = "Sharing stopped: " + last[0][:160]
+        screens = self._screens()
+        output = screens[self._monitor].name() if 0 <= self._monitor < len(screens) else ""
+        password = one_time_password()
+        got = self._call("ShareStart", "sqssss", (output, self._port, LOGIN, password, str(cert), str(key)))
+        why = got[0] if got else "The compositor didn't answer."
+        if why:
+            self._why, self._password = "Sharing didn't start: " + why, ""
+        else:
+            self._why, self._password, self._on = "", password, True
+            self._timer.start()
         self.changed.emit()
 
     def _stop_server(self) -> None:
-        proc, self._proc = self._proc, None
-        if proc is not None:
-            proc.terminate()
-            if not proc.waitForFinished(2000):
-                proc.kill()
-                proc.waitForFinished(1000)
+        if self._on or not self._demo:
+            self._call("ShareStop", timeout=3000)
+        self._on = False
         self._timer.stop()
         self._watching = []
+        self._tell_island()
 
     @Slot()
     def stop(self) -> None:
@@ -301,5 +373,5 @@ class Sharing(QObject):
 
     def leaving(self) -> None:
         """The window closed: sharing never outlives it."""
-        if self._proc is not None:
+        if self._on:
             self._stop_server()

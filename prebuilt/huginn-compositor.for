@@ -1,3 +1,3 @@
 # The compositor, built for exactly these sources (compositor/ and third_party/smithay/).
-sources: 2e6bf61a89d4d084ed802764194ba59bd9b173f11b7967ce74cdd35f4f7ba37f
-sha256: ef3ad571c0aec7f0221741609274066b315dee0f674c22f84fd7eb14adc82cdc
+sources: 86da070e30fab9a4e5e8cd9f956ffdaea4702a172fb3c2b798e97806455a80b8
+sha256: 39f13b52de3bf44d5e07c4e6725ee93391aae7c95c95ae616d963faf0e302801

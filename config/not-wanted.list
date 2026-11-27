@@ -48,3 +48,5 @@ breeze-wallpaper
 # brought along (2026-11-27)
 kdeconnect
 plasma-desktoptheme
+# KDE's RDP server: Screen Sharing is the compositor's own now (compositor/src/rdp.rs) (2026-11-27)
+krdp

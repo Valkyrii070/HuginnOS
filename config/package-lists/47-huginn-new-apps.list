@@ -4,8 +4,7 @@ zbar-tools
 # Messages: Matrix, with end-to-end encryption
 python3-matrix-nio
 python3-olm
-# Screen Sharing: KDE's RDP server (sharing this screen) and FreeRDP's viewer (seeing another one)
-krdp
+# Screen Sharing: FreeRDP's viewer (seeing another computer's screen); sharing this one is the compositor's own
 freerdp-sdl
 # Privacy Report: who has the camera, microphone and screen (pw-dump), who went online (ss), location in use (busctl)
 pipewire-bin

@@ -73,6 +73,14 @@ pub enum Request {
     KeyboardLayout(mpsc::Sender<String>),
     /// Use one of them by its place (-1: the next)
     SetKeyboardLayout(i32),
+    /// Screen Sharing (rdp.rs): start (screen, port, name, password, certificate, key): "" when listening, else why
+    /// not; stop; how it's going (JSON), which also keeps it going.
+    #[cfg(feature = "rdp")]
+    ShareStart(String, u16, String, String, String, String, mpsc::Sender<String>),
+    #[cfg(feature = "rdp")]
+    ShareStop,
+    #[cfg(feature = "rdp")]
+    ShareStatus(mpsc::Sender<String>),
     /// Sign out: the apps are asked to close, then the compositor ends, and with it the session (so the sign-in
     /// screen comes back: ending it through logind takes SDDM's helper down too, which SDDM takes for a crash).
     SignOut,
@@ -185,6 +193,35 @@ impl Compositor {
     /// Screens off (true) or on again (false).
     fn blank(&self, off: bool) {
         let _ = self.to_loop.send(Request::Blank(off));
+    }
+
+    /// Screen Sharing: this screen over RDP (rdp.rs), only with Network Level Authentication, `user` and
+    /// `password` (8 characters or more), TLS with `cert` and `key` (PEM files). `output` "" is the first screen.
+    /// "" when listening, else why not, in words for the person. It stops with `share_stop`, or when
+    /// `share_status` hasn't been asked for 20 seconds.
+    #[cfg(feature = "rdp")]
+    fn share_start(&self, output: &str, port: u16, user: &str, password: &str, cert: &str, key: &str) -> String {
+        let (tx, rx) = mpsc::channel();
+        let ask = Request::ShareStart(output.into(), port, user.into(), password.into(), cert.into(), key.into(), tx);
+        if self.to_loop.send(ask).is_err() {
+            return "The compositor didn't answer.".into();
+        }
+        rx.recv_timeout(Duration::from_secs(8)).unwrap_or_else(|_| "The compositor didn't answer in time.".into())
+    }
+
+    #[cfg(feature = "rdp")]
+    fn share_stop(&self) {
+        let _ = self.to_loop.send(Request::ShareStop);
+    }
+
+    /// {"on": false} or {"on": true, "output", "port", "viewers": [their addresses]}
+    #[cfg(feature = "rdp")]
+    fn share_status(&self) -> String {
+        let (tx, rx) = mpsc::channel();
+        if self.to_loop.send(Request::ShareStatus(tx)).is_err() {
+            return "{\"on\":false}".into();
+        }
+        rx.recv_timeout(Duration::from_secs(1)).unwrap_or_else(|_| "{\"on\":false}".into())
     }
 
     /// A picture of the screen, saved: its path ("" when it can't be done yet).

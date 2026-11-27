@@ -16,6 +16,8 @@ pub mod dbus;
 pub mod displays;
 pub mod input;
 pub mod places;
+#[cfg(feature = "rdp")]
+pub mod rdp;
 pub mod tearing;
 pub mod drawing;
 pub mod focus;

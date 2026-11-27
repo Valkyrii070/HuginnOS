@@ -2204,6 +2204,8 @@ fn render_surface<'a>(
     let now = smithay::utils::Clock::<smithay::utils::Monotonic>::new().now();
     let shown = if hdr.is_some() { &elements[1..] } else { &elements[..] };
     crate::capture::serve(renderer, output, shown, cursor_n, clear_color, now.into());
+    #[cfg(feature = "rdp")]
+    crate::rdp::serve(renderer, output, shown, clear_color);
     crate::capture::serve_windows(renderer, space, output);
 
     if rendered {
