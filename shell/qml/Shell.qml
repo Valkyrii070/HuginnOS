@@ -14,7 +14,7 @@ QtObject {
     // every screen's wallpaper has been drawn (a frame with something real in it): signing in, the desktop is shown
     // from behind the sign-in screen once it's drawn (huginn_shell.py, ShellReady)
     property int wallsDrawn: 0
-    readonly property bool drawnIn: wallsDrawn > 0 && wallsDrawn >= walls.count
+    readonly property bool drawnIn: wallsDrawn > 0 && wallsDrawn >= walls.count && (!arriving || arriveWin.drawn)
     onDrawnInChanged: if (drawnIn && typeof ShellReady !== "undefined" && ShellReady) ShellReady.drawn()
     property bool tabsOpen: false
     property string searchText: ""
@@ -418,6 +418,8 @@ QtObject {
         id: arriveWin
         objectName: "arrival"
         visible: arrival.visible; color: "transparent"
+        property bool drawn: false
+        onFrameSwapped: if (!drawn) drawn = true
         flags: Qt.WindowTransparentForInput
         LayerShell.Window.scope: "huginn-arrival"
         LayerShell.Window.keyboardInteractivity: LayerShell.Window.KeyboardInteractivityNone

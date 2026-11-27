@@ -178,9 +178,9 @@ FocusScope {
     }
 
     // --------------------------------------------------------------------------------------------------- the top bar
-    Glass { visible: view.main; x: 20; y: 16; height: 44; radius: 22; width: brand.width + 36
+    Glass { id: barLeft; visible: view.main; x: 20; y: 16; height: 44; radius: 22; width: brand.width + 36
         Text { id: brand; anchors.centerIn: parent; text: "HUGINN OS"; color: view.ink; font { family: view.face; pixelSize: 13; weight: Font.DemiBold; letterSpacing: 2 } } }
-    Glass { visible: view.main; anchors { right: parent.right; rightMargin: 20 } y: 16; height: 44; radius: 22; width: status.width + 36
+    Glass { id: barRight; visible: view.main; anchors { right: parent.right; rightMargin: 20 } y: 16; height: 44; radius: 22; width: status.width + 36
         Row { id: status; anchors.centerIn: parent; spacing: 16
             // which session: only when there's a choice (Game Mode installed); click to change
             Text { visible: Host.sessions.length > 1; anchors.verticalCenter: parent.verticalCenter; color: sessArea.containsMouse ? view.ink : view.soft
@@ -361,6 +361,10 @@ FocusScope {
             SequentialAnimation { PauseAnimation { duration: 620 } NumberAnimation { target: greet; property: "opacity"; to: 0; duration: 360 } }
             SequentialAnimation { PauseAnimation { duration: 200 } NumberAnimation { target: tileBox; property: "opacity"; to: 0; duration: 420; easing.type: Easing.InCubic } }
             SequentialAnimation { PauseAnimation { duration: 700 } NumberAnimation { target: dock; property: "lineFade"; to: 0; duration: 380 } }
+            // the top bar goes too: the desktop's own comes in after the arrival (only the dock carries over)
+            SequentialAnimation { PauseAnimation { duration: 480 }
+                ParallelAnimation { NumberAnimation { target: barLeft; property: "opacity"; to: 0; duration: 420; easing.type: Easing.InCubic }
+                                    NumberAnimation { target: barRight; property: "opacity"; to: 0; duration: 420; easing.type: Easing.InCubic } } }
         }
         PauseAnimation { duration: 120 }
         ScriptAction { script: Host.done() }
