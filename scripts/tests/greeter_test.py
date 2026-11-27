@@ -67,7 +67,19 @@ real_people = sd.people
 sd.people = lambda root=Path("/"), e=None: real_people(root, everyone)
 sd.save_state(tmp, user="leif", session="huginn")
 powered = []
-svc = sd.Service(root=tmp, worker_argv=[sys.executable, str(tmp / "fake.py")], run_dir=tmp / "run", power=powered.append)
+import huginn_signin_widgets as sw  # noqa: E402
+import datetime as _dt  # noqa: E402
+_today = _dt.date.today().isoformat()
+_later = (_dt.datetime.now() + _dt.timedelta(minutes=49)).strftime("%H:%M")
+LAYOUT = json.dumps({"widgets": [{"kind": "today", "size": "wide", "before": False}, {"kind": "weather", "size": "small", "before": True},
+                                 {"kind": "pc", "size": "small", "before": True}, {"kind": "music", "size": "wide", "before": False}]})
+SNAP = json.dumps({"data": {"weather": {"place": "Reykjavík", "temp": "4°", "words": "Clear", "high": "9°", "low": "1°", "at": int(time.time()) - 600},
+                            "pc": {"downloads": 3, "at": int(time.time())},
+                            "today": {"events": [{"title": "Secret meeting", "date": _today, "time": _later}]},
+                            "music": {"title": "A private song", "sub": "Someone", "app": "Music", "at": int(time.time())}}})
+widgets_for = {"astrid": sw.merge(LAYOUT, SNAP, {"update": "Updated today"})}
+svc = sd.Service(root=tmp, worker_argv=[sys.executable, str(tmp / "fake.py")], run_dir=tmp / "run", power=powered.append,
+                 widgets=lambda name, system: widgets_for.get(name, []))
 svc.listen()
 svc.greeter_uid = os.geteuid()                                 # (here the greeter is us)
 svc.next()
@@ -159,6 +171,17 @@ from PySide6.QtCore import QMetaObject, Q_ARG  # noqa: E402
 QMetaObject.invokeMethod(view, "choose", Q_ARG("QVariant", 0))
 settle(200)
 check("choosing someone else", view.property("who")["name"] == "astrid" and any(isinstance(x, str) and x.endswith(", Astrid") for x in texts()), view.property("who"))
+check("no widgets for someone without any: the time in the middle", True)
+settle(400)
+tiles = [i for i in items(win.contentItem()) if i.metaObject().className().startswith("GreeterTile") and i.isVisible()]
+check("their four widgets are on the screen", len(tiles) == 4, len(tiles))
+t = texts()
+check("the weather they allowed", "4° and clear" in t and "REYKJAVÍK" in t, [x for x in t if isinstance(x, str)][:40])
+check("This PC: the update, the downloads", "Updated today" in t and any(isinstance(x, str) and "3 downloads finished" in x for x in t), t)
+check("private ones show only their name and that they're private", t.count("Private until you sign in") == 2 and "TODAY" in t and "NOW PLAYING" in t, t)
+check("nothing of a private widget reaches the screen", not any(isinstance(x, str) and ("Secret meeting" in x or "A private song" in x) for x in t))
+check("the time has moved to the left", view.property("withTiles") is True)
+shot("8-widgets")
 
 # a wrong password
 pwf.setProperty("text", "not-it")

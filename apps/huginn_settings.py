@@ -1495,6 +1495,16 @@ def demo_state() -> dict:
                  "filters": [{"id": i, "label": l} for i, l in FILTERS], "cursor": 24, "sticky": False, "stickyLock": True, "slow": False,
                  "slowDelay": 300, "bounce": False, "bounceDelay": 500, "mouseKeys": False, "flash": False, "osk": False, "hasOsk": True, "animations": True},
         "look": {"loginRealm": "aurora", "canChange": True},
+        "signin": {"widgets": [{"kind": "today", "size": "wide", "before": False}, {"kind": "weather", "size": "small", "before": True},
+                               {"kind": "pc", "size": "small", "before": True}, {"kind": "music", "size": "wide", "before": False}],
+                   "catalog": [{"id": "today", "label": "Today", "sub": "Your next events, from Calendar", "sizes": ["small", "wide", "tall"], "size": "wide", "before": False},
+                               {"id": "weather", "label": "Weather", "sub": "Your first place in Weather", "sizes": ["small", "wide"], "size": "small", "before": True},
+                               {"id": "pc", "label": "This PC", "sub": "Updates, finished downloads and the battery", "sizes": ["small", "wide"], "size": "small", "before": True},
+                               {"id": "music", "label": "Now Playing", "sub": "What last played", "sizes": ["small", "wide"], "size": "wide", "before": False}],
+                   "preview": {"today": {"events": [{"title": "Stand-up", "date": "2026-11-27", "time": "10:30"}, {"title": "Build review", "date": "2026-11-27", "time": "13:00"}]},
+                               "weather": {"place": "Reykjavík", "temp": "4°", "words": "Clear", "high": "9°"}, "pc": {"downloads": 3, "update": "Updated today"},
+                               "music": {"title": "Northern Line", "sub": "Vega Hall"}},
+                   "most": 6, "realm": "aurora", "canChangeRealm": True},
         "printers": {"available": True, "jobs": 0, "printers": [{"name": "Office_LaserJet", "label": "Office LaserJet", "state": "Ready", "ok": True, "default": True},
                                                                 {"name": "Canon_TS3300", "label": "Canon TS3300", "state": "Paused", "ok": False, "default": False}],
                      "scanners": [{"id": "airscan:e0:Canon TS3300", "name": "Canon TS3300 flatbed"}]},
@@ -1524,7 +1534,7 @@ LOGIN_CONF = Path("/etc/huginn/signin.conf.d")
 LOGIN_LOOK = "/usr/libexec/huginn-login-look"            # writes signin.conf.d/10-look.conf as root (through Huginn's password prompt)
 
 
-def load_look() -> dict:
+def login_realm() -> str:
     """Which realm the sign-in screen wears ([Look] Realm= in the sign-in service's files; later files win)."""
     realm = "aurora"
     for f in [LOGIN_CONF.parent / "signin.conf"] + sorted(LOGIN_CONF.glob("*.conf")):
@@ -1534,6 +1544,33 @@ def load_look() -> dict:
                 realm = m.group(1).lower()
         except OSError:
             pass
+    return realm
+
+
+def load_signin() -> dict:
+    """Settings › Sign-In Screen: your widgets there (huginn_signin_widgets.py), what each would show now, and the realm."""
+    import huginn_signin_widgets as sw
+    home = Path.home()
+    widgets = sw.read_layout(home)
+    try:
+        snap = json.loads(sw.snapshot_path(home).read_text(encoding="utf-8")).get("data", {})
+    except (OSError, ValueError, AttributeError):
+        snap = {}
+    # (read here in the background: Calendar's events and what last played come from what the desktop last kept)
+    preview = sw.collect(home, [w["kind"] for w in widgets if w["kind"] not in ("music", "today")])
+    for kind in ("music", "today"):
+        if isinstance(snap, dict) and isinstance(snap.get(kind), dict):
+            preview[kind] = snap[kind]
+    if "pc" in preview:
+        preview["pc"].update(sw.system_status())
+    catalog = [{"id": k, "label": v["name"], "sub": v["about"], "sizes": v["sizes"], "size": v["size"], "before": v["before"]} for k, v in sw.CATALOG.items()]
+    return {"widgets": widgets, "catalog": catalog, "preview": preview, "most": sw.MOST, "realm": login_realm(),
+            "canChangeRealm": os.access(LOGIN_LOOK, os.X_OK) and bool(HAVE("pkexec"))}
+
+
+def load_look() -> dict:
+    """Which realm the sign-in screen wears, the icon and pointer themes, the live wallpapers."""
+    realm = login_realm()
     import huginn_looks as hl
     pointers = hl.list_pointer_themes()
     for p in pointers:
@@ -1564,7 +1601,7 @@ def current_icon_theme() -> str:
 
 # ---------------------------------------------------------------------------------------------- the backend Settings talks to
 PAGES = ("network", "bluetooth", "displays", "sound", "notifications", "power", "input", "keys", "time", "language", "users", "defaults", "privacy", "about", "a11y", "look",
-         "printers", "graphics", "controllers", "storage")
+         "printers", "graphics", "controllers", "storage", "signin")
 
 
 class SystemSettings(QObject):
@@ -1591,6 +1628,7 @@ class SystemSettings(QObject):
     language, users, defaults, privacy, about = _page("language", changed), _page("users", changed), _page("defaults", changed), _page("privacy", changed), _page("about", changed)
     a11y, look, keys, printers = _page("a11y", changed), _page("look", changed), _page("keys", changed), _page("printers", changed)
     graphics, controllers, storage = _page("graphics", changed), _page("controllers", changed), _page("storage", changed)
+    signin = _page("signin", changed)
     del _page
     busy = Property("QVariantList", lambda self: sorted(self._busy), notify=changed)
     reportChanged = Signal()
@@ -1609,7 +1647,7 @@ class SystemSettings(QObject):
                 "input": load_input, "time": load_time, "language": load_language, "users": load_users,
                 "defaults": lambda: load_defaults(self._known_apps()), "privacy": lambda: load_privacy(self._known_apps()), "about": load_about,
                 "a11y": load_a11y, "look": load_look, "keys": lambda: load_keys(self._known_apps()), "printers": load_printers,
-                "graphics": load_graphics, "controllers": load_controllers, "storage": load_storage}[page]
+                "graphics": load_graphics, "controllers": load_controllers, "storage": load_storage, "signin": load_signin}[page]
 
     @Slot(str)
     def load(self, page: str) -> None:
@@ -1715,6 +1753,28 @@ class SystemSettings(QObject):
         QDesktopServices.openUrl(QUrl.fromLocalFile(str(Path(path).parent)))
 
     # -------------------------------------------------------------- the sign-in screen
+    @Slot(str)
+    def setSigninWidgets(self, rows: str) -> None:
+        """Your widgets on the sign-in screen, in order: [{kind, size, before}] as JSON. Yours alone (in your own
+        folder), so no password is asked; the sign-in screen shows them from its next start."""
+        try:
+            want = json.loads(rows)
+        except ValueError:
+            return
+        import huginn_signin_widgets as sw
+
+        def demo(st):
+            st["widgets"] = sw.clean_layout({"widgets": want})
+        self._act("signin", lambda: sw.write_layout(Path.home(), want) and "", demo_change=demo)
+
+    @Slot(str)
+    def setSigninRealm(self, realm: str) -> None:
+        if realm not in ("aurora", "bifrost", "muspelheim", "niflheim"):
+            return
+        label = realm.capitalize().replace("Bifrost", "Bifröst")
+        self._act("signin", lambda: must(["pkexec", LOGIN_LOOK, realm], None, 130, "Changing the sign-in screen") and "",
+                  ok=f"The sign-in screen now wears {label}.", demo_change=lambda st: st.update(realm=realm))
+
     @Slot(str)
     def setLoginRealm(self, realm: str) -> None:
         if not re.fullmatch(r"[a-z]+", realm or ""):

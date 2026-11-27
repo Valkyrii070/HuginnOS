@@ -1316,6 +1316,46 @@ class Tabs(QObject):
             QProcess.startDetached(parts[0], parts[1:] + ["--private-window"])
 
 
+class SignInSnapshot(QObject):
+    """The sign-in screen's widgets (Settings › Sign-In Screen): every minute, the latest data of the ones you've let
+    show before sign-in, and only theirs, kept in ~/.cache/huginn/signin-snapshot.json for the sign-in service to
+    read as you (huginn_signin_widgets.py). What last played is noted as it plays; the rest is read from the apps'
+    own files, as the desktop's cards are."""
+
+    def __init__(self, live, glance):
+        super().__init__()
+        self._live, self._glance, self._music = live, glance, {}
+        try:
+            import huginn_signin_widgets as sw
+        except Exception:                                   # noqa: BLE001  (the apps aren't installed: nothing to keep)
+            return
+        self._sw = sw
+        if live is not None:
+            live.changed.connect(self._heard)
+        QTimer(self, interval=60000, timeout=self.write).start()
+        QTimer.singleShot(4000, self.write)
+
+    def _heard(self) -> None:
+        for item in [self._live.main] + list(self._live.bubbles) + list(self._live.others):
+            if isinstance(item, dict) and item.get("kind") == "playing" and item.get("title"):
+                now = {"title": item.get("title", ""), "sub": item.get("sub", ""), "app": item.get("app", ""), "at": int(time.time())}
+                if {k: now[k] for k in ("title", "sub")} != {k: self._music.get(k) for k in ("title", "sub")}:
+                    self._music = now
+                    if any(w["kind"] == "music" and w["before"] for w in self._sw.read_layout(Path.home())):
+                        self.write()
+                return
+
+    @Slot()
+    def write(self) -> None:
+        home = Path.home()
+        kinds = [w["kind"] for w in self._sw.read_layout(home) if w["before"]]
+        try:
+            calendar = self._glance._calendar if self._glance is not None else None
+            self._sw.write_snapshot(home, self._sw.collect(home, kinds, music=self._music, calendar=calendar))
+        except OSError:
+            pass
+
+
 class Glance(QObject):
     """What the desktop's cards show: the weather for your first place in Weather, which apps used the camera,
     microphone, screen or location this week (Privacy Report's notebook), and what's next in Calendar and Reminders.
@@ -1557,6 +1597,8 @@ def main() -> int:
     if not args.preview:                                  # a photo for the Photo widget as soon as it's put on the desktop
         settings.changed.connect(lambda: QTimer.singleShot(0, glance.refresh) if "photo" in settings.widgets and not glance.photo else None)
     ctx.setContextProperty("Glance", glance)
+    if not args.preview:
+        signin_snapshot = SignInSnapshot(live, glance)          # noqa: F841  (kept for as long as the shell runs: it writes every minute)
     from huginn_system import System
     status = System(demo=args.preview, apps=apps)              # battery, network, Bluetooth, levels, the app in front
     apps.changed.connect(status._name_windows)                  # an app just installed: its open windows are its now

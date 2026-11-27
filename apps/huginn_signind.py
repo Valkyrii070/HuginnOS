@@ -164,6 +164,85 @@ def save_state(root: Path, **changes) -> None:
         say("can't remember who signed in:", err)
 
 
+def read_as(pw, paths: list, timeout: float = 2.0, most: int = 256 * 1024) -> list:
+    """The text of these files (or "" for each that can't be read), read in a process of its own that has become the
+    person first: the service never opens a file in someone's home as root, so whatever a link there points at, it
+    gets only what that person could read anyway. Regular files only, at most `most` bytes each."""
+    import select
+    import stat
+    r, w = os.pipe()
+    pid = os.fork()
+    if pid == 0:                                                       # the child: become them, read, say, go
+        code = 1
+        try:
+            os.close(r)
+            if os.geteuid() == 0:
+                os.setgroups([])
+                os.setgid(pw.pw_gid)
+                os.setuid(pw.pw_uid)
+                if os.geteuid() == 0 or os.getuid() != pw.pw_uid:
+                    os._exit(1)
+            out = []
+            for p in paths:
+                try:
+                    fd = os.open(p, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
+                except OSError:
+                    out.append("")
+                    continue
+                try:
+                    st = os.fstat(fd)
+                    out.append(os.read(fd, most + 1).decode("utf-8", "replace") if stat.S_ISREG(st.st_mode) and st.st_size <= most else "")
+                except OSError:
+                    out.append("")
+                finally:
+                    os.close(fd)
+            data = json.dumps(out).encode("utf-8")
+            while data:
+                data = data[os.write(w, data):]
+            code = 0
+        finally:
+            os._exit(code)
+    os.close(w)
+    buf, until = b"", time.monotonic() + timeout
+    try:
+        while time.monotonic() < until:
+            ready, _, _ = select.select([r], [], [], max(0.0, until - time.monotonic()))
+            if not ready:
+                break
+            chunk = os.read(r, 65536)
+            if not chunk:
+                break
+            buf += chunk
+            if len(buf) > (most + 1024) * len(paths) * 2:
+                break
+    finally:
+        os.close(r)
+        try:
+            done, _ = os.waitpid(pid, os.WNOHANG)
+            if not done:
+                os.kill(pid, signal.SIGKILL)
+                os.waitpid(pid, 0)
+        except OSError:
+            pass
+    try:
+        got = json.loads(buf.decode("utf-8"))
+        return [g if isinstance(g, str) else "" for g in got][:len(paths)] + [""] * (len(paths) - len(got))
+    except (ValueError, TypeError):
+        return [""] * len(paths)
+
+
+def widgets_of(name: str, system: dict) -> list:
+    """One person's sign-in widgets, as the sign-in screen may see them (huginn_signin_widgets.merge)."""
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import huginn_signin_widgets as sw
+    try:
+        pw = pwd.getpwnam(name)
+    except KeyError:
+        return []
+    layout, snap = read_as(pw, [str(sw.layout_path(pw.pw_dir)), str(sw.snapshot_path(pw.pw_dir))])
+    return sw.merge(layout, snap, system) if layout else []
+
+
 # ------------------------------------------------------------------------------------------------- waits after misses
 class Misses:
     """Wrong passwords per name: after TRIES_BEFORE_WAITING in a row, a wait that doubles each time (30 s … 10 min).
@@ -276,12 +355,13 @@ class Worker(Line):
 
 
 class Service:
-    def __init__(self, root: Path = Path("/"), worker_argv=None, run_dir=None, power=None, now=time.monotonic, warm=None):
+    def __init__(self, root: Path = Path("/"), worker_argv=None, run_dir=None, power=None, now=time.monotonic, warm=None, widgets=None):
         self.root = root
         self.worker_argv = worker_argv or [sys.executable, "-I", os.path.abspath(__file__), "--worker"]
         self.run_dir = Path(run_dir) if run_dir else root / "run/huginn-signin"
         self.power = power or self._power
         self.warm = warm or (self._warm if str(root) == "/" else (lambda user: None))
+        self.widgets = widgets or (widgets_of if str(root) == "/" else (lambda name, system: []))
         self.now = now
         self.misses = Misses(now)
         self.sel = selectors.DefaultSelector()
@@ -356,6 +436,15 @@ class Service:
     def _people(self) -> dict:
         last = load_state(self.root)
         who = people(self.root)
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        import huginn_signin_widgets as sw
+        system = sw.system_status(self.root)
+        for p in who[:12]:                                              # each person's widgets (most have none)
+            try:
+                p["widgets"] = self.widgets(p["name"], system)
+            except Exception as err:                                    # noqa: BLE001  (someone's odd files never stop the sign-in screen)
+                say("couldn't read", p["name"] + "'s sign-in widgets:", err)
+                p["widgets"] = []
         try:
             host = (self.root / "etc/hostname").read_text(encoding="utf-8").strip()
         except OSError:

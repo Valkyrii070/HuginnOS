@@ -40,6 +40,9 @@ Printers on your network that need no driver (nearly all made since 2015) appear
 ## Privacy and security
 The firewall keeps everything outside from reaching this computer unless you allow it. What apps may use lists the camera, microphone, location and more that apps from Flathub have asked for: switch any off, or Reset to be asked again. Screen lock: whether the screen locks by itself, after how long without use (the screen can turn off sooner and stay unlocked until then), and whether it locks before the computer sleeps. Turning off Remember recent files stops Huginn's apps and others from noting what you open. Empty the Trash by itself deletes what's been in the Trash longer than you choose. Clipboard history is here, off until you turn it on.
 
+## Sign-in screen
+Put widgets beside the time on the sign-in screen: Today (your next events), Weather, This PC (updates, downloads that finished, the battery) and Now Playing (what last played). Add them, choose small, wide or tall, and drag them in the picture to change their order. Each has a Before sign-in switch: on, it shows what your desktop last saw, for anyone at the computer to read; off, it shows only its name and a lock. Today and Now Playing start off. Nobody at the sign-in screen can change them; only you, here, once you've signed in. The realm the sign-in screen wears is here too (it's everyone's, so it asks for an administrator's password).
+
 ## Notifications
 Do Not Disturb holds every banner and sound; quiet hours turn it on by itself at night. Show what a notification says: Never keeps banners to the app's name (the Control Centre still shows it all); When unlocked hides it while the screen is locked. Notification sounds, and each app's three switches: allowed, banners, sounds.
 

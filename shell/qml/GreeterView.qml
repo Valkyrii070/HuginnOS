@@ -35,6 +35,25 @@ FocusScope {
     property int waitLeft: 0
     property date now: new Date()
     readonly property bool busy: phase !== "idle"
+    // their sign-in widgets (Settings › Sign-In Screen): with any, the time moves left and the widgets take the right
+    readonly property var tiles: who && who.widgets ? who.widgets : []
+    readonly property real k: Math.max(0.8, Math.min(1.5, Math.min(width / 1440, height / 900)))
+    readonly property bool withTiles: main && tiles.length > 0 && width >= 1000
+    // two columns of cells, filled row by row: a wide widget takes two cells across, a tall one two down
+    function pack(list) {
+        var used = [], out = []
+        function free(r, c) { return !used[r * 2 + c] }
+        for (var i = 0; i < list.length; i++) {
+            var w = list[i].size === "wide" ? 2 : 1, h = list[i].size === "tall" ? 2 : 1, done = false
+            for (var r = 0; r < 12 && !done; r++) for (var c = 0; c + w <= 2 && !done; c++) {
+                var ok = true
+                for (var dr = 0; dr < h; dr++) for (var dc = 0; dc < w; dc++) if (!free(r + dr, c + dc)) ok = false
+                if (ok) { for (dr = 0; dr < h; dr++) for (dc = 0; dc < w; dc++) used[(r + dr) * 2 + c + dc] = true
+                          out.push({ row: r, col: c, w: w, h: h }); done = true }
+            }
+        }
+        return out
+    }
 
     function initials(full) {
         var parts = String(full || "").trim().split(/\s+/).filter(function (p) { return p.length })
@@ -176,19 +195,19 @@ FocusScope {
     Column {
         id: clock
         visible: view.main
-        anchors.horizontalCenter: parent.horizontalCenter
-        y: Math.round(parent.height * 0.25)
+        x: view.withTiles ? Math.round(88 * view.k) : Math.round((parent.width - width) / 2)
+        y: view.withTiles ? Math.round(tileBox.y - 12 * view.k) : Math.round(parent.height * 0.25)
         spacing: 6
-        Text { id: greet; anchors.horizontalCenter: parent.horizontalCenter; color: Qt.rgba(0.96, 0.96, 0.99, 0.88)
+        Text { id: greet; x: view.withTiles ? 0 : Math.round((clock.width - width) / 2); color: Qt.rgba(0.96, 0.96, 0.99, 0.88)
             font { family: view.face; pixelSize: Math.max(16, Math.round(view.height * 0.022)); weight: Font.Medium }
             text: view.phase === "wake" ? "Welcome back" + (view.who ? ", " + view.first(view.who.full) : "") : view.greeting() + (view.who ? ", " + view.first(view.who.full) : "") }
-        Item { id: timeBox; anchors.horizontalCenter: parent.horizontalCenter; width: timeText.width + 240; height: timeText.height + 80
+        Item { id: timeBox; x: view.withTiles ? -120 : Math.round((clock.width - width) / 2); width: timeText.width + 240; height: timeText.height + 80
             property real glow: 0       // 0…1: the realm's light coming up around the digits
             property real melt: 0       // 0…1: dissolving
             opacity: 1 - melt
             scale: 1 + 0.08 * melt
             Text { id: timeText; anchors.centerIn: parent; color: view.ink; text: view.clockText(true)
-                font { family: view.face; pixelSize: Math.round(view.height * 0.166); weight: Font.Light; letterSpacing: -4 } }
+                font { family: view.face; pixelSize: Math.round(view.height * (view.withTiles ? 0.2 : 0.166)); weight: Font.Light; letterSpacing: -4 } }
             // (drawn in software, where the effect can't be: the time simply fades and grows a little)
             layer.enabled: view.phase === "wake" && GraphicsInfo.api !== GraphicsInfo.Software
             layer.effect: MultiEffect { autoPaddingEnabled: false
@@ -197,6 +216,29 @@ FocusScope {
                 shadowEnabled: true; shadowColor: view.own.glowA; shadowBlur: 1.0; shadowOpacity: timeBox.glow; shadowScale: 1 + 0.05 * timeBox.glow
                 shadowHorizontalOffset: 0; shadowVerticalOffset: 0 } }
     }
+
+    // ----------------------------------------------------------------------------------------------------- the widgets
+    Item {
+        id: tileBox
+        visible: view.withTiles
+        readonly property real cw: Math.round(280 * view.k)
+        readonly property real ch: Math.round(150 * view.k)
+        readonly property real gap: Math.round(16 * view.k)
+        readonly property var places: view.pack(view.tiles)
+        readonly property real room: dock.y - 24 * view.k - y               // down to just above the dock (and what it says)
+        width: cw * 2 + gap
+        height: room
+        x: parent.width - width - Math.round(88 * view.k)
+        y: Math.round(Math.max(84, parent.height * 0.15))
+        Repeater { model: view.tiles
+            GreeterTile { required property var modelData; required property int index
+                readonly property var at: tileBox.places[index] || { row: 0, col: 0, w: 1, h: 1 }
+                widget: modelData; now: view.now; battery: Host.battery; k: view.k; behind: sky; liveBehind: frostOk
+                x: at.col * (tileBox.cw + tileBox.gap); y: at.row * (tileBox.ch + tileBox.gap)
+                width: at.w * tileBox.cw + (at.w - 1) * tileBox.gap; height: at.h * tileBox.ch + (at.h - 1) * tileBox.gap
+                visible: y + height <= tileBox.room } }       // more than fits: left off rather than under the dock
+    }
+    readonly property bool frostOk: wall.status === Loader.Ready && wall.item !== null && !wall.item.still
 
     // -------------------------------------------------------------------------------------------- what the service said
     Glass { visible: view.main && (view.message !== "" || !Host.up); anchors { horizontalCenter: dock.horizontalCenter; bottom: dock.top; bottomMargin: 14 }
@@ -314,6 +356,7 @@ FocusScope {
                 NumberAnimation { target: timeBox; property: "glow"; from: 0; to: 1; duration: 300; easing.type: Easing.OutCubic }
                 NumberAnimation { target: timeBox; property: "melt"; from: 0; to: 1; duration: 420; easing.type: Easing.InCubic } }
             SequentialAnimation { PauseAnimation { duration: 620 } NumberAnimation { target: greet; property: "opacity"; to: 0; duration: 360 } }
+            SequentialAnimation { PauseAnimation { duration: 200 } NumberAnimation { target: tileBox; property: "opacity"; to: 0; duration: 420; easing.type: Easing.InCubic } }
             SequentialAnimation { PauseAnimation { duration: 700 } NumberAnimation { target: dock; property: "lineFade"; to: 0; duration: 380 } }
         }
         PauseAnimation { duration: 120 }

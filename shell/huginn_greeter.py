@@ -149,13 +149,26 @@ class Greeter(QObject):
                 if isinstance(p, dict) and isinstance(p.get("name"), str):
                     face = p.get("face") or ""
                     who.append({"name": p["name"], "full": str(p.get("full") or p["name"]),
-                                "face": QUrl.fromLocalFile(face).toString() if face and os.access(face, os.R_OK) else ""})
+                                "face": QUrl.fromLocalFile(face).toString() if face and os.access(face, os.R_OK) else "",
+                                "widgets": self._widgets(p.get("widgets"))})
             self._people = who
             self._sessions = [s for s in (msg.get("sessions") or []) if isinstance(s, dict) and "id" in s and "name" in s]
             self._last, self._last_session, self._host = str(msg.get("last") or ""), str(msg.get("lastSession") or "huginn"), str(msg.get("host") or "")
             self.changed.emit()
         elif msg.get("op") == "signin":
             self.answered.emit(bool(msg.get("ok")), str(msg.get("why") or ""), int(msg.get("wait") or 0))
+
+    @staticmethod
+    def _widgets(rows) -> list:
+        """A person's widgets as the service sent them, kept to what the tiles draw."""
+        out = []
+        for w in rows if isinstance(rows, list) else []:
+            if isinstance(w, dict) and w.get("kind") in ("today", "weather", "pc", "music") and w.get("size") in ("small", "wide", "tall"):
+                out.append({"kind": w["kind"], "name": str(w.get("name") or "")[:40], "size": w["size"], "private": w.get("private") is not False,
+                            "data": w.get("data") if isinstance(w.get("data"), dict) and w.get("private") is False else {}})
+            if len(out) >= 6:
+                break
+        return out
 
     # ................................................................................................. what the screen asks
     @Slot(str, str, str)

@@ -9,6 +9,8 @@ test -f /usr/share/huginn-apps/huginn_pam.py
 test -f /usr/share/huginn-shell/huginn_greeter.py
 test -f /usr/share/huginn-shell/qml/Greeter.qml
 test -f /usr/share/huginn-shell/qml/GreeterView.qml
+test -f /usr/share/huginn-shell/qml/GreeterTile.qml
+test -f /usr/share/huginn-apps/huginn_signin_widgets.py
 for f in huginn-signin huginn-signin-greeter huginn-signin-autologin; do test -f "/etc/pam.d/$f"; chmod 644 "/etc/pam.d/$f"; done
 test -f /etc/systemd/system/huginn-signin.service
 test -f /etc/systemd/system/graphical.target.d/huginn-signin.conf

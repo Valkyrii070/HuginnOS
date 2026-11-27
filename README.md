@@ -1491,6 +1491,37 @@ Plymouth itself with its X11 renderer (starting, a disk password, shutting down)
 Appearance page; the sign-in screen as below.
 Not tested here: how smooth the scenes are on real graphics cards (they are light: a few hundred operations a pixel).
 
+### Widgets on the sign-in screen
+
+None to begin with: the sign-in screen is the time and the dock. Settings › Sign-In Screen (`apps/qml/SetSignIn.qml`)
+adds them, up to six: **Today** (the next events in Calendar and Reminders), **Weather** (the first place in Weather),
+**This PC** (Huginn OS's own updates, downloads that finished in the last day, the battery) and **Now Playing** (what
+last played). Each is small, wide (two across) or tall (two down), packed in two columns at the right while the time
+moves to the left; the page shows the sign-in screen as it will look, and dragging a widget onto another's place
+changes the order. The sign-in screen itself offers no way to change them.
+
+Each widget has **Before sign-in**. On: it shows what the desktop last saw (anyone at the computer can read it). Off:
+its name and a lock, and none of its data ever leaves the person's own folder. Today and Now Playing start off.
+
+How the data gets there without the sign-in screen (or root) reading anyone's files (`apps/huginn_signin_widgets.py`):
+- Settings writes the choice to `~/.config/huginn/signin-widgets.json`.
+- The desktop (`SignInSnapshot` in `shell/huginn_shell.py`) writes, every minute, the data of the widgets allowed
+  before sign-in and only theirs to `~/.cache/huginn/signin-snapshot.json` (mode 600); with none allowed, no file.
+- The sign-in service reads both in a process that has become that person first (`read_as`: no root reads in
+  anyone's home, no links followed, regular files of at most 256 KB), keeps for each widget only the fields its tile
+  draws, as short text, and gives private ones nothing but their name. This PC's update line is the system's own
+  (`/var/lib/huginn-os-update`), read by the service.
+- The greeter (`shell/qml/GreeterTile.qml`) draws what it is given, and works out what's past: Today drops events
+  that are over, Weather says "As of …" after three hours and gives up after a day.
+
+Tested: `signin_test.py` (the layout and snapshot rules, what a private widget may carry, the service handing them
+over and carrying on past someone's broken files), `signin_real_check.py` as root (read as the person; a link from
+the snapshot to /etc/shadow reads nothing; a file the person can't read stays unread; an oversized layout is no
+widgets), `greeter_test.py` (four widgets on screen, two private, none of their data in any text on screen), the
+Settings page through its own controls (adding, sizes, before sign-in, dragging to reorder, rubbish input), and the
+desktop's snapshot (only allowed widgets, mode 600, gone when none are allowed).
+Not tested here: on a started computer, which needs a restart after the update so the sign-in service reads them.
+
 ### The sign-in service
 
 SDDM is not in the image. What stands between the computer starting and somebody's desktop is Huginn's own

@@ -11,6 +11,7 @@ GlassWindow {
     readonly property var pages: [
         { id: "appearance", label: "Appearance", glyph: "palette", a: "#9B8BFF", b: "#5A3FE0", group: "YOU", sub: "Light or dark, the colour of everything, the wallpaper, icons and pointer." },
         { id: "desktop", label: "Desktop & Dock", glyph: "desktop", a: "#6AB4FF", b: "#2563EB", group: "YOU", sub: "The dock, the top bar, Today, windows, spaces and motion." },
+        { id: "signin", label: "Sign-In Screen", glyph: "key", a: "#B79BFF", b: "#6D3FE0", group: "YOU", sub: "What this computer shows before your password. It can only be changed here, once you've signed in." },
         { id: "notifications", label: "Notifications", glyph: "bell", a: "#FF7A7A", b: "#D6336C", group: "YOU", sub: "Which apps may tell you things, and quiet hours." },
         { id: "a11y", label: "Accessibility", glyph: "eye", a: "#5EC8FF", b: "#1A73E8", group: "YOU", sub: "Seeing, hearing, typing and moving, made easier." },
         { id: "network", label: "Wi‑Fi & Network", glyph: "wifi", a: "#4DB0FF", b: "#1D63D1", group: "CONNECTIONS", sub: "Wireless and wired networks, VPN and hotspot." },
@@ -40,7 +41,7 @@ GlassWindow {
     ]
     readonly property var railPages: pages.filter(function (p) { return !p.hidden })
     property string makerId: ""                  // the live wallpaper being changed in the maker ("" a new one)
-    readonly property var files: ({ appearance: "SetAppearance", desktop: "SetDesktop", notifications: "SetNotifications", network: "SetNetwork", bluetooth: "SetBluetooth",
+    readonly property var files: ({ appearance: "SetAppearance", desktop: "SetDesktop", signin: "SetSignIn", notifications: "SetNotifications", network: "SetNetwork", bluetooth: "SetBluetooth",
                                     accounts: "SetAccounts", ai: "SetAI", displays: "SetDisplays", sound: "SetSound", power: "SetPower", input: "SetInput", keys: "SetKeys", time: "SetTime",
                                     language: "SetLanguage", users: "SetUsers", defaults: "SetDefaults", privacy: "SetPrivacy", updates: "SetUpdates", sync: "SetSync", about: "SetAbout",
                                     a11y: "SetAccessibility", printers: "SetPrinters", livemaker: "SetLiveMaker", graphics: "SetGraphics", controllers: "SetControllers", storage: "SetStorage" })
@@ -68,6 +69,7 @@ GlassWindow {
         ["printers", "Printers", "print printer add cups queue default airprint ipp"], ["printers", "Scanners", "scan scanner sane"],
         ["keys", "Switch keyboard layout", "language input source layout super ctrl space"],
         ["desktop", "App menus", "top bar menu one menu row"], ["desktop", "Files on the desktop", "desktop icons files folder shortcuts"], ["desktop", "Dock on every screen", "monitors displays dock all screens"], ["desktop", "Clock", "24-hour time seconds top bar"], ["desktop", "Battery percentage", "top bar"], ["desktop", "Top bar on every screen", "monitors screens displays second menu bar clock"],
+        ["signin", "Sign-in widgets", "sign in login screen lock widgets weather calendar today music battery"], ["signin", "Sign-in screen realm", "sign in login screen look colour wallpaper"],
         ["desktop", "Dock size", "dock bigger smaller icons"], ["desktop", "Hiding a window", "minimise minimize hide dock drop line comet"],
         ["desktop", "Stacks", "downloads folder dock stack"], ["desktop", "Today", "date calendar weather clocks world time agenda"], ["desktop", "Widgets", "desktop widgets cards clock calendar weather system music photo add remove"],
         ["desktop", "Snapping windows", "snap layout halves thirds quarters tile fill button gaps"], ["desktop", "Games", "game mode gamemode performance freesync g-sync adaptive sync vrr tearing v-sync vsync stats overlay fps frame rate temperature mangohud"],
@@ -133,7 +135,7 @@ GlassWindow {
     onPageChanged: { refresh(); flick.contentY = 0 }
     Component.onCompleted: refresh()
     function refresh() {
-        if (["network", "bluetooth", "displays", "sound", "notifications", "power", "input", "keys", "time", "language", "users", "defaults", "privacy", "about", "a11y", "printers", "graphics", "controllers", "storage"].indexOf(page) >= 0) Backend.load(page)
+        if (["network", "bluetooth", "displays", "sound", "notifications", "power", "input", "keys", "time", "language", "users", "defaults", "privacy", "about", "a11y", "printers", "graphics", "controllers", "storage", "signin"].indexOf(page) >= 0) Backend.load(page)
         if (page === "desktop") Backend.load("displays")            // (Where apps open names the screens)
         if (page === "livemaker") Backend.load("look")
         if (page === "accounts" && typeof Accounts !== "undefined") Accounts.refresh()

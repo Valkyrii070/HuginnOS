@@ -300,5 +300,56 @@ b = Bench(auto="[Autologin]\nUser=nobody-here\n", plans={"huginn-greeter": "yes 
 check("by itself for someone who can't: the sign-in screen", b.spin(5, lambda: "started huginn-greeter" in b.log()), b.log())
 b.close()
 
+# --------------------------------------------------------------------------------------------- sign-in widgets
+import huginn_signin_widgets as sw  # noqa: E402
+L = lambda *ws: json.dumps({"widgets": list(ws)})  # noqa: E731
+check("layout: known kinds, each once, sizes they can have", sw.clean_layout({"widgets": [{"kind": "today", "size": "tall"}, {"kind": "today"}, {"kind": "bad"},
+      {"kind": "weather", "size": "tall", "before": "yes"}, "x", {"kind": "music", "size": "wide", "before": True}]})
+      == [{"kind": "today", "size": "tall", "before": False}, {"kind": "weather", "size": "small", "before": False}, {"kind": "music", "size": "wide", "before": True}])
+check("layout: rubbish is no widgets", sw.clean_layout([1, 2]) == [] and sw.clean_layout({"widgets": "x"}) == [] and sw.clean_layout(None) == [])
+snap = json.dumps({"data": {"today": {"events": [{"title": "Private thing", "date": "2026-11-27", "time": "10:30"}]},
+                            "weather": {"place": "R" * 500, "temp": "4°", "words": "Clear", "high": "9°", "secret": "x", "at": 5},
+                            "music": {"title": "A song", "sub": "x"}, "pc": {"downloads": -4, "at": "soon"}}})
+m = sw.merge(L({"kind": "today", "size": "wide"}, {"kind": "weather", "before": True}, {"kind": "music"}, {"kind": "pc", "before": True}), snap, {"update": "Updated today"})
+check("merge: in order, with names and sizes", [(w["kind"], w["name"], w["size"]) for w in m] == [("today", "Today", "wide"), ("weather", "Weather", "small"), ("music", "Now Playing", "wide"), ("pc", "This PC", "small")], m)
+check("merge: a private widget carries nothing of its data", m[0]["private"] and m[0]["data"] == {} and m[2]["private"] and m[2]["data"] == {})
+check("merge: an allowed one carries only what it draws, cut short", m[1]["data"] == {"place": "R" * 40, "temp": "4°", "words": "Clear", "high": "9°", "low": "", "at": 5}, m[1]["data"])
+check("merge: numbers that aren't are none", m[3]["data"] == {"downloads": 0, "at": 0, "update": "Updated today"}, m[3]["data"])
+check("merge: no layout, no widgets", sw.merge("", snap) == [] and sw.merge("{", snap) == [])
+check("merge: a broken snapshot, the widgets without data", [w["data"] for w in sw.merge(L({"kind": "weather", "before": True}), "[1")] == [{}])
+t2 = Path(tempfile.mkdtemp(prefix="signin-u-"))
+(t2 / "var/lib/huginn-os-update").mkdir(parents=True)
+(t2 / "var/lib/huginn-os-update/state.json").write_text(json.dumps({"applied": {"when": time.time() - 60}}))
+check("system: just updated", sw.system_status(t2) == {"update": "Updated today"}, sw.system_status(t2))
+(t2 / "var/lib/huginn-os-update/state.json").write_text(json.dumps({"staged": {"sha": "x"}, "applied": {"when": time.time() - 60}}))
+(t2 / "var/lib/huginn-os-update/ready").write_text("")
+check("system: one waiting goes first", sw.system_status(t2) == {"update": "Update at next restart"})
+(t2 / "var/lib/huginn-os-update/state.json").write_text("nope")
+check("system: a broken state says nothing", sw.system_status(t2) == {})
+h = Path(tempfile.mkdtemp(prefix="signin-h-"))
+check("the layout is saved cleaned, and an empty one removes the file",
+      sw.write_layout(h, [{"kind": "pc"}, {"kind": "pc"}]) == [{"kind": "pc", "size": "small", "before": False}] and sw.read_layout(h) == [{"kind": "pc", "size": "small", "before": False}]
+      and sw.write_layout(h, []) == [] and not sw.layout_path(h).exists())
+check("the snapshot is the person's alone, and written only when it changes",
+      sw.write_snapshot(h, {"pc": {"downloads": 1}}) and (sw.snapshot_path(h).stat().st_mode & 0o777) == 0o600 and not sw.write_snapshot(h, {"pc": {"downloads": 1}}))
+check("no widgets allowed: no snapshot", sw.write_snapshot(h, {}) and not sw.snapshot_path(h).exists())
+
+b = Bench(plans={"huginn-greeter": "yes 60"})
+b.svc.widgets = lambda name, system: [{"kind": "pc", "name": "This PC", "size": "small", "private": False, "data": {"downloads": 2}}] if name == "astrid" else []
+b.svc._root_people = None
+real_people = sd.people
+sd.people = lambda root=Path("/"), everyone=None: [{"name": "astrid", "full": "Astrid", "face": ""}, {"name": "leif", "full": "Leif", "face": ""}]
+b.spin(2, lambda: "started huginn-greeter" in b.log())
+c = b.connect()
+r = b.ask(c, {"op": "people"})
+check("people come with their widgets", r and [p.get("widgets") for p in r["people"]] == [[{"kind": "pc", "name": "This PC", "size": "small", "private": False, "data": {"downloads": 2}}], []], r)
+def boom(name, system):
+    raise OSError("odd files")
+b.svc.widgets = boom
+r = b.ask(c, {"op": "people"})
+check("someone's odd files never stop the sign-in screen", r and [p.get("widgets") for p in r["people"]] == [[], []], r)
+sd.people = real_people
+b.close()
+
 print(f"{passed} passed, {failed} failed")
 sys.exit(1 if failed else 0)

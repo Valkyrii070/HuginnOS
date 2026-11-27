@@ -197,6 +197,45 @@ if g:
     r = w.get()
     check("nobody can sign in AS the greeter's account", r and r["auth"] is False, r)
 
+# ---------------------------------------------------------------------------------- sign-in widgets, read as them
+sys.path.insert(0, str(KIT / "apps"))
+import huginn_signind as sd  # noqa: E402
+import huginn_signin_widgets as sw  # noqa: E402
+home = Path(p.pw_dir)
+
+
+def as_them(path: Path, text: str, mode=0o644):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text)
+    os.chmod(path, mode)
+    for q in (path, *[x for x in path.parents if str(x).startswith(str(home)) and x != home]):
+        os.chown(q, p.pw_uid, p.pw_gid)
+
+
+as_them(sw.layout_path(home), json.dumps({"widgets": [{"kind": "today", "size": "wide", "before": False}, {"kind": "weather", "size": "small", "before": True}]}))
+as_them(sw.snapshot_path(home), json.dumps({"data": {"today": {"events": [{"title": "Private thing", "date": "2026-11-27", "time": "10:30"}]},
+                                                     "weather": {"place": "Reykjavík", "temp": "4°", "words": "Clear", "at": 1}}}), 0o600)
+got = sd.widgets_of(PERSON, {})
+check("their widgets, read as them", [(w["kind"], w["private"]) for w in got] == [("today", True), ("weather", False)], got)
+check("the private one carries nothing; the other its weather", got[0]["data"] == {} and got[1]["data"].get("temp") == "4°", got)
+snap = sw.snapshot_path(home)
+snap.unlink()
+os.symlink("/etc/shadow", snap)
+os.lchown(snap, p.pw_uid, p.pw_gid)
+got = sd.widgets_of(PERSON, {})
+check("a link from their snapshot to /etc/shadow: nothing of it is read", got and got[1]["data"] == {} and "root:" not in json.dumps(got), got)
+raw = sd.read_as(p, ["/etc/shadow", str(sw.layout_path(home))])
+check("reading as them: /etc/shadow can't be read, their own file can", raw[0] == "" and "today" in raw[1], [r[:30] for r in raw])
+snap.unlink()
+as_them(snap, json.dumps({"data": {"weather": {"temp": "5°", "at": 1}}}), 0o600)
+os.chown(snap, 0, 0)                                           # root's file in their folder, theirs to see no longer
+os.chmod(snap, 0o600)
+got = sd.widgets_of(PERSON, {})
+check("a file in their folder that they can't read stays unread", got and got[1]["data"] == {}, got)
+as_them(sw.layout_path(home), "x" * (300 * 1024))
+check("a layout file far too big is no widgets", sd.widgets_of(PERSON, {}) == [])
+check("someone with no layout has no widgets", sd.widgets_of(OTHER, {}) == [] and sd.widgets_of("nobody-called-this", {}) == [])
+
 for u in (PERSON, OTHER):
     sh("pkill", "-KILL", "-u", u)
     sh("userdel", "-r", u)
