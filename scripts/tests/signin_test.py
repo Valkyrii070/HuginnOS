@@ -81,8 +81,9 @@ class Bench:
         os.environ["PLAN"] = str(self.plan)
         self.clock = [1000.0]
         self.powered = []
+        self.warmed = []
         self.svc = sd.Service(root=self.tmp, worker_argv=[sys.executable, str(self.tmp / "fake.py")], run_dir=self.tmp / "run",
-                              power=self.powered.append, now=lambda: self.clock[0])
+                              power=self.powered.append, now=lambda: self.clock[0], warm=self.warmed.append)
         self.svc.listen()
         self.svc.next()
 
@@ -189,6 +190,7 @@ check("no session started by a wrong password", not any(line.startswith("started
 r = b.ask(c, {"op": "signin", "user": "astrid", "password": "right", "session": "game"})
 check("right password: yes", r == {"op": "signin", "ok": True}, r)
 check("the session waits for the greeter to leave", not any(line.startswith("started astrid") for line in b.log()), b.log())
+check("the person's own services are started meanwhile, and only on a right password", b.warmed == ["astrid"], b.warmed)
 r2 = b.ask(c, {"op": "signin", "user": "leif", "password": "right"}, wait=0.6)
 check("a second sign-in while one is going through: no", r2 and r2["ok"] is False and "Still" in r2["why"], r2)
 b.clock[0] += 13                                             # the greeter outstays its wake

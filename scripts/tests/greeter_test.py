@@ -22,6 +22,7 @@ if os.geteuid() == 0:
 KIT = Path(sys.argv[1]).resolve()
 SHOTS = Path(sys.argv[2]) if len(sys.argv) > 2 else None
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+os.environ["HUGINN_GREETER_LEAVE_SLOWLY"] = "1"
 sys.path.insert(0, str(KIT / "apps"))
 sys.path.insert(0, str(KIT / "shell"))
 import huginn_signind as sd  # noqa: E402

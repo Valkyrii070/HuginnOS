@@ -276,11 +276,12 @@ class Worker(Line):
 
 
 class Service:
-    def __init__(self, root: Path = Path("/"), worker_argv=None, run_dir=None, power=None, now=time.monotonic):
+    def __init__(self, root: Path = Path("/"), worker_argv=None, run_dir=None, power=None, now=time.monotonic, warm=None):
         self.root = root
         self.worker_argv = worker_argv or [sys.executable, "-I", os.path.abspath(__file__), "--worker"]
         self.run_dir = Path(run_dir) if run_dir else root / "run/huginn-signin"
         self.power = power or self._power
+        self.warm = warm or (self._warm if str(root) == "/" else (lambda user: None))
         self.now = now
         self.misses = Misses(now)
         self.sel = selectors.DefaultSelector()
@@ -381,6 +382,16 @@ class Service:
                                      "command": SESSIONS[session][1], "session": session, "vt": VT, "go": False, "env": {}})
         self.checking.asked_by = client
 
+    def _warm(self, user: str) -> None:
+        """A right password: the person's own service manager (systemd --user) is started now, while the sign-in
+        screen plays its wake, so their session doesn't wait for it on a black screen."""
+        try:
+            uid = pwd.getpwnam(user).pw_uid
+            subprocess.Popen(["systemctl", "start", "--no-block", f"user@{uid}.service"], stdin=subprocess.DEVNULL,
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except (KeyError, OSError):
+            pass
+
     def _power(self, what: str) -> None:
         verb = {"sleep": "suspend", "restart": "reboot", "off": "poweroff"}[what]
         subprocess.Popen(["systemctl", verb], stdin=subprocess.DEVNULL)
@@ -417,6 +428,7 @@ class Service:
                 asker = w.asked_by
                 if msg["auth"]:
                     self.misses.right(w.user)
+                    self.warm(w.user)
                     self.pending, self.pending_since = w, self.now()
                     if asker and not asker.gone:
                         asker.send({"op": "signin", "ok": True})
@@ -680,6 +692,12 @@ def worker(fd: int) -> int:
         return 0
     env = {"PATH": PATH, "TERM": "linux", **asks, **pam.env(), **(job.get("env") or {}),
            "HOME": pw.pw_dir, "USER": pw.pw_name, "LOGNAME": pw.pw_name, "SHELL": pw.pw_shell or "/bin/sh"}
+    if kind == "user":
+        # the session's compositor shows the sign-in screen's wallpaper (a still) from its first frame, so the screen
+        # isn't black while the desktop gets ready
+        still = Path("/usr/share/huginn-os/live/arrive") / (look_realm() + ".png")
+        if still.is_file():
+            env["HUGINN_SPLASH"] = str(still)
     pid = os.fork()
     if pid == 0:
         chan.close()

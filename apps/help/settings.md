@@ -5,7 +5,7 @@ Everything about this computer, on one page each. Search at the top right finds 
 Type in Search settings: "night light", "password", "VPN". Pick a result to go straight to its page. Each page has its own colour, and the window takes it on.
 
 ## Wi‑Fi and network
-Turn Wi‑Fi on or off, pick a network and type its password once (the system keeps it). Join another network covers ones that hide their name. This network shows your IP address, router and DNS; Change… by DNS lets you use servers of your own (Quad9 or Cloudflare, say), or leave it empty for the network's own. Add a VPN from the WireGuard (.conf) or OpenVPN (.ovpn) file your provider gives you. Personal hotspot shares a wired connection with your phone; Settings tells you the password it made.
+Turn Wi‑Fi on or off, pick a network and type its password once (the system keeps it). The eye at the end of a password box shows what you've typed, so you can check it; click it again to hide it. Join another network covers ones that hide their name. This network shows your IP address, router and DNS; Change… by DNS lets you use servers of your own (Quad9 or Cloudflare, say), or leave it empty for the network's own. Add a VPN from the WireGuard (.conf) or OpenVPN (.ovpn) file your provider gives you. Personal hotspot shares a wired connection with your phone; Settings tells you the password it made.
 
 ## Bluetooth
 Put the device in pairing mode (usually by holding its button), choose Look for devices, then Pair. My devices shows what's paired, whether it's connected and its battery.

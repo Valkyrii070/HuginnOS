@@ -163,7 +163,9 @@ FocusScope {
             // which session: only when there's a choice (Game Mode installed); click to change
             Text { visible: Host.sessions.length > 1; anchors.verticalCenter: parent.verticalCenter; color: sessArea.containsMouse ? view.ink : view.soft
                 font { family: view.face; pixelSize: 13; weight: Font.Medium }
-                text: { for (var i = 0; i < Host.sessions.length; i++) if (Host.sessions[i].id === view.session) return Host.sessions[i].name; return "Huginn OS" }
+                // (the desktop is "Desktop" here: the system's own name is already at the other end of the bar)
+                text: { if (view.session === "huginn") return "Desktop"
+                    for (var i = 0; i < Host.sessions.length; i++) if (Host.sessions[i].id === view.session) return Host.sessions[i].name; return "Desktop" }
                 MouseArea { id: sessArea; anchors { fill: parent; margins: -12 } hoverEnabled: true; cursorShape: Qt.PointingHandCursor; enabled: !view.busy
                     onClicked: { var ids = Host.sessions.map(function (s) { return s.id }); view.session = ids[(ids.indexOf(view.session) + 1) % ids.length] } } }
             Text { visible: Host.battery >= 0; anchors.verticalCenter: parent.verticalCenter; text: Host.battery + "%"; color: view.ink; font { family: view.face; pixelSize: 13; weight: Font.Medium } }

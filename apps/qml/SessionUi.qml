@@ -245,13 +245,21 @@ QtObject {
                         color: Theme.t.text; font.pixelSize: 14; clip: true; KeyNavigation.tab: field
                         Text { visible: !parent.text; text: "User name"; color: Theme.t.text_secondary; font.pixelSize: 14; anchors.verticalCenter: parent.verticalCenter } } }
                 Rectangle { visible: !!pb.p.field; width: parent.width; height: 42; radius: 21; color: Theme.t.hover; border.width: 1; border.color: field.activeFocus ? Theme.t.accent : Theme.t.islandLine
-                    TextInput { id: field; objectName: "promptField"; anchors.fill: parent; anchors.leftMargin: 16; anchors.rightMargin: 16; verticalAlignment: TextInput.AlignVCenter
+                    TextInput { id: field; objectName: "promptField"; anchors.fill: parent; anchors.leftMargin: 16; anchors.rightMargin: pb.p.field === "password" ? 44 : 16; verticalAlignment: TextInput.AlignVCenter
                         color: Theme.t.text; font.pixelSize: 14; clip: true
-                        echoMode: pb.p.field === "password" ? TextInput.Password : TextInput.Normal
+                        property bool shown: false                      // the eye: see what you've typed
+                        onVisibleChanged: if (!visible) shown = false
+                        echoMode: pb.p.field === "password" && !shown ? TextInput.Password : TextInput.Normal
                         inputMethodHints: pb.p.field === "number" ? Qt.ImhDigitsOnly : Qt.ImhNone
                         onAccepted: pb.go((pb.p.buttons || []).filter(function (b) { return b.primary }).map(function (b) { return b.key })[0] || "cancel")
                         Keys.onEscapePressed: pb.go("cancel")
-                        Text { visible: !parent.text; text: pb.p.field === "password" ? "Password" : "Code"; color: Theme.t.text_secondary; font.pixelSize: 14; anchors.verticalCenter: parent.verticalCenter } } }
+                        Text { visible: !parent.text; text: pb.p.field === "password" ? "Password" : "Code"; color: Theme.t.text_secondary; font.pixelSize: 14; anchors.verticalCenter: parent.verticalCenter } }
+                    Item { visible: pb.p.field === "password"; objectName: "promptEye"; anchors { right: parent.right; rightMargin: 8; verticalCenter: parent.verticalCenter } width: 30; height: 30
+                        Accessible.role: Accessible.Button; Accessible.name: field.shown ? "Hide the password" : "Show the password"
+                        Rectangle { anchors.fill: parent; radius: 15; color: peye.containsMouse ? Theme.t.hover : "transparent" }
+                        Glyph { anchors.centerIn: parent; name: "eye"; size: 17; ink: field.shown ? Theme.t.accent : Theme.t.text_secondary }
+                        Rectangle { visible: !field.shown; anchors.centerIn: parent; width: 20; height: 1.7; radius: 1; rotation: -40; color: Theme.t.text_secondary }
+                        MouseArea { id: peye; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor; onClicked: { field.shown = !field.shown; field.forceActiveFocus() } } } }
                 Row {
                     anchors.right: parent.right; spacing: 8; topPadding: 4
                     Repeater { model: pb.p.buttons || []

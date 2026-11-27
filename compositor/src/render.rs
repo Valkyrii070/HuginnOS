@@ -24,7 +24,7 @@ use smithay::{
 
 #[cfg(feature = "debug")]
 use crate::drawing::FpsElement;
-use smithay::backend::renderer::element::memory::MemoryRenderBufferRenderElement;
+use smithay::backend::renderer::element::memory::{MemoryRenderBuffer, MemoryRenderBufferRenderElement};
 use crate::{
     drawing::{CLEAR_COLOR, CLEAR_COLOR_FULLSCREEN, PointerRenderElement},
     look::{Frosted, Look},
@@ -281,6 +281,70 @@ where
     )))
 }
 
+/// How long the picture below stays (the shell has long since drawn its own wallpaper over it by then).
+const SPLASH_SECONDS: u64 = 20;
+
+thread_local! {
+    /// The sign-in screen's wallpaper, as a still: what a session shows from its first frame, under everything,
+    /// until the shell has drawn its own. Without it the screen is black from the sign-in screen leaving until the
+    /// shell is up (a few seconds). The sign-in service names the picture in HUGINN_SPLASH (huginn_signind.py).
+    static SPLASH: std::cell::RefCell<Option<(MemoryRenderBuffer, (i32, i32), std::time::Instant)>> = std::cell::RefCell::new(load_splash());
+}
+
+fn load_splash() -> Option<(MemoryRenderBuffer, (i32, i32), std::time::Instant)> {
+    let path = std::path::PathBuf::from(std::env::var_os("HUGINN_SPLASH")?);
+    // (one of the system's own pictures; anything else only when developing)
+    if !path.starts_with("/usr/share/huginn-os/") && std::env::var_os("HUGINN_DEV").is_none() {
+        return None;
+    }
+    let bytes = std::fs::read(&path).ok()?;
+    if bytes.len() > 32 << 20 {
+        return None;
+    }
+    let picture = image::load_from_memory_with_format(&bytes, image::ImageFormat::Png).ok()?.to_rgba8();
+    let (w, h) = (picture.width() as i32, picture.height() as i32);
+    if w < 16 || h < 16 || w > 8192 || h > 8192 {
+        return None;
+    }
+    let buffer = MemoryRenderBuffer::from_slice(
+        &picture,
+        smithay::backend::allocator::Fourcc::Abgr8888,
+        (w, h),
+        1,
+        smithay::utils::Transform::Normal,
+        None,
+    );
+    Some((buffer, (w, h), std::time::Instant::now()))
+}
+
+/// The still wallpaper for one screen, filling it (cropped to the screen's shape), or nothing once its time is up.
+fn splash<R, E>(renderer: &mut R, output: &Output) -> Option<OutputRenderElements<R, E>>
+where
+    R: Look,
+    R::TextureId: Clone + Send + 'static,
+    E: RenderElement<R>,
+{
+    SPLASH.with(|s| {
+        let mut s = s.borrow_mut();
+        if s.as_ref().is_some_and(|(_, _, since)| since.elapsed().as_secs() >= SPLASH_SECONDS) {
+            *s = None;
+        }
+        let (buffer, (w, h), _) = s.as_ref()?;
+        let mode = output.current_mode()?;
+        let scale = output.current_scale().fractional_scale();
+        let screen: smithay::utils::Size<i32, smithay::utils::Logical> =
+            output.current_transform().transform_size(mode.size).to_f64().to_logical(scale).to_i32_round();
+        if screen.w <= 0 || screen.h <= 0 {
+            return None;
+        }
+        let (iw, ih, ow, oh) = (*w as f64, *h as f64, screen.w as f64, screen.h as f64);
+        let k = (iw / ow).min(ih / oh);
+        let src: Rectangle<f64, smithay::utils::Logical> = Rectangle::new(((iw - ow * k) / 2.0, (ih - oh * k) / 2.0).into(), (ow * k, oh * k).into());
+        let e = MemoryRenderBufferRenderElement::from_buffer(renderer, (0.0, 0.0), buffer, None, Some(src), Some(screen), Kind::Unspecified).ok()?;
+        Some(OutputRenderElements::Ghost(RescaleRenderElement::from_element(e, (0, 0).into(), 1.0)))
+    })
+}
+
 /// Windows that were asked to close, fading out and shrinking a little once they're gone (capture.rs: Ghost).
 fn ghosts<R, E>(renderer: &mut R, space: &Space<WindowElement>, output: &Output) -> Vec<OutputRenderElements<R, E>>
 where
@@ -442,6 +506,8 @@ where
         }
         // drawn by hand (not Smithay's space_render_elements), so the shell's glass can be frosted
         output_render_elements.extend(scene_elements(output, space, renderer, view));
+        // under everything, for a session's first moments: the sign-in screen's wallpaper instead of black
+        output_render_elements.extend(splash(renderer, output));
         (output_render_elements, CLEAR_COLOR)
     }
 }

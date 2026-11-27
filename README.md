@@ -1473,7 +1473,7 @@ Every screen between pressing the power button and the desktop is now Huginn's o
   behind a greeting and the time. You sign in in the dock: your picture, your name and your password sit where your
   apps will be, other people are beside them (click one, or Left and Right with the field empty), then sleep, restart
   and shut down. A quiet bar along the top has the date and time, the battery when there is one, and the session when
-  there's a choice (Game Mode). A wrong password shakes the field and says so; after five, the service makes that name
+  there's a choice ("Desktop" or "Game Mode"; click it to change). A wrong password shakes the field and says so; after five, the service makes that name
   wait (30 seconds, doubling to ten minutes) and the wait counts down. Other screens show the wallpaper alone.
 - **The wake**: when the password is right it becomes a line of light, the dock clears to your picture, places for
   your apps light up from the middle outwards, and the time blooms in the realm's colours and is gone. Then the
@@ -1516,6 +1516,13 @@ SDDM is not in the image. What stands between the computer starting and somebody
 - If the sign-in screen stops four times in quick succession the service gives up, and after three failed starts
   in a minute `huginn-signin-fallback.service` takes over: SDDM where it is still installed (a system installed
   before this and updated since), else a text sign-in on the first screen.
+
+Between the sign-in screen leaving and the desktop being ready, three things keep the screen from sitting black:
+the greeter leaves at once when its wake has played; the person's own service manager (`user@UID.service`) is
+started as soon as the password is right, while the wake plays; and the session's compositor shows the sign-in
+screen's wallpaper as a still from its first frame, under everything, for up to twenty seconds (`HUGINN_SPLASH`,
+set by the worker to `/usr/share/huginn-os/live/arrive/<realm>.png`; `compositor/src/render.rs`), so what's left of
+the gap is the moment the screens change hands.
 
 How it is switched on is made of plain files, so an update can put it in place and Go Back can take it away exactly:
 `graphical.target.d/huginn-signin.conf` (Wants the service) and `sddm.service.d/huginn-signin.conf` (SDDM starts only

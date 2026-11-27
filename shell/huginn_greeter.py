@@ -169,8 +169,12 @@ class Greeter(QObject):
 
     @Slot()
     def done(self) -> None:
-        """The wake has played: leaving is what lets the session have the screen."""
-        self._app.exit(0)
+        """The wake has played: leaving is what lets the session have the screen. At once: nothing here needs putting
+        away, and every moment spent leaving is a moment of black screen."""
+        if os.environ.get("HUGINN_GREETER_LEAVE_SLOWLY"):            # (tests watch the leaving)
+            self._app.exit(0)
+            return
+        os._exit(0)
 
     def _minute(self) -> None:
         b = battery()
