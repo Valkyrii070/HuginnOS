@@ -11,6 +11,8 @@ systemsettings
 calamares
 polkit-kde-agent-1
 sddm-theme-breeze
+# Huginn signs you in itself (apps/huginn_signind.py)
+sddm
 plymouth-theme-spinner
 # Plasma's background services: Huginn's session daemon does their work (notifications, power and idle, keys and
 # levels, Wi‑Fi secrets, Bluetooth pairing)
