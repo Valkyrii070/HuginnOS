@@ -1040,8 +1040,18 @@ def load_audio(path: str) -> np.ndarray:
         out = None
     if out is None:
         try:
-            raw = subprocess.run(["ffmpeg", "-v", "error", "-i", path, "-f", "f32le", "-ac", "2", "-ar", str(SR), "-"], capture_output=True, timeout=600).stdout
-            out = np.frombuffer(raw[:len(raw) // 8 * 8], np.float32).reshape(-1, 2).copy()
+            # A one-channel file is asked for as one channel and put on both sides at full level here, as read_wav does:
+            # ffmpeg's own mono-to-stereo makes each side 3 dB quieter, so the same recording came in at two levels
+            # depending on its sample rate.
+            try:
+                probe = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "a:0", "-show_entries", "stream=channels", "-of", "csv=p=0", path],
+                                       capture_output=True, text=True, timeout=30).stdout.strip()
+            except (OSError, subprocess.SubprocessError):
+                probe = ""
+            ch = 1 if probe.split(",")[0].strip() == "1" else 2
+            raw = subprocess.run(["ffmpeg", "-v", "error", "-i", path, "-f", "f32le", "-ac", str(ch), "-ar", str(SR), "-"], capture_output=True, timeout=600).stdout
+            out = np.frombuffer(raw[:len(raw) // (4 * ch) * (4 * ch)], np.float32).reshape(-1, ch)
+            out = np.repeat(out, 2, axis=1) if ch == 1 else out.copy()
         except (OSError, subprocess.SubprocessError):
             out = np.zeros((0, 2), np.float32)
     _AUDIO[key] = out

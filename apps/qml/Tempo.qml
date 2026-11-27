@@ -104,6 +104,7 @@ GlassWindow {
 
     toolbar: [
         Seg { icon: "download"; text: "Export"; enabled: Backend.hasSong; onClicked: win.sheet = "export" },
+        Seg { objectName: "sfxButton"; icon: "bolt"; text: "Effect"; tip: "Make a sound effect"; onClicked: win.sheet = "sfx" },
         Seg { icon: "sliders"; text: "Mixer"; on: win.benchOpen && win.benchKind === "mixer"; onClicked: { win.bench = win.bench === "mixer" ? "auto" : "mixer"; win.benchOpen = true } },
         Seg { icon: "music"; text: "Instruments"; on: win.drawer === "library"; onClicked: win.drawer = win.drawer === "library" ? "" : "library" },
         Seg { icon: "refresh"; text: "Loops"; on: win.drawer === "loops"; onClicked: win.drawer = win.drawer === "loops" ? "" : "loops" },
@@ -568,7 +569,11 @@ GlassWindow {
                         Meter { width: 105; interactive: true; value: Math.min(1, (win.reg.fadeOut || 0) / Math.max(0.01, Math.min(4, win.reg.span || 1))); onMoved: function (v) { Backend.setRegion(win.reg.id, "fadeOut", v * Math.min(4, win.reg.span || 1)) } } }
                     Row { spacing: 8; height: 30
                         Toggle { objectName: "reverseToggle"; anchors.verticalCenter: parent.verticalCenter; on: !!win.reg.reverse; onToggled: function (v) { Backend.setRegion(win.reg.id, "reverse", v) } }
-                        Label { anchors.verticalCenter: parent.verticalCenter; text: "Reverse"; font.pixelSize: 12 } } }
+                        Label { anchors.verticalCenter: parent.verticalCenter; text: "Reverse"; font.pixelSize: 12 } }
+                    Flow { width: 226; spacing: 4
+                        Seg { objectName: "normalizeButton"; anchors.verticalCenter: undefined; text: "Normalize"; tip: "Its highest point to 1 dB under full"; onClicked: Backend.normalizeRegion(win.reg.id) }
+                        Seg { objectName: "stripButton"; anchors.verticalCenter: undefined; text: "Strip Silence"; tip: "A region for each stretch of sound"; onClicked: Backend.stripSilence(win.reg.id, -45, 0.3) }
+                        Seg { objectName: "variationsButton"; anchors.verticalCenter: undefined; text: "5 Variations"; tip: "Five slightly different copies after it"; onClicked: Backend.makeVariations(win.reg.id, 5, 1.5, 1.5) } } }
                 Column { visible: win.reg.kind === "audio"; width: 230; spacing: 6
                     Heading { text: "PITCH AND TIME" }
                     Row { spacing: 4; height: 30
@@ -897,7 +902,18 @@ GlassWindow {
                 Label { x: 6; y: 10; width: parent.width - 12; horizontalAlignment: Text.AlignHCenter; elide: Text.ElideRight; text: strip.t ? strip.t.name : "Master"; font.pixelSize: 11; font.weight: Font.DemiBold }
                 Label { x: 6; y: 26; width: parent.width - 12; horizontalAlignment: Text.AlignHCenter; font.pixelSize: 9; secondary: true; font.family: Theme.t.fontMono; elide: Text.ElideRight
                     text: (strip.vol > 0 ? "+" : "") + strip.vol.toFixed(1) + " dB" + (strip.t && strip.t.outputName ? " → " + strip.t.outputName : "") }
-                Item { x: 12; y: 46; width: parent.width - 24; height: parent.height - 46 - (strip.t ? 40 : 12)
+                // the master's loudness as it plays: short-term LUFS (what streaming and consoles measure), and whether it went over
+                MouseArea { visible: !strip.t; x: 4; width: parent.width - 8; height: 42; anchors { bottom: parent.bottom; bottomMargin: 4 } onClicked: Backend.resetLoudness() }
+                Column { objectName: "loudness"; visible: !strip.t; x: 4; width: parent.width - 8; anchors { bottom: parent.bottom; bottomMargin: 6 } spacing: 0
+                    readonly property var now: Backend.loudnessNow
+                    Label { width: parent.width; horizontalAlignment: Text.AlignHCenter; font.pixelSize: 11; font.family: Theme.t.fontMono; font.weight: Font.DemiBold
+                        text: parent.now.s <= -69.9 ? "– LUFS" : parent.now.s.toFixed(1) + " LUFS" }
+                    Label { width: parent.width; horizontalAlignment: Text.AlignHCenter; font.pixelSize: 9; font.family: Theme.t.fontMono; secondary: true
+                        text: "whole " + (parent.now.i <= -69.9 ? "–" : parent.now.i.toFixed(1)) }
+                    Label { width: parent.width; horizontalAlignment: Text.AlignHCenter; font.pixelSize: 9; font.family: Theme.t.fontMono; color: parent.now.over ? "#F85149" : Theme.t.text_secondary
+                        text: parent.now.over ? "OVER" : "peak " + (parent.now.peak <= -119 ? "–" : parent.now.peak.toFixed(1)) }
+                }
+                Item { x: 12; y: 46; width: parent.width - 24; height: parent.height - 46 - (strip.t ? 40 : 52)
                     Rectangle { x: 0; width: 6; height: parent.height; radius: 3; color: Theme.t.dark ? "#1F232B" : "#E1E4EA"
                         Rectangle { anchors.bottom: parent.bottom; width: parent.width; radius: 3; height: parent.height * Math.min(1, strip.lvl)
                             gradient: Gradient { GradientStop { position: 0; color: "#FF5A4F" } GradientStop { position: 0.15; color: "#F5C542" } GradientStop { position: 0.35; color: "#3DDC84" } GradientStop { position: 1; color: "#2BAA5A" } } } }
@@ -1059,10 +1075,11 @@ GlassWindow {
     // ================================================================ sheets: songs, key, export
     Item { anchors.fill: parent; z: 40; visible: win.sheet !== ""
         Rectangle { anchors.fill: parent; radius: win.r; color: "#77000000"; MouseArea { anchors.fill: parent; onClicked: if (Backend.hasSong) win.sheet = "" } }
-        Rectangle { anchors.centerIn: parent; width: win.sheet === "songs" ? 760 : 520; height: win.sheet === "songs" ? Math.min(win.height - 80, 600) : win.sheet === "key" ? 250 : 330; radius: 18
+        Rectangle { anchors.centerIn: parent; width: win.sheet === "songs" || win.sheet === "sfx" ? 760 : win.sheet === "game" ? 680 : 520
+            height: win.sheet === "songs" ? Math.min(win.height - 80, 600) : win.sheet === "game" || win.sheet === "sfx" ? Math.min(win.height - 60, 640) : win.sheet === "key" ? 250 : 330; radius: 18
             color: Theme.t.menu_bg; border.width: 1; border.color: Theme.t.menu_border
             MouseArea { anchors.fill: parent }
-            Label { x: 24; y: 20; font.pixelSize: 18; font.weight: Font.DemiBold; text: win.sheet === "songs" ? "Make music" : win.sheet === "key" ? "The song's key" : "Share your song" }
+            Label { x: 24; y: 20; font.pixelSize: 18; font.weight: Font.DemiBold; text: win.sheet === "songs" ? "Make music" : win.sheet === "key" ? "The song's key" : win.sheet === "game" ? "Export for a game" : win.sheet === "sfx" ? "Make a sound effect" : "Share your song" }
             // songs
             Column { visible: win.sheet === "songs"; x: 24; y: 58; width: parent.width - 48; spacing: 12
                 Label { text: "NEW SONG"; font.pixelSize: 10; font.weight: Font.Bold; font.letterSpacing: 1.2; secondary: true }
@@ -1096,7 +1113,102 @@ GlassWindow {
                 Flow { width: parent.width; spacing: 6
                     Repeater { model: [["wav", "WAV (best)"], ["flac", "FLAC"], ["mp3", "MP3"], ["m4a", "AAC"], ["ogg", "Ogg"], ["stems", "Stems (a WAV per track)"], ["midi", "MIDI"]]
                         Btn { required property var modelData; text: modelData[1]; primary: modelData[0] === "wav"; onClicked: Backend.export(modelData[0]) } } }
+                Btn { objectName: "gameButton"; text: "For a Game…"; onClicked: win.sheet = "game" }
                 Label { visible: Backend.lastExport !== ""; width: parent.width; elide: Text.ElideMiddle; font.pixelSize: 11; secondary: true; text: "Last: " + Backend.lastExport } }
+            // ---- for a game: sections, layers and regions as files an engine takes, loops joined, at one loudness
+            Item { id: game; objectName: "gameSheet"; visible: win.sheet === "game"; x: 24; y: 56; width: parent.width - 48; height: parent.height - 56 - 60
+                property string what: "sections"
+                property bool layers: false
+                property bool loop: true
+                property string format: "wav16"
+                property int rate: 48000
+                property bool mono: false
+                property string level: "lufs-16"
+                property bool snake: true
+                property var loops: ({})                      // rows whose loop was set by hand
+                readonly property var place: Backend.gameFolder(gameDir.text)
+                readonly property var opts: ({ what: what, layers: layers && what !== "regions", loop: loop, format: format, rate: rate, mono: mono, loud: level === "none" ? "none" : level === "peak" ? "peak" : "lufs",
+                                               target: level === "peak" ? -1 : level === "lufs-23" ? -23 : -16, names: snake ? "snake" : "as", prefix: gamePrefix.text, folder: gameDir.text, loops: loops, track: Backend.selectedTrack })
+                readonly property var plan: visible && Backend.tracks.length >= 0 ? Backend.gamePlan(opts) : []
+                onVisibleChanged: if (visible) { loops = ({}); if (!Backend.sections.length && what === "sections") what = "song" }
+                Column { id: gameCol; width: parent.width; spacing: 7
+                    Row { spacing: 10; height: 30
+                        Label { width: 62; anchors.verticalCenter: parent.verticalCenter; secondary: true; font.pixelSize: 12; text: "What" }
+                        Chips { width: 520; items: [["song", "The whole song"], ["sections", "Each section"], ["regions", "Each region of " + (win.selTrack ? win.selTrack.name : "the selected track")]]; current: game.what; onChosen: function (id) { game.what = id; game.loops = ({}) } } }
+                    Row { spacing: 10; height: 30; visible: game.what !== "regions"
+                        Item { width: 62; height: 1 }
+                        Toggle { anchors.verticalCenter: parent.verticalCenter; on: game.loop; onToggled: function (v) { game.loop = v; game.loops = ({}) } }
+                        Label { anchors.verticalCenter: parent.verticalCenter; font.pixelSize: 12; text: "Loops: the ringing after the last bar is laid under the first" }
+                        Item { width: 6; height: 1 }
+                        Toggle { anchors.verticalCenter: parent.verticalCenter; on: game.layers; onToggled: function (v) { game.layers = v } }
+                        Label { anchors.verticalCenter: parent.verticalCenter; font.pixelSize: 12; text: "A file per track" } }
+                    Row { spacing: 10; height: 30
+                        Label { width: 62; anchors.verticalCenter: parent.verticalCenter; secondary: true; font.pixelSize: 12; text: "Files" }
+                        Chips { width: 300; items: Backend.gameFormats.map(function (f) { return [f.id, f.name.replace(", ", " ").replace(" bit", "").replace(" Vorbis", "")] }); current: game.format; onChosen: function (id) { game.format = id } }
+                        Chips { width: 200; items: [[48000, "48 kHz"], [44100, "44.1"], [22050, "22"]]; current: String(game.rate); onChosen: function (id) { game.rate = parseInt(id) } }
+                        Seg { text: "Mono"; on: game.mono; onClicked: game.mono = !game.mono } }
+                    Row { spacing: 10; height: 30
+                        Label { width: 62; anchors.verticalCenter: parent.verticalCenter; secondary: true; font.pixelSize: 12; text: "Level" }
+                        Chips { width: 560; items: [["lufs-16", "−16 LUFS (music, effects)"], ["lufs-23", "−23 LUFS (speech, consoles)"], ["peak", "Peak −1 dB"], ["none", "As it is"]]; current: game.level; onChosen: function (id) { game.level = id } } }
+                    Row { spacing: 10; height: 32
+                        Label { width: 62; anchors.verticalCenter: parent.verticalCenter; secondary: true; font.pixelSize: 12; text: "Names" }
+                        Field { id: gamePrefix; objectName: "gamePrefix"; width: 150; placeholder: "start with: mus_" }
+                        Seg { text: "snake_case"; on: game.snake; onClicked: game.snake = !game.snake }
+                        Field { id: gameDir; objectName: "gameDir"; width: 300; placeholder: "Folder (else Music/Tempo Exports)" } }
+                    Label { visible: game.place.kind !== "" || (gameDir.text !== "" && !game.place.there); width: parent.width; wrapMode: Text.WordWrap; font.pixelSize: 11; secondary: true
+                        text: game.place.kind === "godot" ? "A Godot project. " + game.place.note : game.place.kind === "unreal" ? "An Unreal project. " + game.place.note : "That folder will be made." }
+                    Seg { visible: game.place.kind !== "" && gameDir.text !== game.place.sound && gameDir.text.indexOf(game.place.sound) !== 0; anchors.verticalCenter: undefined; text: "Put them in " + game.place.sound.replace(game.place.root, "").replace(/^\//, "") + "/"
+                        onClicked: gameDir.text = game.place.sound } }
+                ListView { id: planList; objectName: "gamePlan"; anchors { left: parent.left; right: parent.right; bottom: parent.bottom; top: gameCol.bottom; topMargin: 8 } clip: true; boundsBehavior: Flickable.StopAtBounds; model: game.plan; spacing: 1
+                    delegate: Rectangle { id: planRow; required property var modelData; width: planList.width - 6; height: 30; radius: 8; color: Qt.alpha(Theme.t.text, 0.04)
+                        Label { x: 10; width: parent.width - 220; elide: Text.ElideMiddle; anchors.verticalCenter: parent.verticalCenter; font.family: Theme.t.fontMono; font.pixelSize: 12; text: planRow.modelData.file }
+                        Label { anchors { right: parent.right; rightMargin: 110; verticalCenter: parent.verticalCenter } font.pixelSize: 11; secondary: true; text: planRow.modelData.seconds.toFixed(1) + " s" }
+                        Seg { visible: planRow.modelData.canLoop; anchors { right: parent.right; rightMargin: 6; verticalCenter: parent.verticalCenter } height: 24; text: planRow.modelData.loop ? "Loops" : "Plays once"; on: planRow.modelData.loop
+                            onClicked: { var l = Object.assign({}, game.loops); l[planRow.modelData.key] = !planRow.modelData.loop; game.loops = l } } } }
+                Label { visible: planList.count === 0; anchors.centerIn: planList; width: planList.width - 60; wrapMode: Text.WordWrap; horizontalAlignment: Text.AlignHCenter; secondary: true
+                    text: game.what === "sections" ? "This song has no sections yet. Add some over the bars (Sections), or export the whole song." : game.what === "regions" ? "Select the track whose regions are the sounds: each becomes a file." : "There's nothing to export yet." } }
+            // ---- a sound effect from numbers: pick a kind, press it again for another, shape it, add it to the song
+            Item { id: fx; objectName: "sfxSheet"; visible: win.sheet === "sfx"; x: 24; y: 56; width: parent.width - 48; height: parent.height - 56 - 60
+                property var p: ({})
+                property string kind: "coin"
+                property var shape: []
+                property real secs: 0
+                function take(params, play) { p = params; shape = Backend.sfxShape(p, 240); if (play) secs = Backend.sfxPlay(p) }
+                function set(key, value) { var q = Object.assign({}, p); q[key] = value; take(q, false); again.restart() }
+                Timer { id: again; interval: 250; onTriggered: fx.secs = Backend.sfxPlay(fx.p) }
+                onVisibleChanged: if (visible && p.wave === undefined) take(Backend.sfxNew(kind), false)
+                Column { width: 250; spacing: 8
+                    Heading { text: "A NEW ONE" }
+                    Flow { width: parent.width; spacing: 4
+                        Repeater { model: Backend.sfxKinds
+                            Seg { required property var modelData; objectName: "sfxKind"; anchors.verticalCenter: undefined; text: modelData.name; on: fx.kind === modelData.id; onClicked: { fx.kind = modelData.id; fxName.text = modelData.id === "random" ? "Effect" : modelData.name; fx.take(Backend.sfxNew(modelData.id), true) } } } }
+                    Label { width: parent.width; wrapMode: Text.WordWrap; secondary: true; font.pixelSize: 11; text: "Press a kind again for another of it. They are made from a wave, a slide, an envelope and two filters, as the game-jam tool sfxr makes them." }
+                    Row { spacing: 4; height: 30
+                        Seg { objectName: "sfxPlay"; icon: "play"; text: "Play"; onClicked: fx.secs = Backend.sfxPlay(fx.p) }
+                        Seg { objectName: "sfxMutate"; text: "A Little Different"; onClicked: fx.take(Backend.sfxMutate(fx.p), true) } }
+                    Rectangle { width: parent.width; height: 70; radius: 10; color: Theme.t.dark ? "#121419" : "#F3F4F7"
+                        Row { anchors { fill: parent; margins: 6 } spacing: 0
+                            Repeater { model: fx.shape
+                                Item { required property var modelData; width: (parent.width) / Math.max(1, fx.shape.length); height: parent.height
+                                    Rectangle { width: Math.max(1, parent.width - 0.3); height: Math.max(1, parent.height * Math.min(1, modelData)); anchors.verticalCenter: parent.verticalCenter; color: win.hot } } } }
+                        Label { anchors { right: parent.right; bottom: parent.bottom; margins: 5 } font.pixelSize: 10; secondary: true; text: fx.secs > 0 ? fx.secs.toFixed(2) + " s" : "" } }
+                    Heading { text: "WAVE" }
+                    Chips { width: parent.width; items: Backend.sfxWaves.map(function (w) { return [w, w.charAt(0).toUpperCase() + w.substring(1)] }); current: fx.p.wave || ""; onChosen: function (id) { fx.set("wave", id) } }
+                    Heading { text: "NAME" }
+                    Field { id: fxName; objectName: "sfxName"; width: parent.width; text: "Coin"; placeholder: "Coin" } }
+                Flickable { x: 270; width: parent.width - 270; height: parent.height; clip: true; contentHeight: knobGrid.height; boundsBehavior: Flickable.StopAtBounds
+                    Grid { id: knobGrid; columns: 2; columnSpacing: 18; rowSpacing: 7; width: parent.width - 8
+                        Repeater { model: Backend.sfxKnobs
+                            Column { id: knob; required property var modelData; width: (knobGrid.width - 18) / 2; spacing: 3
+                                readonly property real v: fx.p[modelData.id] === undefined ? 0 : fx.p[modelData.id]
+                                Label { font.pixelSize: 11; text: knob.modelData.name + "  " + knob.v.toFixed(2); opacity: knob.modelData.id.indexOf("duty") === 0 && fx.p.wave !== "square" ? 0.4 : 1 }
+                                Meter { objectName: "sfxKnob"; width: parent.width; interactive: true; value: (knob.v - knob.modelData.min) / (knob.modelData.max - knob.modelData.min)
+                                    onMoved: function (x) { fx.set(knob.modelData.id, Math.round((knob.modelData.min + x * (knob.modelData.max - knob.modelData.min)) * 100) / 100) } } } } } } }
+            Label { visible: win.sheet === "game" && Backend.gameBusy !== ""; anchors { left: parent.left; leftMargin: 24; bottom: parent.bottom; bottomMargin: 24 } font.pixelSize: 12; secondary: true; text: Backend.gameBusy }
+            Label { visible: win.sheet === "game" && Backend.gameBusy === "" && game.plan.length > 0; anchors { left: parent.left; leftMargin: 24; bottom: parent.bottom; bottomMargin: 24 } width: parent.width - 300; elide: Text.ElideMiddle; font.pixelSize: 11; secondary: true
+                text: game.plan.length + (game.plan.length === 1 ? " file" : " files") + ". Files of the same name there are replaced." }
             Row { anchors { right: parent.right; rightMargin: 20; bottom: parent.bottom; bottomMargin: 16 } spacing: 8
-                Btn { visible: Backend.hasSong; text: "Done"; onClicked: win.sheet = "" } } } }
+                Btn { objectName: "sfxAdd"; visible: win.sheet === "sfx"; primary: true; text: "Add to the Song"; onClicked: { if (Backend.sfxAdd(fx.p, fxName.text)) win.sheet = "" } }
+                Btn { objectName: "gameGo"; visible: win.sheet === "game"; primary: true; enabled: Backend.gameBusy === "" && game.plan.length > 0; text: "Export"; onClicked: { var no = Backend.gameExport(game.opts); if (no) toast.say(no, true) } }
+                Btn { visible: Backend.hasSong || win.sheet === "sfx"; text: "Done"; onClicked: win.sheet = Backend.hasSong ? "" : "songs" } } } }
 }

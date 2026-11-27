@@ -26,6 +26,7 @@ import numpy as np
 from PySide6.QtCore import Property, QByteArray, QObject, QStandardPaths, QTimer, QUrl, Signal, Slot
 
 import huginn_tempo_engine as se
+import huginn_tempo_game as tg
 
 try:
     from PySide6.QtMultimedia import QAudioFormat, QAudioSink, QAudioSource, QMediaDevices
@@ -219,6 +220,7 @@ class Player:
                     break
                 start, block, levels = item
                 block = self._mix_live(block)
+                self.owner._meter.feed(block)
                 if self.io is not None:
                     self.io.write(QByteArray(np.clip(block, -1, 1).astype(np.float32).tobytes()))
                 self.marks.append((self.written, start, len(block)))
@@ -291,6 +293,8 @@ class Tempo(QObject):
         self._recording = False
         self._rec = None
         self._levels = {}
+        self._meter = tg.Meter()
+        self._game_busy, self._sfx_seed = "", int(time.time()) & 0xFFFF
         self._sel_track, self._sel_region = "", ""
         self._held = {}
         self._player = Player(self)
@@ -668,6 +672,7 @@ class Tempo(QObject):
         """[beat, bpm] along the song, for drawing the tempo line."""
         if self._p is None or steps < 2:
             return []
+        steps = min(int(steps), 4000)                               # (more points than a screen has dots is only waiting)
         tm = self._tm()
         pts = sorted({max(0.0, b0 + (b1 - b0) * k / (steps - 1)) for k in range(steps)} | {p[0] for p in tm.pts if b0 <= p[0] <= b1}
                      | {p[0] - 1e-4 for p in tm.pts if b0 <= p[0] - 1e-4 <= b1})
@@ -2381,6 +2386,7 @@ class Tempo(QObject):
         if self._p is None or self._playing:
             return
         self._playing = True
+        self._meter.reset()                                       # (the loudness of this playing, from where it starts)
         cyc = self._p.get("cycle") or {}
         cycle = (self._frame(cyc["start"]), self._frame(cyc["end"])) if cyc.get("on") else None
         self._player.start(self._p, self._folder, self._frame(self._pos), cycle, bool(self._p.get("metronome")), 0)
@@ -2754,6 +2760,330 @@ class Tempo(QObject):
         self.changed.emit()
 
     lastExport = Property(str, lambda self: getattr(self, "_last_export", ""), notify=changed)
+
+    # ---------------------------------------------------------------- for games (huginn_tempo_game.py has the sound of it)
+    loudnessNow = Property("QVariantMap", lambda self: self._meter.read(), notify=clockChanged)
+    gameBusy = Property(str, lambda self: self._game_busy, notify=changed)
+    gameFormats = Property("QVariantList", lambda self: [{"id": k, "name": v[0]} for k, v in tg.FORMATS.items()], constant=True)
+
+    @Slot()
+    def resetLoudness(self) -> None:
+        self._meter.reset()
+        self.clockChanged.emit()
+
+    @Slot(str, result="QVariantMap")
+    def gameFolder(self, path: str) -> dict:
+        """What a folder is, for the export sheet: a Godot or Unreal project (and where its sound goes), or just a folder."""
+        path = path.replace("file://", "").strip()
+        if not path:
+            return {"kind": "", "root": "", "sound": "", "note": "", "there": False, "path": ""}
+        here = Path(path).expanduser()
+        return dict(tg.project_kind(here), there=here.is_dir(), path=str(here))
+
+    def _game_items(self, opt: dict) -> list:
+        """What an export makes: [{key, name, start, end (beats), tracks (ids, or None for the mix), loop}]."""
+        p, what = self._p, str(opt.get("what") or "song")
+        end, items = se.song_length(p), []
+        used = [t for t in p["tracks"] if t["kind"] != "stack" and any(r["track"] == t["id"] for r in p["regions"])]
+        if what == "regions":
+            tid = str(opt.get("track") or self._sel_track)
+            for r in sorted((r for r in p["regions"] if r["track"] == tid and not r.get("muted")), key=lambda r: r["start"]):
+                items.append({"key": r["id"], "name": r.get("name") or (self._t(tid) or {}).get("name", "sound"), "start": float(r["start"]),
+                              "end": float(r["start"]) + float(r["length"]) * max(1, int(r.get("loops", 1))), "tracks": [tid], "loop": False, "one": True})
+        else:
+            spans = [{"key": "song", "name": p.get("name", "Song"), "start": 0.0, "end": end, "loop": bool(opt.get("loop"))}]
+            if what == "sections":
+                spans = [{"key": sec["id"], "name": sec["name"], "start": float(sec["start"]), "end": float(sec["start"]) + float(sec["length"]),
+                          "loop": bool(opt.get("loop")) and not re.search(r"intro|outro|end|sting|stinger", sec["name"], re.I)} for sec in self.sections if sec["start"] < end]
+            for sp in spans:
+                if opt.get("layers"):                              # one file per track: layers a game brings in and out
+                    items += [dict(sp, key=f"{sp['key']}/{t['id']}", name=f"{sp['name']} {t['name']}", tracks=[t["id"]], of=sp["key"]) for t in used]
+                else:
+                    items.append(dict(sp, tracks=None))
+        loops = opt.get("loops") if isinstance(opt.get("loops"), dict) else {}
+        seen, style, prefix = {}, ("as" if opt.get("names") == "as" else "snake"), str(opt.get("prefix") or "")[:40]
+        for it in items[:tg.MAX_FILES]:
+            if it.get("of", it["key"]) in loops and not it.get("one"):
+                it["loop"] = bool(loops[it.get("of", it["key"])])
+            stem = tg.engine_name(prefix + it["name"], style)
+            seen[stem] = seen.get(stem, 0) + 1
+            it["stem"] = stem
+        count = {}
+        for it in items[:tg.MAX_FILES]:                            # the same name twice: numbered (footstep_01, footstep_02)
+            if seen[it["stem"]] > 1:
+                count[it["stem"]] = count.get(it["stem"], 0) + 1
+                it["stem"] += ("_%02d" if style == "snake" else " %02d") % count[it["stem"]]
+        return items[:tg.MAX_FILES]
+
+    def _game_dir(self, opt: dict) -> Path:
+        typed = str(opt.get("folder") or "").replace("file://", "").strip()
+        return Path(typed).expanduser() if typed else self._exports() / tg.engine_name((self._p or {}).get("name", "Song") + " for a game", "as")
+
+    @Slot("QVariantMap", result="QVariantList")
+    def gamePlan(self, options) -> list:
+        """The files an export would write, before it writes them: [{key, file, seconds, loop, canLoop}]."""
+        if self._p is None:
+            return []
+        opt = dict(options.toVariant() if hasattr(options, "toVariant") else options)
+        ext, tm = tg.FORMATS.get(str(opt.get("format")), tg.FORMATS["wav24"])[1], self._tm()
+        return [{"key": it.get("of", it["key"]), "file": it["stem"] + ext, "seconds": round(tm.seconds(it["end"]) - tm.seconds(it["start"]), 2), "loop": it["loop"], "canLoop": not it.get("one")}
+                for it in self._game_items(opt)]
+
+    @Slot("QVariantMap", result=str)
+    def gameExport(self, options) -> str:
+        """Write the song as a game takes it: the whole mix, each section, each track as a layer, or each region of a
+        track (voice lines, sound effects), as files named for an engine, at one loudness, the loops joined end to
+        start with their loop points written in. Files of the same name in the folder are replaced: exporting again
+        into the game's folder is the point. Returns "" when under way, else why not."""
+        if self._p is None or not self._p.get("regions"):
+            return "There's nothing to export yet."
+        if self._game_busy:
+            return "An export is already under way."
+        opt = dict(options.toVariant() if hasattr(options, "toVariant") else options)
+        fmt = str(opt.get("format")) if opt.get("format") in tg.FORMATS else "wav24"
+        try:
+            rate = int(opt.get("rate") or se.SR)
+        except (TypeError, ValueError):
+            rate = se.SR
+        rate = rate if rate in tg.RATES else se.SR
+        how = str(opt.get("loud")) if opt.get("loud") in ("none", "peak", "lufs") else "none"
+        try:
+            target = max(-40.0, min(0.0, float(opt.get("target", -16.0 if how == "lufs" else -1.0))))
+            tail = max(0.0, min(30.0, float(opt.get("tail", 2.0))))
+        except (TypeError, ValueError):
+            target, tail = (-16.0 if how == "lufs" else -1.0), 2.0
+        mono = bool(opt.get("mono"))
+        items = self._game_items(opt)
+        if not items:
+            return "This track has no regions to export." if opt.get("what") == "regions" else "The song has no sections yet: add some (Sections), or export the whole song." if opt.get("what") == "sections" else "There's nothing to export yet."
+        tm = self._tm()
+        if any(tm.seconds(it["end"]) - tm.seconds(it["start"]) > tg.MAX_SECONDS for it in items):
+            return "One of those files would be over an hour long."
+        if fmt in ("ogg", "flac") and not tg.shutil.which("ffmpeg"):
+            return "Ogg and FLAC files need ffmpeg."
+        folder = self._game_dir(opt)
+        if self._demo:
+            self.said.emit(f"Would write {len(items)} file{'' if len(items) == 1 else 's'} to {folder}.", False)
+            return ""
+        try:
+            folder.mkdir(parents=True, exist_ok=True)
+        except OSError as err:
+            return f"That folder can't be made: {err.strerror or err}"
+        if not os.access(folder, os.W_OK):
+            return "That folder can't be written to."
+        snap, folder_in, ext = json.loads(json.dumps(self._p)), self._folder, tg.FORMATS[fmt][1]
+        self._game_busy = f"Exporting 0 of {len(items)}…"
+        self.changed.emit()
+
+        def work():
+            done, notes, gains = [], [], {}
+            try:
+                for k, it in enumerate(items):
+                    a0, a1 = tm.seconds(it["start"]), tm.seconds(it["end"])
+                    body = int(round((a1 - a0) * se.SR))
+                    ring = max(tail, 4.0) if it["loop"] else (0.6 if it.get("one") and tail > 0.6 else tail)
+
+                    def draw(tracks):
+                        return se.render_song(snap, folder_in, tracks=tracks, tail=ring, start_beats=it["start"], end_beats=it["end"])
+                    def shape(a):                                   # (one channel is measured as one channel: what the file will hold)
+                        a = tg.seamless(a, body) if it["loop"] else a
+                        return tg.stereo(a.mean(axis=1)) if mono else a
+                    audio = shape(draw(it["tracks"]))
+                    if it.get("one"):                               # a voice line, an effect: its ringing kept, the silence after it not
+                        loud = np.nonzero(np.abs(audio).max(axis=1) > 10 ** (-66 / 20))[0]
+                        audio = audio[:max(body if len(loud) == 0 else min(len(audio), max(int(loud[-1]) + se.SR // 100, 1)), 1)]
+                    if "of" in it:                                  # layers of one piece share one gain: the mix's, so they still add up to it
+                        if it["of"] not in gains:
+                            mix = draw(None)
+                            gains[it["of"]] = tg.normalise(shape(mix), how, target)[1]
+                        info = gains[it["of"]]
+                        audio = (audio * (10 ** (info["gain"] / 20))).astype(np.float32)
+                    else:
+                        audio, info = tg.normalise(audio, how, target)
+                    if info.get("note") and (it.get("of", it["key"]), info["note"]) not in notes:
+                        notes.append((it.get("of", it["key"]), info["note"]))
+                    target_file = folder / (it["stem"] + ext)
+                    if not tg.write(str(target_file), audio, fmt, rate, mono, (0.0, len(audio) / se.SR) if it["loop"] else None):
+                        raise OSError(f"{target_file.name} couldn't be written")
+                    done.append(str(target_file))
+                    self._back.emit(lambda n=k + 1: self._game_step(f"Exporting {n} of {len(items)}…"))
+                kind = tg.project_kind(folder)
+                text = f"Wrote {len(done)} file{'' if len(done) == 1 else 's'} to {folder}." + (f" {len(notes)} couldn't reach the loudness asked for without clipping." if notes else "")
+                if kind["kind"] and any(it["loop"] for it in items):
+                    text += " " + kind["note"]
+                result = (str(folder), text, False)
+            except Exception as err:                                # noqa: BLE001 (whatever went wrong is said, and the window is let go)
+                result = ("", f"Couldn't export: {err}", True)
+            self._back.emit(lambda: self._game_done(result, done))
+        threading.Thread(target=work, daemon=True).start()
+        return ""
+
+    def _game_step(self, text: str) -> None:
+        if self._game_busy:
+            self._game_busy = text
+            self.changed.emit()
+
+    def _game_done(self, result, files) -> None:
+        self._game_busy, self._game_files = "", list(files)
+        if result[0]:
+            self._last_export = result[0]
+        self.said.emit(result[1], result[2])
+        self.changed.emit()
+
+    # ---- sound effects from numbers
+    sfxKinds = Property("QVariantList", lambda self: [{"id": k, "name": n} for k, n in tg.SFX_KINDS], constant=True)
+    sfxKnobs = Property("QVariantList", lambda self: [{"id": k, "name": n, "min": lo, "max": hi} for k, n, lo, hi in tg.SFX_KNOBS], constant=True)
+    sfxWaves = Property("QVariantList", lambda self: list(tg.WAVES), constant=True)
+
+    @Slot(str, result="QVariantMap")
+    def sfxNew(self, kind: str) -> dict:
+        """Another sound of a kind (a new one each time it's asked)."""
+        self._sfx_seed += 1
+        return tg.sfx_preset(kind if any(kind == k for k, _n in tg.SFX_KINDS) else "random", self._sfx_seed)
+
+    @Slot("QVariantMap", result="QVariantMap")
+    def sfxMutate(self, params) -> dict:
+        self._sfx_seed += 1
+        return tg.sfx_mutate(dict(params.toVariant() if hasattr(params, "toVariant") else params), self._sfx_seed)
+
+    def _sfx_audio(self, params) -> np.ndarray:
+        return tg.sfx(dict(params.toVariant() if hasattr(params, "toVariant") else params), 1)
+
+    @Slot("QVariantMap", int, result="QVariantList")
+    def sfxShape(self, params, count: int) -> list:
+        """The sound's outline, for drawing: `count` heights from 0 to 1."""
+        a = self._sfx_audio(params)
+        return se.peaks(tg.stereo(a), max(8, min(600, int(count)))) if len(a) else []
+
+    @Slot("QVariantMap", result=float)
+    def sfxPlay(self, params) -> float:
+        """Hear it. Returns its length in seconds."""
+        a = self._sfx_audio(params)
+        if len(a) and not self._demo:
+            self._player.stop_live("preview")
+            self._player.play_live("preview", a * 0.8)
+        return round(len(a) / se.SR, 3)
+
+    @Slot("QVariantMap", str, result=str)
+    def sfxAdd(self, params, name: str) -> str:
+        """Put the sound in the song at the playhead, on the selected sound track or a new one. Returns the region."""
+        a = self._sfx_audio(params)
+        if not len(a):
+            self.said.emit("That sound has no length: raise Hold or Decay.", True)
+            return ""
+        name = re.sub(r"\s+", " ", re.sub(r"[\\/:*?\"<>|]+", " ", name or "")).strip()[:40] or "Effect"
+        if self._p is None:
+            self.newProject("empty", name)
+        t = self._t(self._sel_track)
+        if not t or t["kind"] != "audio":
+            t = next((x for x in self._p["tracks"] if x["kind"] == "audio" and x["name"] == "Sound Effects"), None)
+            if t is None:
+                self._before()
+                t = self._add_track("audio", "", "Sound Effects")
+                t["reverb"] = 0.0
+                self._undo.pop()
+        rid = self._add_audio_region(t["id"], tg.stereo(a), self._pos, name)
+        self.selectRegion(rid)
+        return rid
+
+    # ---- tools for a recording
+    def _plain_audio(self, rid: str):
+        """(region, its track, its sound as it plays without gain or fades, played seconds per source second) for a
+        sound region that isn't a comp of takes; else (None, None, None, 1) and a word about why."""
+        r = self._r(rid)
+        if not r or r.get("kind") != "audio":
+            return None, None, None, 1.0
+        if r.get("comp") and r.get("takes"):
+            self.said.emit("Flatten its takes first (Takes › Flatten).", True)
+            return None, None, None, 1.0
+        m = se.Mixer(self._p, self._folder)
+        audio = m._region_audio(self._t(r["track"]), dict(r, gain=0.0, fadeIn=0.0, fadeOut=0.0))
+        return r, self._t(r["track"]), np.asarray(audio, np.float32), m._take_audio(r, r.get("file", ""))[1]
+
+    @Slot(str, float, float, result=int)
+    @finite
+    def stripSilence(self, rid: str, threshold: float, gap: float) -> int:
+        """Cut a recording into a region for each stretch of sound, leaving out the silence between: one long take of
+        voice lines becomes a region per line. Nothing is thrown away: each region can be dragged wider again.
+        Returns how many regions there are now (0: nothing was done)."""
+        if self._p is None:
+            return 0
+        r, _t, audio, ratio = self._plain_audio(rid)
+        if r is None or int(r.get("loops", 1)) > 1:
+            return 0
+        spans = tg.sound_spans(audio, max(-80.0, min(-6.0, threshold or -45.0)), max(0.05, min(10.0, gap or 0.3)))
+        if not spans:
+            self.said.emit("There's no sound in that region above the level set.", True)
+            return 0
+        if len(spans) == 1 and spans[0][0] <= se.SR // 50 and spans[0][1] >= len(audio) - se.SR // 50:
+            self.said.emit("There's no silence in it to take out.", False)
+            return 0
+        tm = self._tm()
+        t0, off0, base = tm.seconds(float(r["start"])), float(r.get("offset", 0)), r.get("name") or "Take"
+        self._before()
+        made = []
+        for k, (a, b) in enumerate(spans[:200]):
+            piece = r if k == 0 else copy.deepcopy(made[0])
+            if k:
+                piece["id"] = self._id("r")
+                self._p["regions"].append(piece)
+            start = tm.beat(t0 + a / se.SR)
+            piece.update(start=round(start, 4), length=round(max(0.01, tm.beat(t0 + b / se.SR) - start), 4), offset=round(off0 + a / se.SR / max(ratio, 1e-6), 5),
+                         name=f"{base} {k + 1:02d}"[:60], fadeIn=0.0, fadeOut=0.0)
+            piece.pop("loop", None)
+            made.append(piece)
+        self._keep()
+        self.said.emit(f"{len(made)} regions, the silence between them left out.", False)
+        return len(made)
+
+    @Slot(str, result=float)
+    def normalizeRegion(self, rid: str) -> float:
+        """Set a recording's gain so its highest point is 1 dB under full. Returns the gain it was given (dB)."""
+        if self._p is None:
+            return 0.0
+        r, _t, audio, _ratio = self._plain_audio(rid)
+        if r is None or not len(audio):
+            return 0.0
+        peak = tg.true_peak(audio)
+        if peak <= -100:
+            self.said.emit("That region is silent.", True)
+            return 0.0
+        gain = round(max(-30.0, min(12.0, -1.0 - peak)), 1)
+        self._before()
+        r["gain"] = gain
+        self._keep()
+        if -1.0 - peak > 12.0:
+            self.said.emit("It is very quiet: its gain is as high as a region's goes (12 dB).", False)
+        return gain
+
+    @Slot(str, int, float, float, result=int)
+    @finite
+    def makeVariations(self, rid: str, count: int, pitch: float, gain: float) -> int:
+        """Several slightly different copies of a sound after it on its track, each its own file (a footstep, five
+        ways). Returns how many were made."""
+        if self._p is None:
+            return 0
+        r, _t, audio, _ratio = self._plain_audio(rid)
+        if r is None or not len(audio):
+            return 0
+        count = max(1, min(32, int(count)))
+        self._sfx_seed += 1
+        sounds = tg.variations(audio * se.db(float(r.get("gain", 0))), count, self._sfx_seed, max(0.0, min(12.0, pitch)), max(0.0, min(12.0, gain)))
+        tm, base = self._tm(), re.sub(r"\s+\d+$", "", r.get("name") or "Sound")
+        at = tm.seconds(float(r["start"]) + float(r["length"])) + 0.25
+        self._before()
+        mark = self._undo[-1]
+        for k, a in enumerate(sounds):
+            self._add_audio_region(r["track"], a, tm.beat(at), f"{base} {k + 2:02d}"[:60])
+            at += len(a) / se.SR + 0.25
+        at_mark = next((i for i, u in enumerate(self._undo) if u is mark), None)
+        if at_mark is not None:
+            del self._undo[at_mark + 1:]                            # one step back takes them all away
+        if not re.search(r"\s\d+$", r.get("name") or ""):
+            r["name"] = f"{base} 01"[:60]
+        self._keep()
+        self.said.emit(f"{len(sounds)} variation{'' if len(sounds) == 1 else 's'} of “{base}” after it. Export for a Game › Regions writes them as files.", False)
+        return len(sounds)
 
     # ---------------------------------------------------------------- undo
     @Slot()

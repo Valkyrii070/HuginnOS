@@ -627,7 +627,7 @@ Four apps are being taken, round by round, to the level of the professional tool
 | Easel | Photoshop, Illustrator | 4 |
 | Code | Xcode, VS Code | 4 |
 | Clips | Final Cut Pro, Premiere, DaVinci Resolve | 4 |
-| Tempo (first called Studio) | Logic Pro, Ableton Live | 2 |
+| Tempo (first called Studio) | Logic Pro, Ableton Live | 3 |
 
 **Tempo, pro pass one** (`apps/huginn_tempo_engine.py`, `apps/huginn_tempo.py`, `apps/qml/Tempo.qml`)
 - *Sections*: Intro, Verse, Chorus markers over the bars. Copy a section after itself, move it, or delete it with its music, and the song closes up; automation goes with it.
@@ -698,6 +698,50 @@ Four apps are being taken, round by round, to the level of the professional tool
     time, the pedal holding a short note, a full bend taking Tempo's organ from 440 to 493.8 Hz and Calf's synth the
     same over MIDI, a drawn bend gliding, the mod wheel's vibrato. On screen: notes' strength bars and a drawn bend.
   - Not yet: controllers in MIDI files, and on the live keyboard.
+
+**Tempo, pro pass three: sound for games** (`apps/huginn_tempo_game.py`, new; `apps/huginn_tempo.py`,
+`apps/qml/Tempo.qml`). A studio making a game needs things from a music program that a songwriter never asks for.
+
+- *Export for a Game* (Export › For a Game…). What: the whole song, each section, or each region of a track (voice
+  lines, sound effects), and optionally a file per track (layers a game brings in and out). Files: WAV 16 or 24 bit,
+  Ogg Vorbis or FLAC, at 48, 44.1 or 22.05 kHz, stereo or mono. Names an engine takes (`boss_fight_loop`, with a
+  prefix; the same name twice is numbered). The sheet lists every file before anything is written, and exporting
+  again replaces the files, since exporting again into the game's folder is the point.
+  - *Loops that join.* The reverb and echo ringing after the last bar are laid under the first, so the file is
+    exactly its bars long and plays round with no gap and no cut-off tail. Loop points are written into the file: a
+    `smpl` chunk in a WAV (Godot, FMOD and Wwise read it), `LOOPSTART`/`LOOPLENGTH` tags in Ogg and FLAC.
+    Each row can be set to loop or play once; sections called Intro, Outro, End or Sting start as "plays once" and
+    keep their ringing.
+  - *One level for every file*: to a loudness (−16 or −23 LUFS, measured as BS.1770 says) or to a peak, never
+    above −1 dB true peak. Where the loudness asked for would clip, the file stops at the ceiling and the export
+    says how many fell short: no limiter is run over your sound behind your back. Layers of one piece share the
+    mix's gain, so played together they are still the mix.
+  - A folder inside a Godot or Unreal project is recognised (project.godot, a .uproject): the sheet offers its sound
+    folder and says what that engine does with a loop.
+- *Sound effects from numbers* (Effect in the toolbar): coin, laser, explosion, power-up, hit, jump, blip, or a
+  surprise; press a kind again for another, "A Little Different" to nudge one, or shape it with twenty sliders. It
+  is sfxr's method and sfxr's numbers (one wave whose pitch slides, steps and wobbles, an envelope, two filters),
+  drawn eight times finer than it is heard so sliding squares don't whistle. Add to the Song puts it on a Sound
+  Effects track as an ordinary recording.
+- *For recordings* (Region): **Strip Silence** cuts one long take into a region per stretch of sound (fifty voice
+  lines read in one go become fifty regions, named and numbered; nothing is deleted, each can be dragged wider);
+  **Normalize** sets a region's gain so it peaks 1 dB under full; **5 Variations** makes five slightly different
+  copies after a sound (pitch, level), so a footstep heard a hundred times isn't one footstep.
+- *Loudness as it plays*: the mixer's master strip shows short-term LUFS, the whole playing's LUFS and the peak, and
+  says OVER if the mix went past full. Click it to start again.
+- Fixed on the way: a one-channel file at any rate but 48 kHz came in 3 dB quieter than the same file at 48 kHz
+  (ffmpeg's mono-to-stereo); and asking for the tempo line with an absurd number of points hung Tempo (found by the
+  fuzz).
+
+`tempo_game_test.py`: 81 checks, among them: a loop's join is no bigger a step than the wave's own; the loop points
+read back from the WAV and from the Ogg's tags; files at the loudness asked for, and layers summing to the mix
+within 0.05; three voice lines found in a take with room noise and a click; sfxr's "0.3" being 321 Hz, slides,
+steps, both filters and a sweep; and the live meter agreeing with the offline measure to 0.3 LU. In the window:
+the game sheet exporting into a made Godot folder with real clicks, the effect maker, and the meter moving.
+Not checked: importing the files into a real Godot or Unreal editor (the loop chunk follows the WAV specification,
+and what each engine does with it is from their documentation), and how the effects sound to an ear, since the build
+machine has no sound card. Not in this pass: scoring to picture (a video track), an Ableton-style clip launcher, and
+surround.
 
 - *Freeze* and *Bounce in Place* (Smart Controls): freezing draws a track's instrument and effects once (their knobs
   as drawn) and plays it back from the file, light on the computer however heavy its plugins; its fader, pan and
