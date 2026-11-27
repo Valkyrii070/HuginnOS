@@ -49,7 +49,7 @@ Column {
                 readonly property bool hiding: stage.kind === "hide" && index === 0
                 readonly property bool spread: stage.kind === "overview"
                 // home
-                readonly property real hx: index === 0 ? 150 : 210
+                readonly property real hx: index === 0 ? 150 : 320
                 readonly property real hy: index === 0 ? 34 : 48
                 readonly property real hw: 150
                 readonly property real hh: 92
@@ -62,10 +62,17 @@ Column {
                 radius: 6; color: index === 0 ? "#F2F4F7" : "#2A2F37"; border.width: 1; border.color: Qt.rgba(1, 1, 1, 0.2)
                 opacity: hiding && p > 0.85 ? (1 - p) / 0.15 : 1
                 visible: stage.kind !== "motion" || index === 1
+                z: index === 0 ? 2 : 0          // the window that hides is the one in front: nothing may cover what is being shown
                 function hideX() { var t = p, cx = stage.width / 2 + 40; if (stage.how === "comet") return hx + (cx - hx) * t * t + hw / 2 * (1 - t) - 4 * t; return hx + (cx - 12 - hx) * Math.max(0, (t - 0.38) / 0.62) + (hw - hideW()) / 2 * Math.min(1, t / 0.38) * 0 }
                 function hideY() { var t = p; if (stage.how === "comet") return hy + (stage.height - 30 - hy) * t * t - Math.sin(t * Math.PI) * 30; var fold = Math.min(1, t / 0.38); return hy + (hh - hideH()) / 2 + (stage.height - 34 - hy - hh / 2) * Math.max(0, (t - 0.65) / 0.35) }
                 function hideW() { var t = p; if (stage.how === "comet") return Math.max(6, hw * (1 - t)); return hw + (20 - hw) * Math.max(0, Math.min(1, (t - 0.38) / 0.27)) }
                 function hideH() { var t = p; if (stage.how === "comet") return Math.max(6, hh * (1 - t)); return hh + (3 - hh) * Math.min(1, t / 0.38) }
+                // drawn as a window (a title strip and a few lines), so it never reads as a blank box
+                Item { anchors.fill: parent; visible: mini.height > 40 && mini.width > 60; opacity: mini.hiding ? Math.max(0, 1 - mini.p * 4) : 1
+                    Rectangle { x: 1; y: 1; width: parent.width - 2; height: 12; radius: 5; color: mini.index === 0 ? Qt.rgba(0, 0, 0, 0.10) : Qt.rgba(1, 1, 1, 0.08) }
+                    Rectangle { x: 6; y: 5; width: 22; height: 3; radius: 2; color: mini.index === 0 ? Qt.rgba(0, 0, 0, 0.45) : Qt.rgba(1, 1, 1, 0.6) }
+                    Repeater { model: 3
+                        Rectangle { required property int index; x: 10; y: 24 + index * 12; width: (parent.width - 20) * [0.8, 0.6, 0.7][index]; height: 4; radius: 2; color: mini.index === 0 ? Qt.rgba(0, 0, 0, 0.16) : Qt.rgba(1, 1, 1, 0.16) } } }
                 Rectangle { anchors.fill: parent; radius: parent.radius; color: Theme.t.glowA; opacity: mini.hiding ? Math.min(0.8, mini.p * 2) : 0 }
             }
         }
