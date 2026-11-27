@@ -4,8 +4,9 @@
 Drawn as the `huginn-greeter` account under Huginn's compositor, with nobody's session behind it (huginn-signind starts
 /usr/libexec/huginn-greeter-session, which starts this). It can do nothing by itself: it shows who can sign in, sends a
 name and a password to the sign-in service down the service's socket, and is told yes or no. On yes it plays the wake
-(the dock fills, the clock blooms away) and leaves with 0; the service then starts that person's session on the screen
-it has left.
+(the dock fills, the clock blooms away) and says so; meanwhile that person's desktop has been starting on a terminal of
+its own behind this one, and the service switches the screen to it once it's ready, ending this. The wake's last
+picture stays up until then, so the screen goes from the sign-in screen's dock straight to the desktop's.
 
     huginn_greeter.py            under the compositor, as the service starts it
     HUGINN_SIGNIN_SOCK=…         the service's socket (the service sets it)
@@ -70,6 +71,7 @@ class Greeter(QObject):
         self._people, self._sessions, self._last, self._last_session, self._host = [], [], "", "huginn", ""
         self._sock, self._lock, self._up = None, threading.Lock(), False
         self._battery = battery()
+        self._left = False
         app.screenAdded.connect(lambda _s: self.screensChanged.emit())
         app.screenRemoved.connect(lambda _s: self.screensChanged.emit())
         app.primaryScreenChanged.connect(lambda _s: self.screensChanged.emit())
@@ -182,12 +184,22 @@ class Greeter(QObject):
 
     @Slot()
     def done(self) -> None:
-        """The wake has played: leaving is what lets the session have the screen. At once: nothing here needs putting
-        away, and every moment spent leaving is a moment of black screen."""
+        """The wake has played. The sign-in service hands the screen to the desktop starting behind this one as soon as
+        that's ready, and ends this then; until it does, the wake's last picture stays. Without the service (or if it
+        never does), this leaves by itself."""
+        if self._left:
+            return
+        self._left = True
+        if not self._send({"op": "leaving"}) or os.environ.get("HUGINN_GREETER_LEAVE_NOW"):
+            self._leave()
+            return
+        QTimer.singleShot(20000, self._leave)
+
+    def _leave(self) -> None:
         if os.environ.get("HUGINN_GREETER_LEAVE_SLOWLY"):            # (tests watch the leaving)
             self._app.exit(0)
             return
-        os._exit(0)
+        os._exit(0)                                               # at once: nothing here needs putting away
 
     def _minute(self) -> None:
         b = battery()

@@ -55,6 +55,7 @@ PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:
 TRIES_BEFORE_WAITING = 5          # wrong passwords in a row for one name before a wait
 FIRST_WAIT, LONGEST_WAIT = 30, 600
 GREETER_LEAVES_WITHIN = 12.0      # after a right password: its wake, then it must be gone (slow computers take a while to close it)
+READY_MOST = 8.0                  # a session started behind the sign-in screen: how long it may take to be ready before it's shown anyway
 GREETER_QUICK, GREETER_GIVES_UP = 20.0, 4   # a greeter that ends this soon, this many times running: something's broken
 AUTOLOGIN_QUICK = 10.0            # a by-itself sign-in that ends this soon isn't tried again
 WRONG = "Wrong password."
@@ -342,6 +343,10 @@ class Worker(Line):
         self.user, self.kind, self.asked_by, self.started_at = job["user"], job["class"], None, time.monotonic()
         self.session = job.get("session", "")
         self.auto = False
+        self.early = False                 # started behind the sign-in screen (on a terminal of its own)
+        self.started_at_ok = None          # when its session started
+        self.ready = False                 # its desktop said it has loaded
+        self.stopped_by_us = False
         self.send(job)
 
     def stop(self) -> None:
@@ -492,6 +497,9 @@ class Service:
                 client.send(self._people())
             elif op == "signin":
                 self._signin(client, msg)
+            elif op == "leaving":                                       # its wake has played: its last picture stays up
+                self.greeter_leaving = True
+                self.maybe_switch()
             elif op == "power" and msg.get("what") in ("sleep", "restart", "off"):
                 # (only from the sign-in screen, where nobody's work is open: a session asks logind itself)
                 if not self.session:
@@ -518,11 +526,11 @@ class Service:
                 if msg["auth"]:
                     self.misses.right(w.user)
                     self.warm(w.user)
-                    self.pending, self.pending_since = w, self.now()
+                    w.early = msg.get("early") is True
+                    self.pending, self.pending_since, self.greeter_leaving = w, self.now(), False
                     if asker and not asker.gone:
                         asker.send({"op": "signin", "ok": True})
-                    if not self.greeter:                               # (the greeter already went: don't wait for it)
-                        self._go()
+                    self.maybe_switch()
                 else:
                     self.misses.missed(w.user)
                     wait = self.misses.wait(w.user)
@@ -530,20 +538,55 @@ class Service:
                     if asker and not asker.gone:
                         asker.send({"op": "signin", "ok": False, "why": wait_words(wait) if wait else why, "wait": wait})
             elif "started" in msg:
-                if w is self.session and msg["started"]:
+                if msg["started"] and w is self.pending:
+                    w.started_at_ok = self.now()
+                    say(w.user, "is signing in" + (" (behind the sign-in screen, on its own terminal)" if w.early else ""))
+                    self.maybe_switch()
+                elif w is self.session and msg["started"]:
                     say(w.user, "is signed in" if w.kind == "user" else "(the sign-in screen) is up")
                 elif not msg["started"]:
                     say("couldn't start", "the sign-in screen:" if w.kind == "greeter" else f"{w.user}'s session:", msg.get("why", ""))
+            elif msg.get("ready") and w is self.pending:
+                w.ready = True
+                say(w.user + "'s desktop is ready")
+                self.maybe_switch()
+            elif "shown" in msg and w is self.session:
+                say(w.user, "is signed in" if msg["shown"] else "is signed in (its terminal didn't come to the front)")
         if w.gone or w.proc.poll() is not None:
             self._ended(w)
 
+    greeter_leaving = False
+
+    def maybe_switch(self) -> None:
+        """Hands the screen to the person whose password was right, when it's time: the greeter has played its wake
+        (or gone, or taken too long) and, for a session started behind it, that desktop is ready (or has had long
+        enough). Until then the greeter's last picture stays on the screen."""
+        w = self.pending
+        if w is None:
+            return
+        greeter_done = self.greeter is None or self.greeter_leaving or self.now() - self.pending_since > GREETER_LEAVES_WITHIN
+        if w.early:
+            if w.started_at_ok is None:
+                return                                                 # (still opening the session)
+            desktop_ready = w.ready or self.now() - w.started_at_ok > READY_MOST
+            if not (greeter_done and desktop_ready):
+                return
+        elif not greeter_done:
+            return
+        if self.greeter is not None and not self.greeter_leaving and self.now() - self.pending_since > GREETER_LEAVES_WITHIN:
+            say("the sign-in screen didn't finish its wake in time: handing over anyway")
+        self._go()
+
     def _go(self) -> None:
-        """The greeter has left the screen: the person whose password was right gets it."""
+        """The person whose password was right gets the screen; the sign-in screen goes."""
         w, self.pending = self.pending, None
         if w is None:
             return
         self.session = w
         w.send({"go": True})
+        if self.greeter is not None:
+            self.greeter.stopped_by_us = True
+            self.greeter.stop()
 
     def _ended(self, w: Worker) -> None:
         for m in w.read():                                             # (anything it said on its way out)
@@ -560,13 +603,23 @@ class Service:
                 w.asked_by.send({"op": "signin", "ok": False, "why": "The password can't be checked right now."})
         elif w is self.pending:
             self.pending = None
+            say(w.user + "'s session ended before it was shown")
+            if self.greeter is not None:                               # its wake played for nothing: start it afresh
+                self.greeter.stopped_by_us = True
+                self.greeter.stop()
+                return
         elif w is self.greeter:
             self.greeter = None
             for c in list(self.clients):                               # its connections go with it
                 self.drop(c)
             if self.pending:
                 self.greeter_fails = 0
-                self._go()
+                self.greeter_leaving = True
+                self.maybe_switch()
+                return
+            if w.stopped_by_us:
+                self.greeter_fails = 0
+                self.next()
                 return
             quick = self.now() - w.started_at < GREETER_QUICK
             self.greeter_fails = self.greeter_fails + 1 if quick else 0
@@ -590,11 +643,9 @@ class Service:
     autologin_broken = False
 
     def tick(self) -> None:
-        """Things that depend on time passing."""
-        if self.pending and self.greeter and self.now() - self.pending_since > GREETER_LEAVES_WITHIN:
-            say("the sign-in screen didn't leave after a right password: closing it")
-            self.greeter.stop()
-            self.pending_since = self.now() + 3600                     # (once)
+        """Things that depend on time passing: a desktop slow to be ready, a greeter slow to finish its wake."""
+        if self.pending:
+            self.maybe_switch()
 
     def step(self, timeout: float = 0.5) -> None:
         for key, _ in self.sel.select(timeout):
@@ -647,7 +698,60 @@ class Service:
 
 
 # ----------------------------------------------------------------------------------------------------------- a worker
-KDSETMODE, KD_TEXT, VT_ACTIVATE, VT_WAITACTIVE = 0x4B3A, 0, 0x5606, 0x5607
+KDSETMODE, KD_TEXT, VT_ACTIVATE, VT_WAITACTIVE, VT_OPENQRY = 0x4B3A, 0, 0x5606, 0x5607, 0x5600
+
+
+def free_vt() -> int:
+    """A virtual terminal nobody has open (the kernel's VT_OPENQRY), or 0 when there's none to have (no terminals)."""
+    try:
+        fd = os.open("/dev/tty0", os.O_RDWR | os.O_NOCTTY)
+    except OSError:
+        return 0
+    try:
+        n = struct.unpack("i", fcntl.ioctl(fd, VT_OPENQRY, struct.pack("i", 0)))[0]
+    except OSError:
+        n = 0
+    finally:
+        os.close(fd)
+    return n if 2 <= n <= 63 else 0
+
+
+def ready_screen(vt: int) -> int:
+    """Opens a terminal for a session that starts behind the sign-in screen, without bringing it to the front. Its fd,
+    or -1."""
+    try:
+        fd = os.open(f"/dev/tty{vt}", os.O_RDWR | os.O_NOCTTY)
+    except OSError:
+        return -1
+    try:
+        fcntl.ioctl(fd, KDSETMODE, KD_TEXT)
+        os.write(fd, b"\033[2J\033[H\033[?25l")
+    except OSError:
+        pass
+    return fd
+
+
+def show_screen(vt: int, within: float = 3.0) -> bool:
+    """Brings a terminal to the front (logind then makes the session on it the active one). True once it is."""
+    try:
+        fd = os.open("/dev/tty0", os.O_RDWR | os.O_NOCTTY)
+    except OSError:
+        return False
+    try:
+        fcntl.ioctl(fd, VT_ACTIVATE, vt)
+    except OSError:
+        return False
+    finally:
+        os.close(fd)
+    until = time.monotonic() + within
+    while time.monotonic() < until:
+        try:
+            if Path("/sys/class/tty/tty0/active").read_text().strip() == f"tty{vt}":
+                return True
+        except OSError:
+            return True                                              # (can't tell: it was asked for)
+        time.sleep(0.02)
+    return False
 
 
 def take_screen(vt: int) -> int:
@@ -762,17 +866,25 @@ def worker(fd: int) -> int:
     pam = huginn_pam.Session(job["service"], user)
     ok, why = pam.authenticate(password or "")
     password = job["password"] = None
-    send({"auth": ok, "why": why})
+    # A sign-in from the sign-in screen starts at once, on a terminal of its own behind the sign-in screen, while the
+    # wake plays: the desktop gets ready unseen, and the screen is handed over (told "go") once it is. Signing in by
+    # itself, and a computer with no spare terminal, start on the first one when told, as before.
+    vt = free_vt() if kind == "user" and not job.get("go") else 0
+    early = vt > 0
+    send({"auth": ok, "why": why, "early": early})
     if not ok:
         pam.close()
         return 0
-    if not job.get("go"):
+    if not job.get("go") and not early:
         msg = recv()                                                   # waits here while the greeter plays its wake and leaves
         if not msg or not msg.get("go"):
             pam.close()
             return 0
-    vt = int(job.get("vt") or VT)
-    tty = take_screen(vt)
+    if early:
+        tty = ready_screen(vt)
+    else:
+        vt = int(job.get("vt") or VT)
+        tty = take_screen(vt)
     asks = {"XDG_SEAT": "seat0", "XDG_VTNR": str(vt), "XDG_SESSION_CLASS": kind, "XDG_SESSION_TYPE": "wayland", "XDG_SESSION_DESKTOP": "huginn"}
     ok, why = pam.open(asks, f"/dev/tty{vt}" if tty >= 0 else "")
     if not ok:
@@ -793,7 +905,11 @@ def worker(fd: int) -> int:
         become(pw, tty, env, list(job["command"]), kind)
     if tty >= 0:
         os.close(tty)
-    send({"started": True, "pid": pid})
+    started_at = time.time()
+    send({"started": True, "pid": pid, "vt": vt})
+    # ready: the desktop has loaded (the shell says so in its runtime folder); the service hands the screen over then
+    ready_file = Path(env.get("XDG_RUNTIME_DIR") or f"/run/user/{pw.pw_uid}") / "huginn/shell-ready" if early else None
+    said_ready = False
     stop_at, killed = None, False
     signal.signal(signal.SIGTERM, lambda *_: None)                     # ending is asked for below, in order
     sel = selectors.DefaultSelector()
@@ -807,11 +923,20 @@ def worker(fd: int) -> int:
         if done:
             code = os.waitstatus_to_exitcode(status)
             break
+        if ready_file is not None and not said_ready:
+            try:
+                if ready_file.stat().st_mtime >= started_at - 1:
+                    said_ready = True
+                    send({"ready": True})
+            except OSError:
+                pass
         if not asked and sel.select(0.2):
             msg = recv()
             if msg is None or msg.get("stop"):                         # told to stop, or the service has gone
                 asked = True
                 sel.unregister(chan)
+            elif msg.get("go") and early:                              # the screen is the desktop's now
+                send({"shown": show_screen(vt)})
         elif asked:
             time.sleep(0.2)
         if asked and stop_at is None:

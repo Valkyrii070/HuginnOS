@@ -46,7 +46,9 @@ FAKE = textwrap.dedent('''
     job = json.loads(f.readline())
     with open(os.environ["PLAN"], "a") as fh: fh.write(json.dumps({k: job.get(k) for k in ("class", "user", "password", "session")}) + "\\n")
     if job["class"] == "greeter":
-        send({"auth": True}); send({"started": True}); f.readline(); send({"ended": 0}); sys.exit(0)
+        send({"auth": True}); send({"started": True}); f.readline()
+        with open(os.environ["PLAN"], "a") as fh: fh.write(json.dumps({"stopped": "huginn-greeter"}) + "\\n")
+        send({"ended": 0}); sys.exit(0)
     time.sleep(0.25)
     if job.get("password") != "right-" + job["user"]: send({"auth": False, "why": "Wrong password."}); sys.exit(0)
     send({"auth": True})
@@ -154,6 +156,10 @@ def jobs():
         return []
 
 
+def signins():
+    return [j for j in jobs() if "class" in j]
+
+
 check("it reaches the service and hears who's here", settle(3000, lambda: len(view.property("people")) == 3), (view.property("people"), host.property("up"), host._people, problems[:4]))
 check("the one who signed in last is chosen", view.property("who")["name"] == "leif", view.property("who"))
 texts = lambda: [i.property("text") for i in find(lambda i: i.metaObject().className().startswith("QQuickText") and i.isVisible() and i.property("text"))]  # noqa: E731
@@ -195,7 +201,7 @@ check("the password is gone from the field", pwf.property("text") == "")
 check("and the field has the keyboard again", pwf.property("activeFocus") is True)
 settle(150)
 shot("3-wrong")
-check("what was sent: the name, the password as typed, the session", jobs()[-1] == {"class": "user", "user": "astrid", "password": "not-it", "session": "huginn"}, jobs()[-1:])
+check("what was sent: the name, the password as typed, the session", signins()[-1] == {"class": "user", "user": "astrid", "password": "not-it", "session": "huginn"}, jobs()[-1:])
 
 # the wait after too many
 for _ in range(4):
@@ -231,13 +237,14 @@ app.exit = lambda code=0: exits.append(code)                   # (so the test go
 host._app = SimpleNamespace(exit=lambda code=0: exits.append(code))
 QMetaObject.invokeMethod(view, "submit")
 check("yes: the wake begins", settle(4000, lambda: view.property("phase") == "wake"), view.property("phase"))
-check("the session chosen was sent", jobs()[-1] == {"class": "user", "user": "astrid", "password": "right-astrid", "session": "game"}, jobs()[-1:])
+check("the session chosen was sent", signins()[-1] == {"class": "user", "user": "astrid", "password": "right-astrid", "session": "game"}, jobs()[-1:])
 settle(450)
 shot("5-wake-a")
 settle(350)
 shot("6-wake-b")
 check("the screen can't be used during the wake", pwf.property("enabled") is False)
-check("when the wake is over the screen leaves, with 0", settle(4000, lambda: exits == [0]), exits)
+check("when the wake is over it says so, and the service hands over and ends it", settle(6000, lambda: any(line.get("stopped") == "huginn-greeter" for line in jobs())), jobs()[-3:])
+check("it stays up until then (its last picture on the screen)", exits == [], exits)
 shot("7-wake-end")
 check("it left within a second and a half of the yes", True)
 check("nothing in the screen's own code complained", not [p for p in problems if "GreeterView" in p or "Greeter" in p], problems[:6])

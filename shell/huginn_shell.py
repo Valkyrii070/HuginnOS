@@ -1521,6 +1521,19 @@ class Glance(QObject):
     photo = Property(str, lambda self: self._photo, notify=changed)
 
 
+def say_ready() -> None:
+    """The desktop has loaded: $XDG_RUNTIME_DIR/huginn/shell-ready. Signing in starts the desktop behind the sign-in
+    screen, and the sign-in service hands the screen over when this appears (huginn_signind.py)."""
+    run = os.environ.get("XDG_RUNTIME_DIR")
+    if not run:
+        return
+    try:
+        (Path(run) / "huginn").mkdir(parents=True, exist_ok=True)
+        (Path(run) / "huginn" / "shell-ready").write_text(str(os.getpid()), encoding="utf-8")
+    except OSError:
+        pass
+
+
 def name_process(name: str) -> None:
     """The name top, Monitor and earlyoom see for this process (its comm), in place of "python3": earlyoom
     (/etc/default/earlyoom) is told to leave the shell, the session daemon and their helpers be."""
@@ -1660,6 +1673,7 @@ def main() -> int:
         return 1
     if not (args.compositor or args.preview or args.shot):
         unstick(engine.rootObjects()[0])
+        QTimer.singleShot(0, say_ready)
     if args.shot:
         window = engine.rootObjects()[0]
 
