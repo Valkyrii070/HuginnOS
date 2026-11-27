@@ -8,6 +8,10 @@ Item {
     id: paper
     property bool comingIn: typeof arriving !== "undefined" && arriving      // `arriving`: the shell was just started by signing in
     readonly property bool live: scene.status === Loader.Ready
+    // something real is drawn: the picture, the scene (or its still), or the painted sky in their place
+    readonly property bool drawn: made ? madeScene.status !== Loader.Loading
+                                       : picture.status === Image.Loading ? false
+                                       : live ? scene.item.shown !== false : true
     Timer { running: paper.comingIn; interval: 2600; onTriggered: paper.comingIn = false }
     // A window fills this screen (a game, a film, a filled window): nothing behind it needs to move (Shell.qml)
     property bool covered: false

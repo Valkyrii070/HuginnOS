@@ -11,6 +11,11 @@ QtObject {
     property bool editWidgets: false       // the desktop's widgets being added, taken off and moved (Widgets.qml)
     property var deskMenuAt: null          // the desktop's menu, open: {x, y, screen} where it was right-clicked
     property bool settled: !arriving       // after the arrival from the sign-in screen, the desktop's pieces come in
+    // every screen's wallpaper has been drawn (a frame with something real in it): signing in, the desktop is shown
+    // from behind the sign-in screen once it's drawn (huginn_shell.py, ShellReady)
+    property int wallsDrawn: 0
+    readonly property bool drawnIn: wallsDrawn > 0 && wallsDrawn >= walls.count
+    onDrawnInChanged: if (drawnIn && typeof ShellReady !== "undefined" && ShellReady) ShellReady.drawn()
     property bool tabsOpen: false
     property string searchText: ""
     property var dockIsland: null              // the app whose island is open over the dock
@@ -334,6 +339,8 @@ QtObject {
             required property var modelData
             readonly property bool main: modelData.name === Status.primaryScreen || Status.primaryScreen === ""
             visible: true; color: "black"
+            property bool drawn: false
+            onFrameSwapped: if (!drawn && paperHere.drawn) { drawn = true; shell.wallsDrawn += 1 }
             LayerShell.Window.screen: modelData                 // each on its own screen (else they all land on one)
             LayerShell.Window.wantsToBeOnActiveScreen: false
             LayerShell.Window.scope: "huginn-wallpaper"
@@ -341,7 +348,7 @@ QtObject {
             LayerShell.Window.layer: LayerShell.Window.LayerBackground
             LayerShell.Window.anchors: LayerShell.Window.AnchorTop | LayerShell.Window.AnchorBottom | LayerShell.Window.AnchorLeft | LayerShell.Window.AnchorRight
             LayerShell.Window.exclusionZone: -1
-            Wallpaper { anchors.fill: parent; covered: shell.filled(wall.modelData) }
+            Wallpaper { id: paperHere; anchors.fill: parent; covered: shell.filled(wall.modelData) }
             // right-click the desktop: a small menu (Edit Widgets, the wallpaper, the desktop's settings), over everything
             MouseArea { anchors.fill: parent; acceptedButtons: Qt.RightButton
                 onClicked: function (m) { shell.deskMenuAt = { x: m.x, y: m.y, screen: wall.modelData } } }

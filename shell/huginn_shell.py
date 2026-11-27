@@ -1565,6 +1565,26 @@ class OnScreen(QObject):
     shown = Property(bool, _get, notify=changed)
 
 
+class ShellReady(QObject):
+    """Says the desktop is ready (say_ready) once every screen's wallpaper has been drawn (Shell.qml calls drawn()),
+    or after a few seconds whatever happened: signing in shows the desktop from behind the sign-in screen then, so
+    its first picture is the desktop, not a black screen waiting for the wallpaper."""
+
+    def __init__(self, most_ms: int = 6000):
+        super().__init__()
+        self._said = False
+        self._most = most_ms
+
+    def start(self) -> None:
+        QTimer.singleShot(self._most, self.drawn)
+
+    @Slot()
+    def drawn(self) -> None:
+        if not self._said:
+            self._said = True
+            say_ready()
+
+
 def say_ready() -> None:
     """The desktop has loaded: $XDG_RUNTIME_DIR/huginn/shell-ready. Signing in starts the desktop behind the sign-in
     screen, and the sign-in service hands the screen over when this appears (huginn_signind.py)."""
@@ -1709,6 +1729,8 @@ def main() -> int:
     real = not (args.compositor or args.preview or args.shot or args.windowed)
     on_screen = OnScreen(os.environ.get("XDG_VTNR", "") if real else "")
     ctx.setContextProperty("onScreen", on_screen)
+    shell_ready = ShellReady() if real else None
+    ctx.setContextProperty("ShellReady", shell_ready)
     comp = None
     if args.compositor:
         from huginn_compositor import Compositor
@@ -1720,7 +1742,8 @@ def main() -> int:
         return 1
     if not (args.compositor or args.preview or args.shot):
         unstick(engine.rootObjects()[0], on_screen)
-        QTimer.singleShot(0, say_ready)
+        if shell_ready is not None:
+            shell_ready.start()
     if args.shot:
         window = engine.rootObjects()[0]
 

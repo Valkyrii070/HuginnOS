@@ -37,6 +37,7 @@ Item {
     readonly property bool resting: speed === 0
     // the still for the appearance: <realm>-day.jpg for the light one (where there is one), <realm>.jpg for the dark
     property bool noDayStill: false
+    readonly property bool shown: stillPicture.status === Image.Ready || shader.status === ShaderEffect.Compiled   // something drawn
     readonly property url stillSource: Qt.resolvedUrl("stills/" + realm + (day > 0.5 && !noDayStill ? "-day" : "") + ".jpg")
 
     FrameAnimation {
@@ -57,6 +58,7 @@ Item {
     }
     // the still: shown until the graphics card is ready, and for good without one
     Image {
+        id: stillPicture
         anchors.fill: parent
         visible: lw.still || shader.status !== ShaderEffect.Compiled
         source: lw.stillSource
