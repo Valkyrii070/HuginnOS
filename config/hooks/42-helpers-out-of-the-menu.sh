@@ -3,6 +3,7 @@
 # FreeRDP (behind Screen Sharing and Machines), Calf and setBfree (Tempo's instruments and effects) and Kvantum's
 # manager (Huginn dresses Qt apps itself). Each gets a copy in /usr/local/share/applications, which comes before
 # /usr/share's, with NoDisplay=true: they still run, open files and start as before, and package updates don't undo it.
+# On update: run
 set -e
 mkdir -p /usr/local/share/applications
 for id in org.kde.kdeconnect.app org.kde.kdeconnect.nonplasma org.kde.kdeconnect.sms sdl-freerdp calf setbfree kvantummanager; do

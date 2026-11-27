@@ -16,6 +16,7 @@ Column {
     readonly property var groups: [
         { kind: "system", title: "System", sub: "Ubuntu's packages: the kernel, drivers, the browser engine and every library", glyph: "cpu", tile: "#1E40AF" },
         { kind: "app", title: "Apps", sub: "From Flathub", glyph: "apps", tile: "#0A8071" },
+        { kind: "os", title: "Huginn OS", sub: "The desktop, every Huginn app and the system's own files", glyph: "desktop", tile: "#B4491F" },
         { kind: "huginn", title: "Huginn", sub: "The browser, from its own repository", glyph: "globe", tile: "#5A3FE0" },
         { kind: "firmware", title: "Firmware", sub: "This computer's own firmware and devices (needs a restart)", glyph: "bolt", tile: "#C46A00" } ]
     Rectangle { width: parent.width; height: 150; radius: Theme.t.radiusCard; color: Theme.t.group; border.width: 1; border.color: Theme.t.separator; clip: true
@@ -55,8 +56,25 @@ Column {
                             Label { id: sec; anchors.centerIn: parent; text: "Security"; color: Theme.t.danger; font.pixelSize: 10; font.weight: Font.DemiBold } }
                         Btn { visible: modelData.kind === "app"; text: "Update"; enabled: !pg.working; onClicked: Updates.install(modelData.id) } } } }
             SetRow { visible: modelData.kind === "system" && mine.length > 5; title: pg.allSystem ? "Show fewer" : "Show all " + mine.length; chevron: true; onClicked: pg.allSystem = !pg.allSystem } } }
-    SetCard { title: "Automatic updates"; note: "Apps and Huginn update by themselves. System updates are downloaded and go in the next time you restart, so nothing changes under a program you're using."
-        SetRow { title: "Keep this computer up to date by itself"; glyph: "refresh"; tile: "#1E40AF"; Toggle { on: Settings.autoUpdate; onToggled: function (v) { Settings.set("autoUpdate", v ? "true" : "false") } } } }
+    SetCard { title: "Automatic updates"; note: "Apps and Huginn update by themselves. System updates and Huginn OS itself are downloaded and go in the next time you restart, so nothing changes under a program you're using."
+        SetRow { title: "Keep this computer up to date by itself"; glyph: "refresh"; tile: "#1E40AF"; Toggle { on: Settings.autoUpdate; onToggled: function (v) { Settings.set("autoUpdate", v ? "true" : "false"); if (pg.have) Updates.osSetAuto(v) } } } }
+    // Huginn OS itself: which version this is, one fetched and waiting for the restart, what it changes, going back
+    SetCard { id: osCard; objectName: "osCard"; visible: pg.have; title: "Huginn OS"
+        readonly property var os: pg.have ? Updates.os : ({})
+        note: !os.known ? "This system was installed before Huginn OS could update itself. Install the newest image once: after that the desktop, the apps and the system's own files arrive here, with no new installation."
+              : os.live ? "This is Huginn OS running from the installation drive. An installed system keeps itself up to date."
+              : "The desktop, every Huginn app, the look and the system's own files, from the same place the system was built from. A new version is fetched and checked in the background and put in place when the computer starts, before you sign in, so nothing changes under an app you're using."
+        SetRow { visible: !!osCard.os.known; title: "Version"; sub: osCard.os.applied && osCard.os.applied.undone ? "You went back to this version" : osCard.os.applied && osCard.os.applied.date === osCard.os.date ? "Updated by Software Update" : "The version that came with the system"
+            Label { text: (osCard.os.date || "") + (osCard.os.commit ? " · " + osCard.os.commit : ""); secondary: true; font.family: Theme.t.fontMono } }
+        SetRow { objectName: "osStaged"; visible: !!(osCard.os.staged && osCard.os.staged.commit); title: "Ready: " + (osCard.os.staged ? osCard.os.staged.date + " · " + osCard.os.staged.commit : "")
+            sub: osCard.os.staged && osCard.os.staged.news && osCard.os.staged.news.length ? osCard.os.staged.news.slice(0, 4).join("  ·  ") : (osCard.os.staged ? osCard.os.staged.title || "" : "")
+            Row { spacing: 8
+                Btn { text: "Finish Now"; enabled: !pg.working; onClicked: win.confirm("Put Huginn OS in place now?", "Open Huginn apps keep running the old version until you open them again, and the desktop until you sign out. Restarting instead does it all at once.", "Finish Now", function () { Updates.osFinishNow() }) }
+                Btn { primary: true; text: "Restart"; onClicked: win.confirm("Restart now?", "Save your work first: open apps close.", "Restart", function () { Updates.restartNow() }) } } }
+        SetRow { visible: !!(osCard.os.applied && osCard.os.applied.kept && osCard.os.applied.kept.length); title: "Left as you changed them"; sub: osCard.os.applied && osCard.os.applied.kept ? osCard.os.applied.kept.join(", ") : "" }
+        SetRow { visible: !!osCard.os.problem; title: "The last try didn't work"; sub: osCard.os.problem || "" }
+        SetRow { objectName: "osBack"; visible: !!osCard.os.canGoBack; title: "Go back to the version before"; sub: "If the newest one gives you trouble. It isn't taken again by itself."
+            Btn { text: "Go Back"; enabled: !pg.working; onClicked: win.confirm("Go back to the Huginn OS before this one?", "The desktop, the apps and the system's own files go back to how they were before the last update. Your files and settings aren't touched.", "Go Back", function () { Updates.osGoBack() }) } } }
     SetCard { visible: pg.have; title: "Huginn"
         SetRow { title: "Version"; sub: pg.have ? (Updates.huginn.yours ? "Updated by Software Update" : "The version that came with the system") : ""
             Label { text: pg.have ? Updates.huginn.date + " · " + Updates.huginn.commit : ""; secondary: true; font.family: Theme.t.fontMono } }

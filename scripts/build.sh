@@ -379,6 +379,13 @@ stage_customise() {
     # Compiled once here: users can't write next to these files, so otherwise every start compiles them again (the
     # shell and the apps are large Python files; on a slow computer that alone takes seconds at every sign-in).
     in_chroot python3 -m compileall -q /usr/share/huginn-apps /usr/share/huginn-shell
+    # Which version this system is, and what each of its own files was when it was put there: a later update
+    # (apps/huginn_osupdate.py) starts from the first and tells your changes from its own by the second.
+    # HUGINN_COMMIT is the commit of this tree (the build tree need not be a git checkout).
+    local commit="${HUGINN_COMMIT:-$(git -C "$ROOT" rev-parse HEAD 2>/dev/null || true)}"
+    python3 "$ROOT/apps/huginn_osupdate.py" record "$ROOT" "$CHROOT" "$commit" "$(date -u -d "@$SOURCE_DATE_EPOCH" +%Y-%m-%d)" "$theme" >/dev/null \
+        || warn "This system's version couldn't be recorded: it won't update itself until an image that records it is installed"
+    [ -n "$commit" ] || warn "HUGINN_COMMIT isn't set and this tree isn't a git checkout: the system's first update will bring everything again"
 
     build_compositor
     build_whisper

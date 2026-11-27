@@ -5,6 +5,9 @@
                  in its own window; this app never sees it.
     Apps         apps from Flathub, for you and for everyone on the computer (flatpak update).
     Firmware     the computer's own firmware and devices that take updates (fwupd, from the LVFS).
+    Huginn OS    the desktop, every Huginn app, the look, system files and the compositor, from the branch this system
+                 was built from (huginn_osupdate.py). Fetched and checked, then put in place at the next start-up
+                 before the sign-in screen, or at once if asked; the version before is kept for "Go Back".
     Huginn       the browser, from its own repository (vendor/huginn/SOURCE says which). A newer Huginn goes into
                  ~/.local/share/huginn-os/browser, and /usr/bin/huginn starts whichever copy is newer, so it needs
                  no password and the previous copy stays for "Go Back".
@@ -231,6 +234,43 @@ def check_huginn() -> list:
              "kind": "huginn", "repo": repo, "sha": sha, "date": date}]
 
 
+OS_ROOT = Path("/")
+OS_HELPER = "/usr/libexec/huginn-os-update"
+
+
+def check_os() -> list:
+    """A newer Huginn OS on this system's branch, as one item (none while it is already fetched and waiting for the
+    restart, or when this system doesn't say what it is)."""
+    import huginn_osupdate as osu
+    try:
+        found = osu.look(OS_ROOT, lambda url, timeout=60, cap=8 * 1024 * 1024: FETCH(url, timeout))
+    except osu.Problem:
+        return []
+    if not found["waiting"] or found["staged"] == found["latest"]["sha"]:
+        return []
+    new = found["latest"]
+    return [{"id": "os", "name": "Huginn OS", "version": f"{new['date']} · {new['sha'][:7]}", "from": found["have"]["date"], "security": False, "kind": "os",
+             "sha": new["sha"], "date": new["date"], "note": new["title"], "news": found["news"][:12], "skipped": found["skipped"]}]
+
+
+def os_view(demo: bool = False) -> dict:
+    """What Software Update shows about Huginn OS itself: {known, date, commit, staged: {date, commit, title, news},
+    canGoBack, problem, applied: {date, kept, compositor}, live}."""
+    if demo:
+        return {"known": True, "date": "2026-11-27", "commit": "db47fe0", "staged": {"date": "2026-11-28", "commit": "4b1e9c2", "title": "Tempo: sound for games",
+                                                                                     "news": ["Tempo: sound for games", "Code: notebooks and workspaces"]},
+                "canGoBack": True, "problem": "", "applied": {}, "live": False}
+    import huginn_osupdate as osu
+    have, st = osu.source(OS_ROOT), osu.load_state(OS_ROOT)
+    staged = st.get("staged") if isinstance(st.get("staged"), dict) else None
+    applied = st.get("applied") if isinstance(st.get("applied"), dict) else {}
+    return {"known": bool(have["repo"] and have["branch"]), "date": have["date"], "commit": have["commit"][:7],
+            "staged": {"date": staged.get("date", ""), "commit": str(staged.get("sha", ""))[:7], "title": staged.get("title", ""), "news": list(staged.get("news") or [])[:12]} if staged else {},
+            "canGoBack": (osu.state_dir(OS_ROOT) / "previous/undo.json").is_file(), "problem": str(st.get("problem") or ""),
+            "applied": {"date": applied.get("date", ""), "kept": list(applied.get("kept") or [])[:8], "compositor": applied.get("compositor", ""), "undone": bool(applied.get("undone"))} if applied else {},
+            "live": osu.is_live(OS_ROOT)}
+
+
 def needs_restart(items: list) -> bool:
     return Path("/var/run/reboot-required").exists() or any(i["kind"] == "system" and RESTART_NAMES.match(i["name"]) for i in items)
 
@@ -351,7 +391,7 @@ def auto_wanted() -> bool:
 def look_everywhere(refresh: bool = True, problems: list = None) -> list:
     """Everything waiting; `problems` (if given) gets a sentence for each place that couldn't be looked at."""
     items = []
-    for check in (lambda: check_system(refresh), check_flatpak, check_firmware, check_huginn):
+    for check in (lambda: check_system(refresh), check_flatpak, check_firmware, check_huginn, check_os):
         try:
             items += check()
         except NoLists as why:
@@ -496,7 +536,7 @@ class Updates(QObject):
 
     def _install(self, chosen: list) -> None:
         done, restart, problems = set(), False, []
-        steps = [k for k in ("app", "huginn", "firmware", "system") if any(i["kind"] == k for i in chosen)]
+        steps = [k for k in ("app", "huginn", "firmware", "system", "os") if any(i["kind"] == k for i in chosen)]
         for n, kind in enumerate(steps):
             part = [i for i in chosen if i["kind"] == kind]
             base = n / len(steps)
@@ -530,6 +570,15 @@ class Updates(QObject):
                     line("Fetching Huginn…")
                     self._emit("said", (install_huginn(part[0]), False))
                     done.add("huginn")
+                elif kind == "os":
+                    line("Fetching Huginn OS…")
+                    code = run_stream(["pkexec", OS_HELPER, "stage"], line, stopped)
+                    if code == 0:
+                        done.add("os")
+                        restart = True
+                        self._emit("said", ("Huginn OS is fetched and checked. It goes in when the computer restarts (or now: Finish Now).", False))
+                    else:
+                        problems.append("Huginn OS wasn't updated" + (" (the password wasn't given)" if code in (126, 127) else why("")))
                 elif kind == "firmware":
                     code = run_stream(["fwupdmgr", "update", "-y", "--no-reboot-check"], line, stopped)
                     if code == 0:
@@ -588,6 +637,51 @@ class Updates(QObject):
         except OSError as err:
             self.said.emit(f"Couldn't go back: {err}", True)
         self.changed.emit()
+
+    # ---- Huginn OS itself (huginn_osupdate.py, as root through pkexec)
+    os = Property("QVariantMap", lambda self: os_view(self._demo), notify=changed)
+
+    def _os_do(self, word: str, good: str, bad: str) -> None:
+        if self._demo:
+            self.said.emit(good, False)
+            return
+        if self._phase != "idle":
+            return
+        self._phase, self._stop = "installing", False
+        self._progress, self._line = 0.0, ""
+        self.changed.emit()
+
+        def work():
+            last = {"text": ""}
+
+            def line(text):
+                if text.strip():
+                    last["text"] = text.strip()
+                    self._emit("progress", (0.5, text[:140]))
+            code = run_stream(["pkexec", OS_HELPER, word], line, lambda: False)
+            self._emit("phase", "idle")
+            if code == 0:
+                self._emit("said", (last["text"] or good, False))
+            else:
+                self._emit("said", (bad + (" (the password wasn't given)." if code in (126, 127) else f": {last['text'][:200]}" if last["text"] else "."), True))
+        threading.Thread(target=work, daemon=True).start()
+
+    @Slot(bool)
+    def osSetAuto(self, on: bool) -> None:
+        """Whether the system fetches a newer Huginn OS on its own (for everyone on this computer, so it asks)."""
+        if self._demo or not os_view().get("known"):
+            return
+        threading.Thread(target=lambda: RUN(["pkexec", OS_HELPER, "auto-on" if on else "auto-off"], None, 130), daemon=True).start()
+
+    @Slot()
+    def osFinishNow(self) -> None:
+        """Put the fetched Huginn OS in place now instead of at the next start-up. Open apps keep the old version
+        until they are opened again; the desktop itself until you sign out."""
+        self._os_do("apply", "Huginn OS is up to date. Sign out and in (or restart) for the desktop to be the new one.", "Huginn OS wasn't put in place")
+
+    @Slot()
+    def osGoBack(self) -> None:
+        self._os_do("back", "Huginn OS went back to the version before. Sign out and in (or restart) to be using it.", "Huginn OS couldn't go back")
 
     @Slot()
     def restartNow(self) -> None:

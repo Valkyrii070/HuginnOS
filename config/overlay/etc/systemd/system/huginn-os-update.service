@@ -1,0 +1,14 @@
+[Unit]
+Description=Look for a newer Huginn OS and get it ready
+Documentation=file:///usr/share/huginn-apps/huginn_osupdate.py
+After=network-online.target
+Wants=network-online.target
+ConditionPathExists=!/run/live/medium
+ConditionPathExists=!/cdrom/casper
+
+[Service]
+Type=oneshot
+ExecStart=-/usr/libexec/huginn-os-update auto
+Nice=10
+IOSchedulingClass=idle
+TimeoutStartSec=2h

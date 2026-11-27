@@ -135,6 +135,47 @@ marks shown are sample values, not read from Flathub.
 - SOURCE_DATE_EPOCH comes from the last git commit, so file times in the squashfs and ISO are stable.
 - out/*.manifest lists every package and version in the image; diff two manifests to see what changed.
 
+## Huginn OS updates itself
+
+An installed Huginn OS brings its own parts up to date without a new image: the desktop, every Huginn app, the look,
+the system's own files (helpers, services, rules, the sign-in and start-up screens' files) and the compositor
+(`apps/huginn_osupdate.py`, 59 checks in `scripts/tests/osupdate_test.py`).
+
+- **Where from.** The branch the image was built from. The build records it in `/usr/share/huginn-os/SOURCE`
+  (repository, branch, commit, date; `config/update.conf` names the first two), and what each of the system's own
+  files was when it was put there in `/usr/share/huginn-os/files.json`.
+- **Look.** A timer (a few minutes after start-up, then every six hours) and Software Update ask GitHub for the
+  branch's newest commit. Nothing else is sent.
+- **Stage.** That commit's tree is fetched over HTTPS and checked (its pieces are there, every Python file
+  compiles), and any Ubuntu packages its lists name that the computer lacks are installed, so an app that gains a
+  dependency gets it. Nothing of the running system has changed yet.
+- **Apply.** At the next start-up, before the sign-in screen, in a few seconds; or at once with Finish Now. Only
+  files that differ are written, each swapped in whole. Files the version dropped are removed. The steps the image
+  build does that are safe on a running system are done again (hooks marked `# On update: run`), and systemd, udev,
+  the app list and the icon caches are told; the start-up picture and the boot menu are rebuilt only when their
+  files changed. The new version's own copy of the updater does the installing, so a version can change how it is
+  installed.
+- **Yours stays yours.** Your files are never touched. A few system settings files (`/etc/xdg`, the sign-in
+  screen's, the network's and the like) are replaced only while they are still exactly what Huginn OS put there;
+  once you or Settings change one it is left alone, and Software Update lists which.
+- **Go Back.** Everything an update replaces or removes is kept, so Go Back puts every file back exactly (the test
+  compares the whole made-up system before and after). The version gone back from isn't taken again by itself.
+- **The compositor** is a compiled program. The tree carries a ready-built one (`prebuilt/`, 5 MB) noted as being
+  for exactly its compositor sources; an update uses it only when that still holds and its bytes match its note.
+  Otherwise the compositor is left as it is and Software Update says so. Whoever builds the image refreshes it:
+  `python3 apps/huginn_osupdate.py prebuilt . <the built huginn-compositor>`.
+- **Trust.** HTTPS to GitHub, one repository and branch named in a root-owned file, fetched by commit. It is not
+  signed: it trusts GitHub and whoever can push to that branch. Signing releases is the next step if more people
+  than the makers come to depend on it.
+- **Checked against the image.** Run against a built image, the updater's idea of what goes where matched all 2,052
+  files the image build had put in place, the generated look and settings files included; it differed only in the
+  files added since, and in two stale files the build never removes.
+- **An installation from before this** has no record of what it is. One line in its Terminal brings it across
+  (`scripts/switch-to-updates.sh` has the line and what it does); or install the newest image once.
+
+Building an image: commit first, then `HUGINN_COMMIT=<that commit> scripts/build.sh …`, so the system knows which
+commit it is. Ubuntu's own packages, Flatpak apps and firmware update as before (Software Update's other parts).
+
 ## Known limits of Phase 1
 
 - Scripts are syntax-checked and the package lists are verified against the 26.04 archive,
