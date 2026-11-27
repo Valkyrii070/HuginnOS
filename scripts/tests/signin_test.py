@@ -191,7 +191,7 @@ check("right password: yes", r == {"op": "signin", "ok": True}, r)
 check("the session waits for the greeter to leave", not any(line.startswith("started astrid") for line in b.log()), b.log())
 r2 = b.ask(c, {"op": "signin", "user": "leif", "password": "right"}, wait=0.6)
 check("a second sign-in while one is going through: no", r2 and r2["ok"] is False and "Still" in r2["why"], r2)
-b.clock[0] += 9                                             # the greeter outstays its wake
+b.clock[0] += 13                                             # the greeter outstays its wake
 check("a greeter that doesn't leave is closed", b.spin(3, lambda: "stopped huginn-greeter" in b.log()), b.log())
 check("then the session starts", b.spin(3, lambda: "started astrid" in b.log()), b.log())
 check("with the session asked for", any(line.startswith("job user astrid huginn-signin pw /usr/bin/huginn-session --game") for line in b.log()), b.log())
@@ -214,7 +214,7 @@ r = b.ask(c, {"op": "people"})
 check("rubbish is ignored and the service carries on", r and r["op"] == "people")
 r = b.ask(c, {"op": "signin", "user": "astrid", "password": "right", "session": "/bin/sh"})
 check("an unknown session is Huginn OS", r and r["ok"] is True)
-b.clock[0] += 9
+b.clock[0] += 13
 b.spin(3, lambda: b.log().count("started astrid") == 2)
 check("…the plain session", b.log()[-3:] and any(line == "job user astrid huginn-signin pw /usr/bin/huginn-session" for line in b.log()), b.log()[-6:])
 b.spin(4, lambda: b.log().count("started huginn-greeter") == 3)
@@ -251,7 +251,7 @@ r = b.ask(c, {"op": "signin", "user": "astrid", "password": "right"})
 check("a worker that dies while checking is a no, never a yes", r and r["ok"] is False and "can't be checked" in r["why"], r)
 r = b.ask(c, {"op": "signin", "user": "leif", "password": "right"})
 check("(right password)", r and r["ok"] is True, r)
-b.clock[0] += 9
+b.clock[0] += 13
 check("a session that can't start brings the sign-in screen back", b.spin(5, lambda: b.log().count("started huginn-greeter") == 2), b.log())
 check("and nobody is signed in", b.svc.session is None)
 b.close()

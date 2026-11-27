@@ -54,7 +54,7 @@ NO_SIGN_IN_SHELLS = ("nologin", "false", "sync", "halt", "shutdown")
 PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin"
 TRIES_BEFORE_WAITING = 5          # wrong passwords in a row for one name before a wait
 FIRST_WAIT, LONGEST_WAIT = 30, 600
-GREETER_LEAVES_WITHIN = 8.0       # after a right password: its wake, then it must be gone
+GREETER_LEAVES_WITHIN = 12.0      # after a right password: its wake, then it must be gone (slow computers take a while to close it)
 GREETER_QUICK, GREETER_GIVES_UP = 20.0, 4   # a greeter that ends this soon, this many times running: something's broken
 AUTOLOGIN_QUICK = 10.0            # a by-itself sign-in that ends this soon isn't tried again
 WRONG = "Wrong password."
@@ -560,6 +560,12 @@ def take_screen(vt: int) -> int:
             fcntl.ioctl(fd, req, arg)
         except OSError:
             pass
+    try:
+        # whatever start-up wrote there is wiped and the cursor hidden: between the sign-in screen leaving and the
+        # session drawing, the screen is plain black, not a page of text
+        os.write(fd, b"\033[2J\033[H\033[?25l")
+    except OSError:
+        pass
     return fd
 
 

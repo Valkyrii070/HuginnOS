@@ -1504,7 +1504,7 @@ SDDM is not in the image. What stands between the computer starting and somebody
   also ask who can sign in, and for sleep, restart or shut down (only while nobody is signed in).
 - Each sign-in is done by a worker process of its own: PAM (`/etc/pam.d/huginn-signin`: the same modules Ubuntu's
   SDDM file names) runs there, so a module that crashes takes a worker down, not the service. On a right password the
-  worker waits for the greeter to leave (its wake; eight seconds at most, then it is closed), opens the session
+  worker waits for the greeter to leave (its wake; twelve seconds at most, then it is closed), opens the session
   (logind hears of it from `pam_systemd`: seat0, VT 1, class `user`, type `wayland`), becomes the person (groups,
   gid, uid, checked afterwards) and starts `/usr/bin/huginn-session` through their login shell. The session's own
   messages go to `~/.local/share/huginn/session.log` (the one before: `session.log.1`), which problem reports read.
