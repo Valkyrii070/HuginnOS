@@ -14,6 +14,9 @@ import QtQuick.Effects
 FocusScope {
     id: view
     property bool main: true
+    // the lock screen (huginn_locker.py) is this same screen: only you in the dock, Sleep and no Restart or Shut Down
+    // (they'd close what you have open), and no session to choose
+    readonly property bool locking: Host.locking === true
     readonly property string realm: Host.realm
     readonly property var realms: ({
         aurora:     { tintA: "#0F2624", tintB: "#17192C", glowA: "#3DD6B5", glowB: "#7B61FF", accent: "#43D9B8", onAccent: "#062321", deep: "#16302F" },
@@ -233,7 +236,7 @@ FocusScope {
         Repeater { model: view.tiles
             GreeterTile { required property var modelData; required property int index
                 readonly property var at: tileBox.places[index] || { row: 0, col: 0, w: 1, h: 1 }
-                widget: modelData; now: view.now; battery: Host.battery; k: view.k; behind: sky; liveBehind: frostOk
+                widget: modelData; now: view.now; battery: Host.battery; k: view.k; behind: sky; liveBehind: frostOk; locking: view.locking
                 x: at.col * (tileBox.cw + tileBox.gap); y: at.row * (tileBox.ch + tileBox.gap)
                 width: at.w * tileBox.cw + (at.w - 1) * tileBox.gap; height: at.h * tileBox.ch + (at.h - 1) * tileBox.gap
                 visible: y + height <= tileBox.room } }       // more than fits: left off rather than under the dock
@@ -269,8 +272,8 @@ FocusScope {
                             Text { id: otherName; anchors.centerIn: parent; text: modelData.full; color: view.ink; font { family: view.face; pixelSize: 12; weight: Font.Medium } } } } }
                 Rectangle { visible: view.people.length > 1; width: 1; height: 40; color: Qt.rgba(1, 1, 1, 0.2); anchors.verticalCenter: parent.verticalCenter }
                 RoundButton { mark: "sleep"; say: "Sleep"; onPressed: Host.power("sleep") }
-                RoundButton { mark: "restart"; say: "Restart"; onPressed: Host.power("restart") }
-                RoundButton { mark: "off"; say: "Shut Down"; onPressed: Host.power("off") }
+                RoundButton { visible: !view.locking; mark: "restart"; say: "Restart"; onPressed: Host.power("restart") }
+                RoundButton { visible: !view.locking; mark: "off"; say: "Shut Down"; onPressed: Host.power("off") }
             }
             Rectangle { id: pill; height: 56; radius: 28; y: 12
                 property real nudge: 0

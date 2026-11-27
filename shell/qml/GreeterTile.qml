@@ -11,6 +11,7 @@ Rectangle {
     property real k: 1
     property Item behind: null
     property bool liveBehind: false
+    property bool locking: false                     // the lock screen: you're signed in, it's locked
     readonly property var d: widget.data || ({})
     readonly property bool tall: height > 200 * k
     readonly property bool wide: width > 400 * k
@@ -72,7 +73,7 @@ Rectangle {
         return ""
     }
     readonly property string small: {
-        if (widget.private) return "Private until you sign in"
+        if (widget.private) return locking ? "Private while locked" : "Private until you sign in"
         switch (widget.kind) {
         case "today": return events.length ? inMinutes(events[0]) : "in Calendar or Reminders"
         case "weather":

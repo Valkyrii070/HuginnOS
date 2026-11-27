@@ -2,14 +2,15 @@ import QtQuick
 import QtQuick.Window
 import org.kde.layershell 1.0 as LayerShell
 
-// The lock screen under Huginn's own compositor (huginn_locker.py): a full-screen overlay on every screen, the lock
-// itself (the same Lock.qml as the KWin session's) on the main one, black on the others. The Python side is "LockHost"
-// (not "Locker": inside this file that name is this file's own type).
+// The lock screen under Huginn's own compositor (huginn_locker.py): the sign-in screen's own design (GreeterView.qml,
+// as "Host" sees it: you alone in the dock, Sleep only), a full-screen overlay on every screen; the main one asks for
+// your password, the others show the wallpaper. The compositor draws nothing else and sends keys nowhere else while
+// it's up; leaving with 0 (after the wake) is what unlocks.
 QtObject {
     id: root
 
     property Instantiator screens: Instantiator {
-        model: LockHost.screens
+        model: Host.screens
         delegate: Window {
             id: win
             required property var modelData
@@ -26,35 +27,7 @@ QtObject {
             LayerShell.Window.anchors: LayerShell.Window.AnchorTop | LayerShell.Window.AnchorBottom | LayerShell.Window.AnchorLeft | LayerShell.Window.AnchorRight
             LayerShell.Window.exclusionZone: -1
 
-            Loader {
-                id: lock
-                anchors.fill: parent
-                active: win.main
-                source: LockHost.lockUi
-                focus: true
-                onLoaded: {
-                    item.userName = LockHost.me.login
-                    item.realName = LockHost.me.name
-                    item.picture = LockHost.me.face
-                    item.realm = LockHost.realm
-                    if (LockHost.liveDir !== "")
-                        item.liveDir = LockHost.liveDir
-                    item.canSuspend = true
-                    item.allowEmpty = LockHost.live
-                    item.submit.connect(function (pw) { LockHost.unlock(pw) })
-                    item.suspend.connect(function () { LockHost.suspend() })
-                    item.done.connect(function () { LockHost.unlocked() })
-                    item.forceActiveFocus()
-                }
-            }
-            Connections {
-                target: LockHost
-                enabled: win.main
-                function onUnlockAnswer(ok, message) {
-                    if (!lock.item) return
-                    if (ok) lock.item.succeed(); else lock.item.fail(message)
-                }
-            }
+            GreeterView { anchors.fill: parent; main: win.main; focus: win.main }
         }
     }
 }

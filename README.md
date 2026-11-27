@@ -1491,6 +1491,17 @@ Plymouth itself with its X11 renderer (starting, a disk password, shutting down)
 Appearance page; the sign-in screen as below.
 Not tested here: how smooth the scenes are on real graphics cards (they are light: a few hundred operations a pixel).
 
+### The lock screen
+
+Locking (Super+L, the lid, going to sleep, the screen-off timer) shows the sign-in screen's own design
+(`shell/huginn_locker.py` as the "Host" of `GreeterView.qml`, through `Locker.qml`): your realm behind the time, you
+alone in the dock, Sleep and nothing else (Restart and Shut Down would close what you have open), and your sign-in
+widgets under the same rule (a private one says "Private while locked"). Five wrong passwords make you wait, as at the
+sign-in screen. When it's right the wake plays and the lock leaves with 0, which is what unlocks; a lock screen that
+crashes is started again and never unlocks. Tested: `scripts/tests/locker_test.py` (14 checks) and under the real
+compositor in a window. (`config/overlay/usr/share/huginn-os/lock/Lock.qml`, the earlier design, is now only the QML
+preview session's.)
+
 ### Widgets on the sign-in screen
 
 None to begin with: the sign-in screen is the time and the dock. Settings › Sign-In Screen (`apps/qml/SetSignIn.qml`)
