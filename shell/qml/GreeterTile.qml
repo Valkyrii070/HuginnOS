@@ -12,14 +12,15 @@ Rectangle {
     property Item behind: null
     property bool liveBehind: false
     property bool locking: false                     // the lock screen: you're signed in, it's locked
+    property bool light: false                       // the sign-in screen's light look (by day)
     readonly property var d: widget.data || ({})
     readonly property bool tall: height > 200 * k
     readonly property bool wide: width > 400 * k
-    readonly property color ink: "#F5F7FA"
-    readonly property color soft: Qt.rgba(0.96, 0.97, 0.98, 0.76)
+    readonly property color ink: light ? "#15171E" : "#F5F7FA"
+    readonly property color soft: light ? Qt.rgba(0.08, 0.09, 0.12, 0.70) : Qt.rgba(0.96, 0.97, 0.98, 0.76)
     radius: Math.round(24 * k)
-    color: Qt.rgba(0.08, 0.08, 0.13, frost.status === Loader.Ready ? 0.42 : 0.62)
-    border.width: 1; border.color: Qt.rgba(1, 1, 1, 0.16)
+    color: light ? Qt.rgba(1, 1, 1, frost.status === Loader.Ready ? 0.46 : 0.74) : Qt.rgba(0.08, 0.08, 0.13, frost.status === Loader.Ready ? 0.42 : 0.62)
+    border.width: 1; border.color: light ? Qt.rgba(1, 1, 1, 0.6) : Qt.rgba(1, 1, 1, 0.16)
     Loader { id: frost; z: -1; anchors.fill: parent; active: tile.liveBehind && tile.behind !== null
         source: "GreeterFrost.qml"
         onLoaded: { item.behind = tile.behind; item.radius = Qt.binding(function () { return tile.radius })

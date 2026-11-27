@@ -45,6 +45,7 @@ FAKE = textwrap.dedent('''
     def send(m): chan.sendall((json.dumps(m) + "\\n").encode())
     job = json.loads(f.readline())
     with open(os.environ["PLAN"], "a") as fh: fh.write(json.dumps({k: job.get(k) for k in ("class", "user", "password", "session")}) + "\\n")
+    with open(os.environ["PLAN"] + ".env", "a") as fh: fh.write(json.dumps(job.get("env") or {}) + "\\n")
     if job["class"] == "greeter":
         send({"auth": True}); send({"started": True}); f.readline()
         with open(os.environ["PLAN"], "a") as fh: fh.write(json.dumps({"stopped": "huginn-greeter"}) + "\\n")
@@ -80,8 +81,9 @@ SNAP = json.dumps({"data": {"weather": {"place": "Reykjavík", "temp": "4°", "w
                             "today": {"events": [{"title": "Secret meeting", "date": _today, "time": _later}]},
                             "music": {"title": "A private song", "sub": "Someone", "app": "Music", "at": int(time.time())}}})
 widgets_for = {"astrid": sw.merge(LAYOUT, SNAP, {"update": "Updated today"})}
+ways_for = {"leif": sw.look_of(json.dumps({"greet": True, "clock": "left"})), "astrid": sw.look_of("")}
 svc = sd.Service(root=tmp, worker_argv=[sys.executable, str(tmp / "fake.py")], run_dir=tmp / "run", power=powered.append,
-                 widgets=lambda name, system: widgets_for.get(name, []))
+                 widgets=lambda name, system: {"widgets": widgets_for.get(name, []), "look": ways_for.get(name) or sw.look_of("")})
 svc.listen()
 svc.greeter_uid = os.geteuid()                                 # (here the greeter is us)
 svc.next()
@@ -165,7 +167,8 @@ check("the one who signed in last is chosen", view.property("who")["name"] == "l
 texts = lambda: [i.property("text") for i in find(lambda i: i.metaObject().className().startswith("QQuickText") and i.isVisible() and i.property("text"))]  # noqa: E731
 settle(300)
 t = texts()
-check("it greets them by first name", any(isinstance(x, str) and x.endswith(", Leif") for x in t), t)
+check("they asked to be greeted by name: it does", any(isinstance(x, str) and x.endswith(", Leif") for x in t), t)
+check("they asked for the time at the left (no widgets)", view.property("clockLeft") is True and view.property("withTiles") is False)
 check("their name is in the dock", "Leif Karlsson" in t, t)
 check("the others are a click away", len(find(lambda i: i.property("mark") in ("sleep", "restart", "off"))) == 3)
 shot("1-idle")
@@ -176,8 +179,9 @@ from PySide6.QtCore import QMetaObject, Q_ARG  # noqa: E402
 
 QMetaObject.invokeMethod(view, "choose", Q_ARG("QVariant", 0))
 settle(200)
-check("choosing someone else", view.property("who")["name"] == "astrid" and any(isinstance(x, str) and x.endswith(", Astrid") for x in texts()), view.property("who"))
-check("no widgets for someone without any: the time in the middle", True)
+check("choosing someone else", view.property("who")["name"] == "astrid", view.property("who"))
+check("…who didn't ask to be greeted by name: no name in the greeting", not any(isinstance(x, str) and x.endswith(", Astrid") for x in texts())
+      and any(isinstance(x, str) and x.startswith("Good ") and "," not in x for x in texts()), texts())
 settle(400)
 tiles = [i for i in items(win.contentItem()) if i.metaObject().className().startswith("GreeterTile") and i.isVisible()]
 check("their four widgets are on the screen", len(tiles) == 4, len(tiles))
@@ -188,6 +192,45 @@ check("private ones show only their name and that they're private", t.count("Pri
 check("nothing of a private widget reaches the screen", not any(isinstance(x, str) and ("Secret meeting" in x or "A private song" in x) for x in t))
 check("the time has moved to the left", view.property("withTiles") is True)
 shot("8-widgets")
+
+# light by day
+check("by night (or light by day off): the dark look", view.property("light") is False and view.property("ink").name() == "#f5f7fa", view.property("ink"))
+host._light = True
+host.changed.emit()
+settle(200)
+check("light by day: the light look", view.property("light") is True and view.property("ink").name() == "#15171e", view.property("ink"))
+shot("9-light")
+host._light = False
+host.changed.emit()
+settle(100)
+
+# only the last person shown: anyone else types their name
+(tmp / "etc/huginn/signin.conf.d/10-look.conf").write_text("[Look]\nPeople=last\n")
+host._send({"op": "people"})
+check("only the last person: just Leif, and a way for anyone else", settle(3000, lambda: len(view.property("people")) == 1 and host.property("others") is True),
+      (view.property("people"), host.property("others")))
+someone = find(lambda i: i.property("mark") == "person" and i.isVisible())
+check("…Someone else is in the dock", len(someone) == 1, len(someone))
+if someone:
+    QMetaObject.invokeMethod(someone[0], "pressed")
+settle(200)
+names = find(lambda i: i.metaObject().className().startswith("QQuickTextInput") and i.isVisible() and i.property("objectName") != "password")
+check("…which asks for a name, and nobody's widgets or name are shown", view.property("who") is None and view.property("typing") is True and len(names) == 1
+      and names[0].property("activeFocus") is True and not any(isinstance(x, str) and "Leif" in x for x in texts()), (view.property("who"), len(names), texts()))
+check("…and signing in that way only fades (nothing of theirs to carry on with)", view.property("fades") is True)
+shot("10-someone-else")
+QMetaObject.invokeMethod(view, "choose", Q_ARG("QVariant", 0))
+settle(200)
+check("…and back to Leif", view.property("who") is not None and view.property("who")["name"] == "leif" and view.property("typing") is False, view.property("who"))
+(tmp / "etc/huginn/signin.conf.d/10-look.conf").write_text("[Look]\nPeople=none\n")
+host._send({"op": "people"})
+check("no one shown: a name is asked for", settle(3000, lambda: len(view.property("people")) == 0 and view.property("who") is None), view.property("people"))
+(tmp / "etc/huginn/signin.conf.d/10-look.conf").unlink()
+host._send({"op": "people"})
+settle(3000, lambda: len(view.property("people")) == 3)
+QMetaObject.invokeMethod(view, "choose", Q_ARG("QVariant", 0))
+settle(400)
+check("everyone again, and Astrid chosen", view.property("who")["name"] == "astrid", view.property("who"))
 
 # a wrong password
 pwf.setProperty("text", "not-it")
@@ -238,6 +281,8 @@ host._app = SimpleNamespace(exit=lambda code=0: exits.append(code))
 QMetaObject.invokeMethod(view, "submit")
 check("yes: the wake begins", settle(4000, lambda: view.property("phase") == "wake"), view.property("phase"))
 check("the session chosen was sent", signins()[-1] == {"class": "user", "user": "astrid", "password": "right-astrid", "session": "game"}, jobs()[-1:])
+envs = [json.loads(x) for x in Path(os.environ["PLAN"] + ".env").read_text().splitlines()]
+check("…and that the desktop carries on from the dock", envs[-1].get("HUGINN_ARRIVAL") == "dock", envs[-1:])
 settle(450)
 shot("5-wake-a")
 settle(350)

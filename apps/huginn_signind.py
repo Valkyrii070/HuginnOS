@@ -124,9 +124,17 @@ def read_conf(root: Path = Path("/")) -> dict:
             "relogin": auto.get("Relogin", "false").strip().lower() == "true"}
 
 
-def look_realm(root: Path = Path("/")) -> str:
-    """Which realm the sign-in screen wears: [Look] Realm= in the same files (Settings › Appearance writes
-    signin.conf.d/10-look.conf through huginn-login-look), aurora when nothing says."""
+REALMS = ("aurora", "bifrost", "muspelheim", "niflheim")
+PEOPLE_SHOWN = ("all", "last", "none")
+
+
+def look(root: Path = Path("/")) -> dict:
+    """How the sign-in screen looks, for everyone: [Look] in the same files (Settings writes signin.conf.d/10-look.conf
+    through huginn-login-look, as an administrator).
+        Realm=        aurora | bifrost | muspelheim | niflheim     its living wallpaper (aurora)
+        People=       all | last | none     who is in the dock: everyone; only whoever signed in last (the others
+                      type their name); no one (everyone types their name) (all)
+        LightByDay=   true | false          light between sunrise and sunset (false)"""
     cp = configparser.ConfigParser(interpolation=None, strict=False)
     cp.optionxform = str
     for f in [root / "etc/huginn/signin.conf"] + sorted((root / "etc/huginn/signin.conf.d").glob("*.conf")):
@@ -135,7 +143,14 @@ def look_realm(root: Path = Path("/")) -> str:
         except (OSError, configparser.Error):
             continue
     realm = cp.get("Look", "Realm", fallback="aurora").strip().lower()
-    return realm if realm in ("aurora", "bifrost", "muspelheim", "niflheim") else "aurora"
+    shown = cp.get("Look", "People", fallback="all").strip().lower()
+    return {"realm": realm if realm in REALMS else "aurora", "people": shown if shown in PEOPLE_SHOWN else "all",
+            "light": cp.get("Look", "LightByDay", fallback="false").strip().lower() == "true"}
+
+
+def look_realm(root: Path = Path("/")) -> str:
+    """Which realm the sign-in screen wears (look()), aurora when nothing says."""
+    return look(root)["realm"]
 
 
 def sessions(root: Path = Path("/")) -> list:
@@ -233,16 +248,18 @@ def read_as(pw, paths: list, timeout: float = 2.0, most: int = 256 * 1024) -> li
         return [""] * len(paths)
 
 
-def widgets_of(name: str, system: dict) -> list:
-    """One person's sign-in widgets, as the sign-in screen may see them (huginn_signin_widgets.merge)."""
+def widgets_of(name: str, system: dict) -> dict:
+    """One person's sign-in widgets, as the sign-in screen may see them (huginn_signin_widgets.merge), and their own
+    ways for it (look_of): {widgets, look}."""
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     import huginn_signin_widgets as sw
     try:
         pw = pwd.getpwnam(name)
     except KeyError:
-        return []
-    layout, snap = read_as(pw, [str(sw.layout_path(pw.pw_dir)), str(sw.snapshot_path(pw.pw_dir))])
-    return sw.merge(layout, snap, system) if layout else []
+        return {"widgets": [], "look": sw.look_of("")}
+    layout, snap, settings = read_as(pw, [str(sw.layout_path(pw.pw_dir)), str(sw.snapshot_path(pw.pw_dir)),
+                                          str(sw.settings_path(pw.pw_dir))])
+    return {"widgets": sw.merge(layout, snap, system) if layout else [], "look": sw.look_of(layout, settings)}
 
 
 # ------------------------------------------------------------------------------------------------- waits after misses
@@ -441,22 +458,35 @@ class Service:
     # ................................................................................................... the greeter asks
     def _people(self) -> dict:
         last = load_state(self.root)
-        who = people(self.root)
+        everyone = people(self.root)
         sys.path.insert(0, str(Path(__file__).resolve().parent))
         import huginn_signin_widgets as sw
+        seen = look(self.root)
+        # who the dock shows (Settings › Sign-In Screen, for everyone): the others type their name, and a list that
+        # isn't shown isn't sent either
+        if seen["people"] == "none":
+            who, last_user = [], ""
+        elif seen["people"] == "last":
+            who = [p for p in everyone if p["name"] == last.get("user")]
+            last_user = last.get("user", "") if who else ""
+        else:
+            who, last_user = everyone, last.get("user", "")
         system = sw.system_status(self.root)
-        for p in who[:12]:                                              # each person's widgets (most have none)
+        for p in who[:12]:                                              # each person's widgets and ways (most have none)
             try:
-                p["widgets"] = self.widgets(p["name"], system)
+                got = self.widgets(p["name"], system)
             except Exception as err:                                    # noqa: BLE001  (someone's odd files never stop the sign-in screen)
                 say("couldn't read", p["name"] + "'s sign-in widgets:", err)
-                p["widgets"] = []
+                got = []
+            got = got if isinstance(got, dict) else {"widgets": got}
+            p["widgets"] = got.get("widgets") or []
+            p["look"] = got.get("look") or sw.look_of("")
         try:
             host = (self.root / "etc/hostname").read_text(encoding="utf-8").strip()
         except OSError:
             host = ""
-        return {"op": "people", "people": who, "last": last.get("user", ""), "lastSession": last.get("session", "huginn"),
-                "sessions": sessions(self.root), "host": host}
+        return {"op": "people", "people": who, "last": last_user, "lastSession": last.get("session", "huginn"),
+                "sessions": sessions(self.root), "host": host, "others": seen["people"] == "last"}
 
     def _signin(self, client: Line, msg: dict) -> None:
         user, password, session = msg.get("user"), msg.get("password"), msg.get("session") or "huginn"
@@ -473,8 +503,12 @@ class Service:
             return
         if session not in SESSIONS:
             session = "huginn"
+        # how the desktop carries on from the sign-in screen's last picture (its dock, light or not, or plainly after
+        # the fade): the shell's arrival (huginn_shell.py) reads it
+        arrival = msg.get("arrival") if msg.get("arrival") in ("dock", "dock-light", "plain") else "dock"
         self.checking = self._spawn({"class": "user", "service": "huginn-signin", "user": user, "password": password,
-                                     "command": SESSIONS[session][1], "session": session, "vt": VT, "go": False, "env": {}})
+                                     "command": SESSIONS[session][1], "session": session, "vt": VT, "go": False,
+                                     "env": {"HUGINN_ARRIVAL": arrival}})
         self.checking.asked_by = client
 
     def _warm(self, user: str) -> None:

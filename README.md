@@ -1533,6 +1533,35 @@ Settings page through its own controls (adding, sizes, before sign-in, dragging 
 desktop's snapshot (only allowed widgets, mode 600, gone when none are allowed).
 Not tested here: on a started computer, which needs a restart after the update so the sign-in service reads them.
 
+### The sign-in screen's options
+
+Also in Settings › Sign-In Screen. Each person's own, kept beside their widgets in `signin-widgets.json`
+(`greet`, `clock`, `wake`) and used while they're the one chosen in the dock, and on their lock screen:
+- **Greet me by name**: "Good morning, Astrid" rather than "Good morning". Off to begin with, since anyone at the
+  computer reads it.
+- **The time**: in the middle or at the left when there are no widgets (with widgets it's always at the left).
+- **Play the wake when I sign in**: off, the sign-in screen simply fades to the wallpaper and the desktop's pieces
+  come in without the dock carrying over. Reduce Motion on in Accessibility does the same (the service reads it from
+  `~/.config/huginn-shell/settings.json`, as the person).
+
+For everyone (`[Look]` in `/etc/huginn/signin.conf.d/10-look.conf`, written by `huginn-login-look` as an
+administrator, like the realm):
+- **Who the dock shows** (`People=`): everyone; only whoever signed in last, with a Someone else button for anyone
+  else to type their name; or no one, and everyone types a name. A list that isn't shown isn't sent to the sign-in
+  screen either, nor is the last name when no one is shown.
+- **Light by day** (`LightByDay=`): between sunrise and sunset (`huginn_sun.is_day`: the time zone's own city; 7:00 to
+  19:00 where that can't be told) the sign-in screen and the lock screen wear their light look, the realm's day sky
+  with dark ink on frosted white.
+
+The desktop carries on from what the sign-in screen did: the greeter tells the service how it ended (`dock`,
+`dock-light` or `plain`), the service puts it in the session as `HUGINN_ARRIVAL`, and the shell's arrival
+(`shell/qml/Arrival.qml`) matches it.
+
+Tested: `signin_test.py` (the options' rules, the look's keys, who is and isn't sent for each choice, the arrival
+reaching the session and nothing else), `greeter_test.py` (greeted by name or not, the time at the left, the light
+and dark looks, Someone else and back, no one shown), `signin_real_check.py` as root (the options and Reduce Motion
+read as the person), `huginn-login-look` against a throwaway folder in dash and bash.
+
 ### The sign-in service
 
 SDDM is not in the image. What stands between the computer starting and somebody's desktop is Huginn's own

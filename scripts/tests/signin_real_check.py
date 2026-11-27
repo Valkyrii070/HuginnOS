@@ -75,7 +75,10 @@ probe.chmod(0o755)
 class W:
     def __init__(self, job):
         ours, theirs = socket.socketpair()
-        self.p = subprocess.Popen([sys.executable, "-I", str(KIT / "apps/huginn_signind.py"), "--worker", str(theirs.fileno())], pass_fds=[theirs.fileno()])
+        # (with no spare terminal to start a session behind the sign-in screen on: the terminals here are the machine's
+        # own, and starting there is seen in a virtual machine instead; /dev/tty0 is hidden in a mount namespace)
+        hide = ["unshare", "--mount", "--propagation", "private", "sh", "-c", 'mount --bind /dev/null /dev/tty0 2>/dev/null; exec "$@"', "sh"]
+        self.p = subprocess.Popen(hide + [sys.executable, "-I", str(KIT / "apps/huginn_signind.py"), "--worker", str(theirs.fileno())], pass_fds=[theirs.fileno()])
         theirs.close()
         self.s, self.f = ours, ours.makefile("rb")
         self.send(job)
@@ -215,14 +218,14 @@ def as_them(path: Path, text: str, mode=0o644):
 as_them(sw.layout_path(home), json.dumps({"widgets": [{"kind": "today", "size": "wide", "before": False}, {"kind": "weather", "size": "small", "before": True}]}))
 as_them(sw.snapshot_path(home), json.dumps({"data": {"today": {"events": [{"title": "Private thing", "date": "2026-11-27", "time": "10:30"}]},
                                                      "weather": {"place": "Reykjavík", "temp": "4°", "words": "Clear", "at": 1}}}), 0o600)
-got = sd.widgets_of(PERSON, {})
+got = sd.widgets_of(PERSON, {})["widgets"]
 check("their widgets, read as them", [(w["kind"], w["private"]) for w in got] == [("today", True), ("weather", False)], got)
 check("the private one carries nothing; the other its weather", got[0]["data"] == {} and got[1]["data"].get("temp") == "4°", got)
 snap = sw.snapshot_path(home)
 snap.unlink()
 os.symlink("/etc/shadow", snap)
 os.lchown(snap, p.pw_uid, p.pw_gid)
-got = sd.widgets_of(PERSON, {})
+got = sd.widgets_of(PERSON, {})["widgets"]
 check("a link from their snapshot to /etc/shadow: nothing of it is read", got and got[1]["data"] == {} and "root:" not in json.dumps(got), got)
 raw = sd.read_as(p, ["/etc/shadow", str(sw.layout_path(home))])
 check("reading as them: /etc/shadow can't be read, their own file can", raw[0] == "" and "today" in raw[1], [r[:30] for r in raw])
@@ -230,11 +233,19 @@ snap.unlink()
 as_them(snap, json.dumps({"data": {"weather": {"temp": "5°", "at": 1}}}), 0o600)
 os.chown(snap, 0, 0)                                           # root's file in their folder, theirs to see no longer
 os.chmod(snap, 0o600)
-got = sd.widgets_of(PERSON, {})
+got = sd.widgets_of(PERSON, {})["widgets"]
 check("a file in their folder that they can't read stays unread", got and got[1]["data"] == {}, got)
+as_them(sw.layout_path(home), json.dumps({"widgets": [], "greet": True, "clock": "left", "wake": False}))
+as_them(sw.settings_path(home), json.dumps({"reduceMotion": "false"}))
+check("their own ways, read as them", sd.widgets_of(PERSON, {})["look"] == {"greet": True, "clock": "left", "wake": "fade"}, sd.widgets_of(PERSON, {}))
+as_them(sw.layout_path(home), json.dumps({"widgets": []}))
+as_them(sw.settings_path(home), json.dumps({"reduceMotion": "true"}))
+check("Reduce Motion on: the wake is a fade", sd.widgets_of(PERSON, {})["look"]["wake"] == "fade", sd.widgets_of(PERSON, {}))
 as_them(sw.layout_path(home), "x" * (300 * 1024))
-check("a layout file far too big is no widgets", sd.widgets_of(PERSON, {}) == [])
-check("someone with no layout has no widgets", sd.widgets_of(OTHER, {}) == [] and sd.widgets_of("nobody-called-this", {}) == [])
+check("a layout file far too big is no widgets", sd.widgets_of(PERSON, {})["widgets"] == [])
+plain = {"greet": False, "clock": "centre", "wake": "full"}
+check("someone with no layout has no widgets and the usual ways",
+      sd.widgets_of(OTHER, {}) == {"widgets": [], "look": plain} and sd.widgets_of("nobody-called-this", {}) == {"widgets": [], "look": plain})
 
 for u in (PERSON, OTHER):
     sh("pkill", "-KILL", "-u", u)

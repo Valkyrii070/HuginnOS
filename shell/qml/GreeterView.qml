@@ -11,6 +11,10 @@ import QtQuick.Effects
 // Then this screen leaves (Host.done) and your desktop takes its place.
 //
 // A wrong password shakes the field and says so. After several, the service makes you wait, and the wait counts down.
+//
+// Each person's own ways (Settings › Sign-In Screen), while they're the one chosen: greeted by name or not, the time
+// in the middle or at the left, and the wake or a plain fade (also with Reduce Motion on). For everyone: who the dock
+// shows (everyone, only whoever was last, or no one: then a name is typed), and light by day.
 FocusScope {
     id: view
     property bool main: true
@@ -24,14 +28,22 @@ FocusScope {
         muspelheim: { tintA: "#2C1912", tintB: "#1F1718", glowA: "#FF8A4C", glowB: "#FFC857", accent: "#FF8C50", onAccent: "#2A0F05", deep: "#3A1D12" },
         niflheim:   { tintA: "#12212F", tintB: "#171A20", glowA: "#7CC4FF", glowB: "#CFEAFF", accent: "#7CC4FF", onAccent: "#071828", deep: "#14283A" } })
     readonly property var own: realms[realm] || realms.aurora
-    readonly property color ink: "#F5F7FA"
-    readonly property color soft: Qt.rgba(0.96, 0.97, 0.98, 0.80)
+    // light by day (everyone's choice): dark ink on frosted white over the realm's day sky
+    readonly property bool light: Host.light === true
+    readonly property color ink: view.light ? "#15171E" : "#F5F7FA"
+    readonly property color soft: view.light ? Qt.rgba(0.08, 0.09, 0.12, 0.74) : Qt.rgba(0.96, 0.97, 0.98, 0.80)
+    readonly property color hint: view.light ? Qt.rgba(0.08, 0.09, 0.12, 0.50) : Qt.rgba(0.96, 0.96, 0.99, 0.62)
+    readonly property color tipFill: view.light ? Qt.rgba(1, 1, 1, 0.94) : Qt.rgba(0.05, 0.05, 0.09, 0.9)
+    // a faint fill or line on the glass: white on the dark look, dark on the light one
+    function veil(a) { return view.light ? Qt.rgba(0.05, 0.06, 0.10, a * 0.5) : Qt.rgba(1, 1, 1, a) }
     readonly property string face: "Inter"
 
     // who is chosen, and what's going on
     property int sel: 0
     readonly property var people: Host.people
-    readonly property var who: people.length ? people[Math.min(sel, people.length - 1)] : null
+    property bool typing: false              // "Someone else": a name typed instead of the one listed
+    readonly property var who: people.length && !typing ? people[Math.min(sel, people.length - 1)] : null
+    readonly property var ways: who && who.look ? who.look : ({ greet: false, clock: "centre", wake: "full" })
     property string session: "huginn"
     property string phase: "idle"            // idle | checking | wake
     property string message: ""
@@ -42,6 +54,7 @@ FocusScope {
     readonly property var tiles: who && who.widgets ? who.widgets : []
     readonly property real k: Math.max(0.8, Math.min(1.5, Math.min(width / 1440, height / 900)))
     readonly property bool withTiles: main && tiles.length > 0 && width >= 1000
+    readonly property bool clockLeft: withTiles || (ways.clock === "left" && width >= 1000)
     // two columns of cells, filled row by row: a wide widget takes two cells across, a tall one two down
     function pack(list) {
         var used = [], out = []
@@ -74,16 +87,23 @@ FocusScope {
         return h < 5 ? "Good night" : h < 12 ? "Good morning" : h < 18 ? "Good afternoon" : "Good evening"
     }
     function choose(i) {
-        if (busy || i === sel) return
-        sel = i; pw.text = ""; message = ""; waitLeft = 0
+        if (busy || (i === sel && !typing)) return
+        sel = i; typing = false; pw.text = ""; message = ""; waitLeft = 0
         pw.forceActiveFocus()
     }
+    function someoneElse(on) {
+        if (busy) return
+        typing = on; pw.text = ""; nameBox.text = ""; message = ""; waitLeft = 0
+        if (on) nameBox.forceActiveFocus(); else pw.forceActiveFocus()
+    }
+    // how the desktop carries on from here: the dock (light or not), or plainly when this screen only fades
+    readonly property bool fades: who === null || ways.wake === "fade"
     function submit() {
         if (busy || waitLeft > 0 || !Host.up) return
         var name = who ? who.name : nameBox.text.trim()
         if (name === "") { nameBox.forceActiveFocus(); return }
         phase = "checking"; message = ""
-        Host.signIn(name, pw.text, session)
+        Host.signIn(name, pw.text, session, view.fades ? "plain" : view.light ? "dock-light" : "dock")
     }
     onPeopleChanged: {
         for (var i = 0; i < people.length; i++) if (people[i].name === Host.last) { sel = i; break }
@@ -94,7 +114,7 @@ FocusScope {
         function onAnswered(ok, why, wait) {
             if (view.phase !== "checking") return
             pw.text = ""
-            if (ok) { view.phase = "wake"; wake.start(); return }
+            if (ok) { view.phase = "wake"; (view.fades ? fade : wake).start(); return }
             view.phase = "idle"; view.message = why; view.waitLeft = wait
             if (why !== "") shake.restart()
             pw.forceActiveFocus()
@@ -112,19 +132,20 @@ FocusScope {
         id: sky
         anchors.fill: parent
         Rectangle { anchors.fill: parent
-            gradient: Gradient { GradientStop { position: 0; color: Qt.darker(view.own.tintB, 1.5) } GradientStop { position: 1; color: Qt.darker(view.own.tintA, 1.25) } } }
+            gradient: Gradient { GradientStop { position: 0; color: view.light ? "#DCE4EA" : Qt.darker(view.own.tintB, 1.5) }
+                                 GradientStop { position: 1; color: view.light ? "#B9C4CD" : Qt.darker(view.own.tintA, 1.25) } } }
         Loader { id: wall; anchors.fill: parent; active: Host.liveDir !== ""; source: Host.liveDir + "LiveWallpaper.qml"
-            onLoaded: item.realm = view.realm }
+            onLoaded: { item.realm = view.realm; item.day = Qt.binding(function () { return view.light ? 1 : 0 }) } }
     }
     // the foot of the screen a little darker, so the dock reads on any sky
-    Rectangle { visible: view.main; anchors { left: parent.left; right: parent.right; bottom: parent.bottom } height: parent.height * 0.28; opacity: view.phase === "wake" ? 0 : 1
+    Rectangle { id: foot; visible: view.main; anchors { left: parent.left; right: parent.right; bottom: parent.bottom } height: parent.height * 0.28; opacity: view.phase === "wake" ? 0 : 1
         Behavior on opacity { NumberAnimation { duration: 500 } }
-        gradient: Gradient { GradientStop { position: 0; color: "transparent" } GradientStop { position: 1; color: Qt.rgba(0.03, 0.03, 0.06, 0.55) } } }
+        gradient: Gradient { GradientStop { position: 0; color: "transparent" } GradientStop { position: 1; color: view.light ? Qt.rgba(1, 1, 1, 0.45) : Qt.rgba(0.03, 0.03, 0.06, 0.55) } } }
 
     component Glass: Rectangle {
         id: glass
-        color: Qt.rgba(0.08, 0.08, 0.13, frost.status === Loader.Ready ? 0.36 : 0.62)
-        border.width: 1; border.color: Qt.rgba(1, 1, 1, 0.16)
+        color: view.light ? Qt.rgba(1, 1, 1, frost.status === Loader.Ready ? 0.42 : 0.72) : Qt.rgba(0.08, 0.08, 0.13, frost.status === Loader.Ready ? 0.36 : 0.62)
+        border.width: 1; border.color: view.light ? Qt.rgba(1, 1, 1, 0.6) : Qt.rgba(1, 1, 1, 0.16)
         Loader { id: frost; z: -1; anchors.fill: parent
             active: wall.status === Loader.Ready && wall.item !== null && !wall.item.still
             source: "GreeterFrost.qml"
@@ -136,9 +157,9 @@ FocusScope {
         id: f
         property var person: null
         property bool ring: false
-        Rectangle { anchors.fill: parent; radius: width / 2; color: f.ring ? view.own.deep : Qt.rgba(1, 1, 1, 0.12)
-            border.width: f.ring ? 2 : 1; border.color: f.ring ? view.own.accent : Qt.rgba(1, 1, 1, 0.22) }
-        Text { anchors.centerIn: parent; visible: pic.status !== Image.Ready; text: view.initials(f.person ? f.person.full : ""); color: view.ink
+        Rectangle { anchors.fill: parent; radius: width / 2; color: f.ring ? view.own.deep : view.veil(0.12)
+            border.width: f.ring ? 2 : 1; border.color: f.ring ? view.own.accent : view.veil(0.22) }
+        Text { anchors.centerIn: parent; visible: pic.status !== Image.Ready; text: view.initials(f.person ? f.person.full : ""); color: f.ring ? "#F5F7FA" : view.ink
             font { family: view.face; pixelSize: Math.round(f.width * 0.34); weight: Font.DemiBold } }
         Image { id: pic; anchors { fill: parent; margins: f.ring ? 3 : 1 } source: f.person ? f.person.face : ""; sourceSize: Qt.size(192, 192)
             fillMode: Image.PreserveAspectCrop; asynchronous: true; visible: false; layer.enabled: true }
@@ -154,7 +175,8 @@ FocusScope {
         width: 20; height: 20
         onTintChanged: requestPaint()
         readonly property var paths: ({ go: "M5 12h14M13 6l6 6-6 6", sleep: "M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z",
-                                        restart: "M4 12a8 8 0 1 0 2.5-5.8M4 4v5h5", off: "M12 3v9M6.5 6.5a8 8 0 1 0 11 0" })
+                                        restart: "M4 12a8 8 0 1 0 2.5-5.8M4 4v5h5", off: "M12 3v9M6.5 6.5a8 8 0 1 0 11 0",
+                                        person: "M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM4.5 20c.8-3.6 3.8-5.5 7.5-5.5s6.7 1.9 7.5 5.5" })
         onPaint: {
             var c = getContext("2d"), k = width / 24
             c.reset(); c.scale(k, k); c.strokeStyle = tint; c.lineWidth = weight; c.lineCap = "round"; c.lineJoin = "round"
@@ -168,12 +190,12 @@ FocusScope {
         property string say: ""
         signal pressed()
         width: 48; height: 48; radius: 16
-        color: area.pressed ? Qt.rgba(1, 1, 1, 0.24) : area.containsMouse ? Qt.rgba(1, 1, 1, 0.18) : Qt.rgba(1, 1, 1, 0.11)
+        color: area.pressed ? view.veil(0.24) : area.containsMouse ? view.veil(0.18) : view.veil(0.11)
         Accessible.role: Accessible.Button; Accessible.name: say
         Mark { anchors.centerIn: parent; name: rb.mark }
         MouseArea { id: area; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor; enabled: !view.busy; onClicked: rb.pressed() }
         Rectangle { visible: area.containsMouse; anchors { horizontalCenter: parent.horizontalCenter; bottom: parent.top; bottomMargin: 10 }
-            width: tip.width + 20; height: 28; radius: 9; color: Qt.rgba(0.05, 0.05, 0.09, 0.9); border.width: 1; border.color: Qt.rgba(1, 1, 1, 0.14)
+            width: tip.width + 20; height: 28; radius: 9; color: view.tipFill; border.width: 1; border.color: view.veil(0.14)
             Text { id: tip; anchors.centerIn: parent; text: rb.say; color: view.ink; font { family: view.face; pixelSize: 12; weight: Font.Medium } } }
     }
 
@@ -198,13 +220,15 @@ FocusScope {
     Column {
         id: clock
         visible: view.main
-        x: view.withTiles ? Math.round(88 * view.k) : Math.round((parent.width - width) / 2)
+        x: view.clockLeft ? Math.round(88 * view.k) : Math.round((parent.width - width) / 2)
         y: view.withTiles ? Math.round(tileBox.y - 12 * view.k) : Math.round(parent.height * 0.25)
         spacing: 6
-        Text { id: greet; x: view.withTiles ? 0 : Math.round((clock.width - width) / 2); color: Qt.rgba(0.96, 0.96, 0.99, 0.88)
+        // by name only if they asked to be (Settings › Sign-In Screen): anyone at the computer reads this
+        readonly property string named: view.who && view.ways.greet ? ", " + view.first(view.who.full) : ""
+        Text { id: greet; x: view.clockLeft ? 0 : Math.round((clock.width - width) / 2); color: view.light ? Qt.rgba(0.08, 0.09, 0.12, 0.82) : Qt.rgba(0.96, 0.96, 0.99, 0.88)
             font { family: view.face; pixelSize: Math.max(16, Math.round(view.height * 0.022)); weight: Font.Medium }
-            text: view.phase === "wake" ? "Welcome back" + (view.who ? ", " + view.first(view.who.full) : "") : view.greeting() + (view.who ? ", " + view.first(view.who.full) : "") }
-        Item { id: timeBox; x: view.withTiles ? -120 : Math.round((clock.width - width) / 2); width: timeText.width + 240; height: timeText.height + 80
+            text: (view.phase === "wake" ? "Welcome back" : view.greeting()) + clock.named }
+        Item { id: timeBox; x: view.clockLeft ? -120 : Math.round((clock.width - width) / 2); width: timeText.width + 240; height: timeText.height + 80
             property real glow: 0       // 0…1: the realm's light coming up around the digits
             property real melt: 0       // 0…1: dissolving
             opacity: 1 - melt
@@ -236,7 +260,7 @@ FocusScope {
         Repeater { model: view.tiles
             GreeterTile { required property var modelData; required property int index
                 readonly property var at: tileBox.places[index] || { row: 0, col: 0, w: 1, h: 1 }
-                widget: modelData; now: view.now; battery: Host.battery; k: view.k; behind: sky; liveBehind: frostOk; locking: view.locking
+                widget: modelData; now: view.now; battery: Host.battery; k: view.k; behind: sky; liveBehind: frostOk; locking: view.locking; light: view.light
                 x: at.col * (tileBox.cw + tileBox.gap); y: at.row * (tileBox.ch + tileBox.gap)
                 width: at.w * tileBox.cw + (at.w - 1) * tileBox.gap; height: at.h * tileBox.ch + (at.h - 1) * tileBox.gap
                 visible: y + height <= tileBox.room } }       // more than fits: left off rather than under the dock
@@ -262,15 +286,19 @@ FocusScope {
         Item { id: ask; anchors.fill: parent; opacity: 1
             Row { id: side; anchors { right: parent.right; rightMargin: 14; verticalCenter: parent.verticalCenter } spacing: 12
                 Repeater { model: view.people
-                    Item { required property var modelData; required property int index; visible: index !== view.sel && shown < 4; width: visible ? 52 : 0; height: 52
+                    Item { required property var modelData; required property int index; visible: (index !== view.sel || view.typing) && shown < 4; width: visible ? 52 : 0; height: 52
                         readonly property int shown: index - (index > view.sel ? 1 : 0)          // the first four others fit
                         Face { anchors.fill: parent; person: modelData }
                         Accessible.role: Accessible.Button; Accessible.name: "Sign in as " + modelData.full
                         MouseArea { id: other; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor; onClicked: view.choose(index) }
                         Rectangle { visible: other.containsMouse; anchors { horizontalCenter: parent.horizontalCenter; bottom: parent.top; bottomMargin: 12 }
-                            width: otherName.width + 20; height: 28; radius: 9; color: Qt.rgba(0.05, 0.05, 0.09, 0.9); border.width: 1; border.color: Qt.rgba(1, 1, 1, 0.14)
+                            width: otherName.width + 20; height: 28; radius: 9; color: view.tipFill; border.width: 1; border.color: view.veil(0.14)
                             Text { id: otherName; anchors.centerIn: parent; text: modelData.full; color: view.ink; font { family: view.face; pixelSize: 12; weight: Font.Medium } } } } }
-                Rectangle { visible: view.people.length > 1; width: 1; height: 40; color: Qt.rgba(1, 1, 1, 0.2); anchors.verticalCenter: parent.verticalCenter }
+                // only the last person listed: anyone else types their name (and back again)
+                // (typing a name: their face is back in this row, to go back to them)
+                RoundButton { visible: Host.others === true && view.people.length > 0 && !view.typing; mark: "person"; say: "Someone else"
+                    onPressed: view.someoneElse(true) }
+                Rectangle { visible: view.people.length > 1 || (Host.others === true && view.people.length > 0); width: 1; height: 40; color: view.veil(0.2); anchors.verticalCenter: parent.verticalCenter }
                 RoundButton { mark: "sleep"; say: "Sleep"; onPressed: Host.power("sleep") }
                 RoundButton { visible: !view.locking; mark: "restart"; say: "Restart"; onPressed: Host.power("restart") }
                 RoundButton { visible: !view.locking; mark: "off"; say: "Shut Down"; onPressed: Host.power("off") }
@@ -278,7 +306,7 @@ FocusScope {
             Rectangle { id: pill; height: 56; radius: 28; y: 12
                 property real nudge: 0
                 x: 14 + nudge; width: side.x - 12 - 14
-                color: Qt.rgba(1, 1, 1, 0.10); border.width: 1; border.color: pw.activeFocus || nameBox.activeFocus ? view.own.accent : Qt.rgba(1, 1, 1, 0.3)
+                color: view.light ? Qt.rgba(1, 1, 1, 0.55) : Qt.rgba(1, 1, 1, 0.10); border.width: 1; border.color: pw.activeFocus || nameBox.activeFocus ? view.own.accent : view.veil(0.3)
                 SequentialAnimation { id: shake
                     NumberAnimation { target: pill; property: "nudge"; to: -10; duration: 50 }
                     NumberAnimation { target: pill; property: "nudge"; to: 9; duration: 70 }
@@ -292,7 +320,8 @@ FocusScope {
                 TextInput { id: nameBox; visible: view.who === null; anchors.verticalCenter: parent.verticalCenter; x: 64; width: pill.width * 0.32; clip: true
                     color: view.ink; selectionColor: view.own.accent; font { family: view.face; pixelSize: 15; weight: Font.DemiBold }
                     Accessible.name: "Name"; KeyNavigation.tab: pw; onAccepted: pw.forceActiveFocus()
-                    Text { visible: nameBox.text === ""; text: "Name"; color: Qt.rgba(0.96, 0.96, 0.99, 0.62); font: nameBox.font } }
+                    Keys.onEscapePressed: if (view.typing && text === "") view.someoneElse(false); else text = ""
+                    Text { visible: nameBox.text === ""; text: "Name"; color: view.hint; font: nameBox.font } }
                 Item { id: field; anchors { left: view.who !== null ? myName.right : nameBox.right; leftMargin: 14; right: go.left; rightMargin: 8; verticalCenter: parent.verticalCenter } height: 44
                     TextInput { id: pw; objectName: "password"; anchors.fill: parent; verticalAlignment: TextInput.AlignVCenter; clip: true; focus: true
                         echoMode: TextInput.Password; passwordCharacter: "●"; passwordMaskDelay: 0
@@ -307,11 +336,11 @@ FocusScope {
                             if (e.key === Qt.Key_Left) { view.choose((view.sel + view.people.length - 1) % view.people.length); e.accepted = true }
                             else if (e.key === Qt.Key_Right) { view.choose((view.sel + 1) % view.people.length); e.accepted = true }
                         } }
-                    Text { visible: pw.text === "" && view.phase === "idle"; anchors.verticalCenter: parent.verticalCenter; color: Qt.rgba(0.96, 0.96, 0.99, 0.62)
+                    Text { visible: pw.text === "" && view.phase === "idle"; anchors.verticalCenter: parent.verticalCenter; color: view.hint
                         font { family: view.face; pixelSize: 15 }
                         text: view.waitLeft > 0 ? "Wait…" : "Password" }
                     // checking, and then right: the password is a line of the realm's light
-                    Rectangle { id: light; anchors.verticalCenter: parent.verticalCenter; height: 2; radius: 1; color: view.own.accent
+                    Rectangle { id: lineOfLight; anchors.verticalCenter: parent.verticalCenter; height: 2; radius: 1; color: view.own.accent
                         width: view.phase === "idle" ? 0 : parent.width; opacity: view.phase === "idle" ? 0 : 1
                         Behavior on width { NumberAnimation { duration: 320; easing.type: Easing.OutCubic } }
                         SequentialAnimation on opacity { running: view.phase === "checking"; loops: Animation.Infinite
@@ -335,7 +364,7 @@ FocusScope {
                     width: mid ? meWide : 52; height: 56; anchors.verticalCenter: parent.verticalCenter
                     property real meWide: 64
                     Rectangle { visible: !parent.mid; anchors.centerIn: parent; width: 52; height: 52; radius: 14; opacity: parent.lit; scale: 0.7 + 0.3 * parent.lit
-                        color: Qt.rgba(1, 1, 1, 0.16); border.width: 1; border.color: Qt.rgba(1, 1, 1, 0.24) }
+                        color: view.veil(0.16); border.width: 1; border.color: view.veil(0.24) }
                     Item { visible: parent.mid; anchors.centerIn: parent; width: 56; height: 56; opacity: wokeMe.opacity
                         Rectangle { anchors.centerIn: parent; width: 76; height: 76; radius: 38; color: view.own.accent; opacity: 0.28 }
                         Face { anchors.fill: parent; person: view.who; ring: true } } } }
@@ -367,6 +396,16 @@ FocusScope {
                                     NumberAnimation { target: barRight; property: "opacity"; to: 0; duration: 420; easing.type: Easing.InCubic } } }
         }
         PauseAnimation { duration: 120 }
+        ScriptAction { script: Host.done() }
+    }
+    // the wake turned off (or Reduce Motion, or a name typed): everything simply fades from the wallpaper
+    SequentialAnimation {
+        id: fade
+        ParallelAnimation {
+            NumberAnimation { targets: [ask, clock, tileBox, barLeft, barRight, foot]; property: "opacity"; to: 0; duration: 420; easing.type: Easing.InOutQuad }
+            SequentialAnimation { PauseAnimation { duration: 120 } NumberAnimation { target: dock; property: "opacity"; to: 0; duration: 420; easing.type: Easing.InOutQuad } }
+        }
+        PauseAnimation { duration: 80 }
         ScriptAction { script: Host.done() }
     }
 }

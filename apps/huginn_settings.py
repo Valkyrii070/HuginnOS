@@ -1504,7 +1504,9 @@ def demo_state() -> dict:
                    "preview": {"today": {"events": [{"title": "Stand-up", "date": "2026-11-27", "time": "10:30"}, {"title": "Build review", "date": "2026-11-27", "time": "13:00"}]},
                                "weather": {"place": "Reykjavík", "temp": "4°", "words": "Clear", "high": "9°"}, "pc": {"downloads": 3, "update": "Updated today"},
                                "music": {"title": "Northern Line", "sub": "Vega Hall"}},
-                   "most": 6, "realm": "aurora", "canChangeRealm": True},
+                   "most": 6, "realm": "aurora", "canChangeRealm": True,
+                   "options": {"greet": False, "clock": "centre", "wake": True}, "people": "all", "light": False,
+                   "me": "Astrid", "others": ["Leif", "Guest"], "still": False},
         "printers": {"available": True, "jobs": 0, "printers": [{"name": "Office_LaserJet", "label": "Office LaserJet", "state": "Ready", "ok": True, "default": True},
                                                                 {"name": "Canon_TS3300", "label": "Canon TS3300", "state": "Paused", "ok": False, "default": False}],
                      "scanners": [{"id": "airscan:e0:Canon TS3300", "name": "Canon TS3300 flatbed"}]},
@@ -1534,17 +1536,26 @@ LOGIN_CONF = Path("/etc/huginn/signin.conf.d")
 LOGIN_LOOK = "/usr/libexec/huginn-login-look"            # writes signin.conf.d/10-look.conf as root (through Huginn's password prompt)
 
 
-def login_realm() -> str:
-    """Which realm the sign-in screen wears ([Look] Realm= in the sign-in service's files; later files win)."""
-    realm = "aurora"
+def login_look() -> dict:
+    """How the sign-in screen looks for everyone ([Look] in the sign-in service's files, later files win):
+    {realm, people (all | last | none), light (by day)}. (huginn_signind.look reads the same.)"""
+    found = {"realm": "aurora", "people": "all", "light": "false"}
+    keys = {"Realm": "realm", "People": "people", "LightByDay": "light"}
     for f in [LOGIN_CONF.parent / "signin.conf"] + sorted(LOGIN_CONF.glob("*.conf")):
         try:
-            m = re.search(r"^\[Look\][^\[]*?^Realm\s*=\s*(\w+)", f.read_text(encoding="utf-8"), re.M | re.S)
-            if m:
-                realm = m.group(1).lower()
+            text = f.read_text(encoding="utf-8")
         except OSError:
-            pass
-    return realm
+            continue
+        for section in re.findall(r"^\[Look\]\s*$(.*?)(?=^\[|\Z)", text, re.M | re.S):
+            for key, value in re.findall(r"^\s*(Realm|People|LightByDay)\s*=\s*(\w+)\s*$", section, re.M):
+                found[keys[key]] = value.lower()
+    return {"realm": found["realm"] if found["realm"] in ("aurora", "bifrost", "muspelheim", "niflheim") else "aurora",
+            "people": found["people"] if found["people"] in ("all", "last", "none") else "all", "light": found["light"] == "true"}
+
+
+def login_realm() -> str:
+    """Which realm the sign-in screen wears."""
+    return login_look()["realm"]
 
 
 def load_signin() -> dict:
@@ -1564,8 +1575,25 @@ def load_signin() -> dict:
     if "pc" in preview:
         preview["pc"].update(sw.system_status())
     catalog = [{"id": k, "label": v["name"], "sub": v["about"], "sizes": v["sizes"], "size": v["size"], "before": v["before"]} for k, v in sw.CATALOG.items()]
-    return {"widgets": widgets, "catalog": catalog, "preview": preview, "most": sw.MOST, "realm": login_realm(),
-            "canChangeRealm": os.access(LOGIN_LOOK, os.X_OK) and bool(HAVE("pkexec"))}
+    look = login_look()
+    # who else can sign in (first names, for "Show other people"), and your own first name for the greeting
+    try:
+        import huginn_signind
+        import pwd
+        me = pwd.getpwuid(os.getuid()).pw_name
+        everyone = huginn_signind.people()
+    except Exception:                                            # noqa: BLE001
+        me, everyone = "", []
+    first = lambda full: (full.split() or [""])[0]  # noqa: E731
+    mine = [p for p in everyone if p["name"] == me]
+    try:
+        still = str(json.loads((CONFIG / "huginn-shell/settings.json").read_text(encoding="utf-8")).get("reduceMotion", "")).lower() == "true"
+    except (OSError, ValueError, AttributeError):
+        still = False
+    return {"widgets": widgets, "catalog": catalog, "preview": preview, "most": sw.MOST, "realm": look["realm"],
+            "canChangeRealm": os.access(LOGIN_LOOK, os.X_OK) and bool(HAVE("pkexec")),
+            "options": sw.read_options(home), "people": look["people"], "light": look["light"],
+            "me": first(mine[0]["full"]) if mine else "", "others": [first(p["full"]) for p in everyone if p["name"] != me][:4], "still": still}
 
 
 def load_look() -> dict:
@@ -1766,6 +1794,34 @@ class SystemSettings(QObject):
         def demo(st):
             st["widgets"] = sw.clean_layout({"widgets": want})
         self._act("signin", lambda: sw.write_layout(Path.home(), want) and "", demo_change=demo)
+
+    @Slot(str, str)
+    def setSigninOption(self, key: str, value: str) -> None:
+        """One of your own ways for the sign-in screen (greet by name, where the time sits, the wake): yours, so no
+        password is asked."""
+        import huginn_signin_widgets as sw
+        changes = {"greet": {"greet": value == "true"}, "wake": {"wake": value == "true"},
+                   "clock": {"clock": value if value in ("centre", "left") else "centre"}}.get(key)
+        if changes is None:
+            return
+
+        def demo(st):
+            st["options"] = sw.clean_options(dict(st.get("options") or {}) | changes)
+        self._act("signin", lambda: sw.write_options(Path.home(), **changes) and "", demo_change=demo)
+
+    @Slot(str, str)
+    def setSigninShared(self, key: str, value: str) -> None:
+        """Something about the sign-in screen that's everyone's (who the dock shows, light by day): as an administrator."""
+        if (key, value) not in {("people", "all"), ("people", "last"), ("people", "none"), ("day", "on"), ("day", "off")}:
+            return
+        said = {"people": {"all": "The sign-in screen shows everyone.", "last": "The sign-in screen shows only whoever signed in last.",
+                           "none": "The sign-in screen asks for a name."}, "day": {"on": "The sign-in screen is light by day.",
+                                                                                   "off": "The sign-in screen stays dark."}}[key][value]
+
+        def demo(st):
+            st.update({"people": value} if key == "people" else {"light": value == "on"})
+        self._act("signin", lambda: must(["pkexec", LOGIN_LOOK, key, value], None, 130, "Changing the sign-in screen") and "",
+                  ok=said, demo_change=demo)
 
     @Slot(str)
     def setSigninRealm(self, realm: str) -> None:

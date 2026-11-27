@@ -2,7 +2,9 @@
 every piece applies to them.
 
     ~/.config/huginn/signin-widgets.json     which widgets, in order, their sizes, and whether each may show before
-                                             sign-in (Settings › Sign-In Screen writes it)
+                                             sign-in; and the person's own ways for the screen (OPTIONS: greet them
+                                             by name, where the time sits, the wake). Settings › Sign-In Screen
+                                             writes it
     ~/.cache/huginn/signin-snapshot.json     the latest data of the widgets that may show before sign-in, and only
                                              theirs (the desktop, huginn_shell.py, writes it every minute)
 
@@ -26,6 +28,11 @@ CATALOG = {
     "music": {"name": "Now Playing", "about": "What last played", "sizes": ["small", "wide"], "size": "wide", "before": False},
 }
 MOST = 6                                     # widgets at most (two columns, three rows of small ones)
+# A person's own ways for the sign-in screen, while they're the one chosen in its dock (and on their lock screen):
+#   greet   "Good morning, Astrid" rather than "Good morning"
+#   clock   where the time sits without widgets: "centre" or "left" (with widgets it's always at the left)
+#   wake    the wake when the password is right (the dock filling, the time blooming away); off, a plain fade
+OPTIONS = {"greet": False, "clock": "centre", "wake": True}
 LONGEST = 120                                # characters in any one piece of text
 
 
@@ -58,25 +65,53 @@ def clean_layout(raw) -> list:
     return out
 
 
-def read_layout(home) -> list:
+def clean_options(raw) -> dict:
+    """The person's own ways (OPTIONS) from whatever the file held; anything missing or odd is the default."""
+    raw = raw if isinstance(raw, dict) else {}
+    return {"greet": raw.get("greet") is True, "clock": "left" if raw.get("clock") == "left" else "centre",
+            "wake": raw.get("wake") is not False}
+
+
+def _read(home) -> dict:
     try:
-        return clean_layout(json.loads(layout_path(home).read_text(encoding="utf-8")))
+        raw = json.loads(layout_path(home).read_text(encoding="utf-8"))
+        return raw if isinstance(raw, dict) else {}
     except (OSError, ValueError):
-        return []
+        return {}
+
+
+def read_layout(home) -> list:
+    return clean_layout(_read(home))
+
+
+def read_options(home) -> dict:
+    return clean_options(_read(home))
+
+
+def _save(home, rows: list, options: dict) -> None:
+    path = layout_path(home)
+    if not rows and options == OPTIONS:                      # nothing chosen: no file at all
+        path.unlink(missing_ok=True)
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(".signin-widgets.json.new")
+    tmp.write_text(json.dumps({"v": 1, "widgets": rows, **options}, indent=1), encoding="utf-8")
+    os.replace(tmp, path)
 
 
 def write_layout(home, widgets: list) -> list:
-    """Saves the person's choice (cleaned); an empty one removes the file. Returns what was saved."""
+    """Saves the person's widgets (cleaned), keeping their other choices. Returns what was saved."""
     rows = clean_layout({"widgets": widgets})
-    path = layout_path(home)
-    if not rows:
-        path.unlink(missing_ok=True)
-        return []
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(".signin-widgets.json.new")
-    tmp.write_text(json.dumps({"v": 1, "widgets": rows}, indent=1), encoding="utf-8")
-    os.replace(tmp, path)
+    _save(home, rows, read_options(home))
     return rows
+
+
+def write_options(home, **changes) -> dict:
+    """Changes some of the person's own ways (OPTIONS), keeping their widgets. Returns all of them as saved."""
+    now = read_options(home)
+    options = clean_options(now | {k: v for k, v in changes.items() if k in OPTIONS})
+    _save(home, read_layout(home), options)
+    return options
 
 
 def new_widget(kind: str) -> dict:
@@ -204,6 +239,25 @@ def _clean_data(kind: str, d) -> dict:
         out = {k: _text(d.get(k, "")) for k in ("title", "sub", "app")} | {"at": num(d.get("at"))}
         return out if out["title"] else {}
     return {}
+
+
+def look_of(layout_text: str, settings_text: str = "") -> dict:
+    """The person's own ways as the sign-in screen gets them: {greet, clock, wake}, wake being "full" or "fade" (off,
+    or Reduce Motion on in Accessibility: ~/.config/huginn-shell/settings.json)."""
+    try:
+        opts = clean_options(json.loads(layout_text)) if layout_text else dict(OPTIONS)
+    except ValueError:
+        opts = dict(OPTIONS)
+    try:
+        settings = json.loads(settings_text) if settings_text else {}
+        still = isinstance(settings, dict) and str(settings.get("reduceMotion", "")).lower() == "true"
+    except ValueError:
+        still = False
+    return {"greet": opts["greet"], "clock": opts["clock"], "wake": "full" if opts["wake"] and not still else "fade"}
+
+
+def settings_path(home) -> Path:
+    return Path(home) / ".config/huginn-shell/settings.json"
 
 
 def merge(layout_text: str, snapshot_text: str, system: dict = None) -> list:

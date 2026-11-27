@@ -1,6 +1,8 @@
 import QtQuick
 
-// Settings › Sign-In Screen: widgets beside the time on the sign-in screen (none, to begin with), and its realm.
+// Settings › Sign-In Screen: widgets beside the time on the sign-in screen (none, to begin with), your own ways for it
+// (greeted by name, where the time sits, the wake), and how it looks for everyone (realm, who the dock shows, light
+// by day: those ask for an administrator's password).
 // A picture of the sign-in screen on top, with your widgets where they'll be: drag one onto another's place to
 // change the order. Below, each widget: whether it may show before you sign in, its size, Remove; and Add a Widget.
 // They're yours (~/.config/huginn/signin-widgets.json), and this page is the only place they're changed: nobody at the
@@ -18,6 +20,9 @@ Column {
     readonly property var realmColours: ({ aurora: ["#0F2624", "#17192C", "#3DD6B5", "#7B61FF", "#43D9B8"], bifrost: ["#1D1932", "#2A1727", "#8E7BFF", "#FF7AB8", "#A995FF"],
                                            muspelheim: ["#2C1912", "#1F1718", "#FF8A4C", "#FFC857", "#FF8C50"], niflheim: ["#12212F", "#171A20", "#7CC4FF", "#CFEAFF", "#7CC4FF"] })
     readonly property var rc: realmColours[s.realm] || realmColours.aurora
+    readonly property var opts: s.options || ({ greet: false, clock: "centre", wake: true })
+    readonly property bool shared: s.canChangeRealm !== false
+    function others() { var o = s.others || []; return o.length === 0 ? "Nobody else has an account here" : o.length === 1 ? o[0] : o.slice(0, -1).join(", ") + " and " + o[o.length - 1] }
 
     function info(kind) { for (var i = 0; i < catalog.length; i++) if (catalog[i].id === kind) return catalog[i]; return { label: kind, sub: "", sizes: ["small"] } }
     function save(list) { Backend.setSigninWidgets(JSON.stringify(list)) }
@@ -59,19 +64,22 @@ Column {
         readonly property real k: width / 1440
         readonly property var places: pg.pack(pg.widgets)
         readonly property bool tiles: pg.widgets.length > 0
-        gradient: Gradient { GradientStop { position: 0; color: Qt.darker(pg.rc[1], 1.5) } GradientStop { position: 1; color: Qt.darker(pg.rc[0], 1.25) } }
+        readonly property bool atLeft: tiles || pg.opts.clock === "left"
+        readonly property bool byDay: pg.s.light === true        // (shown light: what it looks like by day)
+        gradient: Gradient { GradientStop { position: 0; color: stage.byDay ? "#DCE4EA" : Qt.darker(pg.rc[1], 1.5) } GradientStop { position: 1; color: stage.byDay ? "#B9C4CD" : Qt.darker(pg.rc[0], 1.25) } }
         border.width: 1; border.color: Theme.t.islandLine
         Rectangle { x: -stage.width * 0.1; y: stage.height * 0.3; width: stage.width * 1.3; height: stage.height * 0.18; radius: height / 2; rotation: -12; color: pg.rc[2]; opacity: 0.22 }
         Rectangle { x: -stage.width * 0.05; y: stage.height * 0.44; width: stage.width * 1.2; height: stage.height * 0.12; radius: height / 2; rotation: -12; color: pg.rc[3]; opacity: 0.16 }
         // the bar
         Rectangle { x: 20 * stage.k; y: 16 * stage.k; height: 44 * stage.k; width: 128 * stage.k; radius: height / 2; color: Qt.rgba(0.08, 0.08, 0.13, 0.6); border.width: 1; border.color: Qt.rgba(1, 1, 1, 0.14)
             Text { anchors.centerIn: parent; text: "HUGINN OS"; color: "white"; font.pixelSize: Math.max(6, 13 * stage.k); font.weight: Font.DemiBold; font.letterSpacing: 1 } }
-        // the time: in the middle, or at the left beside the widgets
+        // the time: in the middle, or at the left (beside the widgets, or as you chose)
         Column {
-            x: stage.tiles ? 88 * stage.k : (stage.width - width) / 2
+            x: stage.atLeft ? 88 * stage.k : (stage.width - width) / 2
             y: stage.tiles ? 120 * stage.k : stage.height * 0.25
-            Text { x: stage.tiles ? 0 : (parent.width - width) / 2; text: "Good morning"; color: Qt.rgba(1, 1, 1, 0.85); font.pixelSize: Math.max(7, 20 * stage.k) }
-            Text { text: "9:41"; color: "white"; font.pixelSize: (stage.tiles ? 180 : 150) * stage.k; font.weight: Font.Light }
+            Text { objectName: "previewGreeting"; x: stage.atLeft ? 0 : (parent.width - width) / 2; text: "Good morning" + (pg.opts.greet && pg.s.me ? ", " + pg.s.me : "")
+                color: stage.byDay ? Qt.rgba(0.08, 0.09, 0.12, 0.8) : Qt.rgba(1, 1, 1, 0.85); font.pixelSize: Math.max(7, 20 * stage.k) }
+            Text { text: "9:41"; color: stage.byDay ? "#15171E" : "white"; font.pixelSize: (stage.tiles ? 180 : 150) * stage.k; font.weight: Font.Light }
         }
         // the widgets, where they'll be; drag one to another's place
         Item {
@@ -124,7 +132,8 @@ Column {
             Row { anchors { right: parent.right; rightMargin: 14 * stage.k; verticalCenter: parent.verticalCenter } spacing: 12 * stage.k
                 Repeater { model: 3; Rectangle { width: 48 * stage.k; height: width; radius: 16 * stage.k; color: Qt.rgba(1, 1, 1, 0.11) } } } }
         Text { visible: !stage.tiles; anchors { horizontalCenter: parent.horizontalCenter; bottom: parent.bottom; bottomMargin: 130 * stage.k }
-            text: "No widgets: the time stays in the middle"; color: Qt.rgba(1, 1, 1, 0.7); font.pixelSize: 12 }
+            text: pg.opts.clock === "left" ? "No widgets: the time sits at the left" : "No widgets: the time stays in the middle"
+            color: stage.byDay ? Qt.rgba(0.08, 0.09, 0.12, 0.7) : Qt.rgba(1, 1, 1, 0.7); font.pixelSize: 12 }
     }
     Label { text: pg.widgets.length > 1 ? "Drag a widget onto another's place to change the order." : "Add a widget and it appears beside the time."
         secondary: true; font.pixelSize: 12; topPadding: -10 }
@@ -147,10 +156,31 @@ Column {
             onClicked: win.pick("Add a Widget", pg.remaining.map(function (c) { return { id: c.id, label: c.label, sub: c.sub } }), "", function (v) { pg.add(String(v)) }) }
     }
 
+    // ------------------------------------------------------------------------------------------- before sign-in
+    SetCard { title: "Before sign-in"; note: "Who the dock shows is the same for everyone who uses this computer, so changing it asks for an administrator's password."
+        SetRow { title: "Greet me by name"; sub: "“Good morning" + (pg.s.me ? ", " + pg.s.me : "") + "” instead of “Good morning”. Anyone at the computer reads it."
+            Toggle { objectName: "greetToggle"; on: pg.opts.greet === true; onToggled: function (v) { Backend.setSigninOption("greet", v ? "true" : "false") } } }
+        SetRow { title: "Who the dock shows"
+            sub: pg.s.people === "none" ? "No one: everyone types their name, then their password"
+                 : pg.s.people === "last" ? "Whoever signed in last; anyone else chooses Someone else and types their name"
+                 : "Everyone: " + (pg.s.me || "you") + (pg.s.others && pg.s.others.length ? ", " + pg.others() : "")
+            SetChoice { objectName: "peopleChoice"; enabled: pg.shared; each: 74; options: [["all", "Everyone"], ["last", "Last"], ["none", "No one"]]; value: pg.s.people || "all"
+                onPicked: function (v) { if (v !== (pg.s.people || "all")) Backend.setSigninShared("people", v) } } } }
+
     // ---------------------------------------------------------------------------------------------------- the look
-    SetCard { title: "Look"; note: "The realm is the same for everyone who uses this computer, so changing it asks for an administrator's password."
+    SetCard { title: "Look"; note: "The realm and light by day are the same for everyone who uses this computer, so changing them asks for an administrator's password."
         SetRow { title: "Realm"; sub: "The living wallpaper behind the sign-in screen"
-            SetPick { enabled: pg.s.canChangeRealm !== false
+            SetPick { enabled: pg.shared
                 text: { for (var i = 0; i < pg.realms.length; i++) if (pg.realms[i][0] === pg.s.realm) return pg.realms[i][1]; return "Aurora" }
-                onClicked: win.pick("Sign-In Screen Realm", pg.realms.map(function (r) { return { id: r[0], label: r[1] } }), pg.s.realm, function (v) { Backend.setSigninRealm(String(v)) }) } } }
+                onClicked: win.pick("Sign-In Screen Realm", pg.realms.map(function (r) { return { id: r[0], label: r[1] } }), pg.s.realm, function (v) { Backend.setSigninRealm(String(v)) }) } }
+        SetRow { title: "Light by day"; sub: "Light from sunrise to sunset here, dark at night"
+            Toggle { objectName: "dayToggle"; enabled: pg.shared; on: pg.s.light === true; onToggled: function (v) { Backend.setSigninShared("day", v ? "on" : "off") } } }
+        SetRow { title: "The time"; sub: pg.widgets.length ? "With widgets it sits at the left, beside them" : "Where it sits when you have no widgets"
+            SetChoice { objectName: "clockChoice"; enabled: pg.widgets.length === 0; each: 74; options: [["centre", "Centre"], ["left", "Left"]]; value: pg.widgets.length ? "left" : pg.opts.clock
+                onPicked: function (v) { Backend.setSigninOption("clock", v) } } } }
+
+    // ------------------------------------------------------------------------------------------------ waking up
+    SetCard { title: "Waking up"; note: pg.s.still ? "Reduce Motion is on in Accessibility, so the wake is a plain fade." : "With Reduce Motion on in Accessibility, the wake is a plain fade."
+        SetRow { title: "Play the wake when I sign in"; sub: "The dock fills with places for your apps and the time blooms away. Off: the sign-in screen simply fades."
+            Toggle { objectName: "wakeToggle"; enabled: !pg.s.still; on: pg.opts.wake !== false && !pg.s.still; onToggled: function (v) { Backend.setSigninOption("wake", v ? "true" : "false") } } } }
 }

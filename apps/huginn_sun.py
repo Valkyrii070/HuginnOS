@@ -4,6 +4,7 @@ is: the time zone's own place (its main city, from the system's time-zone list, 
     place(zone)              (latitude, longitude) of a time zone's city, or None
     times(lat, lon, day)     (sunrise, sunset) in minutes after local midnight; None for a day the sun doesn't rise or set
     today()                  (sunrise, sunset) for this computer's time zone today, or None
+    is_day()                 whether it's between sunrise and sunset here now (7:00 to 19:00 where that can't be told)
 """
 import math
 import os
@@ -73,6 +74,20 @@ def today():
     if not where:
         return None
     return times(where[0], where[1], date.today(), time.localtime().tm_gmtoff / 60)
+
+
+def is_day(now=None, sun=...) -> bool:
+    """Between today's sunrise and sunset here; 7:00 to 19:00 where that can't be told (no time zone, or a day the sun
+    doesn't rise or set). The sign-in screen's "Light by day"."""
+    t = time.localtime(now)
+    minute = t.tm_hour * 60 + t.tm_min
+    if sun is ...:
+        try:
+            sun = today()
+        except Exception:                                 # noqa: BLE001  (an odd time-zone file: the plain hours)
+            sun = None
+    rise, sets = sun if sun else (7 * 60, 19 * 60)
+    return rise <= minute < sets if rise < sets else not (sets <= minute < rise)
 
 
 def hhmm(minutes: int) -> str:

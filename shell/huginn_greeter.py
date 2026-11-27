@@ -41,12 +41,32 @@ def live_dir() -> str:
     return ""
 
 
-def realm() -> str:
+def look() -> dict:
+    """The sign-in screen's look, for everyone (huginn_signind.look: realm, who's shown, light by day)."""
     try:
         import huginn_signind
-        return huginn_signind.look_realm()
+        return huginn_signind.look()
     except Exception:                                            # noqa: BLE001  (whatever's wrong with the files: the default)
-        return "aurora"
+        return {"realm": "aurora", "people": "all", "light": False}
+
+
+def realm() -> str:
+    return look()["realm"]
+
+
+def daytime() -> bool:
+    try:
+        import huginn_sun
+        return huginn_sun.is_day()
+    except Exception:                                            # noqa: BLE001
+        return False
+
+
+def clean_look(raw) -> dict:
+    """A person's own ways for the screen, as the service sent them (huginn_signin_widgets.look_of)."""
+    raw = raw if isinstance(raw, dict) else {}
+    return {"greet": raw.get("greet") is True, "clock": "left" if raw.get("clock") == "left" else "centre",
+            "wake": "fade" if raw.get("wake") == "fade" else "full"}
 
 
 def battery() -> int:
@@ -69,8 +89,11 @@ class Greeter(QObject):
         super().__init__()
         self._app = app
         self._people, self._sessions, self._last, self._last_session, self._host = [], [], "", "huginn", ""
+        self._others = False
         self._sock, self._lock, self._up = None, threading.Lock(), False
         self._battery = battery()
+        self._look = look()
+        self._light = self._look["light"] and daytime()
         self._left = False
         app.screenAdded.connect(lambda _s: self.screensChanged.emit())
         app.screenRemoved.connect(lambda _s: self.screensChanged.emit())
@@ -152,8 +175,9 @@ class Greeter(QObject):
                     face = p.get("face") or ""
                     who.append({"name": p["name"], "full": str(p.get("full") or p["name"]),
                                 "face": QUrl.fromLocalFile(face).toString() if face and os.access(face, os.R_OK) else "",
-                                "widgets": self._widgets(p.get("widgets"))})
+                                "widgets": self._widgets(p.get("widgets")), "look": clean_look(p.get("look"))})
             self._people = who
+            self._others = msg.get("others") is True
             self._sessions = [s for s in (msg.get("sessions") or []) if isinstance(s, dict) and "id" in s and "name" in s]
             self._last, self._last_session, self._host = str(msg.get("last") or ""), str(msg.get("lastSession") or "huginn"), str(msg.get("host") or "")
             self.changed.emit()
@@ -173,9 +197,14 @@ class Greeter(QObject):
         return out
 
     # ................................................................................................. what the screen asks
-    @Slot(str, str, str)
-    def signIn(self, user: str, password: str, session: str) -> None:
-        if not self._send({"op": "signin", "user": user, "password": password, "session": session}):
+    @Slot(str, str, str, str)
+    def signIn(self, user: str, password: str, session: str, arrival: str = "dock") -> None:
+        """arrival: how the desktop should carry on from this screen's last picture (the dock, or the dock in the light
+        look, or plainly after a fade): the session is told (HUGINN_ARRIVAL)."""
+        msg = {"op": "signin", "user": user, "password": password, "session": session}
+        if arrival in ("dock", "dock-light", "plain"):
+            msg["arrival"] = arrival
+        if not self._send(msg):
             self.answered.emit(False, "The sign-in service isn't answering.", 0)
 
     @Slot(str)
@@ -203,8 +232,9 @@ class Greeter(QObject):
 
     def _minute(self) -> None:
         b = battery()
-        if b != self._battery:
-            self._battery = b
+        light = self._look["light"] and daytime()
+        if b != self._battery or light != self._light:
+            self._battery, self._light = b, light
             self.changed.emit()
 
     def _screens(self) -> list:
@@ -219,8 +249,12 @@ class Greeter(QObject):
     lastSession = Property(str, lambda self: self._last_session, notify=changed)
     host = Property(str, lambda self: self._host, notify=changed)
     up = Property(bool, lambda self: self._up, notify=changed)
+    # only the last person is listed (Settings › Sign-In Screen): anyone else types their name
+    others = Property(bool, lambda self: self._others, notify=changed)
+    # light by day, and it's day
+    light = Property(bool, lambda self: self._light, notify=changed)
     battery = Property(int, lambda self: self._battery, notify=changed)
-    realm = Property(str, lambda self: realm(), constant=True)
+    realm = Property(str, lambda self: self._look["realm"], constant=True)
     liveDir = Property(str, lambda self: live_dir(), constant=True)
 
 

@@ -76,6 +76,8 @@ class Locker(QObject):
         self._checking = False
         self._me = person()
         self._widgets = []
+        self._look = {"greet": False, "clock": "centre", "wake": "full"}
+        self._light = False
         self._battery = battery()
         try:
             import huginn_signind
@@ -103,16 +105,23 @@ class Locker(QObject):
                     return ""
             layout = text(sw.layout_path(home))
             self._widgets = sw.merge(layout, text(sw.snapshot_path(home)), sw.system_status()) if layout else []
+            self._look = sw.look_of(layout, text(sw.settings_path(home)))
         except Exception:                                  # noqa: BLE001  (no widgets rather than no lock screen)
             self._widgets = []
+        try:                                               # light by day, as the sign-in screen (everyone's choice)
+            import huginn_signind
+            import huginn_sun
+            self._light = huginn_signind.look()["light"] and huginn_sun.is_day()
+        except Exception:                                  # noqa: BLE001
+            self._light = False
 
     def _minute(self) -> None:
         self._read_widgets()
         self._battery = battery()
         self.changed.emit()
 
-    @Slot(str, str, str)
-    def signIn(self, user: str, password: str, session: str) -> None:
+    @Slot(str, str, str, str)
+    def signIn(self, user: str, password: str, session: str, wake: str = "") -> None:
         """Checks the password away from the screen's thread (a wrong one takes PAM a couple of seconds)."""
         if self._checking:
             return
@@ -173,7 +182,8 @@ class Locker(QObject):
         return ([primary] if primary else []) + rest
 
     def _people(self) -> list:
-        return [{"name": self._me["login"], "full": self._me["name"], "face": self._me["face"], "widgets": self._widgets}]
+        return [{"name": self._me["login"], "full": self._me["name"], "face": self._me["face"], "widgets": self._widgets,
+                 "look": self._look}]
 
     screens = Property("QVariantList", _screens, notify=screensChanged)
     people = Property("QVariantList", _people, notify=changed)
@@ -183,6 +193,8 @@ class Locker(QObject):
     host = Property(str, lambda self: "", constant=True)
     up = Property(bool, lambda self: True, constant=True)
     locking = Property(bool, lambda self: True, constant=True)
+    others = Property(bool, lambda self: False, constant=True)
+    light = Property(bool, lambda self: self._light, notify=changed)
     battery = Property(int, lambda self: self._battery, notify=changed)
     realm = Property(str, lambda self: realm(), constant=True)
     liveDir = Property(str, lambda self: live_dir(), constant=True)

@@ -439,5 +439,58 @@ check("someone's odd files never stop the sign-in screen", r and [p.get("widgets
 sd.people = real_people
 b.close()
 
+# -------------------------------------------------------------------------- the sign-in screen's options
+check("options: the usual ways when nothing's said", sw.clean_options(None) == {"greet": False, "clock": "centre", "wake": True}
+      and sw.clean_options({"greet": "yes", "clock": "middle", "wake": 0}) == {"greet": False, "clock": "centre", "wake": True})
+h = Path(tempfile.mkdtemp(prefix="signin-o-"))
+sw.write_layout(h, [{"kind": "pc"}])
+check("options: changing one keeps the widgets", sw.write_options(h, greet=True, clock="left", nonsense=1) == {"greet": True, "clock": "left", "wake": True}
+      and sw.read_layout(h) == [{"kind": "pc", "size": "small", "before": False}], sw.layout_path(h).read_text())
+check("options: changing the widgets keeps the ways", sw.write_layout(h, []) == [] and sw.read_options(h)["greet"] is True and sw.layout_path(h).exists())
+sw.write_options(h, greet=False, clock="centre")
+check("options: no widgets and the usual ways, no file", not sw.layout_path(h).exists())
+check("what the screen gets: wake off is a fade", sw.look_of(json.dumps({"wake": False})) == {"greet": False, "clock": "centre", "wake": "fade"})
+check("…and Reduce Motion makes it one too", sw.look_of("", json.dumps({"reduceMotion": "true"}))["wake"] == "fade"
+      and sw.look_of("", json.dumps({"reduceMotion": "false"}))["wake"] == "full" and sw.look_of("{", "[")["wake"] == "full")
+
+b = Bench(plans={"huginn-greeter": "yes 60", "astrid": "no"})
+conf = b.tmp / "etc/huginn/signin.conf.d/10-look.conf"
+check("the look: as before when nothing's said", sd.look(b.tmp) == {"realm": "aurora", "people": "all", "light": False}, sd.look(b.tmp))
+conf.write_text("[Look]\nRealm=niflheim\nPeople=Last\nLightByDay=true\n")
+check("the look: realm, who's shown, light by day", sd.look(b.tmp) == {"realm": "niflheim", "people": "last", "light": True}, sd.look(b.tmp))
+conf.write_text("[Look]\nRealm=atlantis\nPeople=some\nLightByDay=maybe\n")
+check("the look: words it doesn't know are the usual", sd.look(b.tmp) == {"realm": "aurora", "people": "all", "light": False}, sd.look(b.tmp))
+sd.people = lambda root=Path("/"), everyone=None: [{"name": "astrid", "full": "Astrid", "face": ""}, {"name": "leif", "full": "Leif", "face": ""}]
+b.svc.widgets = lambda name, system: {"widgets": [], "look": {"greet": name == "leif", "clock": "left", "wake": "full"}}
+sd.save_state(b.tmp, user="leif", session="huginn")
+b.spin(2, lambda: "started huginn-greeter" in b.log())
+c = b.connect()
+r = b.ask(c, {"op": "people"})
+check("everyone shown: both, with their ways, nobody else to type", r and [p["name"] for p in r["people"]] == ["astrid", "leif"] and r["others"] is False
+      and r["people"][1]["look"]["greet"] is True and r["last"] == "leif", r)
+conf.write_text("[Look]\nPeople=last\n")
+r = b.ask(c, {"op": "people"})
+check("only the last: just them, and anyone else types", r and [p["name"] for p in r["people"]] == ["leif"] and r["others"] is True and r["last"] == "leif", r)
+sd.save_state(b.tmp, user="", session="huginn")
+r = b.ask(c, {"op": "people"})
+check("only the last, nobody yet: no one listed", r and r["people"] == [] and r["last"] == "", r)
+sd.save_state(b.tmp, user="leif", session="huginn")
+conf.write_text("[Look]\nPeople=none\n")
+r = b.ask(c, {"op": "people"})
+check("no one: no names at all, not even the last", r and r["people"] == [] and r["last"] == "" and "leif" not in json.dumps(r), r)
+jobs = []
+real_spawn = b.svc._spawn
+b.svc._spawn = lambda job: (jobs.append(job), real_spawn(job))[1]
+b.ask(c, {"op": "signin", "user": "astrid", "password": "x", "session": "huginn", "arrival": "plain"})
+b.spin(1.5, lambda: b.svc.checking is None)
+b.ask(c, {"op": "signin", "user": "astrid", "password": "x", "session": "huginn", "arrival": "; rm -rf"})
+b.spin(1.5, lambda: b.svc.checking is None)
+b.ask(c, {"op": "signin", "user": "astrid", "password": "x", "session": "huginn", "arrival": "dock-light"})
+b.spin(1.5, lambda: b.svc.checking is None)
+check("how the desktop carries on reaches its session (and nothing else does)",
+      [j["env"].get("HUGINN_ARRIVAL") for j in jobs if j["class"] == "user"] == ["plain", "dock", "dock-light"], [j.get("env") for j in jobs])
+sd.people = real_people
+b.close()
+
 print(f"{passed} passed, {failed} failed")
 sys.exit(1 if failed else 0)

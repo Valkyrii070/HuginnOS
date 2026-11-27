@@ -1,14 +1,45 @@
 #!/bin/sh
-# Huginn OS: dress the sign-in screen in a realm (Settings › Appearance › "Use on the sign-in screen").
-# Runs as root through pkexec (org.huginn.login-look); takes one realm name and writes it for the sign-in screen.
+# Huginn OS: how the sign-in screen looks, for everyone (Settings › Sign-In Screen, Settings › Appearance).
+# Runs as root through pkexec (org.huginn.login-look). Changes one thing and keeps the rest, in
+# /etc/huginn/signin.conf.d/10-look.conf ([Look], read by huginn-signind):
+#
+#   huginn-login-look realm aurora|bifrost|muspelheim|niflheim     its living wallpaper
+#   huginn-login-look people all|last|none                         who the dock shows (the others type their name)
+#   huginn-login-look day on|off                                   light between sunrise and sunset
+#   huginn-login-look <realm>                                      (as before: the realm alone)
 set -eu
-case "${1:-}" in
-    aurora|bifrost|muspelheim|niflheim) ;;
-    *) echo "huginn-login-look: not a realm: ${1:-}" >&2; exit 2 ;;
-esac
 dir=/etc/huginn/signin.conf.d
+file="$dir/10-look.conf"
+case "$#:${1:-}" in
+    1:aurora|1:bifrost|1:muspelheim|1:niflheim) set -- realm "$1" ;;
+esac
+what="${1:-}"; value="${2:-}"
+case "$what:$value" in
+    realm:aurora|realm:bifrost|realm:muspelheim|realm:niflheim) ;;
+    people:all|people:last|people:none) ;;
+    day:on|day:off) ;;
+    *) echo "huginn-login-look: not something it can set: $what $value" >&2; exit 2 ;;
+esac
+
+# what's there now (only these three keys, and only plain words, are carried over)
+get() {
+    [ -f "$file" ] || return 0
+    sed -n "s/^[[:space:]]*$1[[:space:]]*=[[:space:]]*\([A-Za-z]*\)[[:space:]]*$/\1/p" "$file" | tail -n 1
+}
+realm=$(get Realm); people=$(get People); light=$(get LightByDay)
+case "$what" in
+    realm) realm=$value ;;
+    people) people=$value ;;
+    day) if [ "$value" = on ]; then light=true; else light=false; fi ;;
+esac
+
 mkdir -p "$dir"
 tmp=$(mktemp "$dir/.look.XXXXXX")
-printf '[Look]\n# Set by Settings › Appearance.\nRealm=%s\n' "$1" > "$tmp"
+{
+    printf '[Look]\n# Set by Settings (Sign-In Screen, Appearance).\n'
+    if [ -n "$realm" ]; then printf 'Realm=%s\n' "$realm"; fi
+    if [ -n "$people" ]; then printf 'People=%s\n' "$people"; fi
+    if [ -n "$light" ]; then printf 'LightByDay=%s\n' "$light"; fi
+} > "$tmp"
 chmod 644 "$tmp"
-mv -f "$tmp" "$dir/10-look.conf"
+mv -f "$tmp" "$file"
