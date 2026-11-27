@@ -578,13 +578,10 @@ pub fn run_udev() {
                         .lock()
                         .activate(false)
                         .expect("failed to activate drm backend");
-                    if !backend.waiting.is_empty() {
-                        // in front for the first time (started behind the sign-in screen): the card is ours now
-                        if let Err(err) = backend.drm_output_manager.device_mut().reset_state() {
-                            warn!(?err, "couldn't reset the card's state");
-                        }
-                        waiting.extend(backend.waiting.drain(..).map(|w| (node, w)));
-                    }
+                    // In front for the first time (started behind the sign-in screen): the card is ours now. Its
+                    // state isn't reset: the sign-in screen's last picture stays on the screen until our first frame
+                    // replaces it (a state that won't take is reset then, in render_surface).
+                    waiting.extend(backend.waiting.drain(..).map(|w| (node, w)));
                     if let Some(lease_global) = backend.leasing_global.as_mut() {
                         lease_global.resume::<HuginnState<UdevData>>();
                     }
@@ -618,6 +615,19 @@ pub fn run_udev() {
     }
 
     let primary_device_id = primary_device.map(|(device_id, _)| device_id);
+    // Started behind the sign-in screen: nothing is drawn until the session is in front, but apps are told to carry
+    // on drawing (their frame callbacks, twenty times a second), so the desktop is drawn in full by the time it's
+    // shown, rather than stopping at its first picture.
+    event_loop
+        .handle()
+        .insert_source(Timer::from_duration(Duration::from_millis(50)), |_, _, data| {
+            if data.backend_data.session.is_active() || data.backend_data.backends.values().all(|b| b.waiting.is_empty()) {
+                return TimeoutAction::Drop;
+            }
+            data.frames_while_hidden();
+            TimeoutAction::ToDuration(Duration::from_millis(50))
+        })
+        .expect("failed to schedule frames while hidden");
     for (device_id, path) in udev_backend.device_list() {
         if Some(device_id) == primary_device_id {
             continue;
@@ -1302,6 +1312,23 @@ impl HuginnState<UdevData> {
                 return;
             }
             self.build_output(node, &connector, crtc, drm_mode, output, global);
+        }
+    }
+
+    /// Frame callbacks for every window and panel on every screen, as if each had just been drawn (see above).
+    fn frames_while_hidden(&mut self) {
+        let time: Duration = self.clock.now().into();
+        let outputs: Vec<Output> = self.space.outputs().cloned().collect();
+        for output in &outputs {
+            let on = |_: &wl_surface::WlSurface, _: &smithay::wayland::compositor::SurfaceData| Some(output.clone());
+            for window in self.space.elements() {
+                if self.space.outputs_for_element(window).contains(output) {
+                    window.send_frame(output, time, Some(Duration::ZERO), on);
+                }
+            }
+            for layer in smithay::desktop::layer_map_for_output(output).layers() {
+                layer.send_frame(output, time, Some(Duration::ZERO), on);
+            }
         }
     }
 
