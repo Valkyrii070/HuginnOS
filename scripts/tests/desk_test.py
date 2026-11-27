@@ -37,4 +37,23 @@ for k, v, want in [("widgetPlaces", '{"clock":{"s":"DP-1","x":0.4,"y":0.3}}', Tr
     check(f"{k}={v!r} {'taken' if want else 'refused'}", settings._allowed(k, v) == want)
 settings.set("widgetPlaces", '{"clock":{"s":"DP-1","x":0.4,"y":0.3}}')
 check("widget places as a map", settings.widgetPlaces == {"clock": {"s": "DP-1", "x": 0.4, "y": 0.3}} and settings.quickTiles == ["dnd", "night", "dark", "captions"])
+# the desktop on the screen yet? (it starts behind the sign-in screen, on a terminal of its own)
+import time
+from PySide6.QtCore import QCoreApplication
+act = Path(tmp) / "active"; act.write_text("tty1\n")
+def spin(sec, until):
+    end = time.monotonic() + sec
+    while time.monotonic() < end and not until():
+        QCoreApplication.processEvents(); time.sleep(0.01)
+    return until()
+o = sh.OnScreen("2", str(act), every=10); seen = []; o.changed.connect(lambda: seen.append(1))
+check("on another terminal: not on the screen yet", not o.property("shown"))
+spin(0.1, lambda: False)
+check("…and still not while that's in front", not o.property("shown") and not seen)
+act.write_text("tty2\n")
+check("its own terminal comes to the front: on the screen, once", spin(1, lambda: o.property("shown")) and seen == [1])
+check("no terminal (nested, previews): on the screen from the start", sh.OnScreen("").property("shown"))
+check("can't tell: never waited for", sh.OnScreen("3", str(Path(tmp) / "nowhere")).property("shown"))
+act.write_text("tty4\n")
+check("already in front at the start", sh.OnScreen("4", str(act)).property("shown"))
 print(f"\n{ok} passed, {fail} failed"); sys.exit(1 if fail else 0)

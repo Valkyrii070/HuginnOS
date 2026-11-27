@@ -417,7 +417,7 @@ QtObject {
         LayerShell.Window.layer: LayerShell.Window.LayerOverlay
         LayerShell.Window.anchors: LayerShell.Window.AnchorTop | LayerShell.Window.AnchorBottom | LayerShell.Window.AnchorLeft | LayerShell.Window.AnchorRight
         LayerShell.Window.exclusionZone: -1
-        Arrival { id: arrival; anchors.fill: parent; playing: arriving; opacity: arriving ? 1 : 0; onLeaving: shell.settled = true }
+        Arrival { id: arrival; anchors.fill: parent; playing: arriving && onScreen.shown; opacity: arriving ? 1 : 0; onLeaving: shell.settled = true }
     },
     Window {   // top bar
         id: topBarWin

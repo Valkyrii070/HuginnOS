@@ -47,10 +47,11 @@ FAKE = textwrap.dedent('''
     try: what = open(os.path.join(plan, job["user"])).read().split()
     except OSError: what = ["no"]
     if what[0] == "die": sys.exit(3)
-    if what[0] == "early":                       # starts behind the sign-in screen: early <ready after s|never> <session s>
+    if what[0] == "early":                       # starts behind the sign-in screen: early <ready after s|never> <session s> [<drawn after s|never>]
         if job.get("password") != "right": send({"auth": False, "why": "Wrong password."}); sys.exit(0)
         send({"auth": True, "why": "", "early": True}); send({"started": True, "pid": 1, "vt": 2}); log("started-behind", job["user"])
         start = time.time(); ready_after = None if what[1] == "never" else float(what[1]); shown = None; said = False
+        drawn_after = None if what[3:4] == ["never"] else float(what[3]) if len(what) > 3 else 0.0; drawn = False
         import select
         while True:
             if ready_after is not None and not said and time.time() - start >= ready_after:
@@ -62,6 +63,8 @@ FAKE = textwrap.dedent('''
                 shown = time.time(); send({"shown": True}); log("shown", job["user"])
             if m not in (b"-",) and json.loads(m).get("stop"):
                 break
+            if shown and not drawn and drawn_after is not None and time.time() - shown >= drawn_after:
+                send({"drawn": True}); drawn = True; log("drawn", job["user"])
             if shown and time.time() - shown > float(what[2]):
                 break
         send({"ended": 0}); log("ended", job["user"]); sys.exit(0)
@@ -319,7 +322,7 @@ check("by itself for someone who can't: the sign-in screen", b.spin(5, lambda: "
 b.close()
 
 # -------------------------------------------------------------------------- the hand-over: a desktop started behind
-b = Bench(plans={"huginn-greeter": "yes 60", "astrid": "early 1.0 0.6"})
+b = Bench(plans={"huginn-greeter": "yes 60", "astrid": "early 1.0 1.5 0.4"})
 b.spin(2, lambda: "started huginn-greeter" in b.log())
 c = b.connect()
 r = b.ask(c, {"op": "signin", "user": "astrid", "password": "right"})
@@ -329,7 +332,9 @@ c.sendall(b'{"op": "leaving"}\n')
 b.spin(0.4)
 check("behind: the wake is over, but the desktop isn't ready: the greeter's last picture stays", "shown astrid" not in b.log() and b.svc.greeter is not None, b.log())
 check("behind: once it's ready, the screen is handed over", b.spin(3, lambda: "shown astrid" in b.log()), b.log())
-check("behind: and the greeter is ended", b.spin(3, lambda: b.svc.greeter is None and "stopped huginn-greeter" in b.log()), b.log())
+check("behind: the greeter's last picture stays until the desktop has drawn over it", b.svc.greeter is not None and "drawn astrid" not in b.log(), b.log())
+check("behind: then the greeter is ended", b.spin(3, lambda: b.svc.greeter is None and "stopped huginn-greeter" in b.log()), b.log())
+check("behind: …once the desktop had drawn", b.log().index("drawn astrid") < b.log().index("stopped huginn-greeter"), b.log())
 check("behind: its ending isn't counted as the greeter failing", b.svc.greeter_fails == 0 and not b.svc.ending)
 check("behind: after signing out, the sign-in screen again", b.spin(5, lambda: b.log().count("started huginn-greeter") == 2), b.log())
 b.close()
@@ -353,6 +358,22 @@ b.spin(0.5)
 check("a desktop that never says it's ready isn't waited for for ever", "shown astrid" not in b.log())
 b.clock[0] += 9
 check("…after a while it's shown anyway", b.spin(3, lambda: "shown astrid" in b.log()), b.log())
+b.close()
+
+b = Bench(plans={"huginn-greeter": "yes 60", "astrid": "early 0.1 30 never"})
+b.spin(2, lambda: "started huginn-greeter" in b.log())
+c = b.connect()
+b.ask(c, {"op": "signin", "user": "astrid", "password": "right"})
+c.sendall(b'{"op": "leaving"}\n')
+b.spin(2, lambda: "shown astrid" in b.log())
+b.spin(0.5)
+check("a desktop that never says it has drawn: the greeter's last picture stays a while", b.svc.greeter is not None, b.log())
+b.clock[0] += 7
+check("…but not for ever", b.spin(3, lambda: b.svc.greeter is None and "stopped huginn-greeter" in b.log()), b.log())
+check("…and the sign-in screen doesn't come back over the desktop", b.log().count("started huginn-greeter") == 1 and b.svc.session is not None, b.log())
+for w in [b.svc.session]:
+    w.kill()
+check("…until that session ends", b.spin(5, lambda: b.log().count("started huginn-greeter") == 2), b.log())
 b.close()
 
 b = Bench(plans={"huginn-greeter": "yes 60", "astrid": "early never 0.5"})

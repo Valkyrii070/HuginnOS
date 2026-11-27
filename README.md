@@ -1546,9 +1546,10 @@ SDDM is not in the image. What stands between the computer starting and somebody
   also ask who can sign in, and for sleep, restart or shut down (only while nobody is signed in).
 - Each sign-in is done by a worker process of its own: PAM (`/etc/pam.d/huginn-signin`: the same modules Ubuntu's
   SDDM file names) runs there, so a module that crashes takes a worker down, not the service. On a right password the
-  worker waits for the greeter to leave (its wake; twelve seconds at most, then it is closed), opens the session
-  (logind hears of it from `pam_systemd`: seat0, VT 1, class `user`, type `wayland`), becomes the person (groups,
-  gid, uid, checked afterwards) and starts `/usr/bin/huginn-session` through their login shell. The session's own
+  worker opens the session at once on a spare terminal (the kernel's `VT_OPENQRY`; logind hears of it from
+  `pam_systemd`: seat0, that VT, class `user`, type `wayland`), becomes the person (groups, gid, uid, checked
+  afterwards) and starts `/usr/bin/huginn-session` through their login shell, behind the sign-in screen while its
+  wake plays (the hand-over, below). The session's own
   messages go to `~/.local/share/huginn/session.log` (the one before: `session.log.1`), which problem reports read.
   When the session ends the worker closes the PAM session and the sign-in screen comes back.
 - Root, service accounts and accounts with no shell are refused before PAM is asked, as slowly as a wrong password.
@@ -1559,12 +1560,25 @@ SDDM is not in the image. What stands between the computer starting and somebody
   in a minute `huginn-signin-fallback.service` takes over: SDDM where it is still installed (a system installed
   before this and updated since), else a text sign-in on the first screen.
 
-Between the sign-in screen leaving and the desktop being ready, three things keep the screen from sitting black:
-the greeter leaves at once when its wake has played; the person's own service manager (`user@UID.service`) is
-started as soon as the password is right, while the wake plays; and the session's compositor shows the sign-in
-screen's wallpaper as a still from its first frame, under everything, for up to twenty seconds (`HUGINN_SPLASH`,
-set by the worker to `/usr/share/huginn-os/live/arrive/<realm>.png`; `compositor/src/render.rs`), so what's left of
-the gap is the moment the screens change hands.
+**The hand-over.** The desktop is started behind the sign-in screen and shown only once it's ready, so there's no
+black screen between them:
+
+1. Right password: the person's service manager (`user@UID.service`) is started, the session opens on its own
+   terminal (above) and its compositor starts there unseen; the greeter plays its wake and says `leaving`, keeping
+   its last picture.
+2. The shell writes `$XDG_RUNTIME_DIR/huginn/shell-ready` once it has loaded; the worker tells the service.
+3. With the wake played and the desktop ready (or eight seconds gone), the service says `go`: the worker brings that
+   terminal to the front (`VT_ACTIVATE`) and logind gives the session the graphics card.
+4. The sign-in screen isn't ended yet. Its last picture stays on the screen until the session's compositor has put
+   its first frame over it (it writes `$XDG_RUNTIME_DIR/huginn/drawn`; six seconds at most), then it is.
+5. The shell's arrival waits until its terminal is the one in front (`XDG_VTNR` against
+   `/sys/class/tty/tty0/active`), so it plays where it can be seen, carrying on from the sign-in screen's last
+   picture.
+
+If the desktop isn't ready after eight seconds it is shown anyway, with the sign-in screen's wallpaper as a still
+under everything for its first twenty seconds (`HUGINN_SPLASH`, `/usr/share/huginn-os/live/arrive/<realm>.png`;
+`compositor/src/render.rs`). A session that ends before it's shown brings a fresh sign-in screen. Signing in by
+itself, and a computer with no spare terminal, start on VT 1 after the greeter has gone, as before.
 
 How it is switched on is made of plain files, so an update can put it in place and Go Back can take it away exactly:
 `graphical.target.d/huginn-signin.conf` (Wants the service) and `sddm.service.d/huginn-signin.conf` (SDDM starts only
@@ -1572,9 +1586,9 @@ when the fallback's flag exists). On a system updated from SDDM, who signs in by
 realm are carried over (`config/hooks/47-sign-in.sh`), and SDDM's settings and Huginn theme are still shipped for
 that fallback alone; they go once the new sign-in has been seen working on real computers.
 
-Tested: the service's logic with stand-in workers (`scripts/tests/signin_test.py`, 64 checks: sign-in, the wait
+Tested: the service's logic with stand-in workers (`scripts/tests/signin_test.py`, 100 checks: sign-in, the wait
 after wrong tries, odd and hostile requests, a stranger on the socket, workers dying, a greeter that won't leave or
-keeps dying, signing in by itself, Relogin); the workers against real PAM and real accounts as root in a throwaway
+keeps dying, signing in by itself, Relogin, the hand-over's order and its time limits); the workers against real PAM and real accounts as root in a throwaway
 system (`signin_real_check.py`, 38 checks: wrong and unknown names, root and shell-less accounts, becoming the
 person with their groups, home, environment and nothing of the service's left open, the log, stop, the greeter's
 account); the screen against the real service (`greeter_test.py`, 25 checks, with pictures), and under the real

@@ -584,7 +584,7 @@ def write_look(realm: str) -> None:
         pass
 
 
-def unstick(shell) -> None:
+def unstick(shell, on_screen=None) -> None:
     """A safety net for the first moments of a session. When KWin is very busy just after sign-in (a computer drawing
     with its CPU, apps all starting at once), a shell surface can miss the frame KWin owes it; Qt then stops drawing
     that surface until something else makes KWin repaint, and the desktop stays at the arrival's first picture. So:
@@ -610,11 +610,19 @@ def unstick(shell) -> None:
                 if w.objectName() == "arrival":
                     w.hide()
         kick()
-    if os.environ.get("HUGINN_DEBUG_UNSTICK"):
-        print("unstick: armed", time.monotonic(), file=sys.stderr, flush=True)
-    QTimer.singleShot(6000, arrive)
-    for t in (9000, 14000, 22000):
-        QTimer.singleShot(t, kick)
+    def arm():
+        if os.environ.get("HUGINN_DEBUG_UNSTICK"):
+            print("unstick: armed", time.monotonic(), file=sys.stderr, flush=True)
+        QTimer.singleShot(6000, arrive)
+        for t in (9000, 14000, 22000):
+            QTimer.singleShot(t, kick)
+    if on_screen is None or on_screen.property("shown"):
+        arm()
+    else:                                                              # (counted from when the desktop is on the screen)
+        def now_shown():
+            on_screen.changed.disconnect(now_shown)
+            arm()
+        on_screen.changed.connect(now_shown)
 
 
 def follow_look(settings) -> None:
@@ -1521,6 +1529,42 @@ class Glance(QObject):
     photo = Property(str, lambda self: self._photo, notify=changed)
 
 
+class OnScreen(QObject):
+    """Whether this desktop is the one on the screen yet. Signing in starts the desktop on a terminal of its own behind
+    the sign-in screen, and it's brought to the front once it has loaded; the arrival from the sign-in screen waits
+    for that, so it plays where it can be seen. Its terminal ($XDG_VTNR) is in front when the kernel's
+    /sys/class/tty/tty0/active names it. Without a terminal (nested, previews) it's on the screen from the start."""
+    changed = Signal()
+
+    def __init__(self, vt: str = "", active: str = "/sys/class/tty/tty0/active", every: int = 40):
+        super().__init__()
+        self._active = Path(active)
+        self._want = f"tty{vt}" if vt.isdigit() else ""
+        self._shown = not self._want or self._front()
+        self._timer = QTimer(self)
+        self._timer.setInterval(every)
+        self._timer.timeout.connect(self._look)
+        if not self._shown:
+            self._timer.start()
+
+    def _front(self) -> bool:
+        """Its terminal is in front (or that can't be told: then it's taken as shown, never waited for)."""
+        try:
+            return self._active.read_text(encoding="ascii").strip() == self._want
+        except OSError:
+            return True
+
+    def _look(self) -> None:
+        if self._front():
+            self._timer.stop()
+            self._shown = True
+            self.changed.emit()
+
+    def _get(self) -> bool:
+        return self._shown
+    shown = Property(bool, _get, notify=changed)
+
+
 def say_ready() -> None:
     """The desktop has loaded: $XDG_RUNTIME_DIR/huginn/shell-ready. Signing in starts the desktop behind the sign-in
     screen, and the sign-in service hands the screen over when this appears (huginn_signind.py)."""
@@ -1662,6 +1706,9 @@ def main() -> int:
     ctx.setContextProperty("startQuery", args.query)
     ctx.setContextProperty("Me", me())
     ctx.setContextProperty("arriving", args.arrive or not (args.preview or args.windowed))
+    real = not (args.compositor or args.preview or args.shot or args.windowed)
+    on_screen = OnScreen(os.environ.get("XDG_VTNR", "") if real else "")
+    ctx.setContextProperty("onScreen", on_screen)
     comp = None
     if args.compositor:
         from huginn_compositor import Compositor
@@ -1672,7 +1719,7 @@ def main() -> int:
     if not engine.rootObjects():
         return 1
     if not (args.compositor or args.preview or args.shot):
-        unstick(engine.rootObjects()[0])
+        unstick(engine.rootObjects()[0], on_screen)
         QTimer.singleShot(0, say_ready)
     if args.shot:
         window = engine.rootObjects()[0]

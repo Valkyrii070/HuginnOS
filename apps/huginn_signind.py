@@ -56,6 +56,7 @@ TRIES_BEFORE_WAITING = 5          # wrong passwords in a row for one name before
 FIRST_WAIT, LONGEST_WAIT = 30, 600
 GREETER_LEAVES_WITHIN = 12.0      # after a right password: its wake, then it must be gone (slow computers take a while to close it)
 READY_MOST = 8.0                  # a session started behind the sign-in screen: how long it may take to be ready before it's shown anyway
+GREETER_AFTER_GO = 6.0            # ...and how long the sign-in screen's last picture is kept for its first frame, at most
 GREETER_QUICK, GREETER_GIVES_UP = 20.0, 4   # a greeter that ends this soon, this many times running: something's broken
 AUTOLOGIN_QUICK = 10.0            # a by-itself sign-in that ends this soon isn't tried again
 WRONG = "Wrong password."
@@ -552,6 +553,12 @@ class Service:
                 self.maybe_switch()
             elif "shown" in msg and w is self.session:
                 say(w.user, "is signed in" if msg["shown"] else "is signed in (its terminal didn't come to the front)")
+                if not msg["shown"]:
+                    self._greeter_goes()
+            elif "drawn" in msg and w is self.session:                 # the desktop's first frame is up: the sign-in screen can go
+                if not msg["drawn"]:
+                    say(w.user + "'s desktop hasn't drawn yet: the sign-in screen goes anyway")
+                self._greeter_goes()
         if w.gone or w.proc.poll() is not None:
             self._ended(w)
 
@@ -578,12 +585,23 @@ class Service:
         self._go()
 
     def _go(self) -> None:
-        """The person whose password was right gets the screen; the sign-in screen goes."""
+        """The person whose password was right gets the screen; the sign-in screen goes. A session started behind it
+        is brought to the front while the sign-in screen is still there: its last picture stays on the screen until
+        the desktop has drawn its first frame over it (the worker says "drawn"), so there's never a black moment."""
         w, self.pending = self.pending, None
         if w is None:
             return
         self.session = w
         w.send({"go": True})
+        if w.early and self.greeter is not None:
+            self.letting_go = self.now()
+        else:
+            self._greeter_goes()
+
+    letting_go = None
+
+    def _greeter_goes(self) -> None:
+        self.letting_go = None
         if self.greeter is not None:
             self.greeter.stopped_by_us = True
             self.greeter.stop()
@@ -617,7 +635,8 @@ class Service:
                 self.greeter_leaving = True
                 self.maybe_switch()
                 return
-            if w.stopped_by_us:
+            if w.stopped_by_us or self.letting_go is not None:             # (or gone by itself while the desktop came up)
+                self.letting_go = None
                 self.greeter_fails = 0
                 self.next()
                 return
@@ -630,6 +649,8 @@ class Service:
                 return
         elif w is self.session:
             self.session = None
+            if self.letting_go is not None:                            # ended at once: a fresh sign-in screen, not the old picture
+                self._greeter_goes()
             if w.kind == "user":
                 say(w.user, "signed out")
                 if w.auto and self.now() - w.started_at < AUTOLOGIN_QUICK:
@@ -646,6 +667,8 @@ class Service:
         """Things that depend on time passing: a desktop slow to be ready, a greeter slow to finish its wake."""
         if self.pending:
             self.maybe_switch()
+        if self.letting_go is not None and self.now() - self.letting_go > GREETER_AFTER_GO:
+            self._greeter_goes()
 
     def step(self, timeout: float = 0.5) -> None:
         for key, _ in self.sel.select(timeout):
@@ -910,6 +933,10 @@ def worker(fd: int) -> int:
     # ready: the desktop has loaded (the shell says so in its runtime folder); the service hands the screen over then
     ready_file = Path(env.get("XDG_RUNTIME_DIR") or f"/run/user/{pw.pw_uid}") / "huginn/shell-ready" if early else None
     said_ready = False
+    # drawn: once shown, the compositor's first frame on the screen (it says so there too); the sign-in screen's last
+    # picture stays up until then
+    drawn_file = ready_file.with_name("drawn") if ready_file else None
+    drawn_by = None
     stop_at, killed = None, False
     signal.signal(signal.SIGTERM, lambda *_: None)                     # ending is asked for below, in order
     sel = selectors.DefaultSelector()
@@ -930,13 +957,25 @@ def worker(fd: int) -> int:
                     send({"ready": True})
             except OSError:
                 pass
-        if not asked and sel.select(0.2):
+        if drawn_by is not None:
+            try:
+                drawn = drawn_file.stat().st_mtime >= started_at - 1
+            except OSError:
+                drawn = False
+            if drawn or time.monotonic() > drawn_by:
+                send({"drawn": drawn})
+                drawn_by = None
+        quick = drawn_by is not None or (ready_file is not None and not said_ready)
+        if not asked and sel.select(0.05 if quick else 0.2):
             msg = recv()
             if msg is None or msg.get("stop"):                         # told to stop, or the service has gone
                 asked = True
                 sel.unregister(chan)
             elif msg.get("go") and early:                              # the screen is the desktop's now
-                send({"shown": show_screen(vt)})
+                shown = show_screen(vt)
+                send({"shown": shown})
+                if shown:
+                    drawn_by = time.monotonic() + 5
         elif asked:
             time.sleep(0.2)
         if asked and stop_at is None:

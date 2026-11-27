@@ -1824,6 +1824,9 @@ impl HuginnState<UdevData> {
             Ok((has_rendered, states)) => {
                 let dmabuf_feedback = surface.dmabuf_feedback.clone();
                 self.post_repaint(&output, frame_target, dmabuf_feedback, &states);
+                if has_rendered {
+                    say_drawn();
+                }
                 !has_rendered
             }
             Err(err) => {
@@ -1918,6 +1921,22 @@ impl HuginnState<UdevData> {
 
 #[allow(clippy::too_many_arguments)]
 #[profiling::function]
+/// The first frame on the screen: say so in the runtime folder ($XDG_RUNTIME_DIR/huginn/drawn). The sign-in service
+/// keeps the sign-in screen's last picture up until then, so handing the screen over is never a black moment
+/// (apps/huginn_signind.py). Nothing is drawn while another console is in front, so this is the frame people see.
+fn say_drawn() {
+    static SAID: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    if SAID.swap(true, std::sync::atomic::Ordering::Relaxed) {
+        return;
+    }
+    if let Some(run) = std::env::var_os("XDG_RUNTIME_DIR") {
+        let dir = std::path::PathBuf::from(run).join("huginn");
+        if let Err(err) = std::fs::create_dir_all(&dir).and_then(|_| std::fs::write(dir.join("drawn"), b"")) {
+            warn!(?err, "couldn't say the first frame is drawn");
+        }
+    }
+}
+
 fn render_surface<'a>(
     surface: &'a mut SurfaceData,
     renderer: &mut UdevRenderer<'a>,
