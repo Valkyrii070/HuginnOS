@@ -13,10 +13,29 @@ hands that to the sign-in screen. A widget that may not show before sign-in reac
 
 Nothing here reaches the network. The data is what the desktop last saw: the weather Weather last fetched, the next
 events in Calendar, what last played, downloads that finished.
+
+Widgets from apps. An app declares one in a small file, and keeps its data in another; no code of the app's ever runs
+on the sign-in screen, which draws the app's words in one of its own templates:
+
+    /usr/share/huginn/signin-widgets/<id>.json             what the widget is (installed with the app), or
+    ~/.local/share/huginn/signin-widgets/<id>.json         for one person (an app installed in their home)
+        {"id": "com.example.raid", "name": "Raid Night", "app": "Example Studio", "about": "Who's in tonight",
+         "template": "status" | "list", "sizes": ["small", "wide"], "size": "wide", "before": false,
+         "accent": "#E8505B"}
+    ~/.cache/huginn/signin-widgets/<id>.json               what it says now, written by the app as it likes (or
+                                                           with publish(), or `huginn-signin-widget set …`)
+        status: {"big": "Build passed", "small": "huginn-os · Build", "state": "good" | "bad" | "", "at": <epoch>}
+        list:   {"rows": [["20:00", "Raid: Molten Core"], …up to four], "at": <epoch>}
+
+Every piece is checked and cut short here (ids, words, colours), so an odd or hostile file is a widget with less in it,
+never anything more. In a person's layout an app's widget is "app:<id>", with its name, template and colour kept
+beside it, so the sign-in service needs nothing of the app's to show it.
 """
 import datetime as dt
 import json
 import os
+import re
+import sys
 import time
 from pathlib import Path
 
@@ -36,6 +55,13 @@ OPTIONS = {"greet": False, "clock": "centre", "wake": True}
 LONGEST = 120                                # characters in any one piece of text
 
 
+APP_DIRS = (Path("/usr/share/huginn/signin-widgets"),)      # (and ~/.local/share/huginn/signin-widgets, the person's own)
+TEMPLATES = ("status", "list")
+SIZES = ("small", "wide", "tall")
+APP_ID = re.compile(r"[a-z0-9][a-z0-9.-]{2,62}")
+ACCENT = re.compile(r"#[0-9A-Fa-f]{6}")
+
+
 def layout_path(home) -> Path:
     return Path(home) / ".config/huginn/signin-widgets.json"
 
@@ -49,20 +75,121 @@ def _text(v, most: int = LONGEST) -> str:
 
 
 # ---------------------------------------------------------------------------------------------------------- the layout
+def app_id(kind) -> str:
+    """The app widget's id in a layout's kind ("app:<id>"), or "" for anything else."""
+    if isinstance(kind, str) and kind.startswith("app:") and APP_ID.fullmatch(kind[4:]):
+        return kind[4:]
+    return ""
+
+
 def clean_layout(raw) -> list:
-    """[{kind, size, before}] from whatever the file held: known kinds, each once, sizes they can have, at most MOST."""
+    """[{kind, size, before}] from whatever the file held: known kinds, each once, sizes they can have, at most MOST.
+    An app's widget ("app:<id>") also keeps {name, template, accent}, checked."""
     rows = raw.get("widgets") if isinstance(raw, dict) else None
     out, seen = [], set()
     for w in rows if isinstance(rows, list) else []:
-        if not isinstance(w, dict) or w.get("kind") not in CATALOG or w["kind"] in seen:
+        if not isinstance(w, dict) or not isinstance(w.get("kind"), str) or w["kind"] in seen:
             continue
         kind = w["kind"]
-        size = w.get("size") if w.get("size") in CATALOG[kind]["sizes"] else CATALOG[kind]["size"]
-        out.append({"kind": kind, "size": size, "before": w.get("before") is True})
+        if kind in CATALOG:
+            size = w.get("size") if w.get("size") in CATALOG[kind]["sizes"] else CATALOG[kind]["size"]
+            out.append({"kind": kind, "size": size, "before": w.get("before") is True})
+        elif app_id(kind):
+            name = _text(w.get("name", ""), 40).strip() or app_id(kind)
+            out.append({"kind": kind, "size": w.get("size") if w.get("size") in SIZES else "small", "before": w.get("before") is True,
+                        "name": name, "template": w.get("template") if w.get("template") in TEMPLATES else "status",
+                        "accent": w.get("accent") if isinstance(w.get("accent"), str) and ACCENT.fullmatch(w["accent"]) else ""})
+        else:
+            continue
         seen.add(kind)
         if len(out) >= MOST:
             break
     return out
+
+
+# -------------------------------------------------------------------------------------------- widgets from apps
+def clean_manifest(raw, where: str = "") -> dict:
+    """An app's declaration of a widget, checked; {} when it isn't one."""
+    if not isinstance(raw, dict) or not isinstance(raw.get("id"), str) or not APP_ID.fullmatch(raw["id"]):
+        return {}
+    name = _text(raw.get("name", ""), 40).strip()
+    if not name:
+        return {}
+    sizes = [z for z in SIZES if isinstance(raw.get("sizes"), list) and z in raw["sizes"]] or ["small"]
+    return {"id": raw["id"], "name": name, "app": _text(raw.get("app", ""), 40).strip(), "about": _text(raw.get("about", ""), 80).strip(),
+            "template": raw.get("template") if raw.get("template") in TEMPLATES else "status", "sizes": sizes,
+            "size": raw.get("size") if raw.get("size") in sizes else sizes[0], "before": raw.get("before") is True,
+            "accent": raw.get("accent") if isinstance(raw.get("accent"), str) and ACCENT.fullmatch(raw["accent"]) else "", "where": where}
+
+
+def app_widgets(home=None, dirs=APP_DIRS) -> dict:
+    """{id: declaration} of the widgets apps bring: the system's, then the person's own (which can't take a system id)."""
+    found = {}
+    places = [(d, "system") for d in dirs] + ([(Path(home) / ".local/share/huginn/signin-widgets", "yours")] if home else [])
+    for folder, where in places:
+        try:
+            files = sorted(folder.glob("*.json"))[:64]
+        except OSError:
+            continue
+        for f in files:
+            try:
+                if not f.is_file() or f.stat().st_size > 16 * 1024:
+                    continue
+                m = clean_manifest(json.loads(f.read_text(encoding="utf-8")), where)
+            except (OSError, ValueError):
+                continue
+            if m and m["id"] not in found:
+                found[m["id"]] = m
+    return found
+
+
+def display_name(m: dict) -> str:
+    """"Code · Last Build": the app's name before the widget's, where it gave one (40 characters at most)."""
+    return ((m["app"] + " · ") if m.get("app") and m["app"].lower() not in m["name"].lower() else "")[:20] + m["name"]
+
+
+def app_data_path(home, wid: str) -> Path:
+    return Path(home) / ".cache/huginn/signin-widgets" / f"{wid}.json"
+
+
+def clean_app_data(d) -> dict:
+    """What an app's widget says, as short plain text: {big, small, state, rows, at} (whichever it has)."""
+    if not isinstance(d, dict):
+        return {}
+    at = d.get("at")
+    out = {"big": _text(d.get("big", ""), 60), "small": _text(d.get("small", ""), 80),
+           "state": d.get("state") if d.get("state") in ("good", "bad") else "",
+           "rows": [[_text(r[0], 40), _text(r[1], 60)] for r in (d.get("rows") if isinstance(d.get("rows"), list) else [])
+                    if isinstance(r, list) and len(r) == 2][:4],
+           "at": int(at) if isinstance(at, (int, float)) and not isinstance(at, bool) and 0 <= at < 1e11 else 0}
+    return out if out["big"] or out["small"] or out["rows"] else {}
+
+
+def publish(wid: str, home=None, **fields) -> bool:
+    """For apps: what their widget says now (see the top of this file). Written only when it changed; True if it was.
+    Without "at", now."""
+    if not APP_ID.fullmatch(wid or ""):
+        raise ValueError(f"not a widget id: {wid!r}")
+    data = clean_app_data({"at": int(time.time())} | fields)
+    path = app_data_path(home or Path.home(), wid)
+    if not data:
+        existed = path.exists()
+        path.unlink(missing_ok=True)
+        return existed
+    text = json.dumps(data, sort_keys=True)
+    try:
+        old = json.loads(path.read_text(encoding="utf-8"))
+        if {k: v for k, v in old.items() if k != "at"} == {k: v for k, v in data.items() if k != "at"} and "at" not in fields:
+            return False
+    except (OSError, ValueError, AttributeError):
+        pass
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f".{wid}.json.new")
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        fh.write(text)
+    os.replace(tmp, path)
+    return True
 
 
 def clean_options(raw) -> dict:
@@ -99,8 +226,12 @@ def _save(home, rows: list, options: dict) -> None:
     os.replace(tmp, path)
 
 
-def write_layout(home, widgets: list) -> list:
-    """Saves the person's widgets (cleaned), keeping their other choices. Returns what was saved."""
+def write_layout(home, widgets: list, apps: dict = None) -> list:
+    """Saves the person's widgets (cleaned), keeping their other choices. Returns what was saved. An app's widget takes
+    its name, template and colour from its declaration (apps: app_widgets()) when it's installed, else keeps its own."""
+    if apps:
+        widgets = [w | {"name": display_name(apps[app_id(w.get("kind"))])} | {k: apps[app_id(w.get("kind"))][k] for k in ("template", "accent")}
+                   if isinstance(w, dict) and app_id(w.get("kind")) in apps else w for w in widgets]
     rows = clean_layout({"widgets": widgets})
     _save(home, rows, read_options(home))
     return rows
@@ -195,6 +326,14 @@ def collect(home, kinds, music: dict = None, calendar=None) -> dict:
             out["pc"] = read_pc(home)
         elif kind == "music" and music:
             out["music"] = {k: _text(music.get(k, "")) for k in ("title", "sub", "app")} | {"at": int(music.get("at") or time.time())}
+        elif app_id(kind):
+            try:
+                path = app_data_path(home, app_id(kind))
+                d = clean_app_data(json.loads(path.read_text(encoding="utf-8"))) if path.is_file() and path.stat().st_size < 16 * 1024 else {}
+            except (OSError, ValueError):
+                d = {}
+            if d:
+                out[kind] = d
     return out
 
 
@@ -238,6 +377,8 @@ def _clean_data(kind: str, d) -> dict:
     if kind == "music":
         out = {k: _text(d.get(k, "")) for k in ("title", "sub", "app")} | {"at": num(d.get("at"))}
         return out if out["title"] else {}
+    if app_id(kind):
+        return clean_app_data(d)
     return {}
 
 
@@ -274,7 +415,11 @@ def merge(layout_text: str, snapshot_text: str, system: dict = None) -> list:
         snap = {}
     out = []
     for w in layout:
-        row = {"kind": w["kind"], "name": CATALOG[w["kind"]]["name"], "size": w["size"], "private": not w["before"], "data": {}}
+        if app_id(w["kind"]):
+            row = {"kind": "app", "id": app_id(w["kind"]), "name": w["name"], "template": w["template"], "accent": w["accent"],
+                   "size": w["size"], "private": not w["before"], "data": {}}
+        else:
+            row = {"kind": w["kind"], "name": CATALOG[w["kind"]]["name"], "size": w["size"], "private": not w["before"], "data": {}}
         if w["before"]:
             row["data"] = _clean_data(w["kind"], snap.get(w["kind"]))
             if w["kind"] == "pc" and system:
@@ -299,3 +444,50 @@ def system_status(root=Path("/")) -> dict:
         days = (dt.date.today() - dt.date.fromtimestamp(when)).days
         return {"update": "Updated " + ("today" if days <= 0 else "yesterday" if days == 1 else "this week")}
     return {}
+
+
+# --------------------------------------------------------------------------------------------- for apps: a command
+USAGE = """huginn-signin-widget: what an app's sign-in widget says (see /usr/share/huginn/signin-widgets)
+
+    huginn-signin-widget set <id> [--big TEXT] [--small TEXT] [--state good|bad] [--row LEFT RIGHT]... [--at EPOCH]
+    huginn-signin-widget clear <id>
+    huginn-signin-widget list                  the widgets apps bring here, and where they're declared
+"""
+
+
+def main(argv: list) -> int:
+    if not argv or argv[0] in ("-h", "--help"):
+        print(USAGE, end="")
+        return 0 if argv else 2
+    if argv[0] == "list":
+        for wid, m in app_widgets(Path.home()).items():
+            print(f"{wid}\t{m['name']}\t{m['template']}\t{m['where']}")
+        return 0
+    if argv[0] in ("set", "clear") and len(argv) >= 2:
+        wid, rest, fields = argv[1], argv[2:], {}
+        if not APP_ID.fullmatch(wid):
+            print(f"huginn-signin-widget: not a widget id: {wid}", file=sys.stderr)
+            return 2
+        if argv[0] == "clear":
+            app_data_path(Path.home(), wid).unlink(missing_ok=True)
+            return 0
+        i = 0
+        while i < len(rest):
+            flag = rest[i]
+            if flag in ("--big", "--small", "--state", "--at") and i + 1 < len(rest):
+                fields[flag[2:]] = int(rest[i + 1]) if flag == "--at" and rest[i + 1].isdigit() else rest[i + 1]
+                i += 2
+            elif flag == "--row" and i + 2 < len(rest):
+                fields.setdefault("rows", []).append([rest[i + 1], rest[i + 2]])
+                i += 3
+            else:
+                print(USAGE, end="", file=sys.stderr)
+                return 2
+        publish(wid, **fields)
+        return 0
+    print(USAGE, end="", file=sys.stderr)
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

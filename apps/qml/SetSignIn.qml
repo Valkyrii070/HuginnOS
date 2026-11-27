@@ -24,9 +24,14 @@ Column {
     readonly property bool shared: s.canChangeRealm !== false
     function others() { var o = s.others || []; return o.length === 0 ? "Nobody else has an account here" : o.length === 1 ? o[0] : o.slice(0, -1).join(", ") + " and " + o[o.length - 1] }
 
-    function info(kind) { for (var i = 0; i < catalog.length; i++) if (catalog[i].id === kind) return catalog[i]; return { label: kind, sub: "", sizes: ["small"] } }
+    function info(kind) {
+        for (var i = 0; i < catalog.length; i++) if (catalog[i].id === kind) return catalog[i]
+        for (var j = 0; j < widgets.length; j++) if (widgets[j].kind === kind)       // an app's widget whose app has gone
+            return { label: widgets[j].name || kind, sub: "Its app isn't installed any more", sizes: ["small", "wide", "tall"] }
+        return { label: kind, sub: "", sizes: ["small"] }
+    }
     function save(list) { Backend.setSigninWidgets(JSON.stringify(list)) }
-    function copy() { return widgets.map(function (w) { return { kind: w.kind, size: w.size, before: w.before } }) }
+    function copy() { return widgets.map(function (w) { var o = {}; for (var k in w) o[k] = w[k]; return o }) }
     function change(i, what) { var l = copy(); for (var k in what) l[i][k] = what[k]; save(l) }
     function remove(i) { var l = copy(); l.splice(i, 1); save(l) }
     function add(kind) { var c = info(kind), l = copy(); l.push({ kind: kind, size: c.size, before: c.before }); save(l) }
@@ -54,6 +59,7 @@ Column {
         if (w.kind === "pc") { var l = []; if (d.update) l.push(d.update); if (d.downloads > 0) l.push(d.downloads + (d.downloads === 1 ? " download" : " downloads") + " finished")
                                return [l[0] || "All quiet", l[1] || (l.length ? "" : "Nothing needs you")] }
         if (w.kind === "music") return d.title ? [d.title, d.sub || ""] : ["Nothing played yet", ""]
+        if (w.kind.indexOf("app:") === 0) return d.big || d.rows ? [d.big || (d.rows && d.rows.length ? d.rows[0][1] : ""), d.small || ""] : ["Nothing yet", "The app fills it in"]
         return ["", ""]
     }
 
@@ -140,7 +146,7 @@ Column {
 
     // ------------------------------------------------------------------------------------------------- the widgets
     SetCard { title: "Widgets"
-        note: "Before sign-in on: the widget shows what your desktop last saw, so anyone at this computer can read it. Off: it shows its name and a lock, nothing more. Only you can change any of this, here, once you've signed in."
+        note: "Before sign-in on: the widget shows what your desktop last saw, so anyone at this computer can read it. Off: it shows its name and a lock, nothing more. Only you can change any of this, here, once you've signed in. Apps can bring widgets of their own: they're in Add a widget."
         Repeater { model: pg.widgets
             SetRow { required property var modelData; required property int index; objectName: "widgetRow"
                 title: pg.info(modelData.kind).label; sub: pg.info(modelData.kind).sub

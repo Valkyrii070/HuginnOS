@@ -1533,6 +1533,37 @@ Settings page through its own controls (adding, sizes, before sign-in, dragging 
 desktop's snapshot (only allowed widgets, mode 600, gone when none are allowed).
 Not tested here: on a started computer, which needs a restart after the update so the sign-in service reads them.
 
+### Widgets from apps
+
+Apps can put a widget of their own on the sign-in screen (and the lock screen), as Code (**Last Build**: passed or
+failed, the project and task, when) and Tempo (**Current Song**: the song last worked on) do. No code of the app's
+ever runs there: an app declares the widget and writes what it says, and the sign-in screen draws those words in one
+of its own two templates, after checking and shortening every piece (`apps/huginn_signin_widgets.py`).
+
+1. Declare it, installed with the app: `/usr/share/huginn/signin-widgets/<id>.json`, or for one person
+   `~/.local/share/huginn/signin-widgets/<id>.json` (which can't take an id the system already has):
+
+       {"id": "com.example.raid", "name": "Raid Night", "app": "Example Studio", "about": "Who's in tonight",
+        "template": "list", "sizes": ["small", "wide"], "size": "wide", "before": false, "accent": "#E8505B"}
+
+   `template` is `status` (a big line, a small one, an optional state, good or bad, shown as a green or red dot, and
+   when) or `list` (up to four lines of two parts). `before` is whether it may show before sign-in when someone adds
+   it; leave it false for anything personal.
+2. Say what it says, whenever it changes: write `~/.cache/huginn/signin-widgets/<id>.json` (only yours to read), or
+   use `huginn-signin-widget set <id> --big "Build passed" --small "huginn-os · Build" --state good`, or from
+   Python `huginn_signin_widgets.publish("<id>", big=…, small=…, state=…, rows=[[…, …]], at=…)`.
+
+It then appears in Settings › Sign-In Screen › Add a widget as "Example Studio · Raid Night". Added, it's in the
+person's layout as `app:<id>` with its name, template and colour kept beside it, so the sign-in service needs nothing
+of the app's to draw it; the desktop copies what it says into the snapshot each minute if it may show before sign-in,
+and if not, the sign-in screen gets its name and a lock, as for Huginn's own. An app that's been removed leaves its
+widget saying nothing new until it's taken off.
+
+Tested: `signin_test.py` (declarations: odd ids, names, templates and colours; where they're found and in what order;
+what a layout keeps and what saving takes from the declaration; publishing: only yours, cut short, nothing unknown
+kept, oversized files ignored; the private one carries its name alone; the command; Code's and Tempo's own),
+`greeter_test.py` (Code's widget on the screen with its words and when, nothing else of the file's).
+
 ### The sign-in screen's options
 
 Also in Settings › Sign-In Screen. Each person's own, kept beside their widgets in `signin-widgets.json`

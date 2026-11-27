@@ -75,11 +75,13 @@ import datetime as _dt  # noqa: E402
 _today = _dt.date.today().isoformat()
 _later = (_dt.datetime.now() + _dt.timedelta(minutes=49)).strftime("%H:%M")
 LAYOUT = json.dumps({"widgets": [{"kind": "today", "size": "wide", "before": False}, {"kind": "weather", "size": "small", "before": True},
-                                 {"kind": "pc", "size": "small", "before": True}, {"kind": "music", "size": "wide", "before": False}]})
+                                 {"kind": "pc", "size": "small", "before": True}, {"kind": "music", "size": "small", "before": False},
+                                 {"kind": "app:huginn.code.build", "size": "small", "before": True, "name": "Code · Last Build", "template": "status", "accent": "#2563EB"}]})
 SNAP = json.dumps({"data": {"weather": {"place": "Reykjavík", "temp": "4°", "words": "Clear", "high": "9°", "low": "1°", "at": int(time.time()) - 600},
                             "pc": {"downloads": 3, "at": int(time.time())},
                             "today": {"events": [{"title": "Secret meeting", "date": _today, "time": _later}]},
-                            "music": {"title": "A private song", "sub": "Someone", "app": "Music", "at": int(time.time())}}})
+                            "music": {"title": "A private song", "sub": "Someone", "app": "Music", "at": int(time.time())},
+                            "app:huginn.code.build": {"big": "Build passed", "small": "huginn-os · Build", "state": "good", "at": int(time.time()) - 120, "html": "<b>x</b>"}}})
 widgets_for = {"astrid": sw.merge(LAYOUT, SNAP, {"update": "Updated today"})}
 ways_for = {"leif": sw.look_of(json.dumps({"greet": True, "clock": "left"})), "astrid": sw.look_of("")}
 svc = sd.Service(root=tmp, worker_argv=[sys.executable, str(tmp / "fake.py")], run_dir=tmp / "run", power=powered.append,
@@ -184,13 +186,16 @@ check("…who didn't ask to be greeted by name: no name in the greeting", not an
       and any(isinstance(x, str) and x.startswith("Good ") and "," not in x for x in texts()), texts())
 settle(400)
 tiles = [i for i in items(win.contentItem()) if i.metaObject().className().startswith("GreeterTile") and i.isVisible()]
-check("their four widgets are on the screen", len(tiles) == 4, len(tiles))
+check("their five widgets are on the screen", len(tiles) == 5, len(tiles))
 t = texts()
 check("the weather they allowed", "4° and clear" in t and "REYKJAVÍK" in t, [x for x in t if isinstance(x, str)][:40])
 check("This PC: the update, the downloads", "Updated today" in t and any(isinstance(x, str) and "3 downloads finished" in x for x in t), t)
 check("private ones show only their name and that they're private", t.count("Private until you sign in") == 2 and "TODAY" in t and "NOW PLAYING" in t, t)
 check("nothing of a private widget reaches the screen", not any(isinstance(x, str) and ("Secret meeting" in x or "A private song" in x) for x in t))
 check("the time has moved to the left", view.property("withTiles") is True)
+check("an app's widget: its name, its words, and when", "CODE · LAST BUILD" in t and "Build passed" in t and "huginn-os · Build · 2 min ago" in t,
+      [x for x in t if isinstance(x, str)][-12:])
+check("…and nothing it wasn't allowed to say", not any(isinstance(x, str) and "<b>" in x for x in t))
 shot("8-widgets")
 
 # light by day

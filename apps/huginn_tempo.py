@@ -354,6 +354,24 @@ class Tempo(QObject):
             STATE.write_text(json.dumps({"last": str(self._folder)}), encoding="utf-8")
         except OSError as e:
             self.said.emit(f"Couldn't save the song: {e.strerror or e}", True)
+            return
+        self._tell_signin()
+
+    def _tell_signin(self) -> None:
+        """Tempo's sign-in widget, Current Song (/usr/share/huginn/signin-widgets/huginn.tempo.song.json): the song
+        you were last working on. Shown only if you add it in Settings › Sign-In Screen. (At most once a minute: Tempo
+        saves as you go.)"""
+        now = time.time()
+        if now - getattr(self, "_told_signin", 0) < 60 and getattr(self, "_told_song", "") == str(self._folder):
+            return
+        self._told_signin, self._told_song = now, str(self._folder)
+        try:
+            import huginn_signin_widgets as sw
+            tracks = len((self._p or {}).get("tracks") or [])
+            sw.publish("huginn.tempo.song", big=self._folder.stem, small="Pick up where you stopped" + (f" · {tracks} tracks" if tracks > 1 else ""),
+                       at=int(now))
+        except Exception:                                    # noqa: BLE001  (a widget never gets in the way of a song)
+            pass
 
     def _keep(self) -> None:
         self._save_timer.start()

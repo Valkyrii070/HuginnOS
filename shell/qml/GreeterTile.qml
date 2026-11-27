@@ -50,6 +50,19 @@ Rectangle {
         var p = e.time.split(":"), m = (+p[0]) * 60 + (+p[1]) - (now.getHours() * 60 + now.getMinutes())
         return e.time + (m < 60 ? " · in " + m + " minute" + (m === 1 ? "" : "s") : "")
     }
+    // an app's widget (huginn_signin_widgets.py): its words, in one of this screen's templates
+    readonly property bool app: widget.kind === "app"
+    readonly property bool appList: app && widget.template === "list" && !widget.private && (d.rows || []).length > 0
+    function when(at) {
+        var s = ago(at)
+        if (at <= 0 || s < 0) return ""
+        if (s < 90) return "Just now"
+        if (s < 3600) return Math.round(s / 60) + " min ago"
+        var then = new Date(at * 1000)
+        if (Qt.formatDate(then, "yyyy-MM-dd") === Qt.formatDate(now, "yyyy-MM-dd")) return "Today " + Qt.formatTime(then, "HH:mm")
+        if (s < 7 * 86400) return Qt.formatDate(then, "ddd") + " " + Qt.formatTime(then, "HH:mm")
+        return Qt.formatDate(then, "d MMM")
+    }
     readonly property var pcLines: {
         var l = []
         if (d.update) l.push(d.update)
@@ -70,6 +83,7 @@ Rectangle {
         case "weather": return !d.temp || ago(d.at) > 86400 ? "No recent forecast" : d.temp + (d.words ? " and " + d.words.toLowerCase() : "")
         case "pc": return pcLines.length ? pcLines[0] : "All quiet"
         case "music": return d.title || "Nothing played yet"
+        case "app": return d.big || (d.rows && d.rows.length ? d.rows[0][1] : "Nothing yet")
         }
         return ""
     }
@@ -83,6 +97,7 @@ Rectangle {
             return ago(d.at) > 3 * 3600 ? "As of " + Qt.formatTime(new Date(d.at * 1000), "h:mm ap") + (hi ? " · " + hi : "") : (hi || d.place)
         case "pc": return pcLines.length > 1 ? pcLines.slice(1).join(" · ") : (pcLines.length ? "" : "Nothing needs you")
         case "music": return d.sub || ""
+        case "app": var w = when(d.at || 0); return [d.small || "", w].filter(function (x) { return x !== "" }).join(" · ")
         }
         return ""
     }
@@ -102,9 +117,26 @@ Rectangle {
                 Text { width: parent.width - 100 * k; text: modelData.title; color: tile.ink; elide: Text.ElideRight
                     font { family: "Inter"; pixelSize: Math.round(15 * k); weight: Font.Medium } } } }
     }
+    // an app's list: up to four lines of its own, a little like Today's
+    Column {
+        visible: tile.appList
+        x: 22 * k; y: name.y + name.height + 14 * k; width: parent.width - 44 * k; spacing: 6 * k
+        Repeater { model: tile.appList ? (d.rows || []).slice(0, tile.tall ? 4 : (tile.wide ? 3 : 2)) : []
+            Row { required property var modelData; spacing: 14 * k; width: parent.width
+                Text { visible: modelData[0] !== ""; width: visible ? 86 * k : 0; text: modelData[0]; color: tile.soft; elide: Text.ElideRight
+                    font { family: "Inter"; pixelSize: Math.round(15 * k) } }
+                Text { width: parent.width - (modelData[0] !== "" ? 100 * k : 0); text: modelData[1]; color: tile.ink; elide: Text.ElideRight
+                    font { family: "Inter"; pixelSize: Math.round(15 * k); weight: Font.Medium } } } }
+    }
+    // its colour: a short line under the name, and how it went (passed, failed) as a dot beside it
+    Rectangle { visible: tile.app && widget.accent !== undefined && widget.accent !== ""; x: 22 * k; y: name.y + name.height + 5 * k
+        width: 18 * k; height: 3 * k; radius: height / 2; color: widget.accent || "transparent" }
+    Rectangle { visible: tile.app && !widget.private && (d.state === "good" || d.state === "bad"); width: 10 * k; height: width; radius: width / 2
+        anchors { right: parent.right; rightMargin: 22 * k; top: parent.top; topMargin: 22 * k }
+        color: d.state === "good" ? "#34C77B" : "#F05252" }
     // the rest: one big line and one small one, at the bottom
     Column {
-        visible: widget.private || !(widget.kind === "today" && (tile.wide || tile.tall) && tile.events.length > 0)
+        visible: widget.private || (!tile.appList && !(widget.kind === "today" && (tile.wide || tile.tall) && tile.events.length > 0))
         x: 22 * k; width: parent.width - 44 * k; spacing: 4 * k
         anchors { bottom: parent.bottom; bottomMargin: 20 * k }
         Text { visible: tile.big !== ""; width: parent.width; text: tile.big; color: tile.ink; elide: Text.ElideRight; maximumLineCount: tile.tall ? 3 : 1; wrapMode: Text.Wrap

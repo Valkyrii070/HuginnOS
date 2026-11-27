@@ -192,6 +192,19 @@ class Greeter(QObject):
             if isinstance(w, dict) and w.get("kind") in ("today", "weather", "pc", "music") and w.get("size") in ("small", "wide", "tall"):
                 out.append({"kind": w["kind"], "name": str(w.get("name") or "")[:40], "size": w["size"], "private": w.get("private") is not False,
                             "data": w.get("data") if isinstance(w.get("data"), dict) and w.get("private") is False else {}})
+            elif isinstance(w, dict) and w.get("kind") == "app" and w.get("size") in ("small", "wide", "tall"):
+                # an app's widget: its words in one of this screen's own templates, checked again here
+                try:
+                    import huginn_signin_widgets as sw
+                except Exception:                                # noqa: BLE001
+                    continue
+                if not sw.APP_ID.fullmatch(str(w.get("id") or "")):
+                    continue
+                accent = w.get("accent") if isinstance(w.get("accent"), str) and sw.ACCENT.fullmatch(w["accent"]) else ""
+                out.append({"kind": "app", "id": w["id"], "name": str(w.get("name") or "")[:40], "size": w["size"],
+                            "template": w.get("template") if w.get("template") in sw.TEMPLATES else "status", "accent": accent,
+                            "private": w.get("private") is not False,
+                            "data": sw.clean_app_data(w.get("data")) if w.get("private") is False else {}})
             if len(out) >= 6:
                 break
         return out

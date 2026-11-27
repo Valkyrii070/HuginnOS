@@ -718,7 +718,21 @@ class Builder(QObject):
         self._status = summary(code, crashed, self._problems, time.time() - self._started, self._stopped)
         self._pending.append({"text": self._status, "kind": "error" if (code != 0 or crashed) and not self._stopped else "done", "path": "", "line": 0, "col": 0})
         self._show()
+        self._tell_signin(code, crashed)
         self.finished.emit(self._task["id"] if self._task else "", code)
+
+    def _tell_signin(self, code: int, crashed: bool) -> None:
+        """Code's sign-in widget, Last Build (/usr/share/huginn/signin-widgets/huginn.code.build.json): passed or
+        failed, which project and task, and when. Shown only if you add it in Settings › Sign-In Screen."""
+        if self._stopped or self._task is None or self._root is None:
+            return
+        try:
+            import huginn_signin_widgets as sw
+            ok = code == 0 and not crashed
+            sw.publish("huginn.code.build", big="Build passed" if ok else "Build failed", state="good" if ok else "bad",
+                       small=f"{self._root.name} · {self._task.get('name', '')}".strip(" ·"), at=int(time.time()))
+        except Exception:                                    # noqa: BLE001  (a widget never gets in the way of a build)
+            pass
 
     @Slot(int)
     def open(self, row: int) -> None:

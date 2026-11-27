@@ -1500,7 +1500,11 @@ def demo_state() -> dict:
                    "catalog": [{"id": "today", "label": "Today", "sub": "Your next events, from Calendar", "sizes": ["small", "wide", "tall"], "size": "wide", "before": False},
                                {"id": "weather", "label": "Weather", "sub": "Your first place in Weather", "sizes": ["small", "wide"], "size": "small", "before": True},
                                {"id": "pc", "label": "This PC", "sub": "Updates, finished downloads and the battery", "sizes": ["small", "wide"], "size": "small", "before": True},
-                               {"id": "music", "label": "Now Playing", "sub": "What last played", "sizes": ["small", "wide"], "size": "wide", "before": False}],
+                               {"id": "music", "label": "Now Playing", "sub": "What last played", "sizes": ["small", "wide"], "size": "wide", "before": False},
+                               {"id": "app:huginn.code.build", "label": "Code · Last Build", "sub": "From Code · Passed or failed, which project, and when",
+                                "sizes": ["small", "wide"], "size": "small", "before": False, "app": True},
+                               {"id": "app:huginn.tempo.song", "label": "Tempo · Current Song", "sub": "From Tempo · The song you were last working on",
+                                "sizes": ["small", "wide"], "size": "wide", "before": False, "app": True}],
                    "preview": {"today": {"events": [{"title": "Stand-up", "date": "2026-11-27", "time": "10:30"}, {"title": "Build review", "date": "2026-11-27", "time": "13:00"}]},
                                "weather": {"place": "Reykjavík", "temp": "4°", "words": "Clear", "high": "9°"}, "pc": {"downloads": 3, "update": "Updated today"},
                                "music": {"title": "Northern Line", "sub": "Vega Hall"}},
@@ -1568,13 +1572,17 @@ def load_signin() -> dict:
     except (OSError, ValueError, AttributeError):
         snap = {}
     # (read here in the background: Calendar's events and what last played come from what the desktop last kept)
-    preview = sw.collect(home, [w["kind"] for w in widgets if w["kind"] not in ("music", "today")])
+    preview = sw.collect(home, [w["kind"] for w in widgets if w["kind"] not in ("music", "today")])       # (apps' widgets: their own files)
     for kind in ("music", "today"):
         if isinstance(snap, dict) and isinstance(snap.get(kind), dict):
             preview[kind] = snap[kind]
     if "pc" in preview:
         preview["pc"].update(sw.system_status())
     catalog = [{"id": k, "label": v["name"], "sub": v["about"], "sizes": v["sizes"], "size": v["size"], "before": v["before"]} for k, v in sw.CATALOG.items()]
+    # and the ones apps bring (/usr/share/huginn/signin-widgets, ~/.local/share/huginn/signin-widgets)
+    for wid, m in sw.app_widgets(home).items():
+        catalog.append({"id": "app:" + wid, "label": sw.display_name(m), "sub": (("From " + m["app"] + " · ") if m["app"] else "From an app · ") + (m["about"] or m["template"]),
+                        "sizes": m["sizes"], "size": m["size"], "before": m["before"], "app": True})
     look = login_look()
     # who else can sign in (first names, for "Show other people"), and your own first name for the greeting
     try:
@@ -1793,7 +1801,7 @@ class SystemSettings(QObject):
 
         def demo(st):
             st["widgets"] = sw.clean_layout({"widgets": want})
-        self._act("signin", lambda: sw.write_layout(Path.home(), want) and "", demo_change=demo)
+        self._act("signin", lambda: sw.write_layout(Path.home(), want, sw.app_widgets(Path.home())) and "", demo_change=demo)
 
     @Slot(str, str)
     def setSigninOption(self, key: str, value: str) -> None:

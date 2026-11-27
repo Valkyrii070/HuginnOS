@@ -492,5 +492,83 @@ check("how the desktop carries on reaches its session (and nothing else does)",
 sd.people = real_people
 b.close()
 
+# ------------------------------------------------------------------------------------------- widgets from apps
+M = {"id": "com.example.raid", "name": "Raid Night", "app": "Example Studio", "about": "Who's in tonight", "template": "list",
+     "sizes": ["small", "wide", "huge"], "size": "wide", "before": True, "accent": "#E8505B"}
+m = sw.clean_manifest(M, "system")
+check("an app's widget: its declaration, checked", m and m["sizes"] == ["small", "wide"] and m["template"] == "list" and m["accent"] == "#E8505B" and m["before"] is True, m)
+check("…odd ids, no name, or not a dict: not a widget", sw.clean_manifest(M | {"id": "../../etc"}) == {} and sw.clean_manifest(M | {"id": "Com.Example"}) == {}
+      and sw.clean_manifest(M | {"name": "  "}) == {} and sw.clean_manifest([M]) == {})
+check("…odd parts are the plain ones", sw.clean_manifest(M | {"template": "html", "accent": "red; x", "size": "tall"}) | {"where": ""}
+      == m | {"template": "status", "accent": "", "size": "small", "where": ""})
+apps_home = Path(tempfile.mkdtemp(prefix="signin-a-"))
+sysdir = apps_home / "sys"
+sysdir.mkdir()
+(sysdir / "raid.json").write_text(json.dumps(M))
+(sysdir / "broken.json").write_text("{")
+(sysdir / "big.json").write_text(json.dumps(M | {"id": "com.example.big", "about": "x" * 20000}))
+mine = apps_home / ".local/share/huginn/signin-widgets"
+mine.mkdir(parents=True)
+(mine / "a.json").write_text(json.dumps(M | {"name": "Not the system's"}))
+(mine / "b.json").write_text(json.dumps(M | {"id": "org.me.thing", "name": "Mine"}))
+found = sw.app_widgets(apps_home, dirs=(sysdir,))
+check("…found where they're installed; a person's own can't take a system id; broken and huge files skipped",
+      sorted(found) == ["com.example.raid", "org.me.thing"] and found["com.example.raid"]["name"] == "Raid Night" and found["org.me.thing"]["where"] == "yours", found)
+check("…named after their app", sw.display_name(found["com.example.raid"]) == "Example Studio · Raid Night")
+rows = sw.clean_layout({"widgets": [{"kind": "app:com.example.raid", "size": "wide", "before": True, "name": "Raid", "template": "list", "accent": "#E8505B"},
+                                    {"kind": "app:com.example.raid"}, {"kind": "app:../x"}, {"kind": "app:"}, {"kind": "app:org.me.thing", "template": "<b>", "accent": "javascript:"}]})
+check("…in a layout: kept with its name, template and colour; the same twice, or a bad id, isn't",
+      [r["kind"] for r in rows] == ["app:com.example.raid", "app:org.me.thing"] and rows[0]["template"] == "list" and rows[1]["template"] == "status" and rows[1]["accent"] == ""
+      and rows[1]["name"] == "org.me.thing", rows)
+sw.write_layout(apps_home, [{"kind": "app:com.example.raid", "size": "wide", "before": True, "name": "Forged", "template": "status"}], found)
+check("…saved with what its declaration says, not what was sent", sw.read_layout(apps_home)[0]["name"] == "Example Studio · Raid Night" and sw.read_layout(apps_home)[0]["template"] == "list",
+      sw.read_layout(apps_home))
+check("what it says: published by the app, only its own to read", sw.publish("com.example.raid", apps_home, rows=[["20:00", "Molten Core"], ["21:30", "Onyxia"]])
+      and (sw.app_data_path(apps_home, "com.example.raid").stat().st_mode & 0o777) == 0o600)
+check("…the same again isn't written", not sw.publish("com.example.raid", apps_home, rows=[["20:00", "Molten Core"], ["21:30", "Onyxia"]]))
+try:
+    sw.publish("../../.bashrc", apps_home, big="x")
+    check("…a bad id is refused", False)
+except ValueError:
+    check("…a bad id is refused", True)
+odd = sw.clean_app_data({"big": "x" * 500, "small": ["no"], "state": "evil", "rows": [["a", "b"]] * 9 + [["c"]], "at": True, "html": "<img>"})
+check("…cut short and plain: long words, odd types, unknown states and fields", len(odd["big"]) == 60 and odd["small"] == "" and odd["state"] == "" and len(odd["rows"]) == 4
+      and odd["at"] == 0 and "html" not in odd, odd)
+got = sw.collect(apps_home, ["app:com.example.raid"])
+check("…the desktop's snapshot takes it", got.get("app:com.example.raid", {}).get("rows", [[None]])[0] == ["20:00", "Molten Core"], got)
+sw.app_data_path(apps_home, "com.example.raid").write_text(json.dumps({"big": "y" * 30000}))
+check("…but not an oversized file", sw.collect(apps_home, ["app:com.example.raid"]) == {})
+lay = json.dumps({"widgets": [{"kind": "app:com.example.raid", "size": "wide", "before": True, "name": "Raid", "template": "list"},
+                              {"kind": "app:org.me.thing", "size": "small", "before": False, "name": "Mine"}]})
+snap = json.dumps({"data": {"app:com.example.raid": {"rows": [["20:00", "Molten Core"]], "evil": 1}, "app:org.me.thing": {"big": "secret"}}})
+merged = sw.merge(lay, snap)
+check("…on the sign-in screen: the allowed one with its words, the private one with its name alone",
+      merged[0] == {"kind": "app", "id": "com.example.raid", "name": "Raid", "template": "list", "accent": "", "size": "wide", "private": False,
+                    "data": {"big": "", "small": "", "state": "", "rows": [["20:00", "Molten Core"]], "at": 0}}
+      and merged[1]["private"] is True and merged[1]["data"] == {} and "secret" not in json.dumps(merged), merged)
+real_home = os.environ.get("HOME")
+os.environ["HOME"] = str(apps_home)
+check("the command: set, clear, and nonsense refused", sw.main(["set", "org.me.thing", "--big", "Done", "--state", "good", "--row", "a", "b"]) == 0
+      and json.loads(sw.app_data_path(apps_home, "org.me.thing").read_text())["big"] == "Done"
+      and sw.main(["clear", "org.me.thing"]) == 0 and not sw.app_data_path(apps_home, "org.me.thing").exists()
+      and sw.main(["set", "BAD ID"]) == 2 and sw.main(["set", "org.me.thing", "--nope"]) == 2 and sw.main([]) == 2)
+from types import SimpleNamespace as NS  # noqa: E402
+import huginn_build  # noqa: E402
+import huginn_tempo  # noqa: E402
+huginn_build.Builder._tell_signin(NS(_stopped=False, _task={"name": "Build"}, _root=Path("/work/huginn-os")), 2, False)
+built = json.loads(sw.app_data_path(apps_home, "huginn.code.build").read_text())
+check("Code's Last Build: a failed build says so, with the project and task", built["big"] == "Build failed" and built["state"] == "bad"
+      and built["small"] == "huginn-os · Build" and built["at"] > 0, built)
+huginn_build.Builder._tell_signin(NS(_stopped=True, _task={"name": "Build"}, _root=Path("/work/x")), 0, False)
+check("…a stopped one says nothing new", json.loads(sw.app_data_path(apps_home, "huginn.code.build").read_text())["big"] == "Build failed")
+song = NS(_folder=Path("/music/Tempo/Night Drive.tempo"), _p={"tracks": [1, 2, 3]})
+huginn_tempo.Tempo._tell_signin(song) if hasattr(huginn_tempo, "Tempo") else None
+said = json.loads(sw.app_data_path(apps_home, "huginn.tempo.song").read_text()) if sw.app_data_path(apps_home, "huginn.tempo.song").exists() else {}
+check("Tempo's Current Song: the song, and how big it is", said.get("big") == "Night Drive" and "3 tracks" in said.get("small", ""), said)
+for f in ("code.build", "tempo.song"):
+    m = sw.clean_manifest(json.loads((KIT / f"config/overlay/usr/share/huginn/signin-widgets/huginn.{f}.json").read_text()))
+    check(f"the {f} declaration is a widget", m and m["id"] == f"huginn.{f}", m)
+os.environ["HOME"] = real_home or "/tmp"
+
 print(f"{passed} passed, {failed} failed")
 sys.exit(1 if failed else 0)

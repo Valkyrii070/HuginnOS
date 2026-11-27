@@ -1,0 +1,11 @@
+{
+ "id": "huginn.tempo.song",
+ "name": "Current Song",
+ "app": "Tempo",
+ "about": "The song you were last working on",
+ "template": "status",
+ "sizes": ["small", "wide"],
+ "size": "wide",
+ "before": false,
+ "accent": "#B4491F"
+}
