@@ -4,6 +4,9 @@ Keeps the system, your apps, this computer's firmware and Huginn up to date. It'
 ## What it updates
 System: Ubuntu's packages, which include the kernel, drivers and the engine the Huginn browser uses. Apps: everything from Flathub. Firmware: the computer's own firmware and devices that take updates. Huginn: the browser, straight from its own repository.
 
+## Huginn OS itself
+The desktop, every Huginn app, the look and the system's own files arrive here too, with no new installation. A new version is fetched and checked in the background, then put in place when the computer starts, before you sign in, which takes a few seconds. Software Update shows the version you have, what the waiting one changes, and two buttons: Restart, or Finish Now to put it in place straight away (open apps keep the old version until you open them again). Your files are never touched, and a system setting you changed yourself is left as you made it. If a new version gives you trouble, Go Back returns every part to the one before; it isn't taken again by itself.
+
 ## Update now
 Check Now looks for updates; Update All puts everything in. Each group also has its own Update button. Updates marked Security fix a security problem: put those in soon. The system asks for your password before changing system packages.
 
