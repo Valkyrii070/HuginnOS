@@ -1,0 +1,80 @@
+# Packages Huginn OS has its own app for. If a dependency ever pulls one in, the build takes it out again
+# (and stops if that would take anything we asked for with it).
+ark
+dolphin
+gwenview
+kate
+kde-spectacle
+konsole
+okular
+systemsettings
+calamares
+polkit-kde-agent-1
+sddm-theme-breeze
+# Huginn signs you in itself (apps/huginn_signind.py)
+sddm
+plymouth-theme-spinner
+# Plasma's background services: Huginn's session daemon does their work (notifications, power and idle, keys and
+# levels, Wi‑Fi secrets, Bluetooth pairing)
+plasma-nm
+plasma-pa
+powerdevil
+bluedevil
+# KWin and Plasma's workspace: Huginn's own compositor draws the desktop and the sign-in screen
+kwin-wayland
+kwin-x11
+kwin-common
+plasma-workspace
+plasma-session-wayland
+kscreen
+# Papirus: replaced by Huginn's own icon theme (2026-11-19)
+papirus-icon-theme
+# KDE's desktop portal and its integration for Qt apps: Huginn's portal and GTK's answer apps, and Huginn's own Qt
+# look carries Huginn's look and Open and Save windows to Qt apps (2026-11-27)
+xdg-desktop-portal-kde
+plasma-integration
+kde-cli-tools
+kio-extras
+kde-config-gtk-style
+# KDE's Breeze style for Qt and for GTK, and what came with it: Huginn's own Qt look and GTK 3 theme do their work
+# (Breeze's icons and pointers stay: 20-desktop.list) (2026-11-27)
+breeze
+breeze-gtk-theme
+kde-style-breeze
+kde-style-breeze-data
+kwin-style-breeze
+breeze-wallpaper
+# KDE Connect: Phone has its own link now (apps/huginn_phoned.py, KDE Connect's protocol), and the desktop theme it
+# brought along (2026-11-27)
+kdeconnect
+plasma-desktoptheme
+# KDE's RDP server: Screen Sharing is the compositor's own now (compositor/src/rdp.rs) (2026-11-27)
+krdp
+# qt6ct and Kvantum: Huginn's own Qt look (qt/: a platform theme and a widget style) does their work, and puts Qt
+# apps' menu bars in the top bar (2026-11-27)
+qt6ct
+qt6-style-kvantum
+qt6-style-kvantum-l10n
+qt6-style-kvantum-themes
+qt-style-kvantum-themes
+# The last of KDE: layer-shell-qt (Huginn's own module makes the shell's windows: qt/layershell), the QML modules for
+# NetworkManager and BlueZ (the shell asks them itself), and KConfig's command-line tools (Settings writes its files
+# itself) (2026-11-27)
+layer-shell-qt
+liblayershellqtinterface6
+qml6-module-org-kde-layershell
+qml6-module-org-kde-networkmanager
+libkf6networkmanagerqt6
+qml6-module-org-kde-bluezqt
+libkf6bluezqt6
+libkf6bluezqt-data
+libkf6config-bin
+# KDE's pointers: Huginn draws its own (pointers/make_pointers.py); Adwaita's and DMZ's stay to choose from (2026-11-28)
+breeze-cursor-theme
+oxygen-cursor-theme
+# Breeze's icons: Huginn's icon theme answers every standard name itself now (scripts/icon_names.py), so nothing of
+# KDE's is left, artwork included (2026-11-28)
+breeze-icon-theme
+kf6-breeze-icon-theme
+# GnuPG's passphrase window is Huginn's own (apps/huginn_pinentry.py); pinentry-qt brought KDE's libraries
+pinentry-qt

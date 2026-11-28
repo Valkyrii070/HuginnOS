@@ -1,0 +1,123 @@
+#!/usr/bin/env python3
+"""A gallery of Qt controls in Huginn's Qt look, as pictures: <name>-window.png and <name>-menu.png (qt_look_test.py
+makes them for a few realms).
+
+    QT_QPA_PLATFORMTHEME=huginn QT_QPA_PLATFORM=offscreen qt_gallery.py <path and name, without .png>
+"""
+import sys
+
+from PySide6.QtCore import Qt, QTimer
+from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QDialogButtonBox, QGridLayout, QGroupBox, QHBoxLayout,
+                               QLabel, QLineEdit, QListWidget, QMainWindow, QMenu, QProgressBar, QPushButton, QRadioButton,
+                               QSlider, QSpinBox, QTableWidget, QTableWidgetItem, QTabWidget, QToolBar, QVBoxLayout, QWidget)
+
+app = QApplication(sys.argv)
+app.setApplicationDisplayName("Gallery")
+win = QMainWindow()
+win.resize(860, 620)
+f = win.menuBar().addMenu("&File")
+f.addAction("&New").setShortcut("Ctrl+N")
+f.addAction("&Quit").setShortcut("Ctrl+Q")
+win.menuBar().addMenu("&Edit")
+tb = QToolBar()
+for name in ("Back", "Forward"):
+    tb.addAction(name)
+tb.addSeparator()
+tb.addAction("Share")
+win.addToolBar(tb)
+c = QWidget()
+grid = QGridLayout(c)
+win.setCentralWidget(c)
+left = QVBoxLayout()
+grid.addLayout(left, 0, 0)
+row = QHBoxLayout()
+plain, default, off = QPushButton("Button"), QPushButton("Default"), QPushButton("Disabled")
+default.setDefault(True)
+off.setEnabled(False)
+for b in (plain, default, off):
+    row.addWidget(b)
+left.addLayout(row)
+search = QLineEdit()
+search.setPlaceholderText("Search…")
+left.addWidget(search)
+typed = QLineEdit("Focused text")
+left.addWidget(typed)
+choice = QComboBox()
+choice.addItems(["Aurora", "Bifröst", "Muspelheim", "Niflheim"])
+left.addWidget(choice)
+editable = QComboBox()
+editable.setEditable(True)
+editable.addItems(["Editable"])
+left.addWidget(editable)
+spin = QSpinBox()
+spin.setValue(42)
+left.addWidget(spin)
+row = QHBoxLayout()
+on, off_box, partly = QCheckBox("Checked"), QCheckBox("Unchecked"), QCheckBox("Partly")
+on.setChecked(True)
+partly.setTristate(True)
+partly.setCheckState(Qt.PartiallyChecked)
+for b in (on, off_box, partly):
+    row.addWidget(b)
+left.addLayout(row)
+row = QHBoxLayout()
+r1, r2 = QRadioButton("On"), QRadioButton("Off")
+r1.setChecked(True)
+row.addWidget(r1)
+row.addWidget(r2)
+left.addLayout(row)
+slider = QSlider(Qt.Horizontal)
+slider.setValue(60)
+left.addWidget(slider)
+progress = QProgressBar()
+progress.setValue(45)
+progress.setTextVisible(False)
+left.addWidget(progress)
+tabs = QTabWidget()
+page = QWidget()
+QVBoxLayout(page).addWidget(QLabel("A tab's page"))
+tabs.addTab(page, "General")
+tabs.addTab(QWidget(), "Advanced")
+tabs.addTab(QWidget(), "About")
+left.addWidget(tabs)
+right = QVBoxLayout()
+grid.addLayout(right, 0, 1)
+places = QListWidget()
+places.addItems(["Documents", "Music", "Pictures", "Videos", "Downloads"])
+places.setCurrentRow(1)
+right.addWidget(places)
+table = QTableWidget(4, 3)
+table.setHorizontalHeaderLabels(["Name", "Size", "Kind"])
+for i in range(4):
+    for j in range(3):
+        table.setItem(i, j, QTableWidgetItem(f"{i}:{j}"))
+table.selectRow(2)
+right.addWidget(table)
+group = QGroupBox("Group")
+QVBoxLayout(group).addWidget(QLabel("Inside a group box"))
+right.addWidget(group)
+right.addWidget(QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel))
+win.show()
+typed.setFocus()
+out = sys.argv[1]
+
+
+def shoot():
+    win.grab().save(out + "-window.png")
+    m = QMenu()
+    m.addAction("Cut").setShortcut("Ctrl+X")
+    shown = m.addAction("Show hidden files")
+    shown.setCheckable(True)
+    shown.setChecked(True)
+    m.addSeparator()
+    m.addMenu("Open with").addAction("Writer")
+    m.addAction("Delete").setEnabled(False)
+    m.setActiveAction(m.actions()[0])
+    m.popup(win.mapToGlobal(win.rect().center()))
+    app.processEvents()
+    m.grab().save(out + "-menu.png")
+    app.quit()
+
+
+QTimer.singleShot(300, shoot)
+app.exec()

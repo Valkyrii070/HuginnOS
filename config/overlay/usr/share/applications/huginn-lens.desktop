@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Look Up
+Comment=Circle or drag over anything on the screen to copy, translate, search or ask about it
+Exec=python3 /usr/share/huginn-apps/huginn_app.py lens
+Icon=huginn-screenshot
+NoDisplay=true
+StartupWMClass=huginn-lens

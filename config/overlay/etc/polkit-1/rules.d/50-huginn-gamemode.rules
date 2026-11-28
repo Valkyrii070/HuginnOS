@@ -1,0 +1,8 @@
+// GameMode (the speed-up games get: the processor at full speed while one plays) works for whoever is at the
+// computer. GameMode's own rule wants a "gamemode" group that Ubuntu doesn't make, and without it every game got
+// GameMode without its main part. Only GameMode's helpers, only for someone signed in at this computer.
+polkit.addRule(function (action, subject) {
+    if (action.id.indexOf("com.feralinteractive.GameMode.") === 0 && subject.local && subject.active) {
+        return polkit.Result.YES;
+    }
+});

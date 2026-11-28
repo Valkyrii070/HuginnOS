@@ -1,0 +1,1179 @@
+//! What Huginn's compositor does on top of the example it started from (Smithay's Anvil):
+//!
+//!  * windows: new ones open in the middle of the screen the pointer is on (cascading), minimised windows wait off
+//!    the screen until the dock (or Alt+Tab) brings them back, Alt+Tab goes through the windows, Super+drag moves one;
+//!  * the session: once the compositor is up it starts the session (the services and the shell) and ends with it;
+//!  * the bus (dbus.rs): which window is in front goes to the shell, Super / Super+Space / Print / the hardware keys
+//!    go to the shell and the session daemon, and they can ask for windows, the lock and the screens off;
+//!  * the lock: a lock screen of its own (huginn_locker.py), started by the compositor on a connection only it
+//!    knows. While locked, nothing but that lock screen is drawn or gets the keyboard and the mouse; if it crashes,
+//!    the screens stay black and it is started again. It ends the lock only by exiting with success.
+
+use std::{
+    os::{
+        fd::{AsRawFd, OwnedFd},
+        unix::{net::UnixStream, process::CommandExt},
+    },
+    process::{Child, Command},
+    sync::{Arc, atomic::Ordering, mpsc},
+    time::{Duration, Instant},
+};
+
+use smithay::{
+    desktop::{WindowSurfaceType, layer_map_for_output, space::SpaceElement},
+    input::pointer::{Focus, GrabStartData as PointerGrabStartData},
+    reexports::{
+        calloop::{
+            channel::{Event as ChannelEvent, channel},
+            timer::{TimeoutAction, Timer},
+        },
+        wayland_protocols::xdg::shell::server::xdg_toplevel,
+        wayland_server::{Resource, backend::ClientId},
+    },
+    utils::{IsAlive, Logical, Point, Rectangle, SERIAL_COUNTER, Serial},
+    wayland::{
+        compositor::with_states,
+        shell::{wlr_layer::Layer as WlrLayer, xdg::XdgToplevelSurfaceData},
+    },
+};
+use tracing::{info, warn};
+
+use crate::{
+    dbus::{self, Outgoing, Request, Shared},
+    focus::KeyboardFocusTarget,
+    shell::{FullscreenSurface, PointerMoveSurfaceGrab, WindowElement},
+    state::{Backend, ClientState, HuginnState},
+};
+
+/// Where the lock screen lives (an installed system; HUGINN_LOCKER overrides it for tests).
+const LOCKER: &str = "/usr/share/huginn-shell/huginn_locker.py";
+
+/// The session to start once the compositor is listening (main.rs: what follows `--`).
+pub static SESSION: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
+
+#[derive(Default)]
+pub struct Huginn {
+    pub shared: Shared,
+    pub out: Option<mpsc::Sender<Outgoing>>,
+    /// Minimised windows, with where they were.
+    pub minimised: Vec<(WindowElement, Point<i32, Logical>)>,
+    /// Super+D put these windows out of the way (pressed again with nothing else open: they come back)
+    pub desktop_shown: Option<Vec<u64>>,
+    /// Super is down and nothing else has been pressed since (on its release: the start menu).
+    pub super_alone: bool,
+    /// Super pressed on its own so far (each press counts one, so a wait from an earlier press does nothing), and
+    /// whether holding it has brought up the shortcut sheet (shown until Super is let go or another key goes down).
+    pub super_press: u64,
+    pub sheet: bool,
+    /// Screens turned off in Settings › Displays (displays.rs): kept, dark, out of the desktop
+    pub off_outputs: Vec<smithay::output::Output>,
+    /// Where each app's window last was (places.rs), and how often that's been looked at
+    pub places: crate::places::Places,
+    pub places_tick: u32,
+    /// A pinch on the touchpad, three fingers or more: how far it has gone (1: not at all)
+    pub pinch: Option<f64>,
+    /// Every window as other programs see it (ext-foreign-toplevel-list: screen sharing of one window), by id
+    pub toplevels: Vec<(u64, smithay::wayland::foreign_toplevel_list::ForeignToplevelHandle)>,
+    /// Sticky keys and bounce keys (access.rs)
+    pub keys: crate::access::Keys,
+    /// The colour filter in use (access.rs)
+    pub filter: crate::access::Filter,
+    /// Accessibility settings as last read, and how far the screen under the pointer is zoomed (1: not at all)
+    pub access: crate::access::Settings,
+    pub zoom: f64,
+    /// Alt+Tab in progress: the windows in the order they were in when it began, and where we are.
+    pub switching: Option<(Vec<WindowElement>, usize)>,
+    /// The session to start once the compositor is listening, and whether it was.
+    pub session: Vec<String>,
+    pub session_started: bool,
+    last_active: Option<(String, String, String, bool)>,
+    /// The window list as the shell last heard it.
+    last_windows: String,
+    /// Alt is down and nothing else has been pressed since (on its release: the app's menu).
+    pub alt_alone: bool,
+    /// A three-finger swipe in progress: how far it has gone.
+    pub swipe: Option<(f64, f64)>,
+    /// Spaces, the Overview, snapping, hiding into the dock (wm.rs).
+    pub wm: crate::wm::Wm,
+    pub lock: Option<Lock>,
+    pub blank: bool,
+    /// Surfaces that asked the computer not to go idle (idle-inhibit), while they live.
+    pub inhibitors: Vec<smithay::reexports::wayland_server::Weak<smithay::reexports::wayland_server::protocol::wl_surface::WlSurface>>,
+    /// The screen Xwayland was last told is its main monitor (x11_primary_tick).
+    pub x11_primary: Option<String>,
+    /// A game fills a screen (game_mode_tick): the computer isn't idle, though a controller (which never reaches
+    /// the compositor) may be all that's being touched.
+    pub game_awake: bool,
+    /// Screen Sharing, while it's on (rdp.rs)
+    #[cfg(feature = "rdp")]
+    pub share: Option<crate::rdp::Share>,
+    /// Characters from afar that no key makes, waiting for the app's text field to take them (afar.rs), and since
+    /// when the compositor has been the input method for them
+    pub afar_text: Option<(String, std::time::Instant)>,
+    pub afar_im: Option<std::time::Instant>,
+    /// An app is starting (the shell said so): the pointer turns busy until a new window appears, for 8 s at most.
+    pub launching: Option<std::time::Instant>,
+}
+
+impl std::fmt::Debug for Huginn {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Huginn")
+            .field("minimised", &self.minimised.len())
+            .field("locked", &self.lock.is_some())
+            .field("session_started", &self.session_started)
+            .finish()
+    }
+}
+
+pub struct Lock {
+    pub client: Option<ClientId>,
+    child: Option<Child>,
+    restart_at: Option<Instant>,
+}
+
+/// Something that marks a new window that still has to be put in its place (once it has a size).
+pub struct NeedsPlacing(pub std::cell::Cell<bool>);
+
+/// Every window's number for the shell (the dock, the Overview): given once, never reused.
+struct WindowId(u64);
+static NEXT_WINDOW_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
+pub fn window_id(window: &WindowElement) -> u64 {
+    window
+        .0
+        .user_data()
+        .get_or_insert(|| WindowId(NEXT_WINDOW_ID.fetch_add(1, Ordering::Relaxed)))
+        .0
+}
+
+impl<B: Backend + 'static> HuginnState<B> {
+    /// After the compositor's own set-up: the bus, and a timer for what is checked now and then.
+    pub fn huginn_start(&mut self) {
+        self.huginn.session = SESSION.get().cloned().unwrap_or_default();
+        crate::shortcuts::load();
+        let (to_loop, from_bus) = channel::<Request>();
+        self.handle
+            .insert_source(from_bus, |event, _, state| {
+                if let ChannelEvent::Msg(request) = event {
+                    state.bus_request(request);
+                }
+            })
+            .expect("can't listen to the bus thread");
+        self.huginn.out = Some(dbus::start(to_loop, self.huginn.shared.clone()));
+        self.wm_start();
+        self.reload_access();
+        self.huginn.shared.touched();
+        self.handle
+            .insert_source(Timer::from_duration(Duration::from_millis(400)), |_, _, state| {
+                state.tick();
+                TimeoutAction::ToDuration(Duration::from_millis(400))
+            })
+            .expect("can't start the timer");
+    }
+
+    pub fn say(&self, msg: Outgoing) {
+        if let Some(out) = &self.huginn.out {
+            let _ = out.send(msg);
+        }
+    }
+
+    /// Any key, movement or touch.
+    /// A key, the mouse or the screen was touched: not idle any more, and a screen switched off comes back on.
+    pub fn touched(&mut self) {
+        self.huginn.shared.touched();
+        let seat = self.seat.clone();
+        self.idle_notifier_state.notify_activity(&seat);
+        if self.huginn.blank {
+            self.huginn.blank = false;
+            self.backend_data.set_blank(false);
+        }
+    }
+
+    pub fn is_locked(&self) -> bool {
+        self.huginn.lock.is_some()
+    }
+
+    fn tick(&mut self) {
+        self.sync_toplevels();
+        #[cfg(feature = "rdp")]
+        self.share_tick();
+        self.afar_tick();
+        self.huginn.places_tick = self.huginn.places_tick.wrapping_add(1);
+        if self.huginn.places_tick % 5 == 0 {
+            self.note_places();
+        }
+        if self.huginn.places_tick % 5 == 2 {
+            self.game_mode_tick();
+        }
+        if self.huginn.places_tick % 5 == 4 {
+            self.x11_primary_tick();
+        }
+        self.report_active();
+        self.report_windows();
+        self.watch_lock();
+        self.huginn.inhibitors.retain(|s| s.upgrade().is_ok());
+        let inhibited = !self.huginn.inhibitors.is_empty() || self.huginn.game_awake;
+        self.huginn.shared.inhibited.store(inhibited, Ordering::Relaxed);
+        self.idle_notifier_state.set_is_inhibited(inhibited);
+    }
+
+    fn bus_request(&mut self, request: Request) {
+        match request {
+            Request::Lock => self.lock_now(),
+            Request::LockForSleep(done) => self.lock_for_sleep(done),
+            Request::Woke => self.touched(),
+            Request::Paste => self.paste_soon(),
+            Request::Launching => self.huginn.launching = Some(std::time::Instant::now() + std::time::Duration::from_secs(8)),
+            Request::Unlock => self.unlock_now(),
+            Request::Blank(off) => {
+                self.huginn.blank = off;
+                self.backend_data.set_blank(off);
+            }
+            Request::Windows(reply) => {
+                let _ = reply.send(self.windows_json());
+            }
+            Request::ActivateApp(ids, reply) => {
+                let _ = reply.send(self.activate_app(&ids));
+            }
+            Request::WindowAction(action) => self.window_action(&action),
+            Request::WindowDo(id, action) => self.window_do(id, &action),
+            Request::OverviewDo(action) => self.overview_do(&action),
+            Request::SpaceDo(action) => self.space_do(&action),
+            Request::DockLayout(json) => self.dock_layout(&json),
+            Request::Pointers(tx) => {
+                let _ = tx.send(serde_json::Value::Array(self.backend_data.pointers()).to_string());
+            }
+            Request::SetPointer(sys, prop, value, tx) => {
+                let _ = tx.send(self.backend_data.set_pointer(&sys, &prop, &value));
+            }
+            Request::ReloadInput => self.reload_input(),
+            Request::WindowPicture(id, tx) => crate::capture::ask_window(id, crate::capture::WindowAsk::Card(tx)),
+            Request::ReloadAccess => self.reload_access(),
+            Request::KeyboardLayout(tx) => {
+                let _ = tx.send(self.keyboard_layouts().to_string());
+            }
+            Request::SetKeyboardLayout(which) => self.set_keyboard_layout(which),
+            Request::SignOut => self.sign_out(),
+            Request::Afar(ev) => self.afar(ev),
+            #[cfg(feature = "rdp")]
+            Request::ShareStart(output, port, user, password, cert, key, tx) => {
+                let ask = crate::rdp::Ask { output, port, user, password, cert: cert.into(), key: key.into() };
+                let _ = tx.send(self.share_start(ask));
+            }
+            #[cfg(feature = "rdp")]
+            Request::ShareStop => self.share_stop(),
+            #[cfg(feature = "rdp")]
+            Request::ShareStatus(tx) => {
+                let _ = tx.send(self.share_status());
+            }
+            Request::Displays(tx) => {
+                let _ = tx.send(self.displays_json());
+            }
+            Request::ConfigureDisplay(name, change, tx) => {
+                let _ = tx.send(self.configure_display(&name, &change));
+            }
+            Request::NightLight(kelvin) => self.backend_data.set_warmth(crate::displays::warmth(kelvin)),
+            Request::Capture(tx) => {
+                let outputs: Vec<_> = self.space.outputs().cloned().collect();
+                if outputs.is_empty() {
+                    let _ = tx.send(String::new());
+                }
+                let collect = std::rc::Rc::new(std::cell::RefCell::new(crate::capture::Collect {
+                    left: outputs.len(),
+                    parts: Vec::new(),
+                    tx,
+                    files: Vec::new(),
+                }));
+                for output in outputs {
+                    let geo = self.space.output_geometry(&output).unwrap_or_default();
+                    let name = format!("\"x\":{},\"y\":{},\"lw\":{},\"lh\":{}", geo.loc.x, geo.loc.y, geo.size.w, geo.size.h);
+                    crate::capture::ask_shot(&output, collect.clone(), name);
+                }
+            }
+        }
+    }
+
+    // ------------------------------------------------------------------------------------------- windows
+    /// (title, app id) of a window.
+    pub fn window_names(window: &WindowElement) -> (String, String) {
+        #[cfg(feature = "xwayland")]
+        if let Some(x) = window.0.x11_surface() {
+            return (x.title(), x.class());
+        }
+        window
+            .0
+            .toplevel()
+            .and_then(|t| {
+                with_states(t.wl_surface(), |states| {
+                    states
+                        .data_map
+                        .get::<XdgToplevelSurfaceData>()
+                        .and_then(|d| d.lock().ok())
+                        .map(|d| (d.title.clone().unwrap_or_default(), d.app_id.clone().unwrap_or_default()))
+                })
+            })
+            .unwrap_or_default()
+    }
+
+    pub(crate) fn is_maximised(window: &WindowElement) -> bool {
+        #[cfg(feature = "xwayland")]
+        if let Some(x) = window.0.x11_surface() {
+            return x.is_maximized();
+        }
+        window
+            .0
+            .toplevel()
+            .map(|t| t.with_committed_state(|s| s.is_some_and(|s| s.states.contains(xdg_toplevel::State::Maximized))))
+            .unwrap_or(false)
+    }
+
+    pub fn focused_window(&self) -> Option<WindowElement> {
+        match self.seat.get_keyboard()?.current_focus()? {
+            KeyboardFocusTarget::Window(w) => self.space.elements().find(|e| e.0 == w).cloned(),
+            _ => None,
+        }
+    }
+
+    /// A window went away: if it had the keyboard, the window now on top gets it (as it would on any desktop).
+    pub fn focus_after_close(&mut self) {
+        if self.is_locked() {
+            return;
+        }
+        let Some(keyboard) = self.seat.get_keyboard() else {
+            return;
+        };
+        let lost = match keyboard.current_focus() {
+            None => true,
+            Some(KeyboardFocusTarget::Window(w)) => !w.alive() || !self.space.elements().any(|e| e.0 == w),
+            // a panel of the shell's (the launcher, Search, clipboard history) that has closed: it no longer takes
+            // the keyboard, so the window in front gets it back
+            Some(KeyboardFocusTarget::LayerSurface(l)) => {
+                !l.alive()
+                    || l.layer_surface().with_cached_state(|d| {
+                        d.keyboard_interactivity == smithay::wayland::shell::wlr_layer::KeyboardInteractivity::None
+                    })
+            }
+            Some(_) => false, // a popup keeps it
+        };
+        if lost {
+            let top = self.space.elements().last().cloned();
+            keyboard.set_focus(self, top.map(KeyboardFocusTarget::from), SERIAL_COUNTER.next_serial());
+        }
+    }
+
+    /// The shell's top bar shows the app in front; tell it when that changes (or the window's name does).
+    fn report_active(&mut self) {
+        // The shell's own panels (the launcher, search…) take the keyboard without changing the app in front.
+        if let Some(keyboard) = self.seat.get_keyboard()
+            && matches!(keyboard.current_focus(), Some(KeyboardFocusTarget::LayerSurface(_) | KeyboardFocusTarget::Popup(_)))
+        {
+            return;
+        }
+        let now = match self.focused_window() {
+            Some(w) => {
+                let (title, app) = Self::window_names(&w);
+                let desktop = app.trim_end_matches(".desktop").to_string();
+                (title, app, desktop, Self::is_maximised(&w))
+            }
+            None => Default::default(),
+        };
+        if self.huginn.last_active.as_ref() != Some(&now) {
+            self.huginn.last_active = Some(now.clone());
+            self.say(Outgoing::Active(now.0, now.1, now.2, now.3));
+        }
+    }
+
+    /// Bring a window forward (out of hiding too) and give it the keyboard.
+    pub fn activate_window(&mut self, window: &WindowElement) {
+        self.bring_space_of(window);
+        if let Some(i) = self.huginn.minimised.iter().position(|(w, _)| w == window) {
+            let (w, loc) = self.huginn.minimised.remove(i);
+            let rect = Rectangle::new(loc + w.geometry().loc, w.geometry().size);
+            self.space.map_element(w.clone(), loc, true);
+            self.animate_hide(&w, rect, true);
+        }
+        // a window snapped beside it comes forward too
+        if let Some(partner) = self.partner_together(window) {
+            self.space.raise_element(&partner, false);
+        }
+        self.space.raise_element(window, true);
+        #[cfg(feature = "xwayland")]
+        if let Some(surface) = window.0.x11_surface()
+            && let Some(xwm) = self.xwm.as_mut()
+        {
+            let _ = xwm.raise_window(surface);
+        }
+        // its dialogs stay over it; one waiting for an answer gets the keyboard
+        self.raise_dialogs(window);
+        let target = self.modal_of(window).unwrap_or_else(|| window.clone());
+        if target != *window {
+            self.space.raise_element(&target, true);
+        }
+        if let Some(keyboard) = self.seat.get_keyboard() {
+            keyboard.set_focus(self, Some(target.into()), SERIAL_COUNTER.next_serial());
+        }
+    }
+
+    fn matches(window: &WindowElement, ids: &[String]) -> bool {
+        let (_, app) = Self::window_names(window);
+        let app = app.to_lowercase();
+        let app = app.trim_end_matches(".desktop");
+        !app.is_empty() && ids.iter().any(|i| i.trim_end_matches(".desktop") == app)
+    }
+
+    /// The dock: the app's window in front of the others (the top-most one, or a minimised one), if it has one.
+    pub fn activate_app(&mut self, ids: &[String]) -> bool {
+        let found = self
+            .space
+            .elements()
+            .rev()
+            .find(|w| Self::matches(w, ids))
+            .cloned()
+            .or_else(|| {
+                self.huginn
+                    .minimised
+                    .iter()
+                    .rev()
+                    .map(|(w, _)| w)
+                    .find(|w| Self::matches(w, ids))
+                    .cloned()
+            });
+        match found {
+            Some(w) => {
+                self.activate_window(&w);
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Super+D: every window on this space out of the way, to see the desktop; again, and they're back (unless
+    /// something was opened in the meantime: then that goes too).
+    pub fn show_desktop(&mut self) {
+        let open: Vec<WindowElement> = self.space.elements().cloned().collect();
+        if open.is_empty() {
+            if let Some(ids) = self.huginn.desktop_shown.take() {
+                for id in ids {
+                    let w = self.huginn.minimised.iter().map(|(w, _)| w).find(|w| window_id(w) == id).cloned();
+                    if let Some(w) = w {
+                        self.activate_window(&w);
+                    }
+                }
+                self.report_windows_now();
+            }
+            return;
+        }
+        self.huginn.desktop_shown = Some(open.iter().map(window_id).collect());
+        for w in &open {
+            self.minimise_window(w);
+        }
+        self.report_windows_now();
+    }
+
+    pub fn minimise_window(&mut self, window: &WindowElement) {
+        let Some(loc) = self.space.element_location(window) else {
+            return;
+        };
+        self.animate_hide(window, Rectangle::new(loc + window.geometry().loc, window.geometry().size), false);
+        self.space.unmap_elem(window);
+        self.huginn.minimised.push((window.clone(), loc));
+        // the keyboard goes to the window that's now in front, if any
+        let next = self.space.elements().last().cloned();
+        if let Some(keyboard) = self.seat.get_keyboard() {
+            keyboard.set_focus(self, next.map(KeyboardFocusTarget::from), SERIAL_COUNTER.next_serial());
+        }
+    }
+
+    /// The window list other programs see (ext-foreign-toplevel-list): every window, minimised and on other spaces
+    /// too, with its title and app; gone ones closed.
+    pub fn sync_toplevels(&mut self) {
+        let all: Vec<WindowElement> = self
+            .space
+            .elements()
+            .cloned()
+            .chain(self.huginn.minimised.iter().map(|(w, _)| w.clone()))
+            .chain(self.huginn.wm.away.iter().map(|(w, _)| w.clone()))
+            .collect();
+        let ids: Vec<u64> = all.iter().map(window_id).collect();
+        let gone: Vec<_> = self.huginn.toplevels.iter().filter(|(id, _)| !ids.contains(id)).map(|(_, h)| h.clone()).collect();
+        for h in gone {
+            self.foreign_toplevel_list.remove_toplevel(&h);
+        }
+        self.huginn.toplevels.retain(|(id, _)| ids.contains(id));
+        for w in &all {
+            let id = window_id(w);
+            let (title, app) = crate::shell::window_names(w);
+            if let Some((_, h)) = self.huginn.toplevels.iter().find(|(i, _)| *i == id) {
+                if h.title() != title || h.app_id() != app {
+                    h.send_title(&title);
+                    h.send_app_id(&app);
+                    h.send_done();
+                }
+            } else {
+                let h = self.foreign_toplevel_list.new_toplevel::<Self>(title, app);
+                self.huginn.toplevels.push((id, h));
+            }
+        }
+    }
+
+    pub fn close_window(window: &WindowElement) {
+        // it fades out once it's gone (capture.rs: a picture of it now)
+        if !crate::access::still() {
+            crate::capture::ask_window(window_id(window), crate::capture::WindowAsk::Ghost);
+        }
+        #[cfg(feature = "xwayland")]
+        if let Some(x) = window.0.x11_surface() {
+            let _ = x.close();
+            return;
+        }
+        if let Some(t) = window.0.toplevel() {
+            t.send_close();
+        }
+    }
+
+    /// Sign out: every window is asked to close, and once they've gone the compositor ends, and the session with it.
+    /// A window still open after 20 seconds (an app that asked whether to save, and was told Cancel) calls it off;
+    /// signing out again within two minutes ends the session even so.
+    pub fn sign_out(&mut self) {
+        thread_local!(static CALLED_OFF: std::cell::Cell<Option<Instant>> = const { std::cell::Cell::new(None) });
+        let insist = CALLED_OFF.with(|c| c.get()).is_some_and(|t| t.elapsed() < Duration::from_secs(120));
+        info!(insist, "Signing out");
+        let windows: Vec<WindowElement> =
+            self.space.elements().cloned().chain(self.huginn.minimised.iter().map(|(w, _)| w.clone())).collect();
+        for w in &windows {
+            Self::close_window(w);
+        }
+        let until = Instant::now() + Duration::from_secs(if insist { 3 } else { 20 });
+        let _ = self.handle.insert_source(Timer::from_duration(Duration::from_millis(250)), move |_, _, state| {
+            let left = state.space.elements().count() + state.huginn.minimised.iter().filter(|(w, _)| w.alive()).count();
+            if left == 0 || (insist && Instant::now() >= until) {
+                info!("Signed out");
+                state.running.store(false, Ordering::SeqCst);
+                return TimeoutAction::Drop;
+            }
+            if Instant::now() >= until {
+                warn!(left, "Signing out called off: windows are still open");
+                CALLED_OFF.with(|c| c.set(Some(Instant::now())));
+                return TimeoutAction::Drop;
+            }
+            TimeoutAction::ToDuration(Duration::from_millis(250))
+        });
+    }
+
+    pub fn window_action(&mut self, action: &str) {
+        let Some(window) = self.focused_window() else {
+            return;
+        };
+        match action {
+            "minimise" | "minimize" => self.minimise_window(&window),
+            "close" => Self::close_window(&window),
+            "ontop" => self.toggle_above(&window),
+            "maximise" | "maximize" => {
+                if let Some(t) = window.0.toplevel().cloned() {
+                    if Self::is_maximised(&window) {
+                        smithay::wayland::shell::xdg::XdgShellHandler::unmaximize_request(self, t);
+                    } else {
+                        smithay::wayland::shell::xdg::XdgShellHandler::maximize_request(self, t);
+                    }
+                }
+            }
+            // the green button's layouts (an app's own, on hover): a part of its screen, the other half offered
+            other => {
+                if let Some(snap) = other.strip_prefix("snap:").and_then(crate::wm::Snap::parse) {
+                    self.snap_window(&window, snap, true);
+                }
+            }
+        }
+    }
+
+    /// The process a window belongs to (the shell asks it for its menus).
+    fn window_pid(&self, w: &WindowElement) -> i32 {
+        #[cfg(feature = "xwayland")]
+        if let Some(x) = w.0.x11_surface() {
+            return x.pid().map(|p| p as i32).unwrap_or(0);
+        }
+        w.0.toplevel()
+            .and_then(|t| t.wl_surface().client())
+            .and_then(|c| c.get_credentials(&self.display_handle).ok())
+            .map(|c| c.pid)
+            .unwrap_or(0)
+    }
+
+    fn window_row(&self, w: &WindowElement, minimised: bool, focused: Option<&WindowElement>, at: Option<Point<i32, Logical>>) -> serde_json::Value {
+        let (title, app) = Self::window_names(w);
+        let pid = self.window_pid(w);
+        let full = w.0.toplevel().is_some_and(|t| t.with_committed_state(|s| s.is_some_and(|s| s.states.contains(xdg_toplevel::State::Fullscreen))));
+        let size = w.geometry().size;
+        let at = at.unwrap_or_default();
+        let screen = self.output_of(w).map(|o| o.name()).unwrap_or_default();
+        let snap = self.snapped_as(w).map(|s| s.name()).unwrap_or("");
+        // a GTK app's menu bar, handed to the top bar (gtkshell.rs): where to read it
+        let gtk = w.0.toplevel().and_then(|t| crate::gtkshell::menus_of(t.wl_surface())).map(|m| {
+            serde_json::json!({"bus": m.bus, "menubar": m.menubar, "app": m.app, "window": m.window, "appId": m.app_id})
+        });
+        // a Qt app's menu bar on KDE's platform theme (appmenu.rs: App Store apps): where its dbusmenu is
+        let app_menu = w.0.toplevel().and_then(|t| crate::appmenu::menu_of(t.wl_surface())).map(|m| serde_json::json!({"service": m.service, "path": m.path}));
+        // an X11 window's own number (an X11 app registers its menu bar under it: com.canonical.AppMenu.Registrar)
+        #[cfg(feature = "xwayland")]
+        let xid = w.0.x11_surface().map(|x| x.window_id());
+        #[cfg(not(feature = "xwayland"))]
+        let xid: Option<u32> = None;
+        serde_json::json!({"id": window_id(w).to_string(), "app": app, "title": title, "minimised": minimised,
+                           "active": !minimised && Some(w) == focused, "space": Self::window_space(w).unwrap_or(0), "pid": pid, "full": full, "x": at.x, "y": at.y, "w": size.w, "h": size.h,
+                           "above": crate::wm::is_above(w), "screen": screen, "snap": snap, "max": Self::is_maximised(w), "gtkMenus": gtk,
+                           "appMenu": app_menu, "xid": xid})
+    }
+
+    /// Every window (bottom to top, then the hidden ones) and the spaces, for the shell.
+    fn windows_json(&self) -> String {
+        let focused = self.focused_window();
+        let mut rows: Vec<serde_json::Value> = self
+            .space
+            .elements()
+            .map(|w| self.window_row(w, false, focused.as_ref(), self.space.element_location(w)))
+            .collect();
+        rows.extend(self.huginn.minimised.iter().map(|(w, loc)| self.window_row(w, true, None, Some(*loc))));
+        rows.extend(self.huginn.wm.away.iter().map(|(w, loc)| self.window_row(w, false, None, Some(*loc))));
+        serde_json::json!({"current": self.huginn.wm.current, "spaces": self.huginn.wm.spaces, "windows": rows}).to_string()
+    }
+
+    /// The shell's dock and Overview keep their own list of windows; tell them when it changes.
+    fn report_windows(&mut self) {
+        self.check_pip();
+        let now = self.windows_json();
+        if now != self.huginn.last_windows {
+            self.huginn.last_windows = now.clone();
+            self.say(Outgoing::Windows(now));
+        }
+    }
+
+    fn window_by_id(&self, id: u64) -> Option<WindowElement> {
+        self.space
+            .elements()
+            .find(|w| window_id(w) == id)
+            .cloned()
+            .or_else(|| self.huginn.minimised.iter().map(|(w, _)| w).find(|w| window_id(w) == id).cloned())
+    }
+
+    /// The shell asks for something done to one window (the dock, the Overview).
+    pub fn window_do(&mut self, id: u64, action: &str) {
+        let Some(window) = self.window_by_id(id) else {
+            return;
+        };
+        let hidden = self.huginn.minimised.iter().any(|(w, _)| *w == window);
+        let in_front = !hidden && self.focused_window().as_ref() == Some(&window);
+        match action {
+            "activate" => self.activate_window(&window),
+            "minimise" | "minimize" if !hidden => self.minimise_window(&window),
+            "toggle" if in_front => self.minimise_window(&window),
+            "toggle" => self.activate_window(&window),
+            "close" => Self::close_window(&window),
+            "ontop" => self.toggle_above(&window),
+            "maximise" | "maximize" => {
+                self.activate_window(&window);
+                self.window_action("maximise");
+            }
+            other => {
+                // snap:<part>, or snap:<part>@<screen> for a part of another screen (Layouts)
+                let (part, screen) = other.strip_prefix("snap:").map(|p| p.split_once('@').map_or((p, None), |(a, b)| (a, Some(b)))).unwrap_or(("", None));
+                if let Some(snap) = crate::wm::Snap::parse(part) {
+                    if hidden {
+                        self.activate_window(&window);
+                    }
+                    if screen.is_some() {
+                        self.snap_on(&window, snap, screen);
+                    } else {
+                        self.snap_window(&window, snap, false);
+                    }
+                } else if let Some(rest) = other.strip_prefix("place:") {
+                    // place:<screen>:<x>,<y>,<w>,<h>, shares of its work area (a window set put back)
+                    if let Some((screen, nums)) = rest.rsplit_once(':') {
+                        let n: Vec<f64> = nums.split(',').filter_map(|v| v.parse().ok()).collect();
+                        if n.len() == 4 {
+                            if hidden {
+                                self.activate_window(&window);
+                            }
+                            self.place_on(&window, screen, n[0], n[1], n[2], n[3]);
+                        }
+                    }
+                } else if let Some(n) = other.strip_prefix("space:").and_then(|n| n.parse::<usize>().ok()) {
+                    self.space_do(&format!("move:{id}:{n}"));
+                }
+            }
+        }
+        self.report_windows();
+    }
+
+    pub fn report_windows_now(&mut self) {
+        self.report_windows();
+    }
+
+    /// Alt+Tab (forward) and Alt+Shift+Tab: the windows as they were stacked when Alt+Tab began, minimised ones last.
+    pub fn switch_step(&mut self, forward: bool) {
+        if self.huginn.switching.is_none() {
+            let mut order: Vec<WindowElement> = self.space.elements().rev().cloned().collect();
+            order.extend(self.huginn.minimised.iter().rev().map(|(w, _)| w.clone()));
+            if order.len() < 2 {
+                return;
+            }
+            self.huginn.switching = Some((order, 0));
+        }
+        let Some((order, at)) = self.huginn.switching.as_mut() else {
+            return;
+        };
+        let n = order.len();
+        *at = if forward { (*at + 1) % n } else { (*at + n - 1) % n };
+        let window = order[*at].clone();
+        if window.0.alive() {
+            self.activate_window(&window);
+        }
+        self.switcher_report();
+    }
+
+    pub fn switch_end(&mut self) {
+        self.huginn.switching = None;
+        self.switcher_report();
+    }
+
+    /// Super + the left button on a window: move it.
+    pub fn super_drag(&mut self, button: u32, serial: Serial) -> bool {
+        let location = self.pointer.current_location();
+        let Some((window, loc)) = self.space.element_under(location).map(|(w, l)| (w.clone(), l)) else {
+            return false;
+        };
+        let start_data = PointerGrabStartData { focus: None, button, location };
+        self.unsnap_for_drag(&window);
+        let grab = PointerMoveSurfaceGrab { start_data, window: window.clone(), initial_window_location: loc };
+        self.activate_window(&window);
+        let pointer = self.pointer.clone();
+        pointer.set_grab(self, grab, serial, Focus::Clear);
+        true
+    }
+
+    /// A new window, once it has a size: in the middle of the screen the pointer is on (between the top bar and the
+    /// dock), a little lower and to the right if another window is already exactly there.
+    pub fn place_window(&mut self, window: &WindowElement) {
+        self.huginn.launching = None; // (the app that was starting is here: the pointer isn't busy any more)
+        self.claim_window(window);
+        // a window that went fullscreen as it opened (a game asking for it as it maps) stays as that put it
+        if self.space.outputs().any(|o| o.user_data().get::<FullscreenSurface>().and_then(|f| f.get()).as_ref() == Some(window)) {
+            return;
+        }
+        let size = window.geometry().size;
+        if size.w <= 0 || size.h <= 0 {
+            return;
+        }
+        let pointer = self.pointer.current_location();
+        let Some(output) = self
+            .space
+            .output_under(pointer)
+            .find(|o| crate::displays::mirror_of(o).is_none())
+            .or_else(|| self.space.outputs().next())
+            .cloned()
+        else {
+            return;
+        };
+        let area = {
+            let geo = self.space.output_geometry(&output).unwrap_or_default();
+            let zone = layer_map_for_output(&output).non_exclusive_zone();
+            Rectangle::new(geo.loc + zone.loc, zone.size)
+        };
+        // a dialog: over its window (not where the app's main window last was)
+        if let Some(at) = self.dialog_place(window) {
+            self.space.map_element(window.clone(), at - window.geometry().loc, true);
+            self.tell_x11_where(window);
+            if !self.is_locked() {
+                self.activate_window(window);
+            }
+            return;
+        }
+        // a rule for the app, or where its window last was (places.rs)
+        if let Some(mut at) = self.place_from_memory(window) {
+            // …but never with its top behind the top bar (the bar may be taller than when the place was kept)
+            if let Some(o) = self.space.outputs().find(|o| self.space.output_geometry(o).is_some_and(|g| g.contains(at))).cloned() {
+                let top = self.space.output_geometry(&o).unwrap_or_default().loc.y + layer_map_for_output(&o).non_exclusive_zone().loc.y;
+                at.y = at.y.max(top);
+            }
+            let offset = window.geometry().loc;
+            self.space.map_element(window.clone(), at - offset, true);
+            self.tell_x11_where(window);
+            if !self.is_locked() {
+                self.activate_window(window);
+            }
+            return;
+        }
+        let mut loc = Point::<i32, Logical>::from((
+            area.loc.x + (area.size.w - size.w).max(0) / 2,
+            area.loc.y + (area.size.h - size.h).max(0) / 2,
+        ));
+        let taken: Vec<Point<i32, Logical>> = self
+            .space
+            .elements()
+            .filter(|w| *w != window)
+            .filter_map(|w| self.space.element_location(w).map(|l| l + w.geometry().loc))
+            .collect();
+        let mut tries = 0;
+        while taken.contains(&loc) && tries < 12 {
+            loc += Point::from((32, 32));
+            tries += 1;
+        }
+        // its own top-left corner, not its shadow's
+        let offset = window.geometry().loc;
+        self.space.map_element(window.clone(), loc - offset, true);
+        self.tell_x11_where(window);
+        // a new window comes to the front with the keyboard (not over the lock screen)
+        if !self.is_locked() {
+            self.activate_window(window);
+        }
+    }
+
+    // ------------------------------------------------------------------------------------------- the session
+    /// Once listening (and with X11 apps' server up): start the session; the compositor ends when it does.
+    pub fn start_session(&mut self) {
+        if self.huginn.session_started || self.huginn.session.is_empty() {
+            return;
+        }
+        self.huginn.session_started = true;
+        self.apply_numlock(); // Settings › Keyboard › Num Lock (input.rs)
+        let mut cmd = Command::new(&self.huginn.session[0]);
+        cmd.args(&self.huginn.session[1..]).env("XDG_SESSION_TYPE", "wayland");
+        if let Some(socket) = &self.socket_name {
+            cmd.env("WAYLAND_DISPLAY", socket);
+        }
+        #[cfg(feature = "xwayland")]
+        if let Some(n) = self.xdisplay {
+            cmd.env("DISPLAY", format!(":{n}"));
+        }
+        info!(session = ?self.huginn.session, "Starting the session");
+        match cmd.spawn() {
+            Ok(mut child) => {
+                let (tx, rx) = channel::<()>();
+                std::thread::spawn(move || {
+                    let _ = child.wait();
+                    let _ = tx.send(());
+                });
+                self.handle
+                    .insert_source(rx, |event, _, state| {
+                        if let ChannelEvent::Msg(()) = event {
+                            info!("The session ended");
+                            state.running.store(false, Ordering::SeqCst);
+                        }
+                    })
+                    .expect("can't watch the session");
+            }
+            Err(err) => {
+                warn!(%err, "Couldn't start the session");
+                self.running.store(false, Ordering::SeqCst);
+            }
+        }
+    }
+
+    // ------------------------------------------------------------------------------------------- the lock
+    pub fn lock_now(&mut self) {
+        // no session of anyone's: the sign-in screen (SDDM's), with nothing to lock
+        if self.huginn.lock.is_some() || SESSION.get().is_none() {
+            return;
+        }
+        info!("Locking");
+        self.huginn.lock = Some(Lock { client: None, child: None, restart_at: None });
+        self.huginn.shared.locked.store(true, Ordering::Relaxed);
+        self.huginn.switching = None;
+        self.say(Outgoing::LockedHint(true));
+        if let Some(pointer) = self.seat.get_pointer() {
+            pointer.unset_grab(self, SERIAL_COUNTER.next_serial(), smithay::backend::input::InputTime::now());
+        }
+        // nothing behind the lock keeps the keyboard (it goes to the lock screen once that's up)
+        if let Some(keyboard) = self.seat.get_keyboard() {
+            keyboard.set_focus(self, None, SERIAL_COUNTER.next_serial());
+        }
+        self.start_locker();
+    }
+
+    /// Ctrl+V for the window in front, a moment from now (the shell's panel lets go of the keyboard first). The
+    /// keys are found in the keyboard's own layout, so V is wherever this layout has it.
+    fn paste_soon(&mut self) {
+        use smithay::reexports::calloop::timer::{TimeoutAction, Timer};
+        let asked = Instant::now();
+        let _ = self.handle.insert_source(Timer::from_duration(Duration::from_millis(60)), move |_, _, state| {
+            if state.is_locked() {
+                return TimeoutAction::Drop;
+            }
+            let Some(keyboard) = state.seat.get_keyboard() else { return TimeoutAction::Drop };
+            // the panel that asked is still closing (it keeps the keyboard until its last frame): wait for it, a while
+            state.focus_after_close();
+            let panel_has_keys = matches!(keyboard.current_focus(), Some(KeyboardFocusTarget::LayerSurface(_)));
+            if panel_has_keys && asked.elapsed() < Duration::from_millis(1500) {
+                return TimeoutAction::ToDuration(Duration::from_millis(30));
+            }
+            if panel_has_keys {
+                tracing::debug!("paste: a panel still has the keyboard, not pasting");
+                return TimeoutAction::Drop; // something else is asking for the keyboard: don't type into it
+            }
+            tracing::debug!("paste: after {:?}, into {:?}", asked.elapsed(), keyboard.current_focus().map(|f| matches!(f, KeyboardFocusTarget::Window(_))));
+            let codes = keyboard.with_xkb_state(state, |ctx| {
+                let xkb = ctx.xkb().lock().unwrap();
+                let keymap = unsafe { xkb.keymap() };
+                let find = |want: smithay::input::keyboard::Keysym| {
+                    (keymap.min_keycode().raw()..=keymap.max_keycode().raw())
+                        .map(smithay::input::keyboard::Keycode::new)
+                        .find(|code| keymap.key_get_syms_by_level(*code, 0, 0).contains(&want))
+                };
+                (find(smithay::input::keyboard::Keysym::Control_L), find(smithay::input::keyboard::Keysym::v))
+            });
+            tracing::debug!("paste: keys {:?}", codes);
+            if let (Some(ctrl), Some(v)) = codes {
+                let time = smithay::backend::input::InputTime::now();
+                for (code, pressed) in [(ctrl, true), (v, true), (v, false), (ctrl, false)] {
+                    let key_state = if pressed { smithay::backend::input::KeyState::Pressed } else { smithay::backend::input::KeyState::Released };
+                    keyboard.input::<(), _>(state, code, key_state, SERIAL_COUNTER.next_serial(), time, |_, _, _| {
+                        smithay::input::keyboard::FilterResult::Forward
+                    });
+                }
+            }
+            TimeoutAction::Drop
+        });
+    }
+
+    /// Going to sleep: lock, then say so once the lock screen has been on screen for a frame or two (or after 3 s,
+    /// whatever it's doing: sleep can't wait for ever).
+    fn lock_for_sleep(&mut self, done: std::sync::mpsc::Sender<()>) {
+        use smithay::reexports::calloop::timer::{TimeoutAction, Timer};
+        self.lock_now();
+        let started = Instant::now();
+        let mut seen: Option<Instant> = None;
+        let _ = self.handle.insert_source(Timer::from_duration(Duration::from_millis(30)), move |_, _, state| {
+            if seen.is_none() && state.lock_surface().is_some() {
+                seen = Some(Instant::now());
+            }
+            let up = seen.is_some_and(|t| t.elapsed() >= Duration::from_millis(120));
+            if up || started.elapsed() >= Duration::from_secs(3) || !state.is_locked() {
+                let _ = done.send(());
+                return TimeoutAction::Drop;
+            }
+            TimeoutAction::ToDuration(Duration::from_millis(30))
+        });
+    }
+
+    fn start_locker(&mut self) {
+        let Some(lock) = self.huginn.lock.as_mut() else {
+            return;
+        };
+        let (ours, theirs) = match UnixStream::pair() {
+            Ok(p) => p,
+            Err(err) => {
+                warn!(%err, "can't make a connection for the lock screen");
+                lock.restart_at = Some(Instant::now() + Duration::from_secs(2));
+                return;
+            }
+        };
+        let client = match self.display_handle.insert_client(ours, Arc::new(ClientState::default())) {
+            Ok(c) => c,
+            Err(err) => {
+                warn!(%err, "can't add the lock screen's connection");
+                lock.restart_at = Some(Instant::now() + Duration::from_secs(2));
+                return;
+            }
+        };
+        let theirs: OwnedFd = theirs.into();
+        let fd = theirs.as_raw_fd();
+        let locker = std::env::var("HUGINN_LOCKER").unwrap_or_else(|_| LOCKER.into());
+        let mut cmd = Command::new("python3");
+        cmd.arg(&locker).env("WAYLAND_SOCKET", "3").env_remove("WAYLAND_DISPLAY");
+        // the connection becomes the lock screen's fd 3 (and only it: everything else is closed on exec)
+        unsafe {
+            cmd.pre_exec(move || {
+                if fd == 3 {
+                    // already there: dup2 would leave it marked close-on-exec
+                    if libc::fcntl(3, libc::F_SETFD, 0) < 0 {
+                        return Err(std::io::Error::last_os_error());
+                    }
+                } else if libc::dup2(fd, 3) < 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+        match cmd.spawn() {
+            Ok(child) => {
+                lock.client = Some(client.id());
+                lock.child = Some(child);
+                lock.restart_at = None;
+            }
+            Err(err) => {
+                warn!(%err, "can't start the lock screen");
+                lock.restart_at = Some(Instant::now() + Duration::from_secs(2));
+            }
+        }
+        drop(theirs);
+    }
+
+    /// The lock screen ends the lock by exiting with success; anything else (a crash) starts it again.
+    fn watch_lock(&mut self) {
+        let Some(lock) = self.huginn.lock.as_mut() else {
+            return;
+        };
+        if let Some(child) = lock.child.as_mut()
+            && let Ok(Some(status)) = child.try_wait()
+        {
+            lock.child = None;
+            if status.success() {
+                self.unlocked();
+                return;
+            }
+            warn!(?status, "The lock screen stopped; starting it again");
+            lock.restart_at = Some(Instant::now() + Duration::from_millis(800));
+        }
+        if lock.restart_at.is_some_and(|t| Instant::now() >= t) {
+            lock.restart_at = None;
+            self.start_locker();
+            return;
+        }
+        // the lock screen has the keyboard as soon as it's on screen (so its password field does)
+        if let Some(keyboard) = self.seat.get_keyboard() {
+            let want = self.lock_surface();
+            if want.is_some() && keyboard.current_focus() != want {
+                keyboard.set_focus(self, want, SERIAL_COUNTER.next_serial());
+            }
+        }
+    }
+
+    /// logind said to unlock: the lock screen goes away whatever it was doing.
+    pub fn unlock_now(&mut self) {
+        let Some(mut lock) = self.huginn.lock.take() else {
+            return;
+        };
+        if let Some(mut child) = lock.child.take() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+        if let Some(client) = lock.client.take() {
+            self.display_handle.backend_handle().kill_client(client, smithay::reexports::wayland_server::backend::DisconnectReason::ConnectionClosed);
+        }
+        self.huginn.lock = Some(lock);
+        self.unlocked();
+    }
+
+    fn unlocked(&mut self) {
+        info!("Unlocked");
+        self.huginn.lock = None;
+        self.huginn.shared.locked.store(false, Ordering::Relaxed);
+        self.huginn.shared.touched();
+        self.say(Outgoing::LockedHint(false));
+        let focus = self.space.elements().last().cloned();
+        if let Some(keyboard) = self.seat.get_keyboard() {
+            keyboard.set_focus(self, focus.map(KeyboardFocusTarget::from), SERIAL_COUNTER.next_serial());
+        }
+    }
+
+    /// While locked: is this the lock screen's?
+    pub fn is_lock_client(&self, client: Option<ClientId>) -> bool {
+        match (&self.huginn.lock, client) {
+            (Some(lock), Some(c)) => lock.client.as_ref() == Some(&c),
+            _ => false,
+        }
+    }
+
+    /// While locked: the lock screen's surface on the output under the pointer (or any), for the keyboard.
+    pub fn lock_surface(&self) -> Option<KeyboardFocusTarget> {
+        let pointer = self.pointer.current_location();
+        let mut outputs: Vec<_> = self.space.output_under(pointer).cloned().collect();
+        outputs.extend(self.space.outputs().cloned());
+        for output in outputs {
+            let map = layer_map_for_output(&output);
+            if let Some(layer) = map.layers_on(WlrLayer::Overlay).find(|l| {
+                self.is_lock_client(l.wl_surface().client().map(|c| c.id()))
+            }) {
+                return Some(layer.clone().into());
+            }
+        }
+        None
+    }
+
+    /// While locked: what the pointer is over, among the lock screen's surfaces only.
+    pub fn lock_surface_under(
+        &self,
+        pos: Point<f64, Logical>,
+    ) -> Option<(crate::focus::PointerFocusTarget, Point<f64, Logical>)> {
+        let output = self.space.output_under(pos).next()?;
+        let geo = self.space.output_geometry(output)?;
+        let map = layer_map_for_output(output);
+        let layer = map.layer_under(WlrLayer::Overlay, pos - geo.loc.to_f64())?;
+        if !self.is_lock_client(layer.wl_surface().client().map(|c| c.id())) {
+            return None;
+        }
+        let layer_loc = map.layer_geometry(layer)?.loc;
+        layer
+            .surface_under(pos - geo.loc.to_f64() - layer_loc.to_f64(), WindowSurfaceType::ALL)
+            .map(|(surface, loc)| (crate::focus::PointerFocusTarget::from(surface), (loc + layer_loc + geo.loc).to_f64()))
+    }
+
+    /// Fullscreen on an output (for FreeSync: on while a game or a video fills the screen).
+    /// Xwayland's main monitor (RandR's primary output) is Huginn's main screen (the top bar and dock's), so Windows
+    /// games (Wine and Proton take it as Windows' main display) and X11 games open fullscreen there, not on whichever
+    /// screen comes first. Tried again until Xwayland knows the screen (it hears of a new one a moment later).
+    fn x11_primary_tick(&mut self) {
+        let main = crate::displays::main_name()
+            .and_then(|m| self.space.outputs().find(|o| o.name() == m).cloned())
+            .or_else(|| self.space.outputs().next().cloned());
+        let Some(main) = main else { return };
+        if self.huginn.x11_primary.as_deref() == Some(main.name().as_str()) {
+            return;
+        }
+        #[cfg(feature = "xwayland")]
+        if let Some(xwm) = self.xwm.as_mut() {
+            match xwm.set_randr_primary_output(Some(&main)) {
+                Ok(()) => {
+                    // Smithay skips the events that carry the setting request's sequence number (its own echo),
+                    // but X stamps every later event with the last request's number until another is sent, so
+                    // windows asking to be shown were skipped too. A question after it moves the number on.
+                    let _ = xwm.get_randr_primary_output();
+                    tracing::info!(screen = %main.name(), "Xwayland's main monitor");
+                    self.huginn.x11_primary = Some(main.name());
+                }
+                Err(err) => tracing::debug!(?err, "Xwayland doesn't know the main screen yet"),
+            }
+        }
+    }
+
+    /// GameMode by itself (gamemode.rs): the games filling a screen now.
+    fn game_mode_tick(&mut self) {
+        // the game stats overlay's windows: the one filling each screen, else the focused one where it is
+        let focused = self.focused_window();
+        let outputs: Vec<_> = self.space.outputs().cloned().collect();
+        for output in &outputs {
+            let full = output.user_data().get::<FullscreenSurface>().and_then(|f| f.get());
+            let here = full.clone().or_else(|| {
+                focused.clone().filter(|w| self.space.outputs_for_element(w).first().is_some_and(|o| o == output))
+            });
+            let surface = here.as_ref().and_then(|w| w.wl_surface().map(|s| smithay::reexports::wayland_server::Resource::id(&*s)));
+            let app = here.as_ref().map(|w| Self::window_names(w).0).unwrap_or_default();
+            crate::frames::watch(&output.name(), surface, &app, full.is_some());
+        }
+        let mut games = std::collections::BTreeSet::new();
+        if !self.is_locked() {
+            for output in self.space.outputs() {
+                let Some(window) = output.user_data().get::<FullscreenSurface>().and_then(|f| f.get()) else { continue };
+                let (title, class) = Self::window_names(&window);
+                let mut pid = self.window_pid(&window).max(0) as u32;
+                #[cfg(feature = "xwayland")]
+                if let Some(x) = window.0.x11_surface() {
+                    // the X server's own count of the client's process (_NET_WM_PID can be a sandbox's)
+                    if let Ok(real) = x.get_client_pid() {
+                        pid = real;
+                    }
+                }
+                let tearing = window.wl_surface().is_some_and(|s| crate::tearing::wants(&s));
+                if pid > 1 && crate::gamemode::looks_like_game(&class, &title, pid, tearing) {
+                    games.insert(pid);
+                }
+            }
+        }
+        self.huginn.game_awake = !games.is_empty();
+        crate::gamemode::mark(!games.is_empty());
+        crate::gamemode::playing(games);
+    }
+
+    pub fn output_has_fullscreen(output: &smithay::output::Output) -> bool {
+        output.user_data().get::<FullscreenSurface>().and_then(|f| f.get()).is_some()
+    }
+}

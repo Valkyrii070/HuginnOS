@@ -1,0 +1,12 @@
+[Unit]
+Description=Huginn OS: finish going back to a restore point
+ConditionPathExists=/run/huginn-undone
+After=local-fs.target
+Before=display-manager.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/libexec/huginn-snapshot finish
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,8 @@
+[Unit]
+Description=A way in when Huginn's sign-in can't start
+# plymouth must be gone before anything can be seen
+After=plymouth-quit.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/libexec/huginn-signin-fallback

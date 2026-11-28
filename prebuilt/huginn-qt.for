@@ -1,0 +1,8 @@
+# Huginn's Qt parts (qt/), built for exactly these sources and this Qt.
+sources: 91e2845909a8c53e55906d85a550df549691687abc6b5228632481ea6e60bbf9
+qt: 6.10.2
+theme_sha256: 4bcadd846f36e7b8d2b3cf0a7d58d9916aaf599a33505a10e5b4bc72db59699b
+style_sha256: 6fd2bbcdb546804eaa6d2321d1f9b4274829fa538d94b14f10bffabe85fbe9d2
+layershell_sha256: f4b10db497a5a5c2721272f4e99d22efc04d0de8fbea324598a7a82afc61dd17
+layershell-qmldir_sha256: 7ebcb2602d86d5fddab7fc6f0fd2ad7e3104dc6fc70da38d2e16e3e0e2eb8e9d
+layershell-types_sha256: 692f81dbd8ee75d2352abdfa3ab1174ecf746febe34ea73ec1513f97bdffc075

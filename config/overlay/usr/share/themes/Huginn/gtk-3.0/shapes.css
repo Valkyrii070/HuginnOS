@@ -1,0 +1,80 @@
+/* Huginn's shapes for GTK 3 apps, over Adwaita's drawing (as Huginn's Qt style is over Fusion's: qt/style), so the
+   two look alike: rounded controls (7 px), cards, lists and menus (10), windows (14), pills for switches, progress
+   and scroll bars, a soft ring of the accent round what has the keyboard, and roomier, quieter controls. The radii
+   are the tokens' (tokens/tokens.json: radius); the colours come from huginn.css and colors*.css. */
+
+/* controls */
+button, entry, spinbutton, combobox button.combo, combobox entry, .linked > button, .linked > entry {
+    border-radius: 7px; }
+button { min-height: 22px; padding: 4px 12px; border: 1px solid @huginn_border; transition: background-color 120ms ease-out; }
+button.image-button { padding: 4px 7px; min-width: 22px; }
+button.circular, button.titlebutton { border-radius: 999px; }
+button.flat, button.flat:backdrop { border-color: transparent; }
+button:focus:focus-visible, button:focus { outline: none; }
+button:focus, entry:focus, spinbutton:focus, combobox button.combo:focus {
+    box-shadow: 0 0 0 3px alpha(@huginn_accent, 0.28); }
+entry:focus, spinbutton:focus { border-color: @huginn_accent; box-shadow: 0 0 0 3px alpha(@huginn_accent, 0.28); }
+entry { min-height: 30px; padding: 0 10px; border: 1px solid @huginn_border; }
+.linked:not(.vertical) > button:not(:first-child), .linked:not(.vertical) > entry:not(:first-child) {
+    border-top-left-radius: 0; border-bottom-left-radius: 0; }
+.linked:not(.vertical) > button:not(:last-child), .linked:not(.vertical) > entry:not(:last-child) {
+    border-top-right-radius: 0; border-bottom-right-radius: 0; }
+
+/* switches, checks, radios */
+switch { border-radius: 999px; min-width: 40px; min-height: 22px; padding: 1px; border-width: 1px; font-size: 0; }
+switch slider { border-radius: 999px; min-width: 20px; min-height: 20px; margin: 0; border: none;
+    box-shadow: 0 1px 3px alpha(#000000, 0.35); }
+check { border-radius: 5px; min-width: 16px; min-height: 16px; border-width: 1px; }
+radio { border-radius: 999px; min-width: 16px; min-height: 16px; border-width: 1px; }
+
+/* sliders, progress, levels */
+scale trough { border-radius: 999px; min-height: 4px; min-width: 4px; border: none; }
+scale highlight { border-radius: 999px; border: none; }
+scale slider { border-radius: 999px; min-width: 18px; min-height: 18px; margin: -8px; border: none;
+    box-shadow: 0 1px 4px alpha(#000000, 0.4); }
+progressbar trough, progressbar progress { border-radius: 999px; min-height: 6px; border: none; }
+levelbar trough, levelbar block { border-radius: 999px; }
+
+/* scroll bars: thin pills that thicken under the pointer */
+scrollbar slider { border-radius: 999px; min-width: 6px; min-height: 6px; border: 3px solid transparent;
+    background-clip: padding-box; }
+scrollbar:hover slider, scrollbar.dragging slider { min-width: 8px; min-height: 8px; }
+scrollbar trough { background-color: transparent; }
+scrollbar.overlay-indicator:not(.dragging):not(.hovering) slider { min-width: 4px; min-height: 4px; margin: 2px; border: none; }
+
+/* lists, sidebars, cards, frames */
+list.boxed-list, frame > border, scrolledwindow.frame, .card, infobar > revealer > box { border-radius: 10px; }
+.navigation-sidebar row, placessidebar row, stacksidebar row { border-radius: 7px; margin: 1px 6px; padding: 6px 10px; }
+row:selected { border-radius: 7px; }
+treeview.view:selected { border-radius: 0; }
+iconview:selected, flowbox flowboxchild:selected, flowbox flowboxchild { border-radius: 10px; }
+
+/* tabs */
+notebook > header tab { border-radius: 7px 7px 0 0; padding: 6px 14px; min-height: 22px; }
+notebook > header tab:hover { background-color: alpha(@huginn_text, 0.05); }
+/* (as specific as Adwaita's own, which draw the chosen tab's line in Adwaita's blue) */
+notebook > header.top > tabs > tab:checked { box-shadow: inset 0 -2px @huginn_accent; }
+notebook > header.bottom > tabs > tab:checked { box-shadow: inset 0 2px @huginn_accent; }
+notebook > header.left > tabs > tab:checked { box-shadow: inset -2px 0 @huginn_accent; }
+notebook > header.right > tabs > tab:checked { box-shadow: inset 2px 0 @huginn_accent; }
+
+/* menus, pop-ups and tooltips: rounded, with room round the items and items rounded within them */
+menu, .menu, .context-menu { border-radius: 10px; padding: 5px; border: 1px solid @huginn_border; }
+.csd.popup decoration, .popup decoration { border-radius: 10px; box-shadow: 0 8px 28px alpha(#000000, 0.45), 0 0 0 1px @huginn_border; }
+menu menuitem, .menu menuitem { border-radius: 6px; min-height: 22px; padding: 4px 10px; margin: 1px 0; }
+menu separator, .menu separator { margin: 4px 6px; }
+popover.background, popover.menu { border-radius: 12px; padding: 4px; box-shadow: 0 8px 28px alpha(#000000, 0.4); border: 1px solid @huginn_border; }
+popover modelbutton.flat { border-radius: 6px; padding: 4px 10px; min-height: 22px; }
+tooltip, tooltip.background { border-radius: 8px; padding: 5px 10px; box-shadow: none; }
+
+/* the window: Huginn's 14 px corners on windows GTK draws itself, a roomier header bar, round window buttons */
+window.csd decoration, dialog.csd decoration { border-radius: 14px; }
+window.csd.maximized decoration, window.csd.fullscreen decoration, window.csd.tiled decoration { border-radius: 0; }
+window.csd headerbar.titlebar, window.csd > .titlebar, window.csd .titlebar headerbar:first-child { border-radius: 14px 14px 0 0; }
+window.csd.maximized headerbar.titlebar, window.csd.tiled headerbar.titlebar { border-radius: 0; }
+headerbar { min-height: 44px; padding: 0 10px; }
+headerbar .title { font-weight: 600; }
+headerbar button.titlebutton { min-width: 24px; min-height: 24px; padding: 0; margin: 0 1px; background-color: alpha(@huginn_text, 0.08);
+    border: none; }
+headerbar button.titlebutton:hover { background-color: alpha(@huginn_text, 0.16); }
+headerbar button.titlebutton.close:hover { background-color: @huginn_danger; color: #FFFFFF; }

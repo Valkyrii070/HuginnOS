@@ -1,0 +1,3 @@
+# /dev/ntsync for every program, games in Steam's sandbox included (each file handle has only its own objects;
+# newer kernels make it like this themselves).
+KERNEL=="ntsync", MODE="0666"

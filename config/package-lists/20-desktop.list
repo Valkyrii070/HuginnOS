@@ -1,0 +1,46 @@
+# The compositor is Huginn's own (54-huginn-compositor.list), for the desktop and for the sign-in screen alike, and
+# so is the sign-in service (apps/huginn_signind.py): KWin, Plasma and SDDM are not in the image.
+xwayland
+# The desktop portal: Huginn's own answers apps' questions (huginn-portals.conf); GTK's answers what's left
+# (printing, email, your name and picture). KDE's is gone.
+xdg-desktop-portal-gtk
+xdg-user-dirs
+# Qt apps that aren't Huginn's wear Huginn's own Qt look (qt/, built into the image: QT_QPA_PLATFORMTHEME=huginn),
+# which opens and saves through the portal (Huginn's own) by Qt's portal theme, kept for that. KDE's integration
+# (plasma-integration), qt6ct and Kvantum are gone.
+qt6-xdgdesktopportal-platformtheme
+# Location for Weather and Maps (the Privacy settings), screen makers' names in Displays.
+geoclue-2.0
+hwdata
+# Shell services. Notifications, power, the hardware keys, Wi‑Fi passwords and Bluetooth pairing are Huginn's own
+# session daemon (apps/huginn_sessiond.py); Plasma's (plasma-nm, plasma-pa, powerdevil, bluedevil) are not-wanted.
+libnotify-bin
+wireplumber
+bluez
+upower
+# Theming: GTK 3 apps in Huginn's own theme (/usr/share/themes/Huginn: Adwaita's shapes, which GTK carries, in the
+# realm's colours); Qt apps in Huginn's own (above). KDE's Breeze style and Breeze-GTK are gone.
+# Icons: Huginn's own theme (scripts/make-icons.py, in the overlay), answering every standard name itself
+# (scripts/icon_names.py); pointers too (pointers/make_pointers.py, drawn into the icon theme by build.sh).
+fonts-inter-variable
+fonts-jetbrains-mono
+fonts-noto-core
+fonts-noto-color-emoji
+# Japanese, Chinese and Korean text (without it web pages and file names in them show as boxes)
+fonts-noto-cjk
+# Native apps (deliberately few)
+udisks2
+ffmpeg
+gvfs-backends
+gvfs-fuse
+avahi-utils
+# App delivery (no snapd): Flatpak, driven by the Huginn App Store
+flatpak
+# Huginn runtime (Phase 2 replaces this with the huginn .deb)
+python3
+python3-pyqt6
+python3-pyqt6.qtwebengine
+# Installer
+# Huginn's password prompt (apps/huginn_polkit.py) speaks to polkit through its own GObject bindings
+gir1.2-polkit-1.0
+pkexec

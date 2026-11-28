@@ -1,0 +1,15 @@
+[Unit]
+Description=Put a waiting Huginn OS update in place before anyone signs in
+Documentation=file:///usr/share/huginn-apps/huginn_osupdate.py
+ConditionPathExists=/var/lib/huginn-os-update/ready
+After=local-fs.target systemd-tmpfiles-setup.service
+Before=display-manager.service huginn-signin.service sddm.service
+
+[Service]
+Type=oneshot
+ExecStart=-/usr/libexec/huginn-os-update apply-at-start
+TimeoutStartSec=20min
+StandardOutput=journal+console
+
+[Install]
+WantedBy=multi-user.target

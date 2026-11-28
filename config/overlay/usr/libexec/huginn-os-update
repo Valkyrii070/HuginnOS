@@ -1,0 +1,5 @@
+#!/bin/sh
+# Huginn OS's own updates (apps/huginn_osupdate.py): the shell, the apps, the look, system files and the compositor,
+# from the branch this system was built from. Software Update runs it through pkexec (org.huginn.os-update); a timer
+# stages new versions on its own and a start-up service puts a staged one in place before the sign-in screen.
+exec /usr/bin/python3 /usr/share/huginn-apps/huginn_osupdate.py "$@"

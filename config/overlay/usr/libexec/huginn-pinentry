@@ -1,0 +1,3 @@
+#!/bin/sh
+# Huginn's own pinentry, for GnuPG (apps/huginn_pinentry.py; /etc/gnupg/gpg-agent.conf names it).
+exec /usr/bin/python3 /usr/share/huginn-apps/huginn_pinentry.py "$@"

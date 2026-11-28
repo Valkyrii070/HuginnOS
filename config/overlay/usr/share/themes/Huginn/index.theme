@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=X-GNOME-Metatheme
+Name=Huginn
+Comment=Huginn OS's look for GTK 3 apps: Adwaita's shapes in the realm's colours
+Encoding=UTF-8
+
+[X-GNOME-Metatheme]
+GtkTheme=Huginn
+IconTheme=Huginn
+CursorTheme=Huginn

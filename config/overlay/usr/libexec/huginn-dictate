@@ -1,0 +1,3 @@
+#!/bin/sh
+# Dictation (Super+H; apps/huginn_dictate.py): talk, and what you say is typed where you're typing. On this computer.
+exec /usr/bin/python3 /usr/share/huginn-apps/huginn_dictate.py "$@"

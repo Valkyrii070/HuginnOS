@@ -1,0 +1,11 @@
+{
+ "id": "huginn.code.build",
+ "name": "Last Build",
+ "app": "Code",
+ "about": "Passed or failed, which project, and when",
+ "template": "status",
+ "sizes": ["small", "wide"],
+ "size": "small",
+ "before": false,
+ "accent": "#2563EB"
+}

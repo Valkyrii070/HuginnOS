@@ -1,0 +1,4 @@
+#!/bin/sh
+# What an app's widget on Huginn's sign-in screen says (apps/huginn_signin_widgets.py). For apps and scripts:
+#   huginn-signin-widget set com.example.raid --big "Raid tonight" --small "8 of 10 in" --state good
+exec python3 /usr/share/huginn-apps/huginn_signin_widgets.py "$@"

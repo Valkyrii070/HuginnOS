@@ -1,0 +1,10 @@
+# The sign-in screen itself, as the huginn-greeter account: no password, a session of its own kind (greeter).
+auth    required        pam_permit.so
+@include common-account
+session optional        pam_keyinit.so force revoke
+session required        pam_limits.so
+session required        pam_loginuid.so
+@include common-session
+password        required pam_deny.so
+session required        pam_env.so
+session required        pam_env.so envfile=/etc/default/locale

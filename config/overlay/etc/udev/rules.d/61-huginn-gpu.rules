@@ -1,0 +1,3 @@
+# Huginn OS: the performance level chosen in Settings › Graphics (kept in /etc/huginn/gpu-level), set again on AMD
+# cards as they appear at each start. Nothing is written when none was chosen (the driver's own, automatic).
+ACTION=="add", SUBSYSTEM=="drm", KERNEL=="card[0-9]*", DRIVERS=="amdgpu", TEST=="/etc/huginn/gpu-level", RUN+="/usr/libexec/huginn-system-settings gpu-apply"

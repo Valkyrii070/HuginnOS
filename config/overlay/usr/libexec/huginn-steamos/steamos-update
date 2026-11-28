@@ -1,0 +1,5 @@
+#!/bin/sh
+# Steam asks this about system updates in Game Mode; Huginn OS updates through Software Update on the desktop.
+# 7 is how SteamOS says there's nothing to update.
+for a in "$@"; do [ "$a" = --supports-duplicate-detection ] && exit 0; done
+exit 7

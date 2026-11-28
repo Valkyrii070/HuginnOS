@@ -1,0 +1,14 @@
+# Huginn Office: spelling for Writer (and anything else that asks enchant) and fonts that measure like
+# Microsoft's, so Word, Excel and PowerPoint files keep their line breaks and page breaks.
+python3-enchant
+hunspell-en-us
+hunspell-en-gb
+hunspell-de-de
+hunspell-fr
+hunspell-es
+hunspell-it
+hunspell-nl
+hunspell-pt-br
+fonts-crosextra-carlito
+fonts-crosextra-caladea
+fonts-liberation2

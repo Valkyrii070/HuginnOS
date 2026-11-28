@@ -1,0 +1,4 @@
+// Huginn OS: a restore point before apt (or Software Update) changes the system, at most one every ten minutes.
+// It never stops apt; on a system that isn't on btrfs it does nothing, nor while the installer is putting Huginn OS on
+// a disk (HUGINN_INSTALLING: the installer makes the first one itself). (/usr/libexec/huginn-snapshot)
+DPkg::Pre-Invoke { "if test -z $HUGINN_INSTALLING && test -x /usr/libexec/huginn-snapshot; then /usr/libexec/huginn-snapshot auto || true; fi"; };

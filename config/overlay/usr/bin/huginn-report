@@ -1,0 +1,4 @@
+#!/bin/sh
+# A problem report (Settings › About › Make a Problem Report): the logs, the hardware and any crashes in one .zip in
+# Documents, with your name, networks and addresses left out. Works from a text console (Ctrl+Alt+F3) too.
+exec python3 /usr/share/huginn-apps/huginn_report.py "$@"

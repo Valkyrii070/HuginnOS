@@ -1,0 +1,4 @@
+#!/bin/sh
+# What was chosen while installing, done after the first start in the background (apps/huginn_first_start.py):
+# media formats, fonts, drivers, apps from Flathub, the person's things from Windows. Run by huginn-first-start.service.
+exec /usr/bin/python3 /usr/share/huginn-apps/huginn_first_start.py "$@"

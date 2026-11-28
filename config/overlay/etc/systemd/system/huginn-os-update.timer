@@ -1,0 +1,11 @@
+[Unit]
+Description=Look for a newer Huginn OS a little after start-up and a few times a day
+
+[Timer]
+OnBootSec=4min
+OnUnitActiveSec=6h
+RandomizedDelaySec=10min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

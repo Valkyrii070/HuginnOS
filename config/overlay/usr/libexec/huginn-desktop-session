@@ -1,0 +1,52 @@
+#!/bin/sh
+# Huginn OS's desktop: Huginn's own compositor (huginn-compositor, built on Smithay) with Huginn's shell, apps and
+# session services. huginn-session runs it (and Game Mode, huginn-game-session, in its place when asked).
+export XDG_CURRENT_DESKTOP=Huginn
+export XDG_SESSION_DESKTOP=huginn
+export QT_QPA_PLATFORM=wayland
+# Qt apps that aren't Huginn's: Huginn's own Qt look (qt/: its colours, icons, fonts and widget style, from
+# ~/.config/huginn/qt.conf, which huginn_look.py writes), and their menu bars in the top bar. (qt6ct only on a
+# system that hasn't got it yet: an update that couldn't bring it, for another Qt.)
+if [ -e /usr/lib/x86_64-linux-gnu/qt6/plugins/platformthemes/libhuginntheme.so ]; then
+    export QT_QPA_PLATFORMTHEME=huginn
+else
+    export QT_QPA_PLATFORMTHEME=qt6ct
+fi
+# Old GTK 3 apps' menu bars in the top bar (gtk/menus.c; GtkApplication apps hand theirs over through the
+# compositor). On Wayland GTK takes modules only from GTK_MODULES.
+if [ -e /usr/lib/x86_64-linux-gnu/gtk-3.0/modules/libhuginn-menus.so ]; then
+    export GTK_MODULES="huginn-menus${GTK_MODULES:+:$GTK_MODULES}"
+fi
+# Every app's Open and Save windows are Huginn's own (huginn_portal.py, through xdg-desktop-portal):
+# Qt apps through Huginn's Qt look (its dialogs: the portal's), GTK apps through GTK's portal support, sandboxed apps always.
+export GTK_USE_PORTAL=1
+export GDK_DEBUG=portals
+# Games made with SDL (most native Linux games, and Steam's runtime) draw through X11 (XWayland): Steam's overlay
+# (Shift+Tab) and its screenshots only work in X11 games, and SDL 3 would otherwise pick Wayland on a compositor as
+# capable as Huginn's. A game can still be told otherwise in its launch options (SDL_VIDEODRIVER=wayland %command%).
+export SDL_VIDEODRIVER="${SDL_VIDEODRIVER:-x11}" SDL_VIDEO_DRIVER="${SDL_VIDEO_DRIVER:-x11}"
+# Mesa keeps 1 GB of compiled shaders by default; a few big games outgrow that and compile again (stutter) each
+# time. 10 GB, in ~/.cache/mesa_shader_cache (Steam from Flathub: in its own folder in ~/.var/app).
+export MESA_SHADER_CACHE_MAX_SIZE="${MESA_SHADER_CACHE_MAX_SIZE:-10G}"
+cfg="${XDG_CONFIG_HOME:-$HOME/.config}"
+# KDE-style settings files (Settings writes them): one value from a [group]
+kread() { [ -r "$cfg/$1" ] && sed -n "/^\[$2\]/,/^\[/{s/^$3=//p}" "$cfg/$1" | head -n 1; }
+# The pointer: Breeze's at Settings › Accessibility's size (the compositor draws it, and so does X11 apps' server).
+size=$(kread kcminputrc Mouse cursorSize); case "$size" in ''|*[!0-9]*) size=24 ;; esac
+theme=$(kread kcminputrc Mouse cursorTheme); [ -n "$theme" ] || theme=Huginn
+export XCURSOR_THEME="$theme" XCURSOR_SIZE="$size"
+# Settings › Language & Region (plasma-localerc, as KDE keeps it): the language, and how dates, numbers and money
+# look, when the system has that language (Settings makes it when it's chosen).
+have_locale() { locale -a 2>/dev/null | grep -qix "$(printf %s "$1" | sed 's/\.UTF-8$/.utf8/I')"; }
+lang=$(kread plasma-localerc Translations LANGUAGE)
+first="${lang%%:*}"
+if [ -n "$first" ] && have_locale "$first.UTF-8"; then
+    export LANG="$first.UTF-8" LANGUAGE="$lang"
+fi
+fmt=$(kread plasma-localerc Formats LANG)
+if [ -n "$fmt" ] && have_locale "$fmt"; then
+    export LC_NUMERIC="$fmt" LC_TIME="$fmt" LC_MONETARY="$fmt" LC_MEASUREMENT="$fmt" LC_PAPER="$fmt" LC_ADDRESS="$fmt" LC_TELEPHONE="$fmt" LC_NAME="$fmt"
+fi
+unset lang first fmt size theme
+# The compositor starts the session (services, then the shell) once it's listening, and ends when the shell does.
+exec dbus-run-session -- huginn-compositor -- /usr/libexec/huginn-session-apps

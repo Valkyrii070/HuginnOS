@@ -1,0 +1,1085 @@
+"""Huginn OS's installer engine: puts Huginn OS on a disk. Runs as root (the Installer app starts it through pkexec,
+as /usr/libexec/huginn-install-engine), reads one JSON plan on stdin (passwords included, so they never touch a
+disk) and writes one JSON line per step to stdout: {"step", "label", "fraction"}, then {"done": true} or
+{"error": "...", "log": "..."}.
+
+    the plan     {"mode": "erase" | "free" | "shrink" | "manual", "disk": "/dev/sda", "firmware": "uefi" | "bios",
+                  "removable": false (a USB drive: GRUB only in its own fallback place, the computer's boot list untouched),
+                  "shrinkPart": "/dev/sda3", "keepBytes": 200e9 (shrink: Windows' partition keeps this much; Huginn OS
+                  goes in the room made after it),
+                  "encrypt": false, "passphrase": "", "root": "/dev/sda3", "efi": "/dev/sda1", "formatEfi": false,
+                  "hostname": "…", "user": {"name", "realName", "password", "autologin"}, "timezone": "Europe/Oslo",
+                  "locale": "nb_NO.UTF-8", "keyboard": {"layout": "no", "variant": ""}, "kernelArgs": "",
+                  "recoveryKey": "fjord-lantern-…" (encrypted: a second key that opens the disk),
+                  "extras": {"codecs": "download" | "build" | "none", "msfonts", "scripts", "printers", "nvidia"},
+                  "apps": {"gamedev", "flathub", "fromWindows": ["discord", …]},
+                  "windows": {"part": "/dev/sda3", "user": "Astrid", "folders": ["documents", …], "how": "copy" | "link"},
+                  "safety": {"restorePoints", "firewall", "autoUpdates"}}
+    the steps    partition (sfdisk), format (FAT32 for EFI, btrfs with subvolumes @ for the system, @home, @snapshots
+                 for restore points and @swap, LUKS2 when encrypted, with a plain ext4 /boot beside it), copy the
+                 system (unsquashfs from the live medium), the kernel (casper keeps it beside the squashfs), settings
+                 (hostname, fstab, crypttab, locale, keyboard, time zone, the person, sign-in), tidy up the live
+                 session's pieces, initramfs and GRUB (UEFI with shim for Secure Boot, or BIOS), a swap file, the
+                 first restore point ("Just installed"), then unmount. What needs the internet or time (media formats,
+                 fonts, drivers, apps from Flathub, your things from Windows) is written down for the first start:
+                 /var/lib/huginn/first-start.json, done in the background by huginn-first-start.service.
+
+Each disk action goes through Engine.run(), so tests can run the same engine against disk images.
+
+    --probe-ntfs PART   (root) how far Windows' partition can shrink: one JSON line {"size", "min", "problem"}
+    --probe-windows PART  (root) what's in Windows, read-only: its people and their folders, apps with Linux
+                        versions, and whether it's half shut down (Fast Startup): one JSON line
+"""
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+import time
+from pathlib import Path
+
+TARGET = Path("/target")
+LOG = Path("/var/log/huginn-installer.log")
+MAPPER = "huginn"                     # the unlocked disk is /dev/mapper/huginn ("Please unlock disk huginn")
+BIOS_GRUB = "21686148-6449-6E6F-744E-656564454649"
+LIVE_ONLY = ["usr/share/applications/huginn-installer.desktop", "usr/share/polkit-1/actions/org.huginn.installer.policy",
+             "etc/polkit-1/rules.d/49-huginn-live-installer.rules", "usr/libexec/huginn-install-engine", "etc/casper.conf"]
+WEIGHTS = [("disk", "Preparing the disk", 0.03), ("format", "Making the disk ready", 0.04), ("copy", "Copying Huginn OS", 0.68),
+           ("kernel", "Copying the kernel", 0.01), ("settings", "Setting it up for you", 0.06), ("boot", "Making it start", 0.15),
+           ("finish", "Finishing", 0.03)]
+
+
+# ---------------------------------------------------------------- what's done at the first start, and from Windows
+FIRST_START = "var/lib/huginn/first-start.json"
+CODEC_PACKAGES = ["ubuntu-restricted-addons", "libavcodec-extra", "gstreamer1.0-libav", "gstreamer1.0-plugins-ugly", "gstreamer1.0-plugins-bad"]
+SCRIPT_FONTS = ["fonts-noto-cjk", "fonts-noto-core", "fonts-noto-color-emoji"]
+PRINTER_PACKAGES = ["printer-driver-all", "hplip"]
+GAMEDEV_PACKAGES = ["git", "git-lfs", "podman", "build-essential", "clang", "cmake", "ninja-build", "python3-venv"]
+GAMEDEV_FLATPAKS = ["org.godotengine.Godot"]
+MSFONTS_EULA = "ttf-mscorefonts-installer msttcorefonts/accepted-mscorefonts-eula boolean true"
+# apps people use on Windows that have a Linux version on Flathub: key -> (name, Flathub id, what Windows calls it)
+WINDOWS_APPS = {
+    "discord": ("Discord", "com.discordapp.Discord", ("discord",)), "spotify": ("Spotify", "com.spotify.Client", ("spotify",)),
+    "vlc": ("VLC", "org.videolan.VLC", ("vlc media player", "videolan")), "obs": ("OBS Studio", "com.obsproject.Studio", ("obs studio", "obs-studio")),
+    "gimp": ("GIMP", "org.gimp.GIMP", ("gimp",)), "blender": ("Blender", "org.blender.Blender", ("blender",)),
+    "audacity": ("Audacity", "org.audacityteam.Audacity", ("audacity",)), "inkscape": ("Inkscape", "org.inkscape.Inkscape", ("inkscape",)),
+    "zoom": ("Zoom", "us.zoom.Zoom", ("zoom",)), "slack": ("Slack", "com.slack.Slack", ("slack",)),
+    "telegram": ("Telegram", "org.telegram.desktop", ("telegram",)), "signal": ("Signal", "org.signal.Signal", ("signal",)),
+    "vscode": ("Visual Studio Code", "com.visualstudio.code", ("visual studio code", "microsoft vs code")),
+    "chrome": ("Google Chrome", "com.google.Chrome", ("google chrome",)), "firefox": ("Firefox", "org.mozilla.firefox", ("firefox", "mozilla firefox")),
+    "thunderbird": ("Thunderbird", "org.mozilla.Thunderbird", ("thunderbird",)), "libreoffice": ("LibreOffice", "org.libreoffice.LibreOffice", ("libreoffice",)),
+    "heroic": ("Heroic (Epic and GOG games)", "com.heroicgameslauncher.hgl", ("epic games launcher", "gog galaxy")),
+    "kdenlive": ("Kdenlive", "org.kde.kdenlive", ("kdenlive",)), "krita": ("Krita", "org.kde.krita", ("krita",)),
+}
+WINDOWS_FOLDERS = {"documents": "Documents", "pictures": "Pictures", "music": "Music", "videos": "Videos", "desktop": "Desktop", "downloads": "Downloads"}
+NOT_PEOPLE = {"default", "default user", "public", "all users", "defaultappool", "wdagutilityaccount"}
+
+
+def first_start_tasks(plan: dict, windows_uuid: str = "") -> dict:
+    """What the plan asks for that is done at the first start, in the background: packages from Ubuntu (media formats,
+    fonts, printers, game-development tools), apps from Flathub, NVIDIA's driver, media formats built here, and the
+    person's things from Windows."""
+    ex, apps, win = plan.get("extras") or {}, plan.get("apps") or {}, plan.get("windows") or {}
+    packages, debconf, flatpaks, build = [], [], [], []
+    if ex.get("codecs") == "download":
+        packages += CODEC_PACKAGES
+    elif ex.get("codecs") == "build":
+        build.append("codecs")
+    if ex.get("msfonts"):
+        packages.append("ttf-mscorefonts-installer")
+        debconf.append(MSFONTS_EULA)
+    if ex.get("scripts"):
+        packages += SCRIPT_FONTS
+    if ex.get("printers"):
+        packages += PRINTER_PACKAGES
+    if apps.get("gamedev"):
+        packages += GAMEDEV_PACKAGES
+        flatpaks += GAMEDEV_FLATPAKS
+    flatpaks += [WINDOWS_APPS[k][1] for k in (apps.get("fromWindows") or []) if k in WINDOWS_APPS]
+    tasks = {"owner": (plan.get("user") or {}).get("name", ""), "packages": list(dict.fromkeys(packages)), "debconf": debconf,
+             "flatpaks": list(dict.fromkeys(flatpaks)), "flathub": apps.get("flathub", True) is not False, "build": build,
+             "drivers": bool(ex.get("nvidia")), "windows": None}
+    if windows_uuid and win.get("user") and (win.get("folders") or win.get("how") == "link" or win.get("bookmarks")):
+        tasks["windows"] = {"uuid": windows_uuid, "user": str(win["user"]), "how": "link" if win.get("how") == "link" else "copy",
+                            "folders": [f for f in (win.get("folders") or []) if f in WINDOWS_FOLDERS], "bookmarks": bool(win.get("bookmarks"))}
+    return tasks
+
+
+def windows_survey(root: Path, budget: float = 12.0) -> dict:
+    """What's in a Windows partition mounted at root (read-only): each person's folders (how many files, how big;
+    counting stops after `budget` seconds and says so), apps with Linux versions, and whether it's half shut down."""
+    out = {"users": [], "apps": [], "fastStartup": False, "counted": True}
+    try:
+        with open(root / "hiberfil.sys", "rb") as fh:        # Fast Startup leaves a hibernation file marked as in use
+            out["fastStartup"] = fh.read(4).lower() == b"hibr"
+    except OSError:
+        pass
+    users = root / "Users"
+    end = time.monotonic() + budget
+    try:
+        people = sorted(d for d in users.iterdir() if d.is_dir() and d.name.lower() not in NOT_PEOPLE and (d / "NTUSER.DAT").exists())
+    except OSError:
+        people = []
+    for d in people:
+        folders = {}
+        for key, name in WINDOWS_FOLDERS.items():
+            files = size = 0
+            for dirpath, _dirs, names in os.walk(d / name):
+                for n in names:
+                    try:
+                        size += os.lstat(os.path.join(dirpath, n)).st_size
+                        files += 1
+                    except OSError:
+                        pass
+                if time.monotonic() > end:
+                    out["counted"] = False
+                    break
+            folders[key] = {"files": files, "bytes": size}
+        try:                                                    # (the same reader the first start uses)
+            from huginn_first_start import windows_bookmarks
+            marks = windows_bookmarks(d)
+        except Exception:                                       # noqa: BLE001
+            marks = []
+        out["users"].append({"name": d.name, "folders": folders,
+                             "bookmarks": {"count": len(marks), "browsers": list(dict.fromkeys(m["browser"] for m in marks))}})
+    seen = set()
+    places = [root / "Program Files", root / "Program Files (x86)", root / "ProgramData/Microsoft/Windows/Start Menu/Programs"]
+    for d in people:
+        places += [d / "AppData/Local", d / "AppData/Roaming", d / "AppData/Roaming/Microsoft/Windows/Start Menu/Programs"]
+    for place in places:
+        try:
+            names = [n.lower() for n in os.listdir(place)]
+        except OSError:
+            continue
+        for key, (_name, _id, words) in WINDOWS_APPS.items():
+            if key not in seen and any(any(n == w or n.startswith(w + " ") or n == w + ".lnk" or n.startswith(w + ".") for n in names) for w in words):
+                seen.add(key)
+    out["apps"] = sorted(seen)
+    return out
+
+
+def probe_windows(part: str) -> dict:
+    """Mount Windows read-only somewhere of its own, survey it, and let go of it."""
+    where = Path(tempfile.mkdtemp(prefix="huginn-windows-"))
+    try:
+        for cmd in (["mount", "-t", "ntfs3", "-o", "ro,nodev,nosuid,noexec", part, str(where)],
+                    ["mount", "-t", "ntfs-3g", "-o", "ro,nodev,nosuid,noexec", part, str(where)]):
+            r = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+            if r.returncode == 0:
+                break
+        else:
+            return {"users": [], "apps": [], "fastStartup": "hibernat" in (r.stderr or "").lower(), "problem": why_ntfs(r.stderr or "")}
+        try:
+            return dict(windows_survey(where), problem="")
+        finally:
+            subprocess.run(["umount", str(where)], capture_output=True, timeout=60)
+    finally:
+        try:
+            where.rmdir()
+        except OSError:
+            pass
+
+
+RECOVERY_WORDS = (
+    "acorn amber anchor antler apple arch arrow ash aspen aurora autumn badger barley basin beacon bear birch bison blaze bloom "
+    "boulder bramble breeze brook cabin canyon cedar cinder clover comet copper coral cove crane creek crest crystal cypress dawn "
+    "delta dew dune dusk eagle echo ember fable falcon fern field finch fjord flint forest fox frost garnet geyser glacier glade "
+    "granite grove gull harbor harvest hawk hazel heath heron hollow honey horizon iris island ivy jade juniper kelp kestrel lake "
+    "lantern larch lark laurel ledge lichen lily linden lotus lynx maple marble marsh meadow mesa meteor mint mist moose moss moth "
+    "nectar needle north oak oasis ocean olive onyx orbit orchid osprey otter owl pebble pepper pine plover plume pond poppy prairie "
+    "quartz quill rain raven reef ridge river robin rowan saffron sage salmon sand sapling shore sierra silver sky slate sparrow "
+    "spruce star stone storm summit swallow swan tern thistle thorn thrush tide timber topaz tundra twig valley velvet violet "
+    "walnut wave willow wind winter wren yarrow zephyr").split()
+
+
+def recovery_key(words: int = 8) -> str:
+    """A key that opens the disk if the password is forgotten: eight words (about 60 bits), easy to write down."""
+    import secrets
+    return "-".join(secrets.choice(RECOVERY_WORDS) for _ in range(words))
+
+
+class Failed(Exception):
+    pass
+
+
+def live_medium() -> Path:
+    """Where the live system's squashfs and kernel are (casper mounts the ISO at /cdrom)."""
+    for root in (Path("/cdrom"), Path("/run/live/medium"), Path("/media/cdrom")):
+        if (root / "casper" / "filesystem.squashfs").exists():
+            return root
+    return Path("/cdrom")
+
+
+def part_name(disk: str, n: int) -> str:
+    """/dev/sda + 2 → /dev/sda2; /dev/nvme0n1 + 2 → /dev/nvme0n1p2 (a disk name ending in a digit takes a "p")."""
+    return f"{disk}p{n}" if disk[-1].isdigit() else f"{disk}{n}"
+
+
+def layout(firmware: str, encrypt: bool) -> list:
+    """The partitions an erased disk gets, in order: [(role, size in MiB or 0 for the rest, sfdisk type)]."""
+    parts = [("efi", 512, "U")] if firmware == "uefi" else [("bios", 1, BIOS_GRUB)]
+    if encrypt:
+        parts.append(("boot", 1536, "L"))
+    parts.append(("root", 0, "L"))
+    return parts
+
+
+def sfdisk_script(parts: list, start: int = 0) -> str:
+    """An sfdisk script: GPT when starting fresh (start=0), otherwise partitions appended from sector `start`."""
+    names = {"efi": "EFI system", "bios": "BIOS boot", "boot": "Huginn OS boot", "root": "Huginn OS"}
+    lines = ["label: gpt"] if not start else []
+    for k, (role, mib, ptype) in enumerate(parts):
+        bits = []
+        if start and k == 0:
+            bits.append(f"start={start}")
+        if mib:
+            bits.append(f"size={mib}MiB")
+        bits += [f"type={ptype}", f'name="{names[role]}"']
+        lines.append(", ".join(bits))
+    return "\n".join(lines) + "\n"
+
+
+SUBVOLUMES = ("@", "@home", "@snapshots", "@swap")
+KEPT_OUT_OF_VERSIONS = (".cache", ".local/share/Steam", ".var/app")       # in the person's home: see settings()
+BTRFS_OPTS = "compress=zstd:1,noatime"
+
+
+def pointer_text(fs_uuid: str, prefix: str) -> str:
+    """GRUB's pointer to its menu. It looks for the system's disk by its id and, should that find nothing (the id
+    changed, or the disk is known to this firmware another way), by the menu file itself."""
+    return (f"search.fs_uuid {fs_uuid} root\n"
+            f"if [ ! -e ($root){prefix}/grub.cfg ]; then\n"
+            f"    search --no-floppy --file --set=root {prefix}/grub.cfg\n"
+            f"fi\n"
+            f"set prefix=($root)'{prefix}'\n"
+            f"configfile $prefix/grub.cfg\n")
+
+
+def grub_pointers(esp: Path, fs_uuid: str, prefix: str) -> list:
+    """Ubuntu's signed GRUB (the one Secure Boot needs) finds its menu through a small pointer file, EFI/ubuntu/grub.cfg
+    (or one beside GRUB itself in the fallback place, EFI/BOOT). With no pointer it can read, the computer starts at a
+    bare "grub>" prompt. The installer writes its own pointer in both places. Returns the files written."""
+    text, made = pointer_text(fs_uuid, prefix), []
+    for f in (esp / "ubuntu" / "grub.cfg", esp / "BOOT" / "grub.cfg"):
+        try:
+            if f.parent.name == "BOOT" and not f.parent.is_dir():
+                continue                                           # nothing was installed in the fallback place
+            f.parent.mkdir(parents=True, exist_ok=True)
+            f.write_text(text)
+            made.append(str(f))
+        except OSError:
+            pass
+    return made
+
+
+ESP_TYPE = "c12a7328-f81f-11d2-ba4b-00a0c93ec93b"
+
+
+def pointer_target(text: str) -> str:
+    """The disk id a pointer file looks for ("" when it names none)."""
+    m = re.search(r"^\s*search\.fs_uuid\s+(\S+)", text, re.M)
+    return m.group(1) if m else ""
+
+
+def stale_pointers(own_esp: str, fs_uuid: str, prefix: str, log=lambda text: None, run=subprocess.run) -> list:
+    """Other disks in this computer can carry a pointer left by an earlier Ubuntu, or an earlier Huginn OS, that names
+    a system which is no longer there. Firmware that starts that one lands at a "grub>" prompt however good the new
+    install is. Each pointer whose system is gone is pointed at the new one (the old file is kept beside it as
+    grub.cfg.before-huginn); one whose system still exists is left alone. Returns the partitions changed."""
+    changed = []
+    try:
+        rows = run(["lsblk", "-rno", "PATH,FSTYPE,PARTTYPE"], capture_output=True, text=True, timeout=30).stdout.splitlines()
+        present = set(run(["blkid", "-s", "UUID", "-o", "value"], capture_output=True, text=True, timeout=30).stdout.split())
+    except (OSError, subprocess.SubprocessError):
+        return changed
+    for row in rows:
+        part = row.split()
+        if len(part) < 3 or part[1] != "vfat" or part[2].lower() != ESP_TYPE or part[0] == own_esp:
+            continue
+        where = tempfile.mkdtemp(prefix="huginn-esp-")
+        try:
+            if run(["mount", "-o", "rw", part[0], where], capture_output=True, timeout=30).returncode != 0:
+                continue
+            try:
+                f = Path(where) / "EFI" / "ubuntu" / "grub.cfg"
+                old = f.read_text(errors="replace") if f.is_file() else ""
+                target = pointer_target(old)
+                if target and target not in present:
+                    (f.parent / "grub.cfg.before-huginn").write_text(old)
+                    f.write_text(pointer_text(fs_uuid, prefix))
+                    changed.append(part[0])
+                    log(f"(a boot pointer on {part[0]} named a system that is gone ({target}): it now points here)")
+            finally:
+                run(["umount", where], capture_output=True, timeout=30)
+        except (OSError, subprocess.SubprocessError):
+            pass
+        finally:
+            try:
+                os.rmdir(where)
+            except OSError:
+                pass
+    return changed
+
+
+def fstab(root_uuid: str, efi_uuid: str = "", boot_uuid: str = "", encrypted: bool = False, swap: bool = True) -> str:
+    rows = ["# /etc/fstab: the disks Huginn OS mounts at start-up (written by the installer).",
+            "# The system is btrfs subvolume @ (restore points are snapshots of it, in @snapshots: huginn-snapshot);",
+            "# your files are @home, which going back to a restore point never touches.",
+            "# <file system>  <mount point>  <type>  <options>  <dump>  <pass>"]
+    dev = "/dev/mapper/" + MAPPER if encrypted else "UUID=" + root_uuid
+    rows.append(f"{dev}  /  btrfs  subvol=@,{BTRFS_OPTS}  0  0")
+    rows.append(f"{dev}  /home  btrfs  subvol=@home,{BTRFS_OPTS}  0  0")
+    rows.append(f"{dev}  /swap  btrfs  subvol=@swap,noatime  0  0")
+    if boot_uuid:
+        rows.append(f"UUID={boot_uuid}  /boot  ext4  defaults  0  2")
+    if efi_uuid:
+        rows.append(f"UUID={efi_uuid}  /boot/efi  vfat  umask=0077  0  1")
+    if swap:
+        rows.append("/swap/swapfile  none  swap  sw  0  0")
+    return "\n".join(rows) + "\n"
+
+
+def crypttab(luks_uuid: str, tpm: bool = False) -> str:
+    if tpm:
+        return (f"# Unlocked at start-up by this computer's security chip (TPM) and your PIN; the password or the recovery key\n"
+                f"# open it too.\n{MAPPER}  UUID={luks_uuid}  none  luks,discard,tpm2-device=auto\n")
+    return f"# Unlocked at start-up with the password asked on the boot screen.\n{MAPPER}  UUID={luks_uuid}  none  luks,discard\n"
+
+
+def tpm2_here(sysfs: Path = Path("/sys")) -> bool:
+    """A TPM 2.0 chip the firmware has turned on."""
+    try:
+        return (sysfs / "class/tpm/tpm0/tpm_version_major").read_text().strip() == "2"
+    except OSError:
+        return False
+
+
+DRACUT_CONF = ("# Huginn OS (the installer): the start-up opens the disk with the TPM and a PIN, asked on the boot screen.\n"
+               "# For this computer only; crypttab's tpm2-device brings systemd-cryptsetup's TPM part (tpm2-tss) with it.\n"
+               'hostonly="yes"\nhostonly_cmdline="no"\n')
+
+
+def good_hostname(name: str) -> str:
+    name = re.sub(r"[^a-z0-9-]+", "-", (name or "").lower()).strip("-")[:63]
+    return name or "huginn"
+
+
+def good_username(name: str) -> bool:
+    return bool(re.fullmatch(r"[a-z_][a-z0-9_-]{0,31}", name or "")) and name not in ("root", "daemon", "bin", "sys", "huginn-live")
+
+
+def check_plan(p: dict) -> list:
+    """What's wrong with a plan (empty when it's fine)."""
+    problems = []
+    if p.get("mode") not in ("erase", "free", "shrink", "manual"):
+        problems.append("No way to use the disk was chosen.")
+    if p.get("mode") in ("erase", "free", "shrink") and not str(p.get("disk", "")).startswith("/"):    # a disk, or a disk image
+        problems.append("No disk was chosen.")
+    if p.get("mode") == "shrink":
+        if not str(p.get("shrinkPart", "")).startswith("/"):
+            problems.append("No partition to make room in was chosen.")
+        if int(p.get("keepBytes") or 0) <= 0:
+            problems.append("How much room to leave Windows wasn't chosen.")
+    if p.get("mode") == "manual":
+        if not str(p.get("root", "")).startswith("/"):
+            problems.append("No partition for Huginn OS was chosen.")
+        if p.get("firmware") == "uefi" and not str(p.get("efi", "")).startswith("/"):
+            problems.append("No EFI system partition was chosen.")
+        if p.get("encrypt"):
+            problems.append("Encryption needs the installer to make the partitions (erase, or use free space).")
+    if p.get("tpmPin") and not p.get("encrypt"):
+        problems.append("Unlocking with the security chip and a PIN needs the disk encrypted.")
+    if p.get("tpmPin") and not 4 <= len(str(p["tpmPin"])) <= 64:
+        problems.append("The PIN should be 4 to 64 characters.")
+    if p.get("encrypt") and len(p.get("passphrase", "")) < 8:
+        problems.append("The disk password is too short (8 characters at least).")
+    if p.get("encrypt") and p.get("recoveryKey") and not re.fullmatch(r"[a-z]+(-[a-z]+){5,}", str(p["recoveryKey"])):
+        problems.append("The recovery key isn't one the installer made.")
+    if (p.get("extras") or {}).get("codecs", "none") not in ("download", "build", "none"):
+        problems.append("No way to add the media formats was chosen.")
+    win = p.get("windows") or {}
+    if win and (win.get("user") or win.get("folders")) and not re.fullmatch(r"/dev/[A-Za-z0-9/_-]+", str(win.get("part", ""))):
+        problems.append("Windows' partition wasn't named.")
+    if win and win.get("part") and p.get("mode") == "erase" and str(win["part"]).startswith(str(p.get("disk", "")) + ("p" if str(p.get("disk", ""))[-1:].isdigit() else "")):
+        problems.append("Windows is on the disk being erased: there'd be nothing to bring from it.")
+    u = p.get("user") or {}
+    if not good_username(u.get("name", "")):
+        problems.append("The user name can only have small letters, digits, - and _, and must start with a letter.")
+    if not u.get("password"):
+        problems.append("A password is needed.")
+    return problems
+
+
+class Engine:
+    def __init__(self, plan: dict, emit=None, target: Path = TARGET, medium: Path = None, log: Path = LOG):
+        self.p = plan
+        self.t = Path(target)
+        self.medium = Path(medium) if medium else live_medium()
+        self.emit = emit or (lambda d: (sys.stdout.write(json.dumps(d) + "\n"), sys.stdout.flush()))
+        self.logf = log
+        self.lines = []
+        self.mounts = []
+        self.opened = False
+        self.dev = {}                 # role → device: efi, bios, boot, root (the partition), rootfs (what's formatted btrfs)
+        self.version = ""
+        self.reuse_efi = False        # sharing the disk's EFI partition (with Windows, say): it's not formatted
+
+    # ---------------------------------------------------------------- running things
+    def log(self, text: str) -> None:
+        for secret in (self.p.get("passphrase"), (self.p.get("user") or {}).get("password")):
+            if secret:
+                text = text.replace(secret, "••••")
+        self.lines.append(text)
+        try:
+            with open(self.logf, "a", encoding="utf-8") as fh:
+                fh.write(text + "\n")
+        except OSError:
+            pass
+
+    def run(self, cmd: list, stdin: str = None, chroot: bool = False, check: bool = True, timeout: int = 3600, secrets: dict = None) -> str:
+        """secrets: environment for the command alone (passwords for systemd-cryptenroll), never logged."""
+        if chroot:
+            cmd = ["chroot", str(self.t)] + cmd
+        self.log("$ " + " ".join(cmd))
+        env = dict(os.environ, LC_ALL="C", DEBIAN_FRONTEND="noninteractive", HUGINN_INSTALLING="1", **(secrets or {}))   # (no restore points from apt's hook)
+        r = subprocess.run(cmd, input=stdin, capture_output=True, text=True, timeout=timeout, env=env)
+        out = (r.stdout + r.stderr).strip()
+        if out:
+            self.log(out[-4000:])
+        if check and r.returncode != 0:
+            said = [l.strip() for l in (r.stderr or r.stdout).splitlines() if l.strip() and not l.strip().startswith("dmesg(1)")]
+            if Path(cmd[0]).name == "ntfsresize":
+                raise Failed(why_ntfs(out))
+            raise Failed(f"{Path(cmd[2] if chroot else cmd[0]).name} failed: {said[-1] if said else 'exit ' + str(r.returncode)}")
+        return r.stdout
+
+    def step(self, key: str, within: float = 0.0, note: str = "") -> None:
+        base = 0.0
+        for k, label, w in WEIGHTS:
+            if k == key:
+                self.emit({"step": key, "label": label, "fraction": round(base + w * within, 4), "note": note})
+                return
+            base += w
+
+    def part_path(self, disk: str, n: int) -> str:
+        """The device for partition n of a disk, once the kernel has it (waiting for udev)."""
+        path = part_name(disk, n)
+        for _ in range(100):
+            if Path(path).exists():
+                return path
+            if shutil.which("udevadm"):
+                subprocess.run(["udevadm", "settle", "--timeout=2"], capture_output=True)
+            time.sleep(0.1)
+        raise Failed(f"The new partition {path} didn't appear")
+
+    def reread(self, disk: str) -> None:
+        if shutil.which("partx"):
+            subprocess.run(["partx", "-u", disk], capture_output=True)
+        if shutil.which("udevadm"):
+            subprocess.run(["udevadm", "settle", "--timeout=10"], capture_output=True)
+
+    def uuid(self, dev: str) -> str:
+        return self.run(["blkid", "-s", "UUID", "-o", "value", dev]).strip()
+
+    def mount(self, what: str, where: Path, *opts) -> None:
+        where.mkdir(parents=True, exist_ok=True)
+        self.run(["mount", *opts, what, str(where)])
+        self.mounts.append(where)
+
+    # ---------------------------------------------------------------- the steps
+    def partition(self) -> None:
+        p, disk = self.p, self.p.get("disk", "")
+        self.step("disk", 0, "")
+        if p["mode"] == "manual":
+            self.dev["root"] = p["root"]
+            if p.get("firmware") == "uefi":
+                self.dev["efi"] = p["efi"]
+            return
+        parts = layout(p.get("firmware", "uefi"), bool(p.get("encrypt")))
+        if p["mode"] == "erase":
+            self.unmount_disk(disk)                               # a USB drive the live session opened, say
+        if p["mode"] == "shrink":
+            p["freeStart"] = self.shrink(disk, p["shrinkPart"], int(p["keepBytes"]))
+        if p["mode"] in ("free", "shrink"):
+            have = self.existing_esp(disk) if p.get("firmware") == "uefi" else 0
+            if have:                                              # share the disk's EFI partition (Windows' too)
+                self.dev["efi"], self.reuse_efi = self.part_path(disk, have), True
+                parts = [x for x in parts if x[0] != "efi"]
+            before = self.partition_numbers(disk)
+            if not p.get("freeStart"):
+                raise Failed("No free space was chosen")
+            self.run(["sfdisk", "--append", "--no-reread", disk], stdin=sfdisk_script(parts, int(p["freeStart"])), timeout=120)
+            after = self.partition_numbers(disk)
+            numbers = [n for n in after if n not in before]
+            if len(numbers) != len(parts):
+                raise Failed("The new partitions didn't come out as planned")
+        else:
+            self.run(["wipefs", "--all", "--force", disk], check=False)
+            self.run(["sfdisk", "--wipe", "always", "--wipe-partitions", "always", "--no-reread", disk], stdin=sfdisk_script(parts), timeout=120)
+            numbers = list(range(1, len(parts) + 1))
+        self.reread(disk)
+        for (role, _mib, _t), n in zip(parts, numbers):
+            self.dev[role] = self.part_path(disk, n)
+        self.step("disk", 1)
+
+    def unmount_disk(self, disk: str) -> None:
+        """Everything on the disk the live session has open (a USB drive opens itself when plugged in) is closed."""
+        try:
+            data = json.loads(self.run(["lsblk", "-J", "-o", "PATH,MOUNTPOINTS,FSTYPE", disk], check=False) or "{}")
+        except ValueError:
+            return
+        def walk(nodes):
+            for n in nodes or []:
+                yield n
+                yield from walk(n.get("children"))
+        for n in walk(data.get("blockdevices")):
+            if n.get("fstype") == "swap":
+                self.run(["swapoff", n["path"]], check=False)
+            for m in n.get("mountpoints") or []:
+                if m and m not in ("/", "/cdrom", "/boot", "/boot/efi") and not m.startswith("/run/live"):
+                    self.run(["umount", "-l", m], check=False)
+
+    def shrink(self, disk: str, part: str, keep: int) -> int:
+        """Make room after Windows: its NTFS partition is shrunk to `keep` bytes (ntfsresize moves what it must), then
+        the partition itself. Returns the first sector of the room made. Nothing is changed unless ntfsresize says
+        first that it can do it."""
+        self.step("disk", 0, "Checking Windows' partition")
+        self.unmount_disk(part)
+        self.run(["ntfsresize", "--no-action", "--size", str(keep), part], timeout=900)   # (refuses when it can't: see why_ntfs)
+        self.step("disk", 0.2, "Making room beside Windows (this can take a while)")
+        self.run(["ntfsresize", "--size", str(keep), part], stdin="y\n", timeout=6 * 3600)
+        n = int(re.search(r"(\d+)$", part).group(1))
+        sectors = ((keep + (1 << 20)) // 512 + 2047) // 2048 * 2048         # the filesystem, a margin, whole MiB
+        self.run(["sfdisk", "--no-reread", "-N", str(n), disk], stdin=f", {sectors}\n", timeout=120)
+        self.reread(disk)
+        data = json.loads(self.run(["sfdisk", "--json", disk]))
+        mine = next(q for q in data["partitiontable"]["partitions"] if q["node"].endswith(str(n)) and re.search(r"(\d+)$", q["node"]).group(1) == str(n))
+        start = mine["start"] + mine["size"]
+        return (start + 2047) // 2048 * 2048
+
+    def existing_esp(self, disk: str) -> int:
+        """The number of the disk's EFI system partition, 0 when it has none."""
+        try:
+            data = json.loads(self.run(["sfdisk", "--json", disk]))
+        except (Failed, ValueError):
+            return 0
+        for part in data.get("partitiontable", {}).get("partitions", []):
+            if part.get("type", "").upper() in ("C12A7328-F81F-11D2-BA4B-00A0C93EC93B", "EF"):
+                return int(re.search(r"(\d+)$", part["node"]).group(1))
+        return 0
+
+    def partition_numbers(self, disk: str) -> list:
+        """The disk's partition numbers, in the order they sit on the disk."""
+        try:
+            data = json.loads(self.run(["sfdisk", "--json", disk]))
+        except (Failed, ValueError):
+            return []
+        nodes = sorted(data.get("partitiontable", {}).get("partitions", []), key=lambda q: q["start"])
+        return [int(re.search(r"(\d+)$", q["node"]).group(1)) for q in nodes]
+
+    def format(self) -> None:
+        p = self.p
+        self.step("format", 0)
+        if "efi" in self.dev and (p["mode"] == "erase" or (p["mode"] == "free" and not self.reuse_efi) or p.get("formatEfi")):
+            self.run(["mkfs.fat", "-F", "32", "-n", "EFI", self.dev["efi"]])
+        if "boot" in self.dev:
+            self.run(["mkfs.ext4", "-F", "-q", "-L", "boot", self.dev["boot"]])
+        root = self.dev["root"]
+        if p.get("encrypt"):
+            self.run(["cryptsetup", "luksFormat", "--type", "luks2", "--batch-mode", "--label", "Huginn OS", "--key-file=-", root], stdin=p["passphrase"], timeout=600)
+            if p.get("recoveryKey"):                       # a second key, for when the password is forgotten
+                fd, keyfile = tempfile.mkstemp(prefix="huginn-key-", dir="/run" if Path("/run").is_dir() else None)
+                try:
+                    os.write(fd, p["recoveryKey"].encode())
+                    os.close(fd)
+                    self.run(["cryptsetup", "luksAddKey", "--batch-mode", "--key-file=-", root, keyfile], stdin=p["passphrase"], timeout=600)
+                finally:
+                    os.unlink(keyfile)
+            self.run(["cryptsetup", "open", "--key-file=-", root, MAPPER], stdin=p["passphrase"])
+            self.opened = True
+            self.dev["rootfs"] = f"/dev/mapper/{MAPPER}"
+        else:
+            self.dev["rootfs"] = root
+        self.run(["mkfs.btrfs", "-f", "-q", "-L", "Huginn OS", self.dev["rootfs"]], timeout=1800)
+        # the subvolumes, made at the file system's top
+        self.t.mkdir(parents=True, exist_ok=True)
+        self.run(["mount", "-t", "btrfs", self.dev["rootfs"], str(self.t)])
+        try:
+            for sv in SUBVOLUMES:
+                self.run(["btrfs", "subvolume", "create", str(self.t / sv)])
+        finally:
+            subprocess.run(["umount", str(self.t)], capture_output=True)
+        self.reread(p.get("disk", ""))                            # udev names the new file systems (by-uuid, for GRUB)
+        self.step("format", 1)
+
+    def mount_target(self) -> None:
+        """Huginn OS's subvolumes (and /boot); the EFI partition goes on after the copy (FAT can't take Linux owners)."""
+        self.mount(self.dev["rootfs"], self.t, "-t", "btrfs", "-o", f"subvol=@,{BTRFS_OPTS}")
+        self.mount(self.dev["rootfs"], self.t / "home", "-t", "btrfs", "-o", f"subvol=@home,{BTRFS_OPTS}")
+        self.mount(self.dev["rootfs"], self.t / "swap", "-t", "btrfs", "-o", "subvol=@swap,noatime")
+        if "boot" in self.dev:
+            self.mount(self.dev["boot"], self.t / "boot")
+
+    def copy(self) -> None:
+        sq = self.medium / "casper" / "filesystem.squashfs"
+        if not sq.exists():
+            raise Failed(f"The live system's files aren't at {sq}")
+        self.step("copy", 0, "")
+        cmd = ["unsquashfs", "-f", "-d", str(self.t), "-percentage", str(sq)]
+        self.log("$ " + " ".join(cmd))
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        last = -1
+        tail = []
+        for line in proc.stdout:
+            line = line.strip()
+            if line.isdigit():
+                pct = int(line)
+                if pct != last:
+                    last = pct
+                    self.step("copy", pct / 100.0, f"{pct}%")
+            elif line:
+                tail = (tail + [line])[-20:]
+        if proc.wait() != 0:
+            self.log("\n".join(tail))
+            raise Failed("Copying the system stopped: " + (tail[-1] if tail else "unsquashfs failed"))
+        self.step("copy", 1)
+
+    def kernel(self) -> None:
+        self.step("kernel", 0)
+        mods = sorted((self.t / "lib" / "modules").glob("*")) if (self.t / "lib" / "modules").is_dir() else []
+        mods = mods or sorted((self.t / "usr" / "lib" / "modules").glob("*"))
+        if not mods:
+            raise Failed("The copied system has no kernel modules")
+        self.version = mods[-1].name
+        boot = self.t / "boot"
+        boot.mkdir(exist_ok=True)
+        kernel = boot / f"vmlinuz-{self.version}"
+        if not kernel.exists():                                   # casper keeps the kernel beside the squashfs
+            src = self.medium / "casper" / "vmlinuz"
+            if not src.exists():
+                raise Failed(f"The kernel isn't at {src}")
+            shutil.copy2(src, kernel)
+        for link, name in (("vmlinuz", kernel.name), ("initrd.img", f"initrd.img-{self.version}")):
+            q = boot / link
+            if q.is_symlink() or q.exists():
+                q.unlink()
+            q.symlink_to(name)
+        self.step("kernel", 1)
+
+    def bind_system(self) -> None:
+        if "efi" in self.dev:
+            self.mount(self.dev["efi"], self.t / "boot" / "efi")
+        for what, where, opts in (("/dev", "dev", ["--bind"]), ("devpts", "dev/pts", ["-t", "devpts"]), ("proc", "proc", ["-t", "proc"]),
+                                  ("sysfs", "sys", ["-t", "sysfs"]), ("/run", "run", ["--bind"])):
+            self.mount(what, self.t / where, *opts)
+        efivars = Path("/sys/firmware/efi/efivars")
+        if self.p.get("firmware") == "uefi" and efivars.is_dir() and any(efivars.iterdir()):
+            self.mount("efivarfs", self.t / "sys/firmware/efi/efivars", "-t", "efivarfs")
+
+    def tpm_unlock(self) -> bool:
+        """The disk opened by the TPM and a PIN: dracut and systemd-cryptenroll from the medium's pool/tpm (offline),
+        the PIN sealed to the chip with Secure Boot's state (PCR 7), crypttab told to try the chip first. The password
+        and the recovery key keep working. False (and the password alone) when there's no chip or no packages."""
+        p, t = self.p, self.t
+        pool = self.medium / "pool/tpm"
+        debs = sorted(pool.glob("*.deb")) if pool.is_dir() else []
+        if not debs or not tpm2_here():
+            self.log("(no TPM 2.0 here, or the medium hasn't its packages: the disk opens with the password)")
+            return False
+        # In two steps, so nothing is swapped until the chip has taken the PIN: first systemd-cryptenroll and the TPM's
+        # libraries and tools (beside initramfs-tools), then, only once the PIN is sealed, dracut in its place.
+        tools = [d for d in debs if not d.name.startswith("dracut")]
+        dracut = [d for d in debs if d.name.startswith("dracut")]
+        if not dracut:
+            self.log("(the medium's pool/tpm hasn't dracut: the disk opens with the password)")
+            return False
+        stage = t / "tmp/huginn-tpm"
+        stage.mkdir(exist_ok=True)
+        try:
+            for d in debs:
+                shutil.copy2(d, stage / d.name)
+            if tools:
+                self.run(["apt-get", "install", "-y", "--no-download"] + [f"/tmp/huginn-tpm/{d.name}" for d in tools], chroot=True, timeout=1200)
+            try:
+                self.run(["systemd-cryptenroll", "--tpm2-device=auto", "--tpm2-pcrs=7", "--tpm2-with-pin=yes", self.dev["root"]],
+                         chroot=True, timeout=300, secrets={"PASSWORD": p["passphrase"], "NEWPIN": str(p["tpmPin"])})
+            except Failed as err:
+                self.log(f"(the chip didn't take the PIN: {err}; the disk opens with the password)")
+                return False
+            self.run(["apt-get", "install", "-y", "--no-download"] + [f"/tmp/huginn-tpm/{d.name}" for d in dracut], chroot=True, timeout=1200)
+        except Failed as err:
+            self.log(f"(the TPM unlock couldn't be set up: {err})")
+            return False
+        finally:
+            shutil.rmtree(stage, ignore_errors=True)
+        (t / "etc/dracut.conf.d").mkdir(parents=True, exist_ok=True)
+        (t / "etc/dracut.conf.d/90-huginn.conf").write_text(DRACUT_CONF)
+        (t / "etc/crypttab").write_text(crypttab(self.uuid(self.dev["root"]), tpm=True))
+        return True
+
+    def settings(self) -> None:
+        p, t = self.p, self.t
+        self.step("settings", 0)
+        root_uuid = self.uuid(self.dev["rootfs"]) if not p.get("encrypt") else ""
+        efi_uuid = self.uuid(self.dev["efi"]) if "efi" in self.dev else ""
+        boot_uuid = self.uuid(self.dev["boot"]) if "boot" in self.dev else ""
+        (t / "etc/fstab").write_text(fstab(root_uuid, efi_uuid, boot_uuid, bool(p.get("encrypt"))))
+        if p.get("encrypt"):
+            (t / "etc/crypttab").write_text(crypttab(self.uuid(self.dev["root"])))
+        host = good_hostname(p.get("hostname", ""))
+        (t / "etc/hostname").write_text(host + "\n")
+        hosts = (t / "etc/hosts").read_text() if (t / "etc/hosts").exists() else "127.0.0.1 localhost\n"
+        hosts = re.sub(r"^127\.0\.1\.1\s.*\n?", "", hosts, flags=re.M)
+        (t / "etc/hosts").write_text(hosts.replace("127.0.0.1 localhost", f"127.0.0.1 localhost\n127.0.1.1 {host}", 1) if "127.0.0.1 localhost" in hosts
+                                     else f"127.0.0.1 localhost\n127.0.1.1 {host}\n" + hosts)
+        # the time zone
+        zone = p.get("timezone") or "UTC"
+        if (t / "usr/share/zoneinfo" / zone).exists():
+            lt = t / "etc/localtime"
+            if lt.exists() or lt.is_symlink():
+                lt.unlink()
+            lt.symlink_to(f"/usr/share/zoneinfo/{zone}")
+            (t / "etc/timezone").write_text(zone + "\n")
+        # language
+        loc = p.get("locale") or "en_US.UTF-8"
+        (t / "etc/default/locale").write_text(f"LANG={loc}\n")
+        gen = t / "etc/locale.gen"
+        if gen.exists() and loc not in ("C.UTF-8",):
+            txt = gen.read_text()
+            txt = re.sub(rf"^#\s*({re.escape(loc)}\s)", r"\1", txt, flags=re.M)
+            if not re.search(rf"^{re.escape(loc)}\s", txt, flags=re.M):
+                txt += f"{loc} UTF-8\n"
+            gen.write_text(txt)
+        self.step("settings", 0.2)
+        self.run(["locale-gen", loc], chroot=True, check=False, timeout=600)
+        # the keyboard, for the console, the sign-in screen and the desktop
+        kb = p.get("keyboard") or {}
+        lay, var = re.sub(r"[^a-z0-9_-]", "", kb.get("layout", "us")) or "us", re.sub(r"[^A-Za-z0-9_-]", "", kb.get("variant", ""))
+        (t / "etc/default").mkdir(parents=True, exist_ok=True)
+        (t / "etc/default/keyboard").write_text(f'XKBMODEL="pc105"\nXKBLAYOUT="{lay}"\nXKBVARIANT="{var}"\nXKBOPTIONS=""\n\nBACKSPACE="guess"\n')
+        x11 = t / "etc/X11/xorg.conf.d"
+        x11.mkdir(parents=True, exist_ok=True)
+        (x11 / "00-keyboard.conf").write_text('Section "InputClass"\n    Identifier "system-keyboard"\n    MatchIsKeyboard "on"\n'
+                                              f'    Option "XkbLayout" "{lay}"\n' + (f'    Option "XkbVariant" "{var}"\n' if var else "") + "EndSection\n")
+        self.step("settings", 0.4)
+        # the person
+        u = p["user"]
+        groups = self.groups(["sudo", "adm", "cdrom", "dip", "plugdev", "lpadmin", "users", "audio", "video", "netdev", "bluetooth", "scanner"])
+        self.run(["useradd", "--create-home", "--shell", "/bin/bash", "--comment", (u.get("realName") or u["name"]).replace(":", " "),
+                  "--groups", ",".join(groups), u["name"]], chroot=True)
+        self.run(["chpasswd"], stdin=f"{u['name']}:{u['password']}\n", chroot=True)
+        home = t / "home" / u["name"]
+        (home / ".config").mkdir(parents=True, exist_ok=True)
+        (home / ".config" / "kxkbrc").write_text(f"[Layout]\nLayoutList={lay}\nVariantList={var}\nUse=true\n")
+        self.run(["chown", "-R", f"{u['name']}:{u['name']}", f"/home/{u['name']}/.config"], chroot=True)
+        # Earlier versions of your files are hourly snapshots of /home: caches and game libraries get subvolumes of
+        # their own, which snapshots don't take in, so they never hold on to a deleted game or a cache's churn.
+        for sub in KEPT_OUT_OF_VERSIONS:
+            where = home / sub
+            if not where.exists():
+                where.parent.mkdir(parents=True, exist_ok=True)
+                self.run(["btrfs", "subvolume", "create", str(where)], check=False)
+                where.mkdir(parents=True, exist_ok=True)
+        self.run(["chown", "-R", f"{u['name']}:{u['name']}", f"/home/{u['name']}/.cache", f"/home/{u['name']}/.local", f"/home/{u['name']}/.var"],
+                 chroot=True, check=False)
+        signin = t / "etc/huginn/signin.conf.d"
+        signin.mkdir(parents=True, exist_ok=True)
+        auto = signin / "20-autologin.conf"
+        if u.get("autologin"):
+            auto.write_text(f"[Autologin]\nUser={u['name']}\nSession=huginn\nRelogin=false\n")
+        elif auto.exists():
+            auto.unlink()
+        for live in (signin / "05-live.conf", t / "etc/sddm.conf"):   # the trial account's sign-in, if it got copied
+            if live.exists():
+                live.unlink()
+        self.step("settings", 0.7)
+        # the live session's own pieces don't belong on the installed system
+        for rel in LIVE_ONLY:
+            q = t / rel
+            if q.exists() or q.is_symlink():
+                q.unlink()
+        self.run(["apt-get", "-y", "purge", "casper"], chroot=True, check=False, timeout=900)
+        for f in (t / "etc/machine-id", t / "var/lib/dbus/machine-id"):
+            if f.exists():
+                f.write_text("") if f.name == "machine-id" and f.parent.name == "etc" else f.unlink()
+        self.safety()
+        self.access()
+        self.later()
+        self.swapfile()
+        self.step("settings", 1)
+
+    def safety(self) -> None:
+        """The firewall, restore points before updates, and updates by themselves, as chosen."""
+        sf, t = self.p.get("safety") or {}, self.t
+        ufw = t / "etc/ufw/ufw.conf"
+        if ufw.exists() and "firewall" in sf:
+            txt = ufw.read_text()
+            want = "yes" if sf["firewall"] else "no"
+            txt = re.sub(r"^ENABLED=.*$", f"ENABLED={want}", txt, flags=re.M) if re.search(r"^ENABLED=", txt, flags=re.M) else txt + f"ENABLED={want}\n"
+            ufw.write_text(txt)
+        hook = t / "etc/apt/apt.conf.d/80huginn-restore-point"
+        if sf.get("restorePoints") is False and hook.exists():
+            hook.unlink()
+        if "autoUpdates" in sf:
+            u = (self.p.get("user") or {}).get("name", "")
+            cfg = t / "home" / u / ".config/huginn-shell/settings.json"
+            try:
+                data = json.loads(cfg.read_text()) if cfg.exists() else {}
+            except ValueError:
+                data = {}
+            data["autoUpdate"] = "true" if sf["autoUpdates"] else "false"
+            cfg.parent.mkdir(parents=True, exist_ok=True)
+            cfg.write_text(json.dumps(data, indent=1))
+            self.run(["chown", "-R", f"{u}:{u}", f"/home/{u}/.config"], chroot=True, check=False)
+
+    def access(self) -> None:
+        """Help seeing, hearing and typing turned on while installing stays on: the screen reader, everything bigger,
+        less motion, the on-screen keyboard (the files Settings › Accessibility keeps them in)."""
+        ac = self.p.get("access") or {}
+        if not any(ac.values()):
+            return
+        u = (self.p.get("user") or {}).get("name", "")
+        cfg = self.t / "home" / u / ".config"
+        cfg.mkdir(parents=True, exist_ok=True)
+        js = cfg / "huginn-shell/settings.json"
+        try:
+            data = json.loads(js.read_text()) if js.exists() else {}
+        except ValueError:
+            data = {}
+        if ac.get("bigger"):
+            data["uiScale"] = "1.25"
+        if ac.get("motion"):
+            data["reduceMotion"] = "true"
+            (cfg / "kdeglobals").write_text("[KDE]\nAnimationDurationFactor=0\n")
+        js.parent.mkdir(parents=True, exist_ok=True)
+        js.write_text(json.dumps(data, indent=1))
+        if ac.get("reader"):
+            (cfg / "kaccessrc").write_text("[ScreenReader]\nEnabled=true\n")
+        if ac.get("osk"):
+            (cfg / "kwinrc").write_text("[Wayland]\nInputMethod=squeekboard\n")
+        self.run(["chown", "-R", f"{u}:{u}", f"/home/{u}/.config"], chroot=True, check=False)
+
+    def later(self) -> None:
+        """Write down what's done at the first start (it needs the internet, or time), and turn on what does it."""
+        win = self.p.get("windows") or {}
+        uuid = ""
+        if win.get("part") and win.get("user"):
+            try:
+                uuid = self.uuid(win["part"])
+            except (Failed, OSError, subprocess.SubprocessError):
+                uuid = ""
+        tasks = first_start_tasks(self.p, uuid)
+        busy = tasks["packages"] or tasks["flatpaks"] or tasks["build"] or tasks["drivers"] or tasks["windows"] or not tasks["flathub"]
+        if not busy:
+            return
+        f = self.t / FIRST_START
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text(json.dumps(tasks, indent=1))
+        os.chmod(f, 0o600)
+        unit = self.t / "etc/systemd/system/huginn-first-start.service"
+        if unit.exists():
+            wants = self.t / "etc/systemd/system/multi-user.target.wants"
+            wants.mkdir(parents=True, exist_ok=True)
+            link = wants / "huginn-first-start.service"
+            if not link.exists() and not link.is_symlink():
+                link.symlink_to("/etc/systemd/system/huginn-first-start.service")
+
+    def groups(self, wanted: list) -> list:
+        names = {line.split(":")[0] for line in (self.t / "etc/group").read_text().splitlines() if line}
+        return [g for g in wanted if g in names]
+
+    def swapfile(self) -> None:
+        try:
+            ram = os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES")
+        except (ValueError, OSError):
+            ram = 4 << 30
+        gib = max(1, min(4, round(ram / (1 << 30))))
+        free = shutil.disk_usage(self.t).free
+        while gib > 1 and free < (gib << 30) * 4:                # a swap file never takes more than a quarter of what's free
+            gib -= 1
+        if free < (gib << 30) * 4:                                # a small disk keeps its space
+            text = (self.t / "etc/fstab").read_text().replace("/swap/swapfile  none  swap  sw  0  0\n", "")
+            (self.t / "etc/fstab").write_text(text)
+            return
+        # on btrfs a swap file must not be copied-on-write or compressed: btrfs makes one that way itself, in @swap
+        # (its own subvolume, so restore points don't take it in)
+        (self.t / "swap").mkdir(exist_ok=True)
+        self.run(["btrfs", "filesystem", "mkswapfile", "--size", f"{gib}g", str(self.t / "swap/swapfile")])
+        os.chmod(self.t / "swap/swapfile", 0o600)
+
+    def restore_point(self) -> None:
+        """The first restore point, of the system just as installed (kept: it counts as one you made), and the
+        start-up menu's list of them."""
+        try:
+            sys.path.insert(0, str(Path(__file__).resolve().parent))
+            import huginn_snapshots as snap
+            boot = self.t / "boot" if "boot" in self.dev else None
+            snap.create("Just installed", dev=self.dev["rootfs"], mine=True, boot=boot, kernel=self.version,
+                        state=self.t / "var/lib/huginn/snapshots.json", menu=False)
+            pts = json.loads((self.t / "var/lib/huginn/snapshots.json").read_text()).get("points", [])
+            root = f"/dev/mapper/{MAPPER}" if self.p.get("encrypt") else f"UUID={self.uuid(self.dev['rootfs'])}"
+            args = f"root={root} ro quiet splash" + (f" {self.p['kernelArgs']}" if self.p.get("kernelArgs") else "") + " rootflags=subvol=@"
+            text = snap.menu_text(pts, self.uuid(self.dev["rootfs"]), self.uuid(self.dev["boot"]) if "boot" in self.dev else "", args)
+            if text and (self.t / "boot/grub").is_dir():
+                (self.t / "boot/grub" / snap.MENU).write_text(text)
+        except Exception as err:                                  # noqa: BLE001 — a missing restore point never fails an install
+            self.log(f"(no first restore point: {err})")
+
+    def bootloader(self) -> None:
+        p, t = self.p, self.t
+        self.step("boot", 0)
+        grub = t / "etc/default/grub"
+        if not grub.exists():
+            grub.parent.mkdir(parents=True, exist_ok=True)
+            grub.write_text('# GRUB, as the installer set it up. Run update-grub after changing it.\nGRUB_DEFAULT=0\nGRUB_CMDLINE_LINUX=""\n')
+        if grub.exists():
+            g = grub.read_text()
+            want = {"GRUB_DISTRIBUTOR": '"Huginn OS"', "GRUB_CMDLINE_LINUX_DEFAULT": f'"quiet splash{(" " + p["kernelArgs"]) if p.get("kernelArgs") else ""}"',
+                    "GRUB_TIMEOUT_STYLE": "hidden" if p["mode"] == "erase" else "menu", "GRUB_TIMEOUT": "0" if p["mode"] == "erase" else "5",
+                    "GRUB_DISABLE_OS_PROBER": "true" if p["mode"] == "erase" else "false"}
+            for k, v in want.items():
+                g, n = re.subn(rf"^#?\s*{k}=.*$", f"{k}={v}", g, flags=re.M)
+                if not n:
+                    g += f"{k}={v}\n"
+            grub.write_text(g)
+        if p.get("encrypt") and p.get("tpmPin") and self.tpm_unlock():
+            self.run(["dracut", "--force", "--kver", self.version, f"/boot/initrd.img-{self.version}"], chroot=True, timeout=1800)
+        elif (t / "usr/sbin/update-initramfs").exists():
+            self.run(["update-initramfs", "-c", "-k", self.version] if not (t / f"boot/initrd.img-{self.version}").exists()
+                     else ["update-initramfs", "-u", "-k", self.version], chroot=True, timeout=1800)
+        else:                                                    # (dracut came, the chip didn't take the PIN: dracut asks the password)
+            self.run(["dracut", "--force", "--kver", self.version, f"/boot/initrd.img-{self.version}"], chroot=True, timeout=1800)
+        self.step("boot", 0.4)
+        # GRUB's package for this computer's firmware (it keeps GRUB up to date later); the ISO carries both
+        pkg = "grub-efi-amd64" if p.get("firmware") == "uefi" else "grub-pc"
+        debs = sorted((self.medium / "pool").glob(f"{pkg}_*.deb")) if (self.medium / "pool").is_dir() else []
+        if debs:
+            shutil.copy2(debs[-1], t / "tmp" / debs[-1].name)
+            if pkg == "grub-pc":
+                self.run(["debconf-set-selections"], stdin=f"grub-pc grub-pc/install_devices multiselect {p['disk']}\n", chroot=True, check=False)
+            self.run(["dpkg", "-i", f"/tmp/{debs[-1].name}"], chroot=True, check=False, timeout=600)
+            (t / "tmp" / debs[-1].name).unlink(missing_ok=True)
+        else:
+            self.log(f"(no {pkg} package on the medium: GRUB is installed, its package isn't)")
+        self.step("boot", 0.5)
+        if p.get("firmware") == "uefi":
+            nvram = os.path.ismount(t / "sys/firmware/efi/efivars")
+            base = ["grub-install", "--target=x86_64-efi", "--efi-directory=/boot/efi", "--bootloader-id=ubuntu", "--recheck"]
+            if (t / "usr/lib/shim").is_dir() or (t / "usr/lib/grub/x86_64-efi-signed").is_dir():
+                base.append("--uefi-secure-boot")
+            if p.get("removable"):
+                # A USB drive: GRUB goes only where any computer looks on a drive it's given (EFI/BOOT/BOOTX64.EFI),
+                # and the computer's own list of things to start (and Windows on its disk) are left as they were.
+                self.run(base + ["--removable", "--no-nvram"], chroot=True, timeout=600)
+            else:
+                self.run(base + ([] if nvram else ["--no-nvram"]), chroot=True, timeout=600)
+            # Firmware that forgets its boot entries starts EFI/BOOT/BOOTX64.EFI. On a disk of its own Huginn OS puts
+            # itself there too (GRUB may already have); beside another system, that system's fallback is left alone.
+            if p["mode"] == "erase" and not p.get("removable") and not (t / "boot/efi/EFI/BOOT/BOOTX64.EFI").exists():
+                self.run(base + ["--removable", "--no-nvram"], chroot=True, timeout=600)
+        else:
+            self.run(["grub-install", "--target=i386-pc", "--recheck", p["disk"]], chroot=True, timeout=600)
+        self.run(["update-grub"], chroot=True, timeout=900)
+        if p.get("firmware") == "uefi":
+            root_uuid = self.uuid(self.dev["boot"] if "boot" in self.dev else self.dev["rootfs"])
+            prefix = "/grub" if "boot" in self.dev else "/@/boot/grub"
+            for made in grub_pointers(t / "boot/efi/EFI", root_uuid, prefix):
+                self.log(f"(GRUB's pointer to its menu written at {made})")
+            if not p.get("removable"):                             # (a USB install leaves the computer's own disks alone)
+                stale_pointers(self.dev.get("efi", ""), root_uuid, prefix, self.log)
+        self.step("boot", 1)
+
+    def unmount(self) -> None:
+        for where in reversed(self.mounts):
+            subprocess.run(["umount", "-l" if where.name in ("dev", "run", "sys", "proc") else "-R", str(where)], capture_output=True)
+        self.mounts = []
+        if self.opened:
+            subprocess.run(["cryptsetup", "close", MAPPER], capture_output=True)
+            self.opened = False
+        subprocess.run(["sync"])
+
+    def save_log(self) -> None:
+        try:
+            dest = self.t / "var/log/huginn-installer.log"
+            if dest.parent.is_dir():
+                dest.write_text("\n".join(self.lines) + "\n")
+        except OSError:
+            pass
+
+    def install(self) -> bool:
+        problems = check_plan(self.p)
+        if problems:
+            self.emit({"error": " ".join(problems), "log": ""})
+            return False
+        try:
+            self.partition()
+            self.format()
+            self.mount_target()
+            self.copy()
+            self.kernel()
+            self.bind_system()
+            self.settings()
+            self.bootloader()
+            self.restore_point()
+            self.step("finish", 0)
+            self.save_log()
+            self.unmount()
+            self.step("finish", 1)
+            self.emit({"done": True, "hostname": good_hostname(self.p.get("hostname", ""))})
+            return True
+        except (Failed, OSError, subprocess.SubprocessError, KeyError, ValueError) as err:
+            self.log(f"stopped: {err}")
+            self.save_log()
+            self.unmount()
+            self.emit({"error": str(err), "log": "\n".join(self.lines[-40:])})
+            return False
+
+
+def why_ntfs(text: str) -> str:
+    """ntfsresize's refusals, said so a person knows what to do in Windows."""
+    low = text.lower()
+    if "hibernat" in low:
+        return ("Windows didn't shut down completely (Fast Startup). Start Windows, hold Shift while you choose Shut Down "
+                "(or turn off Fast Startup in Power Options), then try again.")
+    if "chkdsk" in low or "inconsistent" in low or "dirty" in low or "corrupt" in low:
+        return "Windows wants to check this disk first. In Windows, run \u201cchkdsk C: /f\u201d and restart, then try again."
+    if "bitlocker" in low or "encrypted" in low:
+        return "This Windows partition is locked with BitLocker. Turn BitLocker off (or shrink it in Windows) first."
+    line = [l for l in text.splitlines() if l.strip()]
+    return line[-1].strip() if line else "Windows' partition couldn't be read."
+
+
+def probe_ntfs(part: str) -> dict:
+    r = subprocess.run(["ntfsresize", "--info", "--no-progress-bar", part], capture_output=True, text=True, timeout=900,
+                       env=dict(os.environ, LC_ALL="C"))
+    out = r.stdout + r.stderr
+    size = re.search(r"Current volume size:\s*(\d+) bytes", out)
+    least = re.search(r"You might resize at (\d+) bytes", out)
+    if r.returncode != 0 or not size or not least:
+        return {"size": int(size.group(1)) if size else 0, "min": 0, "problem": why_ntfs(out)}
+    return {"size": int(size.group(1)), "min": int(least.group(1)), "problem": ""}
+
+
+def main() -> int:
+    if os.geteuid() != 0:
+        print(json.dumps({"error": "The installer engine needs to run as root."}))
+        return 1
+    if len(sys.argv) == 3 and sys.argv[1] == "--probe-ntfs" and re.fullmatch(r"/dev/[A-Za-z0-9/_-]+", sys.argv[2]):
+        print(json.dumps(probe_ntfs(sys.argv[2])))
+        return 0
+    if len(sys.argv) == 3 and sys.argv[1] == "--probe-windows" and re.fullmatch(r"/dev/[A-Za-z0-9/_-]+", sys.argv[2]):
+        print(json.dumps(probe_windows(sys.argv[2])))
+        return 0
+    try:
+        plan = json.loads(sys.stdin.read())
+    except ValueError:
+        print(json.dumps({"error": "The plan couldn't be read."}))
+        return 1
+    LOG.parent.mkdir(parents=True, exist_ok=True)
+    return 0 if Engine(plan).install() else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

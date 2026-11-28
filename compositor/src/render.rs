@@ -1,0 +1,548 @@
+use smithay::{
+    backend::renderer::{
+        Color32F, ImportAll, ImportMem, Renderer,
+        damage::{Error as OutputDamageTrackerError, OutputDamageTracker, RenderOutputResult},
+        element::{
+            AsRenderElements, Id, Kind, RenderElement, Wrap,
+            solid::SolidColorRenderElement,
+            surface::WaylandSurfaceRenderElement,
+            utils::{
+                ConstrainAlign, ConstrainScaleBehavior, CropRenderElement, RelocateRenderElement,
+                RescaleRenderElement,
+            },
+        },
+    },
+    desktop::{
+        layer_map_for_output,
+        space::{ConstrainBehavior, ConstrainReference, Space, SpaceElement, SpaceRenderElements, constrain_space_element},
+    },
+    reexports::wayland_server::{Resource, backend::ClientId},
+    output::Output,
+    utils::{Point, Rectangle, Size},
+    wayland::shell::wlr_layer::Layer as WlrLayer,
+};
+
+#[cfg(feature = "debug")]
+use crate::drawing::FpsElement;
+use smithay::backend::renderer::element::memory::{MemoryRenderBuffer, MemoryRenderBufferRenderElement};
+use crate::{
+    drawing::{CLEAR_COLOR, CLEAR_COLOR_FULLSCREEN, PointerRenderElement},
+    look::{Frosted, Look},
+    shell::{FullscreenSurface, WindowElement, WindowRenderElement},
+};
+
+smithay::backend::renderer::element::render_elements! {
+    pub CustomRenderElements<R> where
+        R: ImportAll + ImportMem;
+    Pointer=PointerRenderElement<R>,
+    Surface=WaylandSurfaceRenderElement<R>,
+    #[cfg(feature = "debug")]
+    // Note: We would like to borrow this element instead, but that would introduce
+    // a feature-dependent lifetime, which introduces a lot more feature bounds
+    // as the whole type changes and we can't have an unused lifetime (for when "debug" is disabled)
+    // in the declaration.
+    Fps=FpsElement<R::TextureId>,
+}
+
+impl<R: Renderer> std::fmt::Debug for CustomRenderElements<R> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Pointer(arg0) => f.debug_tuple("Pointer").field(arg0).finish(),
+            Self::Surface(arg0) => f.debug_tuple("Surface").field(arg0).finish(),
+            #[cfg(feature = "debug")]
+            Self::Fps(arg0) => f.debug_tuple("Fps").field(arg0).finish(),
+            Self::_GenericCatcher(arg0) => f.debug_tuple("_GenericCatcher").field(arg0).finish(),
+        }
+    }
+}
+
+smithay::backend::renderer::element::render_elements! {
+    pub OutputRenderElements<R, E> where R: Look;
+    Space=SpaceRenderElements<R, E>,
+    Window=Wrap<E>,
+    Custom=CustomRenderElements<R>,
+    Preview=CropRenderElement<RelocateRenderElement<RescaleRenderElement<WindowRenderElement<R>>>>,
+    Moved=RescaleRenderElement<WindowRenderElement<R>>,
+    Solid=SolidColorRenderElement,
+    Frosted=Frosted<WaylandSurfaceRenderElement<R>>,
+    Backdrop=crate::look::Backdrop,
+    Zoom=crate::look::ZoomElement,
+    Ghost=RescaleRenderElement<MemoryRenderBufferRenderElement<R>>,
+    Hdr=crate::look::HdrElement,
+}
+
+impl<R: Look, E: RenderElement<R> + std::fmt::Debug> std::fmt::Debug
+    for OutputRenderElements<R, E>
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Space(arg0) => f.debug_tuple("Space").field(arg0).finish(),
+            Self::Window(arg0) => f.debug_tuple("Window").field(arg0).finish(),
+            Self::Custom(arg0) => f.debug_tuple("Custom").field(arg0).finish(),
+            Self::Preview(arg0) => f.debug_tuple("Preview").field(arg0).finish(),
+            Self::Moved(arg0) => f.debug_tuple("Moved").field(arg0).finish(),
+            Self::Solid(arg0) => f.debug_tuple("Solid").field(arg0).finish(),
+            Self::Frosted(arg0) => f.debug_tuple("Frosted").field(arg0).finish(),
+            Self::Backdrop(arg0) => f.debug_tuple("Backdrop").field(arg0).finish(),
+            Self::Zoom(arg0) => f.debug_tuple("Zoom").field(arg0).finish(),
+            Self::Ghost(arg0) => f.debug_tuple("Ghost").field(arg0).finish(),
+            Self::Hdr(arg0) => f.debug_tuple("Hdr").field(arg0).finish(),
+            Self::_GenericCatcher(arg0) => f.debug_tuple("_GenericCatcher").field(arg0).finish(),
+        }
+    }
+}
+
+pub fn space_preview_elements<'a, R, C>(
+    renderer: &'a mut R,
+    space: &'a Space<WindowElement>,
+    output: &'a Output,
+) -> impl Iterator<Item = C> + 'a
+where
+    R: Look,
+    R::TextureId: Clone + Send + 'static,
+    C: From<CropRenderElement<RelocateRenderElement<RescaleRenderElement<WindowRenderElement<R>>>>> + 'a,
+{
+    let constrain_behavior = ConstrainBehavior {
+        reference: ConstrainReference::BoundingBox,
+        behavior: ConstrainScaleBehavior::Fit,
+        align: ConstrainAlign::CENTER,
+    };
+
+    let preview_padding = 10;
+
+    let elements_on_space = space.elements_for_output(output).count();
+    let output_scale = output.current_scale().fractional_scale();
+    let output_transform = output.current_transform();
+    let output_size = output
+        .current_mode()
+        .map(|mode| {
+            output_transform
+                .transform_size(mode.size)
+                .to_f64()
+                .to_logical(output_scale)
+        })
+        .unwrap_or_default();
+
+    let max_elements_per_row = 4;
+    let elements_per_row = usize::min(elements_on_space, max_elements_per_row);
+    let rows = f64::ceil(elements_on_space as f64 / elements_per_row as f64);
+
+    let preview_size = Size::from((
+        f64::round(output_size.w / elements_per_row as f64) as i32 - preview_padding * 2,
+        f64::round(output_size.h / rows) as i32 - preview_padding * 2,
+    ));
+
+    space
+        .elements_for_output(output)
+        .enumerate()
+        .flat_map(move |(element_index, window)| {
+            let column = element_index % elements_per_row;
+            let row = element_index / elements_per_row;
+            let preview_location = Point::from((
+                preview_padding + (preview_padding + preview_size.w) * column as i32,
+                preview_padding + (preview_padding + preview_size.h) * row as i32,
+            ));
+            let constrain = Rectangle::new(preview_location, preview_size);
+            constrain_space_element(
+                renderer,
+                window,
+                preview_location,
+                1.0,
+                output_scale,
+                constrain,
+                constrain_behavior,
+            )
+        })
+}
+
+/// The scene, front to back: the shell's upper layers (its glass frosted), the windows (while something moves — the
+/// Overview, a window hiding into the dock — the moved ones where they are now, and the dim), then the lower layers.
+fn scene_elements<R>(
+    output: &Output,
+    space: &Space<WindowElement>,
+    renderer: &mut R,
+    view: &crate::wm::SceneView,
+) -> Vec<OutputRenderElements<R, WindowRenderElement<R>>>
+where
+    R: Look,
+    R::TextureId: Clone + Send + 'static,
+{
+    let scale = output.current_scale().fractional_scale();
+    let geo = space.output_geometry(output).unwrap_or_default();
+    // a screen showing the same as another (displays.rs: MirrorOf) draws that one's bar, dock and wallpaper
+    let shown = crate::displays::mirror_of(output)
+        .and_then(|k| space.outputs().find(|x| crate::displays::key(x) == k || x.name() == k).cloned())
+        .unwrap_or_else(|| output.clone());
+    let map = layer_map_for_output(&shown);
+    let mut out: Vec<OutputRenderElements<R, WindowRenderElement<R>>> = Vec::new();
+    let layers = |out: &mut Vec<OutputRenderElements<R, WindowRenderElement<R>>>, renderer: &mut R, levels: &[WlrLayer]| {
+        for level in levels {
+            for layer in map.layers_on(*level).rev() {
+                let loc = map.layer_geometry(layer).unwrap_or_default().loc.to_physical_precise_round(scale);
+                let glass = crate::look::frosted(layer.namespace());
+                // a pop-up whose glass the shell has said: drawn plain, over a blur of just its glass
+                if let Some(pieces) = glass.then(|| crate::look::glass_of(layer.namespace())).flatten() {
+                    out.extend(
+                        AsRenderElements::<R>::render_elements::<WaylandSurfaceRenderElement<R>>(layer, renderer, loc, scale.into(), 1.0)
+                            .into_iter()
+                            .map(|e| OutputRenderElements::Custom(CustomRenderElements::Surface(e))),
+                    );
+                    for p in pieces {
+                        let r = Rectangle::<f64, smithay::utils::Logical>::new((p.rect[0], p.rect[1]).into(), (p.rect[2], p.rect[3]).into())
+                            .to_physical_precise_round(scale);
+                        let geo = Rectangle::new(loc + r.loc, r.size);
+                        out.push(OutputRenderElements::Backdrop(crate::look::Backdrop::new(p.id, geo, p.radius * scale, p.strength)));
+                    }
+                    continue;
+                }
+                out.extend(
+                    AsRenderElements::<R>::render_elements::<WaylandSurfaceRenderElement<R>>(layer, renderer, loc, scale.into(), 1.0)
+                        .into_iter()
+                        .map(|e| {
+                            if glass {
+                                OutputRenderElements::Frosted(Frosted::new(e))
+                            } else {
+                                OutputRenderElements::Custom(CustomRenderElements::Surface(e))
+                            }
+                        }),
+                );
+            }
+        }
+    };
+    layers(&mut out, renderer, &[WlrLayer::Overlay, WlrLayer::Top]);
+    // light over the windows turning into it
+    for (r, c) in &view.light {
+        if c[3] <= 0.01 {
+            continue;
+        }
+        let rect = Rectangle::<f64, smithay::utils::Logical>::new(r.loc, r.size).to_physical_precise_round(scale);
+        out.push(OutputRenderElements::Solid(SolidColorRenderElement::new(Id::new(), rect, 0usize, [c[0] * c[3], c[1] * c[3], c[2] * c[3], c[3]], Kind::Unspecified)));
+    }
+    // the moved windows (in front of the others), then the rest where they are
+    let moved_ids: Vec<&WindowElement> = view.moved.iter().map(|m| &m.0).collect();
+    for (w, r, sx, sy, alpha) in view.moved.iter().rev() {
+        if *alpha <= 0.01 {
+            continue;
+        }
+        let g = w.geometry();
+        let origin: Point<i32, smithay::utils::Physical> = r.loc.to_physical_precise_round(scale);
+        let at = (r.loc - g.loc.to_f64()).to_physical_precise_round(scale);
+        out.extend(
+            AsRenderElements::<R>::render_elements::<WindowRenderElement<R>>(w, renderer, at, scale.into(), *alpha)
+                .into_iter()
+                .map(|e| OutputRenderElements::Moved(RescaleRenderElement::from_element(e, origin, smithay::utils::Scale { x: *sx, y: *sy }))),
+        );
+    }
+    for w in space.elements_for_output(output).rev() {
+        if moved_ids.contains(&w) {
+            continue;
+        }
+        let Some(loc) = space.element_location(w) else {
+            continue;
+        };
+        let at = (loc - w.geometry().loc - geo.loc).to_physical_precise_round(scale);
+        // fading in from when it was first drawn (it has a size once it has drawn something)
+        let alpha = match w.user_data().get::<Opened>() {
+            Some(o) if !w.geometry().size.is_empty() => o.alpha(),
+            Some(_) => 0.0,
+            None => 1.0,
+        };
+        out.extend(
+            AsRenderElements::<R>::render_elements::<WindowRenderElement<R>>(w, renderer, at, scale.into(), alpha)
+                .into_iter()
+                .map(|e| OutputRenderElements::Window(Wrap::from(e))),
+        );
+    }
+    if view.dim > 0.0 {
+        let rect = Rectangle::from_size(geo.size).to_physical_precise_round(scale);
+        out.push(OutputRenderElements::Solid(SolidColorRenderElement::new(Id::new(), rect, 0usize, [0.0, 0.0, 0.0, view.dim], Kind::Unspecified)));
+    }
+    layers(&mut out, renderer, &[WlrLayer::Bottom, WlrLayer::Background]);
+    out
+}
+
+/// The bell, seen: the whole screen white for a moment, under the pointer (Settings › Accessibility).
+fn flash<R, E>(output: &Output, view: &crate::wm::SceneView) -> Option<OutputRenderElements<R, E>>
+where
+    R: Look,
+    R::TextureId: Clone + Send + 'static,
+    E: RenderElement<R>,
+{
+    if view.flash <= 0.0 {
+        return None;
+    }
+    let mode = output.current_mode().map(|m| output.current_transform().transform_size(m.size)).unwrap_or_default();
+    Some(OutputRenderElements::Solid(SolidColorRenderElement::new(
+        Id::new(),
+        Rectangle::from_size(mode),
+        0usize,
+        [view.flash, view.flash, view.flash, view.flash],
+        Kind::Unspecified,
+    )))
+}
+
+/// How long the picture below stays (the shell has long since drawn its own wallpaper over it by then).
+const SPLASH_SECONDS: u64 = 20;
+
+thread_local! {
+    /// The sign-in screen's wallpaper, as a still: what a session shows from its first frame, under everything,
+    /// until the shell has drawn its own. Without it the screen is black from the sign-in screen leaving until the
+    /// shell is up (a few seconds). The sign-in service names the picture in HUGINN_SPLASH (huginn_signind.py).
+    static SPLASH: std::cell::RefCell<Option<(MemoryRenderBuffer, (i32, i32), std::time::Instant)>> = std::cell::RefCell::new(load_splash());
+}
+
+fn load_splash() -> Option<(MemoryRenderBuffer, (i32, i32), std::time::Instant)> {
+    let path = std::path::PathBuf::from(std::env::var_os("HUGINN_SPLASH")?);
+    // (one of the system's own pictures; anything else only when developing)
+    if !path.starts_with("/usr/share/huginn-os/") && std::env::var_os("HUGINN_DEV").is_none() {
+        return None;
+    }
+    let bytes = std::fs::read(&path).ok()?;
+    if bytes.len() > 32 << 20 {
+        return None;
+    }
+    let picture = image::load_from_memory_with_format(&bytes, image::ImageFormat::Png).ok()?.to_rgba8();
+    let (w, h) = (picture.width() as i32, picture.height() as i32);
+    if w < 16 || h < 16 || w > 8192 || h > 8192 {
+        return None;
+    }
+    let buffer = MemoryRenderBuffer::from_slice(
+        &picture,
+        smithay::backend::allocator::Fourcc::Abgr8888,
+        (w, h),
+        1,
+        smithay::utils::Transform::Normal,
+        None,
+    );
+    Some((buffer, (w, h), std::time::Instant::now()))
+}
+
+/// The still wallpaper for one screen, filling it (cropped to the screen's shape), or nothing once its time is up.
+fn splash<R, E>(renderer: &mut R, output: &Output) -> Option<OutputRenderElements<R, E>>
+where
+    R: Look,
+    R::TextureId: Clone + Send + 'static,
+    E: RenderElement<R>,
+{
+    SPLASH.with(|s| {
+        let mut s = s.borrow_mut();
+        if s.as_ref().is_some_and(|(_, _, since)| since.elapsed().as_secs() >= SPLASH_SECONDS) {
+            *s = None;
+        }
+        let (buffer, (w, h), _) = s.as_ref()?;
+        let mode = output.current_mode()?;
+        let scale = output.current_scale().fractional_scale();
+        let screen: smithay::utils::Size<i32, smithay::utils::Logical> =
+            output.current_transform().transform_size(mode.size).to_f64().to_logical(scale).to_i32_round();
+        if screen.w <= 0 || screen.h <= 0 {
+            return None;
+        }
+        let (iw, ih, ow, oh) = (*w as f64, *h as f64, screen.w as f64, screen.h as f64);
+        let k = (iw / ow).min(ih / oh);
+        let src: Rectangle<f64, smithay::utils::Logical> = Rectangle::new(((iw - ow * k) / 2.0, (ih - oh * k) / 2.0).into(), (ow * k, oh * k).into());
+        let e = MemoryRenderBufferRenderElement::from_buffer(renderer, (0.0, 0.0), buffer, None, Some(src), Some(screen), Kind::Unspecified).ok()?;
+        Some(OutputRenderElements::Ghost(RescaleRenderElement::from_element(e, (0, 0).into(), 1.0)))
+    })
+}
+
+/// Windows that were asked to close, fading out and shrinking a little once they're gone (capture.rs: Ghost).
+fn ghosts<R, E>(renderer: &mut R, space: &Space<WindowElement>, output: &Output) -> Vec<OutputRenderElements<R, E>>
+where
+    R: Look,
+    R::TextureId: Clone + Send + 'static,
+    E: RenderElement<R>,
+{
+    const MS: f64 = 180.0;
+    let geo = space.output_geometry(output).unwrap_or_default();
+    let scale = output.current_scale().fractional_scale();
+    let mapped: Vec<u64> = space.elements().map(crate::huginn::window_id).collect();
+    crate::capture::GHOSTS.with(|g| {
+        let mut g = g.borrow_mut();
+        g.retain_mut(|gh| {
+            if mapped.contains(&gh.id) {
+                // still there (it may be asking whether to save): wait a while, then forget it
+                return gh.asked.elapsed().as_secs() < 30;
+            }
+            let gone = *gh.gone.get_or_insert_with(std::time::Instant::now);
+            gone.elapsed().as_secs_f64() * 1000.0 < MS
+        });
+        g.iter()
+            .filter_map(|gh| {
+                let t = (gh.gone?.elapsed().as_secs_f64() * 1000.0 / MS).min(1.0);
+                let rect = Rectangle::new(gh.at, gh.size);
+                if !geo.overlaps(rect) {
+                    return None;
+                }
+                let loc = (gh.at - geo.loc).to_f64().to_physical(scale);
+                let e = MemoryRenderBufferRenderElement::from_buffer(
+                    renderer,
+                    loc,
+                    &gh.buffer,
+                    Some(((1.0 - t) * (1.0 - t)) as f32),
+                    None,
+                    Some(gh.size),
+                    Kind::Unspecified,
+                )
+                .ok()?;
+                let middle = (rect.loc - geo.loc + Point::from((rect.size.w / 2, rect.size.h / 2))).to_physical_precise_round(scale);
+                Some(OutputRenderElements::Ghost(RescaleRenderElement::from_element(e, middle, 1.0 - 0.05 * t)))
+            })
+            .collect()
+    })
+}
+
+/// When a window was first drawn: it fades in over its first moments (not with Reduce Motion).
+#[derive(Default)]
+pub struct Opened(pub std::cell::Cell<Option<std::time::Instant>>);
+
+impl Opened {
+    const MS: f64 = 160.0;
+    pub fn alpha(&self) -> f32 {
+        if crate::access::still() {
+            return 1.0;
+        }
+        let start = self.0.get().unwrap_or_else(|| {
+            let now = std::time::Instant::now();
+            self.0.set(Some(now));
+            now
+        });
+        let t = (start.elapsed().as_secs_f64() * 1000.0 / Self::MS).min(1.0);
+        (1.0 - (1.0 - t).powi(3)) as f32
+    }
+}
+
+/// Locked (Huginn): what's drawn is the lock screen's surfaces on this output, on black. Nothing else.
+pub struct LockView {
+    pub client: Option<ClientId>,
+}
+
+#[profiling::function]
+pub fn output_elements<R>(
+    output: &Output,
+    space: &Space<WindowElement>,
+    custom_elements: impl IntoIterator<Item = CustomRenderElements<R>>,
+    renderer: &mut R,
+    show_window_preview: bool,
+    lock: Option<&LockView>,
+    view: &crate::wm::SceneView,
+) -> (Vec<OutputRenderElements<R, WindowRenderElement<R>>>, Color32F)
+where
+    R: Look,
+    R::TextureId: Clone + Send + 'static,
+{
+    if let Some(lock) = lock {
+        let scale = output.current_scale().fractional_scale().into();
+        let mut elements: Vec<OutputRenderElements<R, WindowRenderElement<R>>> =
+            custom_elements.into_iter().map(OutputRenderElements::from).collect();
+        let map = layer_map_for_output(output);
+        for layer in map.layers() {
+            let ours = lock.client.is_some()
+                && layer.wl_surface().client().map(|c| c.id()) == lock.client;
+            if !ours {
+                continue;
+            }
+            let loc = map
+                .layer_geometry(layer)
+                .unwrap_or_default()
+                .loc
+                .to_physical_precise_round(scale);
+            elements.extend(
+                AsRenderElements::<R>::render_elements::<WaylandSurfaceRenderElement<R>>(layer, renderer, loc, scale, 1.0)
+                    .into_iter()
+                    .map(|e| OutputRenderElements::Custom(CustomRenderElements::Surface(e))),
+            );
+        }
+        return (elements, CLEAR_COLOR_FULLSCREEN);
+    }
+    if let Some(window) = output
+        .user_data()
+        .get::<FullscreenSurface>()
+        .and_then(|f| f.get())
+    {
+        let scale = output.current_scale().fractional_scale().into();
+        let window_render_elements: Vec<WindowRenderElement<R>> =
+            AsRenderElements::<R>::render_elements(&window, renderer, (0, 0).into(), scale, 1.0);
+
+        let mut elements = custom_elements.into_iter().map(OutputRenderElements::from).collect::<Vec<_>>();
+        elements.extend(flash(output, view));
+        if view.zoom > 1.0 {
+            let mode = output.current_mode().map(|m| output.current_transform().transform_size(m.size)).unwrap_or_default();
+            elements.push(OutputRenderElements::Zoom(crate::look::ZoomElement::new(Rectangle::from_size(mode), view.zoom, view.zoom_origin)));
+        }
+        // over a window filling the screen: the overlay layer only (the game bar and stats, the volume, the start
+        // menu when it's asked for); the bar, dock and wallpaper stay hidden
+        {
+            let map = layer_map_for_output(output);
+            for layer in map.layers_on(smithay::wayland::shell::wlr_layer::Layer::Overlay).rev() {
+                let loc = map.layer_geometry(layer).unwrap_or_default().loc.to_physical_precise_round(scale);
+                elements.extend(
+                    AsRenderElements::<R>::render_elements::<WaylandSurfaceRenderElement<R>>(layer, renderer, loc, scale, 1.0)
+                        .into_iter()
+                        .map(|e| OutputRenderElements::Custom(CustomRenderElements::Surface(e))),
+                );
+            }
+        }
+        elements.extend(window_render_elements.into_iter().map(|e| OutputRenderElements::Window(Wrap::from(e))));
+        (elements, CLEAR_COLOR_FULLSCREEN)
+    } else {
+        let mut output_render_elements = custom_elements
+            .into_iter()
+            .map(OutputRenderElements::from)
+            .collect::<Vec<_>>();
+        output_render_elements.extend(flash(output, view));
+        // zoom (access.rs): over everything but the pointer
+        if view.zoom > 1.0 {
+            let mode = output.current_mode().map(|m| output.current_transform().transform_size(m.size)).unwrap_or_default();
+            output_render_elements.push(OutputRenderElements::Zoom(crate::look::ZoomElement::new(
+                Rectangle::from_size(mode),
+                view.zoom,
+                view.zoom_origin,
+            )));
+        }
+
+        output_render_elements.extend(ghosts(renderer, space, output));
+        if show_window_preview && !view.active() && space.elements_for_output(output).count() > 0 {
+            output_render_elements.extend(space_preview_elements(renderer, space, output));
+        }
+        // drawn by hand (not Smithay's space_render_elements), so the shell's glass can be frosted
+        output_render_elements.extend(scene_elements(output, space, renderer, view));
+        // under everything, for a session's first moments: the sign-in screen's wallpaper instead of black
+        output_render_elements.extend(splash(renderer, output));
+        (output_render_elements, CLEAR_COLOR)
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn render_output<'a, 'd, R>(
+    output: &'a Output,
+    space: &'a Space<WindowElement>,
+    custom_elements: impl IntoIterator<Item = CustomRenderElements<R>>,
+    renderer: &'a mut R,
+    framebuffer: &'a mut R::Framebuffer<'_>,
+    damage_tracker: &'d mut OutputDamageTracker,
+    age: usize,
+    show_window_preview: bool,
+    lock: Option<&LockView>,
+    view: &crate::wm::SceneView,
+) -> Result<RenderOutputResult<'d>, OutputDamageTrackerError<R::Error>>
+where
+    R: Look,
+    R::TextureId: Clone + Send + 'static,
+{
+    let (mut elements, clear_color) =
+        output_elements(output, space, custom_elements, renderer, show_window_preview, lock, view);
+    // HUGINN_DEBUG_HDR (in a window, with HDR turned on in Displays): the HDR conversion drawn as on an HDR screen
+    if let Some(sdr) = crate::displays::hdr_sdr(output) {
+        let size = output.current_mode().map(|m| output.current_transform().transform_size(m.size)).unwrap_or_default();
+        let skip = crate::color::hdr_parts(space, output, (-1000.0, -1000.0).into());
+        elements.insert(0, OutputRenderElements::Hdr(crate::look::HdrElement::new(crate::displays::hdr_of(output).id.clone(), Rectangle::from_size(size), sdr, skip)));
+    } else {
+        // apps' HDR pictures on a screen not in HDR, shown in sRGB (as on a real screen: udev.rs)
+        let parts = crate::color::sdr_parts(space, output);
+        if !parts.is_empty() {
+            let size = output.current_mode().map(|m| output.current_transform().transform_size(m.size)).unwrap_or_default();
+            elements.insert(0, OutputRenderElements::Hdr(crate::look::HdrElement::from_hdr(crate::displays::hdr_of(output).id.clone(), Rectangle::from_size(size), parts)));
+        }
+    }
+    damage_tracker.render_output(renderer, framebuffer, age, &elements, clear_color)
+}

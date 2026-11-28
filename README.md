@@ -1,1 +1,3893 @@
-# HuginnOS
+# Huginn OS build kit (Phase 1)
+
+Reproducible ISO build for Huginn OS on Ubuntu 26.04 LTS ("resolute").
+
+## Quick start (Ubuntu 24.04 or 26.04 host, ~25 GB free)
+
+    sudo scripts/00-host-setup.sh        # once
+    sudo scripts/build.sh --check        # bootstrap + verify every package name resolves
+    sudo scripts/build.sh                # full build -> out/huginn-os-0.1-<date>-amd64.iso
+    scripts/test-qemu.sh                 # boot it (UEFI); add --bios for legacy boot
+
+The browser (Huginn, github.com/Valkyrii070/Huginn) is fetched into `vendor/huginn` the first time; to build with a
+particular version of it, run `scripts/update-huginn.sh /path/to/Huginn` first.
+
+Faster iterations:
+
+    sudo scripts/build.sh --from rootfs  # skip debootstrap, reinstall packages
+    sudo scripts/build.sh --from image   # only repack squashfs + ISO
+    sudo scripts/build.sh --from customise   # reuse the installed chroot: overlay, apps and hooks again, then repack
+    SQUASHFS_COMP=lz4 in config/build.conf for quick dev images
+
+This is Huginn OS's own repository. Until 2026-11-19 the kit was the `os/` folder of the Huginn browser's repository
+(Valkyrii070/Huginn); its history came along. The browser itself stays there, and the image fetches it from there.
+Every change is checked by GitHub Actions (`.github/workflows/huginn-os.yml`: flake8 and shell syntax, and
+`scripts/ci-smoke.py`, which opens every app and the shell headless; the package lists against Ubuntu 26.04 by hand).
+Huginn's own compositor (`compositor/`, Rust) is built inside the image: the build puts Rust and the headers in only
+while it builds, then takes them out. Its crates are fetched with `cargo` on the build computer when it has one (kept
+in the work folder), otherwise inside the image.
+
+Local settings that stay out of the repository go in `config/build.local.conf` (sourced after `build.conf`): a nearer
+mirror, `SNAPSHOT=""` for the live archive, faster compression, or `APT_PROXY` / `APT_CA` for a machine that only
+reaches the archive through an HTTPS proxy (used during the build only; removed before the image is packed).
+
+## Layout
+
+    config/build.conf            suite, snapshot date, names, compression
+    config/package-lists/*.list  one package per line, # comments
+    config/overlay/              copied onto the root filesystem as-is
+    config/hooks/*.sh            optional scripts run inside the chroot, in name order
+    apps/                        the apps: one Python host + QML per app, the shared kit, the portal backends
+    shell/                       Huginn Shell: Python host + QML (top bar, dock, launcher, control centre, widgets)
+    tokens/tokens.json           design tokens (single source of truth, shared with Huginn)
+    tokens/gen_theme.py          tokens -> KDE colour schemes, GTK colours, Huginn's Qt colours, QML singleton
+    qt/                          Huginn's own Qt look: a platform theme (menus in the top bar too) and a widget style
+    scripts/                     host setup, build, QEMU test, CI smoke test, xwayland-satellite
+    patches/                     small patches to software built from source (xwayland-satellite)
+    mockups/                     design previews rendered from the tokens
+
+## Try the shell without building an ISO
+
+On any machine with Python 3:
+
+    pip install PySide6
+    python3 shell/huginn_shell.py --preview            # add --light, --realm bifrost, --open cc
+
+The dock buttons, control centre, realm picker, dark toggle and launcher search all work in the preview.
+
+## The apps
+
+Twenty apps share the shell's theme, settings and component kit (`apps/qml`). Run any of them on any machine with PySide6:
+
+    python3 apps/huginn_app.py files            # also: calendar, mail, settings, monitor, store, video, music,
+                                                # notes, photos, documents, calculator, clock, terminal, screenshot, archives, welcome
+    python3 apps/huginn_app.py music --demo     # --demo fills calendar, mail, store, music and video with sample content
+
+| App | Works now | Not yet |
+| --- | --- | --- |
+| Files | Browse, back/forward/up, breadcrumbs, grid and list (only the rows in view are drawn, so big folders stay quick), thumbnails for pictures, videos and PDFs (cached); tabs (Ctrl+T, Ctrl+W, Ctrl+Tab, middle-click a folder); search this folder as you type, Enter to search its subfolders, and "Inside files" to read inside text files, PDFs and office files too; select several (Ctrl/Shift click, drag a rectangle, arrows, Ctrl+A, type a name); rename one, or several at once with a shared name and numbers; quick look with Space (pictures, videos, PDFs, text), arrows to move on; cut, copy, paste, duplicate, and drag and drop (onto folders, places, drives, the Trash, and to and from other apps) with a choice when a name is taken, off the window's thread with progress and Stop; undo for the last rename, move, copy, new folder or move to Trash (Ctrl+Z), and redo (Ctrl+Shift+Z); sort by name, date, size or kind; Trash view with Put Back, Delete for Good and Empty; drives you plug in (open, eject), locked ones with their password; network places (smb, sftp, ftp, dav, nfs) with sign-in, remembered addresses and a list of computers that announce themselves on the network; Open With, with "always"; Compress to .zip; New Text File; Go to a Folder (Ctrl+L) with pinned folders; Open in Terminal; Details, with who else may open or change a thing, Locked, and Run as a program; refreshes by itself when another app changes the folder | Listing a Windows PC's shared folders (you type the folder name after its address), applying sharing to everything inside a folder, changing the owner, a pane to play video or sound in quick look. Dragging the file area no longer moves the window (it selects); the top strip still does |
+| Calendar | Month view, pick a day, add and remove events (saved locally), coming-up list | Week view, repeating events, online calendars |
+| Mail | Real accounts over IMAP and SMTP, always in TLS with the certificate checked; sign-in that knows the common providers, with Google and Microsoft accounts signed in on the provider's own page (OAuth 2 with PKCE, see "Mail sign-in" below) and app passwords for iCloud, Yahoo, AOL, Fastmail; every account's sign-in kept in the Passwords vault under the master password, never in a file of Mail's own; mailboxes with their roles worked out; newest 400 per mailbox with previews; read, star, unread, archive, junk, Trash, delete for good; search; write, reply, reply all, forward with quoting and threading headers; attachments both ways; address suggestions from Contacts and past mail; several accounts; an unsent message survives closing; opens email links; a local cache so it opens at once and reads offline. HTML mail is shown as text and nothing in a message is ever fetched, so trackers never load | Google and Microsoft sign-in until this copy of Huginn is registered with each (a free, one-time step only the distributor can do; see below). Tuta (it offers no IMAP); Proton only through its Bridge. Exchange without IMAP. HTML shown as designed, server-side drafts, push (it checks every 3 minutes), rules |
+| Settings | Light/dark, realm, top-bar menu style, About | Network, Displays, Sound, Notifications, Apps, Users pages |
+| System Monitor | Ring gauges and two-minute graphs for processor, memory and swap, network and disk; sortable process list with per-program processor, memory and disk use; right-click to end, pause, resume, force stop, show location or see properties | Network use per program (Linux does not expose it without extra tooling), start-up apps |
+| App Store | A featured app, shelves of app rows, search, and an app page with facts at a glance and a picture gallery (developer screenshots, loaded from Flathub when you open the page); Get / Open / Remove through Flatpak with live progress, Verified marks from Flathub. Installed list also shows web apps installed from Huginn (any .desktop file with `X-Huginn-WebApp=true`), with Open and a confirmed Remove | Updates page. Flathub has no ratings, so none are shown. The catalogue reader is tested on a hand-made file in Flathub's format, not on the real catalogue; installing through Flatpak is untested |
+| Media Player | Library from Videos, play/pause, seek, volume, full screen | Subtitles, playlists. Playback itself is untested (see below) |
+| Music | Library from Music, albums, search, queue through the list, seek, volume | Tags from files, artwork, playlists. Playback itself is untested |
+
+| Notes | Notes as Markdown or text files in Documents/Notes; saves as you type (safely, via a temporary file); search; move to trash | Formatting buttons, Markdown preview, sync |
+| Photos | Grid from Pictures, by month; viewer with zoom, next/previous, details; rotate and save; move to trash | Crop and other edits, albums |
+| Documents | PDF reading with page thumbnails, find, zoom, fit width. Plain-text and code editing: line numbers, colouring for common languages, find, auto-indent, word wrap; saves safely and keeps the file's encoding and line endings; warns before overwriting a file something else changed | Password-protected PDFs, annotations, printing, find and replace, several files open at once. First page fit is rough |
+| Calculator | Exact decimal sums with brackets and %, live preview, keyboard entry, history | Scientific functions, unit conversion |
+| Clock | World clock, stopwatch with laps, timer | Alarms and sound: they need a background service, so the timer only runs while Clock is open |
+| Terminal | Your shell with colours, scrollback, resize, paste, Copy All (screen logic from the `pyte` library) | Selecting text with the mouse, tabs, profiles. Redraw is slower than a native terminal |
+| Screenshot | Whole screen, or let the desktop ask for a window or area; delay; pen, box and highlighter in six colours; undo; save, copy | Crop, text labels. Capturing on Wayland (through the desktop portal), saving and copying are untested |
+| Archives | Look inside zip and tar files, unpack all or one item into a new folder; refuses entries that try to write outside it | Creating archives, 7z and rar, passwords |
+| Welcome | Five-step tour with a live realm and light/dark choice; shows itself once at first login | |
+| Passwords | The same vault the Huginn browser fills from and saves to (one file, one master password): a login saved in the browser appears here and the other way round, with both open at once. Unlock once: unlocking either app, or Mail, unlocks the others until Lock is pressed in any of them or an hour passes unused (a switch in Passwords turns this off). Holds Mail's sign-ins too. AES-256-GCM, key from the master password by scrypt; the master password is never stored. Entries with name, password, website, notes; random passwords and word passphrases; strength meter; weak and reused flags; copy with the clipboard wiped after 30 seconds; locks itself after 5 idle minutes; slows down repeated wrong tries; import and export browser .csv; change master password; a spare of the last file | Passkeys, syncing between computers, fingerprint unlock, attachments |
+| Contacts | An ordinary .vcf file any phone or app can read; alphabet index, favourites, search; names, numbers, emails, address, birthday (with "in 3 days"), website, notes; import (skips people already here) and export; fields Huginn has no box for (photos, nicknames) are carried through untouched; opens .vcf files; feeds Mail's address suggestions | Photos shown, groups, syncing with a phone or CardDAV, more than two numbers or emails editable (extra ones are kept) |
+| Weather | Places you pick by name; now, 24 hours, 8 days; °F/°C; the last forecast stays readable offline. Nothing works out where you are: only the chosen place's coordinates are sent, to open-meteo.com (no account, no key; free for non-commercial use) | Radar and maps, alerts, a shell widget |
+| Backup | Dated copies of Home on another drive or server; unchanged files are shared between copies (hard links), so each backup looks complete but only changes take room; daily or weekly by a systemd user timer; browse any backup and bring files back, never over what you have now; keeps the newest 30; checks free room first; stopping leaves nothing half-done | Encrypting the backup, choosing folders to leave out, restoring a whole system, cloud services |
+| Disks | Every drive with how it is divided and how full; open, close, eject; rename; erase to exFAT, ext4 or FAT with a typed name and a tick to confirm. The drive Huginn runs from can't be changed, whatever is asked | Changing partitions, health (SMART) readings, disk images, encrypting a drive |
+| Camera | Viewfinder, photo and video, 3 and 10 second timer, thirds grid, several cameras, last shot thumbnail; saves to Pictures/Camera and Videos/Camera | Not run with a real camera yet. Zoom, filters, resolution choice |
+| Voice Recorder | One-button recording with pause, to Music/Recordings (.m4a); list with play, rename, show in Files, Trash | Not run with a real microphone yet. Level meter, trimming, choosing the microphone |
+
+Tested without a display: the calculator's arithmetic, notes (create, save, trash), archives (including two hostile archives, both refused
+with nothing written), photo rotation, the world clock, and the terminal running real shell commands. Tested only as rendered pictures:
+every screen. Not tested: anything needing a click or a real desktop session.
+
+## Huginn Office: Writer, Sheets, Slides
+
+    python3 apps/huginn_app.py writer            # also: sheets, slides; add a file to open it
+
+| App | Works now | Not yet |
+| --- | --- | --- |
+| Writer | Real pages (Letter, A4, Legal, A5; margins; headers, footers, page numbers), styles, fonts, lists with levels and checklists, tables, pictures, links, find and replace, spelling, printing, Word in and out (see "Office, pro round one") | Page columns; drawn shapes (their words come in), equations |
+| Sheets | An Excel-compatible engine with about 120 functions; several sheets; frozen panes; formats; fill handle; sort, filters and charts; Excel files both ways with formulas, formats and charts | Icon sets; pictures on a sheet |
+| Slides | A free canvas: text boxes, shapes and pictures anywhere, sized and turned, with smart guides; six layouts, six themes, backgrounds; bullets with levels; transitions and builds; presenter view; PowerPoint both ways and vector PDF | Motion paths, audio and video |
+
+Each app keeps its own work in an open format: Writer in HTML, Sheets and Slides in JSON (`.hsheet`, `.hslides`).
+
+### Other suites' files (the hybrid)
+
+- `.docx`, `.xlsx` and `.pptx` are read and written by our own converters (`apps/huginn_docx.py`, `apps/huginn_xlsx.py`, `apps/huginn_pptx.py`).
+- Older or rarer formats (`.doc`, `.odt`, `.rtf`, `.xls`, `.ods`, `.ppt`, `.odp`) appear only if LibreOffice is installed. It runs invisibly to
+  turn them into the modern format, and our converters take it from there. LibreOffice's window never opens, and it is not in the package lists.
+- A foreign file always opens as a copy in our format; the original is never written to. A notice lists what was not carried over.
+
+What was tested, on the machine these were written on:
+
+- Our converters against independent open-source libraries (python-docx, openpyxl, python-pptx): they read what we write, and we read what
+  they write. 21 checks pass, including a file with an XML entity trick and a non-zip file, both refused.
+- LibreOffice 's own reader opens the .docx, .xlsx and .pptx we write, and recalculates the spreadsheet correctly.
+- The LibreOffice route for real: .odt, .doc, .ods and .odp each opened inside Writer, Sheets and Slides.
+- The spreadsheet arithmetic (22 formula checks), document editing and saving, and Slides' PDF export end to end.
+- NOT tested: opening our files in Microsoft Office itself, and anything that needs clicking in the real windows.
+
+Playback uses Qt Multimedia. The machine these were written on has no sound system, and Qt Multimedia crashed there on load,
+so real playback has not been heard or seen yet. The previews with `--demo` do not load it.
+
+The App Store's `--demo` catalogue is illustrative: the app names are real Flathub apps, but the summaries, sizes and Verified
+marks shown are sample values, not read from Flathub.
+
+## Reproducibility
+
+- Every apt source is pinned to snapshot.ubuntu.com at the SNAPSHOT timestamp in build.conf.
+  If the build host cannot reach that timestamp, pick a valid one or set SNAPSHOT="" to use the live archive.
+- SOURCE_DATE_EPOCH comes from the last git commit, so file times in the squashfs and ISO are stable.
+- out/*.manifest lists every package and version in the image; diff two manifests to see what changed.
+
+## Huginn OS updates itself
+
+An installed Huginn OS brings its own parts up to date without a new image: the desktop, every Huginn app, the look,
+the system's own files (helpers, services, rules, the sign-in and start-up screens' files) and the compositor
+(`apps/huginn_osupdate.py`, 59 checks in `scripts/tests/osupdate_test.py`).
+
+- **Where from.** The branch the image was built from. The build records it in `/usr/share/huginn-os/SOURCE`
+  (repository, branch, commit, date; `config/update.conf` names the first two), and what each of the system's own
+  files was when it was put there in `/usr/share/huginn-os/files.json`.
+- **Look.** A timer (a few minutes after start-up, then every six hours) and Software Update ask GitHub for the
+  branch's newest commit. Nothing else is sent.
+- **Stage.** That commit's tree is fetched over HTTPS and checked (its pieces are there, every Python file
+  compiles), and any Ubuntu packages its lists name that the computer lacks are installed, so an app that gains a
+  dependency gets it. Nothing of the running system has changed yet.
+- **Apply.** At the next start-up, before the sign-in screen, in a few seconds; or at once with Finish Now. Only
+  files that differ are written, each swapped in whole. Files the version dropped are removed. The steps the image
+  build does that are safe on a running system are done again (hooks marked `# On update: run`), and systemd, udev,
+  the app list and the icon caches are told; the start-up picture and the boot menu are rebuilt only when their
+  files changed. The new version's own copy of the updater does the installing, so a version can change how it is
+  installed.
+- **Yours stays yours.** Your files are never touched. A few system settings files (`/etc/xdg`, the sign-in
+  screen's, the network's and the like) are replaced only while they are still exactly what Huginn OS put there;
+  once you or Settings change one it is left alone, and Software Update lists which.
+- **Go Back.** Everything an update replaces or removes is kept, so Go Back puts every file back exactly (the test
+  compares the whole made-up system before and after). The version gone back from isn't taken again by itself.
+- **The compositor** is a compiled program. The tree carries a ready-built one (`prebuilt/`, 5 MB) noted as being
+  for exactly its compositor sources; an update uses it only when that still holds and its bytes match its note.
+  Otherwise the compositor is left as it is and Software Update says so. Whoever builds the image refreshes it:
+  `python3 apps/huginn_osupdate.py prebuilt . <the built huginn-compositor>`.
+- **Trust.** HTTPS to GitHub, one repository and branch named in a root-owned file, fetched by commit. It is not
+  signed: it trusts GitHub and whoever can push to that branch. Signing releases is the next step if more people
+  than the makers come to depend on it.
+- **Checked against the image.** Run against a built image, the updater's idea of what goes where matched all 2,052
+  files the image build had put in place, the generated look and settings files included; it differed only in the
+  files added since, and in two stale files the build never removes.
+- **Run for real.** On a copy of the built image, its own helper asked GitHub, found the next commit, staged it in
+  4 seconds and applied it as the start-up service does in 4 more; afterwards the system matched that commit's tree
+  with nothing left to write. Go Back returned it byte for byte (one checksum over 2,000 files, before and after).
+  Then the copy was stripped of every trace of the updater, as an old installation would be, and the one-line
+  switch brought it across from GitHub. Not checked: a real start-up on real hardware (the service's ordering
+  before the sign-in screen is by systemd's rules, unrun), an installation really made from an old image, and a
+  change to the compositor's sources travelling this way.
+- **An installation from before this** has no record of what it is. One line in its Terminal brings it across
+  (`scripts/switch-to-updates.sh` has the line and what it does); or install the newest image once.
+
+Building an image: commit first, then `HUGINN_COMMIT=<that commit> scripts/build.sh …`, so the system knows which
+commit it is. Ubuntu's own packages, Flatpak apps and firmware update as before (Software Update's other parts).
+
+## Known limits of Phase 1
+
+- Scripts are syntax-checked and the package lists are verified against the 26.04 archive,
+  but the first end-to-end build has not been run yet. Expect small fixes.
+- grub-mkrescue images boot on BIOS and UEFI but not with Secure Boot enabled. Phase 2 moves to the signed shim layout.
+- (Phase 1 offered two sessions, KWin + Huginn Shell and Plasma. Both are gone: the sign-in screen and the session
+  are Huginn's own compositor, see "KWin's gone" below.)
+- Huginn itself is not in the image yet. It already runs on Linux through its per-user installer; Phase 2 wraps that as a system package.
+
+## App style: glass and islands
+
+Every app uses one style, chosen from four mockup rounds (the "D" set): no title bar, a rounded window tinted with the
+app's own colour, light in that colour coming from the app's main island, and controls floating in islands like the
+dock's. Each app has its own colour (`tokens.json`, `apps`; Welcome takes the realm's) and puts its main island where
+its job needs it.
+
+- Shared parts: `GlassWindow.qml` (frame, tint, glow, drag, window buttons), `Island.qml`, `Rail.qml`, `Seg.qml`,
+  `IslandField.qml`. An app can also just list a `sidebar` and a `toolbar`: they show as a rail and an island.
+- The glow is one gradient, not a blur, so it costs nothing to draw; a light grain (`grain.png`) over it hides the
+  rings a soft gradient would otherwise show. Photos rounds its pictures in the app (`image://roundthumb`), not with
+  a shader. Nothing in the apps needs a graphics card.
+- All twenty apps are rebuilt.
+- Built since, to match the mockups: Calendar's week view (events placed by time, clashes side by side); Terminal
+  tabs (Ctrl+Shift+T, Ctrl+Shift+W, Ctrl+PageUp/PageDown; a new tab opens where the last one was); Notes headings,
+  checklists and lists (plain marks in a plain file: "# ", "- [ ] ", "- "); Photos albums (folders inside Pictures) and
+  favourites; Screenshot's frame (the screen freezes, you drag a frame, Enter captures); several sheets in one Sheets
+  file, kept through Excel import and export.
+- Known limits of those: a Sheets formula cannot read from another sheet; a CSV file holds one sheet; Calendar events
+  have a start time but no length (drawn as one hour); Notes shows the marks as text, coloured, not as drawn boxes.
+- Documents is also the text and code editor, and the default app for text files (Markdown stays with Notes). Files
+  now covers the everyday jobs of a file manager. The Trash follows the freedesktop.org layout, so other file managers
+  see the same Trash. Drives use `lsblk` to list and `udisksctl` to open and eject (`udisks2` is in the package list).
+  A locked drive's password is piped straight to `udisksctl` and is not kept. "Always open with" is written to the
+  user's `~/.config/mimeapps.list`. Thumbnails are kept in `~/.cache/huginn/thumbs` (trimmed past 5000).
+  Video thumbnails need `ffmpeg`; network places need `gvfs-backends` and `gvfs-fuse` (all three are in the package
+  list). Files talks to `gio mount` and answers its questions; a server's password goes down a pipe and is not kept,
+  only the address is remembered. Computers on the network are found with `avahi-browse` (`avahi-utils`, in the
+  package list); a Windows PC that doesn't announce itself that way won't be listed, but its address still works.
+  Kate and Dolphin are still in the image until both apps have been used on the real desktop; then remove `kate` and
+  `dolphin` from `config/package-lists/20-desktop.list`.
+- Not built yet: the halo a window casts on the desktop (the window manager's job, not the app's), and edge resizing
+  (only the bottom-right corner resizes). A playing video is not cut to the window's rounded corners.
+- Files and the Documents editor are also tested by scripts that press keys and click in the off-screen window
+  (208 checks of what Files does, 104 of its screen; 26 + 14 for Documents). Not tested, because they need a real
+  desktop: the drag gesture itself (what a drop does is tested), a real USB stick and a real locked drive (the drive
+  list and `udisksctl` were stood in for), Open in Terminal, and real network places: connecting was tested against a stand-in for `gio mount` that asks
+  the same questions, so a real SMB or SFTP server is the first thing to try.
+- The second set of apps (`apps/huginn_more.py`) and Mail (`apps/huginn_mail.py`) are tested the same way: 80 + 61 checks of
+  the engines, 23 of their screens, 36 of the shared vault (against the browser's own vault code, both directions), and for Mail 131 + 31 against a small IMAP and SMTP server run on localhost over
+  real TLS. Not tested, because the sandbox has none: a real mail provider, a real camera and microphone, a real
+  format (the system calls were stood in for and checked), the systemd timer firing, and a live Open-Meteo reply
+  (sample replies in its documented shape were used).
+- One vault for the browser, Passwords and Mail (`apps/huginn_vault.py`; the browser side is its pull request #3,
+  already in `vendor/huginn`). The file is the browser's own, `~/.local/share/SafariQt/SafariQt/passwords.vault`.
+  Each program merges with what is on disk before it writes, under a file lock, so two of them open together don't
+  undo each other. "Unlock once" works through a small helper that holds the vault key in memory only, on a socket in
+  your login's runtime folder: it answers only your own user, and only programs run from the installed, root-owned
+  Huginn files. What that does and doesn't protect against: another person's account can't use it; a program
+  already running as you could, in principle, read a running app's memory with or without this helper. Turn
+  "Unlock once" off in Passwords to have each app ask for itself.
+- Mail holds its sign-ins in memory while it runs so it can keep checking for mail; the session going quiet after
+  an hour doesn't stop that, pressing Lock in Passwords or the browser does (the mail already fetched stays readable).
+- The helper's trust check needs the installed layout (`/usr/share/huginn-apps`, `/opt/huginn`): run from a source
+  checkout, each app simply asks for the master password itself.
+- Tested by rendering every app off-screen in dark and light, with no warnings. Not yet run on the desktop in the VM,
+  so clicking, dragging, scrolling and full screen are untested.
+
+## Icons and looks
+
+- **App icons** (redrawn 2026-11-15, chosen on the design canvas: "smoked glass, all together, without the spark").
+  Every app's icon is a tile of smoked glass (a squircle) with a picture of what the app is for, glowing in the
+  app's own colour: the colour rises from deep at its foot to light at its top, glossy across its upper half, with
+  a soft halo on the glass. The tile is thick glass (a lit top edge, a darker foot, a shadow under it), and a thin
+  line of the app's colour runs along its bottom edge, as the dock's Ring. The apps seen most have richer pictures
+  (the calendar's date, the clock's ticks, the lens's rings, papers in the folder). `scripts/make-icons.py` draws
+  all 51 from the colours in `tokens/tokens.json` (SVG, plus PNG at 256, 128, 64 and 48) into
+  `config/overlay/usr/share/icons/hicolor/`, named `huginn-<app>`; the `.desktop` files and the dock use them.
+  Change a picture in that script and run it again.
+- **Folders and files.** The same script writes the **Huginn icon theme** (`usr/share/icons/Huginn`, inheriting
+  Breeze for everything else, set for KDE's parts and GTK): folders as smoked glass tinted with Files' blue with what
+  they hold glowing on the front (Documents, Downloads, Music, Pictures, Videos, Desktop, Home, Templates, Public),
+  and the common kinds of file as smoked-glass pages with their kind glowing on them and a label in its colour (text,
+  PDF, pictures, music, video, archives, documents, sheets, slides, code, web pages, programs). Lists get plainer
+  drawings at 24 and 16 pixels.
+- **The whole icon theme (2026-11-19), in place of Papirus.** The Huginn theme now covers what Papirus did, in
+  about 5 MB instead of 260: more folders (Remote, Recent, Favourites, Development, Games, Cloud), the Bin (empty and
+  full) and Huginn's mark for `start-here`; **devices** (drives, SSDs, USB sticks, SD cards, discs, screens, laptops,
+  phones, keyboards, mice, game pads, printers, scanners, cameras, webcams, headphones, speakers, microphones,
+  servers, batteries, routers) and the **dialogs' and security pictures** as lit objects on nothing (the app
+  pictures' look without the tile, which is for apps); more kinds of file (e-books, fonts, calendars, contact cards,
+  disc images, .deb and Flatpak packages, Markdown, more code, pictures, music and video). Every **action and
+  -symbolic icon** (toolbars, menus, GTK's symbolic set: over 500 names) is one of Huginn's own line glyphs:
+  `scripts/icon_symbols.py` runs the drawing code in `shell/qml/Glyph.qml` with a context that writes down what it
+  draws, outlines every stroke into one filled shape and writes it with KDE's colour-scheme class, so Qt apps draw
+  them in the scheme's text colour and GTK recolours them itself. Glyph.qml gained the glyphs this needed (copy,
+  paste, cut, save, bold, italic, link, reply, eject, the window buttons, volume levels…), which the shell and apps
+  can use too. Breeze stays underneath for anything not drawn.
+- **Other apps' icons on Huginn's glass.** `apps/huginn_iconwrap.py` takes each installed app's own icon (from
+  hicolor, Flatpak's exports, Breeze or pixmaps) and puts it on Huginn's smoked-glass tile: an icon that's already a
+  square tile is cut to Huginn's squircle and takes its glass edges; any other shape sits on the glass at the size
+  Huginn's pictures look, with a soft shadow, the glass glowing in the icon's own main colour. The build does every
+  app in the image (`/usr/share/icons/Huginn/wrapped/apps`); the shell does each user's new ones (apt, Flatpak, a
+  `.desktop` file of their own) into `~/.local/share/icons/Huginn` within seconds of their arrival. They're kept
+  under the icon's own name, so every program asking the theme for that icon gets the wrapped one, and the dock and
+  start menu show them as whole tiles like Huginn's own.
+- **App icons, round five.** The pictures are solid objects with depth: a soft light from the upper left across
+  them, a lit rim along their top edges and a shaded one along their foot, and their white details standing a
+  little proud with a small shadow in the object's own deep colour (`picture()`, masks keep each effect to its part).
+  Redrawn: Maps (a folded map under its pin), Disks (a drive with its partitions), Video (a screen with its play
+  button and scrubber), Shortcuts (a bolt on stacked cards), Phone (with its signal). Terminal and Reminders keep
+  their own drawings.
+- **The two marks.** `branding/huginn-os.svg` is the system's logo (a white raven on a vivid aurora tile; shown in
+  Welcome) and `branding/huginn-browser.svg` the browser's (the same raven in deep indigo on a pale aurora tile). The
+  raven is a soft, rounded drawing made for these icons. The browser carries its icon itself (pull request #4).
+- **Layouts.** Apps no longer share one "list on the left, detail on the right" screen. Reminders is four counters
+  over a ruled page with the lists as tabs; Phone is the phone itself with its actions around it; Games is a console-style carousel that takes the colour of the game in front; Podcasts is a
+  shelf of covers with a floating player; Translate is stacked, with the languages on the fold; Passwords is a
+  cabinet of tiles that open into a card; Contacts is a wall of round portraits under their letters. Writer,
+  Sheets, Slides, Documents, Archives, Notes and Photos each open on their own drawn start screen.
+- **The browser is one of the desktop's apps.** On Huginn OS it starts in its Islands look (Settings > Appearance >
+  Window Look in the browser; Classic is still there), made of the same glass as these apps: their tint, their light
+  from below, their island colours, with close, minimise and zoom together in a pill. With its Appearance on System it
+  follows the desktop's light or dark, and until a realm is picked in the browser it wears the desktop's; both change
+  as you change them in Settings (it reads `~/.config/huginn-shell/settings.json`). Its own menus (File, Edit, View,
+  History, Bookmarks, Window, Help) are in the top bar's menu under its name, answered the way these apps answer
+  (`org.huginn.App.p<pid>`). Its toolbar groups are the islands' size (40 tall, 12 from the edge), and its Web
+  Inspector opens in a window of the desktop's kind. The browser's pull requests #4 and #6. Checked in the nested
+  session, dark and light, two realms, commands picked from the bar, and a stress run under the session's own Qt
+  settings (about 1,700 driven steps, 1,200 random key presses, eight repeated sessions: no errors, memory level);
+  not on real hardware.
+- **Light and dark reach the apps that are open.** Changing light, dark or the realm rewrote KDE's colours
+  (`apps/huginn_look.py`) but, since Plasma's own tool left the image, told nobody: Qt and KDE apps kept the old
+  colours, and web pages inside them the old light or dark, until started again. It now sends KDE's own notice
+  (`org.kde.KGlobalSettings.notifyChange`). The browser passes it on to the pages it has open.
+- **A menu closed with Escape no longer eats the next pointer move.** The first motion after a menu's grab ended was
+  dropped (Smithay puts the pointer back and discards the event), so a single jump followed by a press (a tap
+  elsewhere on a touchpad, a tablet, a remote desktop) landed where the pointer used to be. The compositor sends that
+  motion once more (`input_handler.rs`: `settle_pointer`). Checked in the nested session.
+
+## The third set of apps
+
+`apps/huginn_reminders.py` (Reminders) and `apps/huginn_extra.py` (the rest). Each is a front for something the
+system already does; when that thing isn't installed or reachable the app says so in plain words.
+
+| App | What it does | What it leans on | Not yet |
+|---|---|---|---|
+| Reminders | Lists; Today, Scheduled, All, Flagged, Done; a new one typed as you'd say it ("Call Sam tomorrow 9am", "rent 1 dec", "in 2 weeks at noon"); notes, repeats (ticking one off moves it to next time); details sheet. The shell announces a reminder when it comes due whether or not the app is open. Calendar shows reminders that have a day; Notes ("remind me about this line") and Mail ("remind me about this") add to it; the dock shows how many are due Search across every list; put one off (an hour, this evening, tomorrow, next week) | Nothing: one JSON file, locked while written | Subtasks, sharing a list, snoozing from the notification itself, location-based |
+| Phone | Devices near you; pair (a code on both screens to compare), send files (also "Send to Phone" in Files), send the clipboard, send a note or a web address (a link opens on the phone), ring a lost phone, ping, battery level; from the phone: its notifications (with their buttons and replies), calls (in the island), files, links, words and its clipboard | Huginn's own link, `apps/huginn_phoned.py` (KDE Connect's protocol); the phone needs the free KDE Connect app, same network | Reading whole text conversations, browsing the phone's files, using the phone as a remote or to control music here |
+| Print & Scan | Printers with their state and the usual one; print a file with copies, both sides, page ranges, paper size, black-only, sideways, fill-the-page ("Print…" in Files); the queue, with cancel. Scanners: scan pages one after another in colour or grey at three qualities, drop a bad page, save all as one PDF at the paper's true size in Documents/Scans, then send it by Mail | CUPS (`lpstat`, `lp`) and SANE (`scanimage`); driverless network and USB devices appear by themselves | Adding a printer that needs a driver or an address typed in, which tray, ink levels, document feeders and both-sides scanning, text recognition (OCR) |
+| Maps | A map you can drag and zoom; search for a place or address; kept places; directions by car, bike or foot with the route drawn and each turn written out; km or miles; opens `geo:` links. Huginn never works out where you are | OpenStreetMap: its tile, search (Nominatim) and routing servers. These are run by volunteers for light use: for a distro with many users, point `/etc/huginn/maps.json` at your own (`{"tiles": …, "search": …, "driving": …, "cycling": …, "walking": …}`) | Offline maps, public transport, live traffic, "where am I", satellite pictures |
+| Podcasts | Follow shows by name or feed address; episodes newest first; play, skip back 15 / forward 30, seek; playing speed (0.8× to 2×); keep an episode in `~/Podcasts` to play offline; remembers where you stopped and what you've played; checks for new episodes | Each show's own feed. Finding a show by name asks Apple's public podcast directory (only the words typed are sent) | A queue, chapters, keeping new episodes automatically, playing on in the background with the window closed |
+| Books | A shelf of your EPUB books (from `~/Books`, Downloads, Documents) with covers and how far you are; a clean reading column; letter size; glass, sepia, white or black paper; a contents list from each part's heading; the book's own pictures, scaled to the column; reopens where you stopped. Opening a book can't fetch or run anything: only pictures from inside the book file are shown, and links, styles and scripts are dropped | Nothing (reads the files itself) | Search, highlights and notes, books locked by a shop (DRM), PDF (that's Documents), MOBI |
+| Translate | Type or paste on the left, read on the right; swap; copy; earlier translations (kept in a file only you can read, with Clear and Don't Keep); translate a whole text file into a new file beside it ("Translate…" in Files); a language-pack manager that can also add a pack from a file you already have. Nothing typed ever leaves the computer; fetching a pack is the only network use | Argos Translate, which Ubuntu doesn't package: `config/hooks/30-translate.sh` puts it in the image from PyPI, asking for the CPU-only build of PyTorch (the ordinary one brought graphics-card libraries and measured 5.5 GB here; the CPU-only size wasn't measurable from the sandbox, expect 1 to 2 GB). If it can't be fetched the image is built without it and the app says so. Delete that file to leave Translate out | Detecting the language, translating files or web pages, speaking the result |
+| Screenshot: Record a Video | Records a screen or a window, with what the computer is playing ("Sound: On/Off"; it carries on silently if sound can't be captured), to a video in Videos/Screen Recordings; the desktop's own picker asks what to share, so nothing is captured unasked | The desktop's screen-sharing service (xdg-desktop-portal), PipeWire and GStreamer, driven by `apps/huginn_screencast.py` | The microphone, recording just an area, a pause button, showing clicks |
+| Games | Installed games from Steam, and from Epic, GOG and Amazon through Heroic, appear by themselves (name, cover, size, hours, last played); add your own Windows or Linux games by picking the program or dropping it in; a rail to see one shop at a time or what's running; Play / Stop; a profile per game of your own: compatibility layer (any Proton Steam has, Wine, or run directly), launch arguments, environment variables, performance overlay (MangoHud), GameMode, sync mode, the game's language, skip in-game videos, DLL preferences; each Windows game gets its own bottle; Steam accounts with what each has played here, and switching between them |
+
+### Games
+
+"The big screen": one game at a time stands large in the middle of the window, with the next ones peeking in from
+the sides like a console's home screen, and the whole window takes on the colour of the game in front. Under it are
+its name and one Play button. The shops are chips above (Everything, Steam, Epic, GOG, Amazon, Yours, each with its
+count); a film strip along the bottom jumps to any game. Left and Right move, Enter plays, the wheel turns the reel.
+A game's profile is an island that slides in on the right. A game with no cover from its shop gets a poster drawn
+from its name, so no two look alike; nothing uses shader effects, so it also draws without graphics acceleration.
+
+- **Steam games** are started by Steam (`steam://rungameid/…`), so Steam's own Proton, cloud saves and overlay keep
+  working. A profile for a Steam game can't be pushed into Steam from outside, so the profile makes the Launch
+  Options line (`… gamemoderun mangohud %command% -args`) with a Copy button and a button that opens the game's
+  properties in Steam.
+- **Epic, GOG and Amazon games** come through [Heroic](https://heroicgameslauncher.com), the free launcher that signs
+  in to those three shops. Games reads Heroic's own lists (`legendaryConfig/legendary/installed.json`,
+  `gog_store/installed.json`, `nile_config/nile/installed.json`, names from `store_cache/*_library.json`, play time
+  from `store/timestamp.json`, covers from Heroic's `images-cache` when Heroic has already saved them) in
+  `~/.config/heroic` or the Flatpak's folder, and starts a game with `heroic --no-gui heroic://launch/<shop>/<id>`
+  (`legendary`, `gog` or `nile`). Heroic keeps those games' settings, so their profile only says so and opens Heroic.
+  Signing in to the shops happens in Heroic; Games never sees those accounts.
+- **Your own games**: a Windows program runs with the newest Proton that Steam has installed (through `umu-run` if
+  that is installed, otherwise Proton's own `proton run`), or with Wine; a Linux program runs directly. Each Windows
+  game's bottle is `~/.local/share/huginn/games/bottles/<id>`; what a game printed is in `games/logs/<id>.log`.
+- **Steam accounts**: read from Steam's `loginusers.vdf` and each account's `localconfig.vdf`. Switching closes Steam
+  (`steam -shutdown`), marks the other account as the most recent one (and `AutoLoginUser` in `registry.vdf`), and
+  starts Steam again; the first change keeps a copy as `loginusers.vdf.before-huginn`. **Games never sees or stores a
+  Steam password**: if Steam doesn't remember the account, Steam asks in its own window.
+- Nothing is asked of any shop's servers, so games you own but haven't installed, and an account's worth, aren't shown.
+- **Not in the image**: Steam (`steam-installer`, from Ubuntu's multiverse with 32-bit packages), Heroic (on Flathub
+  as `com.heroicgameslauncher.hgl`; not in Ubuntu's archive) and Wine. Install any of them and Games picks it up.
+  `mangohud` and `gamemode` are in (`46-huginn-games.list`).
+- **Steam from Flathub** (what "Get Steam" installs): its games run in its sandbox, where the system's `mangohud` and
+  `gamemoderun` aren't, so a profile's Launch Options line never names them there: the overlay is `MANGOHUD=1`
+  with Flathub's MangoHud Vulkan layer (`org.freedesktop.Platform.VulkanLayer.MangoHud`, for Steam's runtime
+  branch, which the App Store installs with Steam), and GameMode comes by itself (above). Controllers: Valve's
+  udev rules (`/etc/udev/rules.d/60-steam-input.rules`, `60-steam-vr.rules`, MIT, from
+  ValveSoftware/steam-devices) are in the image, since the Flatpak can't bring them and Ubuntu only has them in
+  multiverse; they give the person at the computer Steam Input's access to controllers (hidraw) and `/dev/uinput`.
+- Tested (116 + 27 checks, dark and light): against a made-up Steam folder (libraries, manifests, cover cache,
+  accounts, play time, four Protons), a made-up Heroic folder (all three shops, DLC, broken files), and stand-ins for
+  `steam`, `heroic`, `wine`, `mangohud` and `pgrep`; starting, stopping, a game that fails at once, and account
+  switching all ran for real against those. **No real Steam, Heroic, Proton or Wine, and no real game has been
+  started.** Heroic's file layout and launch address are as its own project and other launchers document them, not
+  seen on a real install. First things to check on a real computer: that Heroic's lists are read and its games
+  start, that `proton run` starts a game outside Steam on this image, and that Steam honours the account switch.
+
+What was and wasn't tested (102 + 32 checks, plus every screen rendered in dark and light):
+
+- Reminders: everything, including the typed-line parser (16 phrasings), two windows at once, and the links to
+  Calendar and Notes. The shell's announcement was tested as a function; the notification itself appearing was not.
+- Print & Scan: against stand-ins for `lpstat`/`lp`/`cancel` and `scanimage` that answer in the real tools' formats
+  as I know them. **No real printer or scanner.** The first thing to check on real hardware is whether those formats
+  match. (Phone: see "Phone's own link" below; it needs UDP 1716 and TCP 1716-1764 open if a firewall is on.)
+- Maps, Podcasts: against a small web server on localhost answering in the shapes of Nominatim, OSRM, Apple's
+  directory and an RSS feed. **No live server**, and the map tiles have never been seen drawing (the sandbox is
+  offline). The map uses Qt's own map component with OpenStreetMap's tile server set as a custom host.
+- Books: against EPUB files made by the test. No real shop-bought or library book.
+- Translate: the app's own features against a stand-in translator, **and the real Argos Translate, installed in the
+  sandbox, through the app's wrapper**: it loads, reports no languages, fetches the real list of 100 packs, and refuses
+  a file that isn't a pack. What the sandbox's network blocked was downloading a pack (argos-net.com), so **no real
+  sentence has been translated here**.
+- Record a Video: only the app's side (start, stop, cancel, failure) against a stand-in recorder.
+  **`huginn_screencast.py` has never run**: the sandbox has no desktop session, PipeWire or python3-gi. It is written
+  to the portal's published interface and is the piece most likely to need a fix on first use.
+- `config/package-lists/45-huginn-more-apps.list` holds the packages these need. Checked against Ubuntu 26.04's
+  archive: `python3-pyside6.qtlocation` and `qml6-module-qtlocation` exist there, and `qt6-location-plugins` (the
+  OpenStreetMap map plugin, which Maps needs) was added. The others are long-standing Ubuntu names but weren't each
+  looked up; if the build stops on one, that line is the one to fix.
+
+## The fourth set of apps
+
+Eleven more, each with a layout of its own and its own colour (`tokens/tokens.json`). Plain text and code open in Code (below); anything with formatting belongs in Writer.
+
+| App | The look | What it does | Leans on |
+|---|---|---|---|
+| Messages | "The people strip": faces along the top, the conversation as a river of bubbles, one floating writing island | Chat over [Matrix](https://matrix.org) with anyone on any Matrix app or server. Sign in with your Matrix address; the sign-in (an access token, never the password) and this device's encryption keys are locked in the Passwords vault. Chats you start are end-to-end encrypted; files are encrypted too in encrypted chats; invitations with Join / No; earlier messages; `/me`; leave a chat. A notice for a new message says only who it's from unless you turn on the words. Like Mail, it keeps listening with the window closed (switch in Account) and the session starts it at login | `python3-matrix-nio`, `python3-olm` |
+| Authenticator | "The dial wall": a round countdown dial per account | Two-factor codes (TOTP and HOTP). Add by scanning the screen while a site shows its QR code, by pasting an `otpauth://` link or a QR picture, by dropping a picture, by typing the key, or a whole Google Authenticator export at once. Codes live in the vault (drawer `otp`), so one unlock opens Passwords and Authenticator together, and Passwords shows a site's current code on its login | `zbar-tools` (reading QR codes) |
+| Privacy Report | "A week in ink", in black and white | Four lanes for the last seven days (camera, microphone, screen sharing, location), what is in use right now, which programs connected to other computers and to how many places (with Look Up), and how many trackers the Huginn browser stopped. A small notebook started at login writes it down; kept 30 days in `~/.local/state/huginn`, never sent anywhere | PipeWire (`pw-dump`), `ss`, GeoClue over D-Bus, the browser's own tracker log |
+| Feeds | "The magazine": every story a card in a grid, each site with its own colour band and chip, the newest unread story as the big card; plain, large type on solid cards; a story opens as one wide, calm column with A− / A+ letter size (remembered) | Follow a site by its address (its feed is found for you: RSS, Atom, JSON Feed), Today / Everything / Starred / one site at a time, minutes to read, stars, read and unread, OPML in and out, checks every 30 minutes and asks only for what changed. Pictures, scripts and styles in a story are never loaded | Nothing (each site's own feed) |
+| Money | "The wallet" | Your banks' own statement files (CSV in the usual layouts, OFX, QFX), skipping ones already in; categories guessed, with your own "always put this shop here" rules; monthly budgets; goals as jars; what comes round every month; a "safety net" ring of how many months your savings cover. One file only you can read. It never signs in to a bank, on purpose | Nothing |
+| Shortcuts | "Recipe cards" | When: pressed, at a time on chosen days, at login, a drive or phone plugged in, joining a Wi-Fi network, battery low. Do: open an app, site or file, a notice, wait, copy new photos into Pictures/Imported, a backup, the volume, Wi-Fi on or off, a command. Six ready-made ones. A shortcut can sit in the apps menu. A light watcher started at login runs them | `wpctl`, `nmcli` |
+| Clips | "The cutting room" (see "Code and Clips Pro" below) | A multi-track video editor on MLT | MLT (`melt`, `python3-mlt`), ffmpeg |
+| Characters | "The type case": drawers on the left, a tray of characters, a big lens above | Every emoji, with skin tones and their names, and arrows, maths, money, punctuation, accented letters, Greek, shapes and signs; search by name; click to copy; recent and starred | Unicode's emoji list from `unicode-data`, or the copy bundled in `apps/data/emoji.json` (from [unicode-emoji-json](https://github.com/muan/unicode-emoji-json) 0.9.0, MIT, licence beside it); Python's Unicode database for the rest |
+| Fonts | "The proof sheet": a sheet of warm paper with every family setting your words on a ruled line | Your own words and size on every font; a specimen page with every style, a size waterfall and the letters; try a .ttf, .otf or a font site's .zip before installing it; install for yourself (no password) into `~/.local/share/fonts`; remove what you installed; stars; monospace view | `fontconfig` (`fc-list`, `fc-query`, `fc-cache`) |
+| Screen Sharing | "Two doors": this computer on the left, someone else's on the right | One button shares this screen with a fresh one-time password (12 letters, none that look alike), its address written large to read out over the phone, who is connected, which screen to show, a new password, and Stop. Sharing never outlives the window. Any Remote Desktop app can connect (Windows' own, Microsoft's Windows App on a Mac or phone, FreeRDP). The other door opens another computer's screen, remembering addresses and names but never passwords | Huginn's compositor's own RDP server (`compositor/src/rdp.rs`, IronRDP), FreeRDP's viewer `sdl-freerdp` (`freerdp-sdl`) |
+| Help | "The field guide": one big question in the middle, guides on shelves with each app's icon, and the window turns the colour of the app you're reading about | 48 short guides (`apps/help/*.md`), one per app plus "Getting started" and "What goes online", searchable in your own words, each with a button that opens its app. `huginn_app.py help mail` opens straight at Mail's | Nothing |
+
+New glyphs (`chat`, `bolt`, `wallet`, `smile`, `type`, `help`) are drawn in both `Glyph.qml` files, the eleven icons in
+`scripts/make-icons.py`, and the packages are in `config/package-lists/47-huginn-new-apps.list`. At login,
+`huginn-session-apps` now also starts Messages in the background (it leaves at once without an account), Shortcuts'
+watcher and Privacy Report's notebook. Fonts opens font files, Feeds `feed:` links and feed files, and Money
+statement files by default (`/etc/xdg/mimeapps.list`). The build now also installs Help's guides, the emoji list and
+the windows' grain picture (`qml/grain.png`, which the image had been missing).
+
+What was and wasn't tested (all on this sandbox, every screen rendered in dark and light with no QML warnings):
+
+- **Messages** (41 checks) against a **real Matrix server** (Synapse) on this machine, with a second person played
+  by a separate Matrix client: signing in (bad address, wrong password, new vault), starting an encrypted chat, the
+  other person joining, messages decrypted both ways, encrypted files both ways and decrypted into Downloads,
+  invitations, notices without the words, restart and unlock from the vault, sign-out. One more check: if this
+  device's keys aren't ready, a message to an encrypted chat is refused with a reason, never sent in the clear.
+  **Not tested against matrix.org or any public server.** Not yet: verifying the other person's device (emoji
+  check, cross-signing), reading messages encrypted before this device signed in (key backup), servers that only
+  allow signing in through a web page, replies, reactions and edits, calls.
+- **Authenticator** (47 checks): code arithmetic against RFC 4226 and 6238's own test values, every way of adding,
+  a hand-made Google Authenticator export, the vault, and Passwords showing the code. Reading a real QR code needs
+  `zbarimg`, which wasn't in the sandbox, so only its output handling was tested. Not yet: the browser filling codes
+  in for you, Steam Guard codes.
+- **Privacy Report** (20 checks): against recorded `pw-dump`, `ss` and `/proc` output. **Not run on a live desktop**:
+  the first thing to check is that PipeWire's own words for camera, microphone and screen streams match. The
+  location service only says when location is in use, not by whom.
+- **Feeds** (49), **Money** (51), **Shortcuts** (55): against a local web server (RSS, Atom with XHTML, JSON Feed,
+  discovery, not-modified answers, OPML), statements in four banks' layouts and OFX (SGML and XML), and simulated clocks,
+  drives, phones, Wi-Fi and battery. Shortcuts' watcher was never left running through a real login.
+- **Clips** (44): a **real export through ffmpeg** of clips of different sizes, an upright one and a silent one, with
+  soft cuts and captions, checked with ffprobe (length, sound, size); a second export doesn't overwrite, Stop leaves
+  nothing behind. Playing in the window (QtMultimedia) was not tested: it can't run off-screen.
+- **Characters, Fonts, Screen Sharing, Help** (74 checks + 45 on-screen): Unicode's emoji-test format and the bundled
+  list, tones, copying and the clipboard; Fonts installing a real font and a font site's .zip (paths inside the zip
+  are never trusted, Mac junk skipped), listed by fontconfig, then removed, with system fonts refused; Screen Sharing
+  against a stand-in for `sdl-freerdp` (a password handed to the viewer on its input so it never shows in the
+  process list). Sharing this screen is the compositor's own since 2026-11-27: see "Screen Sharing from the
+  compositor". If you turn on the firewall (`ufw`, installed but off), allow port 3389.
+- Help: every app has a guide and every guide's app exists (checked by the test), and the guides' button names were
+  checked against the apps' own.
+
+## Code and Clips Pro (round 1 of several)
+
+**Code** (`apps/huginn_code.py`, `qml/Code.qml`), "the workbench", in glass panels: a slim rail of tools on the left
+(files, project search, Git, problems, tests, the outline) beside the panel it opens, open files as pills floating
+across the top, the code on a deeper pane of Code's indigo glass, a terminal that slides up beneath it, and the status
+line as small islands along the bottom. Text and code files open here by default (`mimeapps.list`); Documents now
+reads PDFs only and hands anything else to Code. One Code at a time: opening a file while it runs sends it to the open
+window.
+- Editing: per-tab undo, syntax colouring for ~25 languages (block comments, Python's triple quotes, decorators,
+  types, function names), the file's own indentation, Enter keeps and adds indent, brackets and quotes close
+  themselves, Tab / Shift+Tab indent lines, Ctrl+/ comments, find and replace with case / whole word / pattern,
+  word wrap, letter size, the file's encoding and line endings kept, a file changed on disk is taken in when nothing
+  was typed here and asks first when something was.
+- Getting around: Ctrl+P quick open (fuzzy, honours `.gitignore`), `>` commands, `:` line, `@` symbol; a command
+  palette (Ctrl+Shift+P) with every action and its key.
+- Project: a file tree with Git colours, new / rename / Trash, search across the project with ripgrep, replace in
+  every file it found (open files change in their tab, undoably).
+- Git: branch, changes, a diff for each file, stage / unstage / throw away (asks first; a new file goes to the
+  Trash), commit (stages everything when nothing is), pull and push (a sign-in prompt can't appear, so it says to
+  run the command once in the terminal), change bars beside the line numbers.
+- Language servers, the same ones VS Code uses, over LSP: completions as you type, problems underlined and listed,
+  hover (Ctrl+I), go to definition (F12, Ctrl+click, across files), format. Python's (pylsp) is in the image, quiet
+  about style (pyflakes on, pycodestyle off); clangd, rust-analyzer, gopls, typescript-language-server,
+  bash-language-server and others are used when installed. Without one: word completions and Python / JSON checks.
+- Run (F5): saves, then runs the project its usual way (make, cargo run, go run ., npm run dev/start, CMake,
+  Django) or the file in front, in the terminal; `.huginn-run` holds your own command.
+- Tested (69 + 23 checks): against a real Git repository, ripgrep and a **real Python language server** (pylsp:
+  problems, completions, hover, definition in another file, problems following your typing), the hand-over to a
+  running Code, and on screen: typing helpers, palette, find, commit, project search and a real shell in the
+  terminal. Not yet: a debugger (DAP), rename and references, multiple cursors, split editors, a minimap, extensions.
+
+**Clips Pro** (`apps/huginn_clips.py`, `qml/Clips.qml`), "the cutting room", now on **MLT**, the engine behind Kdenlive
+and Shotcut. The project is JSON; Clips writes it as an MLT project that both the viewer and the export read, so the
+picture is exactly what will be made. The first Clips' projects are carried over.
+- Library with bins, thumbnails, durations, 4K badges and **proxies** (540-line stand-ins for smooth 4K editing;
+  exports use the originals).
+- Timeline: as many video tracks (stacked, for picture-in-picture, logos and titles) and sound tracks as you like,
+  with hide / mute / lock; drag to move with snapping, drag ends to trim, ripple, blade tool and cut at playhead,
+  duplicate, markers, zoom, undo and redo; waveforms on sound and thumbnails on video.
+- Place: size, position, turn, see-through, crop, fades, **keyframes** (◆ at the playhead) for size, position,
+  see-through and volume.
+- Colour: exposure, contrast, saturation, white balance, tint, shadows / midtones / highlights **colour wheels**,
+  **LUTs** (.cube), and scopes (waveform, vectorscope, histogram) of the current frame.
+- Effects: blur, sharpen, vignette, black and white, mirror, flip, video denoise. Speed ¼× to 8× with pitch kept.
+- Sound: volume and fades per clip, noise clean-up, **music ducking under voices**, loudness evened out for the web
+  (EBU R128, −16 LUFS) when making the video.
+- Titles: lower third, big title, heading, subtitle; size, colour, alignment, placement, band and shadow.
+- Transitions on the same track: cross dissolve and eight wipes (patterns drawn for Huginn, `apps/data/lumas`); they
+  borrow footage beyond the cut, and where there is none the clips overlap, as Final Cut does.
+- Export presets: H.264, H.265, AV1, ProRes 422 HQ, AAC and WAV, at the project's size, 4K, 1080p, 720p or half, in
+  three qualities, never over another file, stoppable. Save as an MLT project for Shotcut or Kdenlive.
+- Viewer: frames pulled through MLT's Python bindings at the project's rate on their own thread (late frames are
+  skipped), sound through MLT's audio output started at the same moment. Without the bindings, the viewer shows the
+  exact frame under the playhead rendered by `melt`, and says that playing needs `python3-mlt`.
+- Tested (54 checks without the bindings, 56 with; 16 on screen): with real footage, the model (blade with
+  keyframes, ripple, snapping, overlaps refused, the transition overlap), the MLT project (every filter it uses
+  present, ducking keyframes on the music), **real exports through melt** checked with ffprobe (size, length, sound,
+  the black-and-white grade visible in the pixels), sound-only export, stopping, saving the .mlt; the live viewer
+  rendering and playing at about 26 frames a second on this 2-core sandbox, dragging and the blade on screen.
+  **Not heard**: the sandbox has no sound device, so playback sound (MLT's `sdl2_audio`) is untested; picture and
+  sound are started together and kept by the clock, not locked to each other, so long plays may drift slightly.
+  Not yet (later rounds): multicam, motion tracking, stabilising, speech-to-text captions, curves, masks, nested
+  timelines, audio mixer and effects, GPU effects.
+
+## Settings, Software Update, Online Accounts, photo editing and Easel
+
+**Settings** is now the whole system's settings: 17 pages in a rail of coloured tiles, each page in its own colour
+(the window's light takes it on), and a search that finds any setting. Each page talks to the tool the system already
+uses, so changes made elsewhere show here too:
+
+| Page | Tool | What it does |
+|---|---|---|
+| Wi‑Fi & Network | NetworkManager (`nmcli`) | networks in range, join (password on stdin, never in the process list), hidden networks, details, VPN from WireGuard/OpenVPN files, hotspot, airplane mode, saved networks |
+| Bluetooth | BlueZ (`bluetoothctl`) | power, visibility, scan, pair, connect, forget, battery levels |
+| Online Accounts | `huginn_accounts.py` | see below |
+| Displays | KWin (`kscreen-doctor`, `kwinrc`) | a map to drag screens, resolution, scaling, refresh, rotation, main screen, brightness (`brightnessctl`), night light |
+| Sound | PipeWire (`pactl`) | output and input devices and levels, a test sound, every app's own volume |
+| Battery & Power | UPower, power-profiles-daemon, PowerDevil (`powerdevilrc`) | charge, health, cycles, power mode, screen-off and sleep times, lid and power button |
+| Keyboard & Mouse | KWin's input devices over D-Bus, `kcminputrc`, `kxkbrc` | layouts, Caps Lock, Compose, key repeat; per device speed, natural scrolling, tap to click, left-handed |
+| Date & Time, Language | `timedatectl`, `plasma-localerc` | time zone, network time, 24-hour clock; language and formats with a live sample |
+| Users | AccountsService over D-Bus, `passwd` on a pseudo-terminal | picture (drawn initials or a photo), name, password, other people, administrators |
+| Default Apps | `mimeapps.list`, `~/.config/autostart` | a tile per kind of file; apps that open at sign-in |
+| Privacy & Security | ufw, Flatpak's permission store, `kscreenlockerrc`, `ktrashrc` | firewall, per-app camera/microphone/location, screen lock, recent files, emptying the Trash |
+| Notifications | `~/.config/huginn-shell/notifications.json` | Do Not Disturb, quiet hours, previews, per-app allow/banner/sound (the shell reads it in Phase 3) |
+| Software Update | `huginn_updates.py` | see below |
+
+Anything the system guards (firewall, time zone, other people's accounts) goes through polkit, so the system's own
+window asks for the password; Settings never sees it. PowerDevil now starts with the session, so the power settings act.
+
+**Software Update** (`apps/huginn_updates.py`): system packages through PackageKit (or `pkexec apt-get`), Flathub apps
+(user and system), firmware through fwupd, and the Huginn browser straight from its repository. A newer browser goes
+into `~/.local/share/huginn-os/browser/<commit>`; `/usr/bin/huginn` starts whichever copy is newer, and Go Back
+returns to the previous one. Downloads are unpacked only inside their folder and must compile before they're used.
+Automatic updates (on by default) run from the session every six hours: apps and Huginn at once, system updates
+downloaded and installed at the next restart (PackageKit offline updates). The App Store has an Updates page.
+
+**Online Accounts** (`apps/huginn_accounts.py`): Google and Microsoft through their own sign-in pages (the same OAuth
+registration as Mail, `/etc/huginn/mail-oauth.json`), iCloud with an app-specific password, Nextcloud through its
+login flow. Sign-ins are kept in the Passwords vault. Mail gets the account (it notices without a restart);
+calendars come in over CalDAV (Microsoft: Graph) and edits made in Calendar go back, touching only the name, day and
+time in the server's copy so invitees and alarms survive; contacts come down over CardDAV; Nextcloud files are
+mounted with gvfs. `huginn_accounts.py watch` keeps them in step every 15 minutes.
+
+**Photos editing** (`apps/huginn_photoedit.py`): Adjust (light, colour, detail, Auto Enhance), eleven filters with
+live previews and strength, crop with shapes, straighten (trimmed so no empty corners), turn, flip, undo and redo,
+hold to compare, Save as Copy. Non-destructive: the original is put aside at the first edit, edits are kept as
+numbers, re-editing starts from the original, Revert to Original restores it.
+
+**Easel** (`apps/huginn_easel.py`, `huginn_easel_ui.py`, `qml/Easel.qml`), the new image editor: pixel and vector
+layers in one picture, like Affinity's single app. Pixel bench: seven brushes (size, hardness, flow, opacity,
+scatter), eraser, fill (tolerance, touching only), gradients, rectangle/ellipse/lasso/magic-wand selections that add
+and subtract, feather, grow and shrink, move (what's selected, or the layer), crop. Vector bench: rectangles,
+ellipses, lines, stars, a pen with curves, text; pick, move, resize, rotate, arrange, align, and combine (unite,
+subtract, intersect, exclude). Layers with blend modes, opacity, masks you paint on, adjustment layers, merge,
+flatten, rasterise. Filters, canvas and image size, rotate and flip, trim. Files: `.easel` (zip of a manifest and
+PNG layers), OpenRaster `.ora` for Krita and GIMP, PNG/JPEG/WebP/TIFF/SVG in; PNG, JPEG, WebP, SVG and PDF out (SVG
+and PDF keep shapes as vectors). Round 1 of several: next are layer groups, free transform for pixels, clone and
+healing brushes, curves, smart objects, guides and rulers, node editing, gradients on shapes, and PSD import.
+
+Tested here: `settings_test` (61: every parser on real output formats, the right command for each change, passwd on a
+pseudo-terminal, Huginn's own updater end to end), `settings_ui_test` (26: all 17 pages load clean, search),
+`accounts_dav_test` (26, against a real CalDAV/CardDAV server, Radicale), `mail_absorb_test` (5), `photoedit_test`
+(40), `easel_test` (89), `easel_ui_test` (20, real mouse and keys); the earlier suites still pass. Not tried here,
+because this machine has none of it: real Wi‑Fi, Bluetooth, screens, sound, batteries, KWin's input devices,
+AccountsService, PackageKit and fwupd, and signing in to the real Google, Microsoft and iCloud.
+
+## Easel, Code and Clips: round two
+
+The second round on the professional apps. Each change was tested against the real tools (debugpy, GDB, pylsp,
+melt, ffmpeg's vid.stab), not mocks.
+
+**Easel** (`apps/huginn_easel.py`, `apps/huginn_easel_ui.py`)
+- **Free transform** (Ctrl+T) of a layer or a selection: move, scale (Shift keeps the shape), rotate, flip.
+- **Clone stamp** (S) and **healing brush** (J). Healing blends the patch's texture with what's around it. Alt-click a source, or let Easel pick a clean spot.
+- **Curves** adjustment layers, per channel. The curve is a monotone cubic.
+- **Gradient fills** on shapes: linear in any direction, or radial.
+- **Point editing** (A) of vector outlines. Click a segment to add a point (a de Casteljau split), delete points, switch corner and smooth. Convert to Outlines turns type and simple shapes into paths.
+- **PSD** in and out: layers, names, opacity, blend modes, hidden layers and the merged image (8-bit RGB and grey, raw and RLE).
+
+**Code** (`apps/huginn_code.py`, new `apps/huginn_debug.py`)
+- **A debugger** over the Debug Adapter Protocol, the protocol VS Code's debuggers speak:
+  - Python uses debugpy. C, C++, Rust and Go use GDB 14+ (`gdb -i dap`). For compiled programs, Code asks for the program once and remembers it in `.huginn-debug`.
+  - Click a line number or press F9 for a breakpoint. Breakpoints are kept per project and follow their code as lines are added or removed.
+  - F5 starts or continues, F10/F11/Shift+F11 step, Shift+F5 stops. Run moves to Ctrl+F5.
+  - The stopped line is marked. The Debug panel shows the call stack, variables a level at a time, and a console that works out expressions in the paused program. The controls dock in the panel, or float over the editor when the panel is closed.
+- **Rename** (F2) across the project through the language server's `textDocument/rename`. It applies the WorkspaceEdit to open tabs (unsaved) and to closed files on disk. Without a server, whole words in the file are renamed.
+- **Find all references** (Shift+F12) lists results in the Search panel. Without a server, they're found by name, in open tabs as typed and on disk for the rest.
+- **Side by side** editing (Ctrl+\\).
+- **A minimap** drawn by a Python image provider (`image://minimap`), with the visible part marked. Click or drag on it to scroll.
+
+**Clips** (`apps/huginn_clips.py`)
+- **Colour curves** per channel, through MLT's `avfilter.curves`. The curve pad draws the same natural cubic spline ffmpeg uses.
+- **Steadying.** A quick `avfilter.deshake` plays at once. Meanwhile a careful two-pass vid.stab copy (detect, then transform with optimal zoom) is made in the background and swapped in for the viewer and the export.
+  - Tested: on a shaky test clip, frame-to-frame difference falls by about half.
+  - MLT's own `vidstab` filter wasn't used: its analysis only holds at the size it was made at, and Clips previews at a smaller size than it exports.
+- **A mixer** with a strip per track: fader (track gain added to every clip's level), pan (MLT `panner`), mute, solo (the tracks' `hide` attributes) and meters from the sound outlines under the playhead. A fader drag is one undo step.
+- **Captions** on their own track:
+  - SRT and VTT in and out. Exports save an `.srt` alongside the video.
+  - Speech to captions through whisper.cpp (`whisper-cli` and a ggml model) or faster-whisper when installed. The film's mix is rendered to 16 kHz mono first. Not shipped, because the models are large.
+
+Packages added: `python3-debugpy`, `gdb`.
+
+## Accessibility, three new apps, and the pro apps' round three
+
+Tested against the real tools where this build machine has them: QEMU (a UEFI machine's screen drawn in the window),
+SANE's test scanner, Tesseract, FluidSynth, git, pytest, `go test`, melt and ffmpeg.
+
+**Settings → Accessibility** (`apps/qml/SetAccessibility.qml`)
+- Seeing: the screen reader (Orca), Zoom (KWin's zoom effect: follow the pointer, keep it centred or push at the edges), bigger everything (the shell and apps scale by `QT_SCALE_FACTOR`), high contrast, solid surfaces instead of glass, reduce motion, colour filters (KWin's colour-blindness filters and greyscale) and pointer size.
+- Hearing: a screen flash instead of the alert sound. Moving and typing: sticky, slow and bounce keys, mouse keys and the on-screen keyboard (Maliit).
+- High contrast, solid surfaces and reduce motion are read by the shared theme, so every Huginn app follows them. KDE's own settings are written to `kaccessrc` and `kwinrc`, and KWin effects are switched over D-Bus so they take effect at once.
+
+**Scan** (`apps/huginn_scan.py`, new): documents from scanners (SANE `scanimage`, glass or feeder, one side or both) or from photos of pages. A photo's paper is found (OpenCV, with a plain-numpy fallback) and straightened (`QTransform.quadToQuad`); drag the corners if the guess is off. Clean-up as Document (white paper, black ink, shadows gone), Grey, Colour or as it is; every page keeps its original. Tesseract reads the text; the PDF (A4, Letter or each page's size) gets a hidden layer of it, so it can be searched and copied.
+
+**Machines** (`apps/huginn_machines.py`, new): other operating systems in a window on QEMU, with KVM when the computer allows. Machines recognises installers in Downloads (Ubuntu, Fedora, Debian, Mint, Windows…) and suggests memory, processors and disk. Windows machines get UEFI with Secure Boot (OVMF) and a TPM (swtpm). QEMU is controlled over QMP and drawn by Machines' own VNC (RFB 3.8) client over a private socket, so nothing listens on the network. Snapshots include the running state; closing Machines saves running machines to carry on later. A folder can be shared into Linux machines (9p).
+
+**Tempo** (`apps/huginn_tempo.py`, `apps/huginn_tempo_engine.py`, new; first called Studio): a music studio in the GarageBand mould, with the depth of a DAW.
+- Templates; instrument, drummer and audio tracks; regions to move, trim, split and copy; undo.
+- Fifteen instruments: synthesised ones (FM, subtractive, organ, plucked) and General MIDI ones rendered from FluidSynth multisamples; three drum kits.
+- A piano roll with velocity and quantize, a drum grid, a drummer (style, kit, a pad from simple to complex and soft to loud, fills) and 18 loops that follow the song's key.
+- Smart controls; per-track EQ, compressor, drive, chorus, delay and filter; sends to a shared reverb (partitioned convolution) and echo; volume automation; a limiter on the output.
+- Recording from the on-screen keyboard, the computer's keyboard, MIDI keyboards (`/dev/snd/midiC*D*`) and the microphone; cycle and metronome.
+- Export to WAV, FLAC, MP3, AAC, Ogg, stems or MIDI; MIDI files and sounds come in by dropping them on the window.
+
+**Easel**: *Fill with Surroundings* (content-aware fill: PatchMatch with expectation-maximisation over an image pyramid, on a crop round the selection, in the background), *text on a path* (type follows a pen path, with an offset along it), and *pen pressure* from tablets (size, strength, both or neither).
+
+**Code**: *blame* by every line (`git blame --porcelain` on the unsaved text) and inline for the current line; *history* of the folder or the file with a lane graph of the branches, and each change's diff file by file; a *test explorer* for pytest (JUnit XML), Go (`go test -v`) and Rust (`cargo test`): run all, a file or one, with failures and their output.
+
+**Clips**
+- *Easing* between keyframes (even, ease in, ease out, both, hold). MLT animates in straight lines, so eased stretches are sampled every two frames.
+- *Sound effects* per clip: clear voice (high-pass, presence, compressor), compressor, three-band EQ and echo. The EQ uses MLT's SoX filter: MLT's libavfilter biquads (`avfilter.bass`, `equalizer`, `highpass`) were found to pass sound through untouched.
+- *Multicam*: two to four clips lined up by cross-correlating their sound; cut between angles with 1–4 or the angle tiles as it plays; pick whose sound to use; flatten back to clips.
+- *Motion tracking*: draw a box round something and it's followed (OpenCV template matching, refreshed as it goes, searched for again when lost). Pixelate it (a run of MLT `obscure` filters), or make a title or picture follow it with position keyframes.
+
+Packages added (`config/package-lists/51-huginn-settings.list`, `52-huginn-scan-machines-tempo.list`): `orca`, `speech-dispatcher`, `espeak-ng`, `maliit-keyboard`, `tesseract-ocr` and language packs, `python3-opencv`, `qemu-system-x86`, `qemu-utils`, `ovmf`, `swtpm`, `swtpm-tools`, `fluidsynth`, `fluid-soundfont-gm`.
+
+Not tested here: KWin's effects and Orca (they need a KDE session), real scanners, KVM speed (this build machine has no KVM), sound output and the microphone (no sound card), drawing tablets, and whisper models.
+
+## The pro suite
+
+Four apps are being taken, round by round, to the level of the professional tools people already know:
+
+| App | Measured against | Rounds so far |
+|---|---|---|
+| Easel | Photoshop, Illustrator | 4 |
+| Code | Xcode, VS Code | 4 |
+| Clips | Final Cut Pro, Premiere, DaVinci Resolve | 4 |
+| Tempo (first called Studio) | Logic Pro, Ableton Live | 3 |
+
+**Tempo, pro pass one** (`apps/huginn_tempo_engine.py`, `apps/huginn_tempo.py`, `apps/qml/Tempo.qml`)
+- *Sections*: Intro, Verse, Chorus markers over the bars. Copy a section after itself, move it, or delete it with its music, and the song closes up; automation goes with it.
+- *Track stacks*: buses with their own effects, fader and sends. Ctrl-click tracks to stack them, fold them away, or send any track into a stack. Solo and mute follow the stack.
+- *Automation of any knob*: volume, pan, both sends and every effect's settings. Effects keep their state as knobs move, so sweeps don't click.
+- *Sidechain*: any compressor can listen to another track (Duck Under… sets it up). The compressor now follows with real attack and release, a fast and a slow follower, whichever is higher.
+- *Editing recordings*: gain, fades, reverse, transpose and follow-the-tempo. Stretching and transposing use our own phase vocoder, with phase locking so chords stay clear (a minute of stereo in about three seconds).
+- *Takes and comping*: every pass round the cycle becomes a take, MIDI or sound (the count-in is no longer recorded). Comps are swiped across takes and crossfaded over 5 ms; flattening writes them as one recording.
+- *Sampler*: any sound across the keys, its note heard by our own YIN pitch detector, held or one shot, with start, end, attack and release. Drum kits take sounds of your own on any drum.
+- *MIDI effects*: an arpeggiator (up, down, up and down, as played, random; 1/8 to 1/32 and triplets; up to four octaves) and a chord trigger (fixed shapes, or the chords of the song's key, live too).
+- Songs made in Studio move to Music/Tempo on first start.
+
+**Tempo, pro pass two** (`apps/huginn_tempo_lv2.py`, new; `apps/huginn_tempo_engine.py`, `apps/huginn_tempo.py`, `apps/qml/Tempo.qml`)
+- *Plugins*: the LV2 effects and instruments Linux's audio world shares, hosted through lilv. In the image: LSP's
+  studio effects, Calf's (and its synth and organ), x42's, Dragonfly's reverbs, AVL's sampled drum kits and setBfree's
+  tonewheel organ, about 240 effects and 8 instruments in all; anything else installed turns up too.
+  - Found by a scan in a process of its own, as other studios do: each plugin is started and played a moment, and
+    one that crashes, gives back no numbers (ZamEQ2: all NaN), or as an instrument makes no sound is left out
+    without taking Tempo down. Also left out: meters and scopes (nothing to see without their own windows), plugins
+    that need a file before they sound (samplers, impulse reverbs), and those whose sound engine brings in Qt or GTK
+    (synthv1 and padthv1 load Qt there, which aborted the process). The list is kept until something is installed or
+    removed.
+  - The host gives what plugins ask for: URIDs, options (sample rate, block sizes), bounded blocks and a worker,
+    whose jobs are done between blocks. Mono plugins run twice (left and right); extra inputs hear silence.
+  - Effects go on any track, stack or the master like Tempo's own, with their first controls on the card and all
+    of them, with the plugin's presets, in a panel (switches, named values, sliders on a log scale where the plugin
+    says). Their knobs can be drawn over time. A plugin gone from the computer is passed through and says so.
+  - Instruments are in the library under Plugins (kits open in the drum grid). A region is drawn in one pass as
+    MIDI, after a moment of silence for kits to load their sounds, with the instrument's own tail; the keyboard's
+    notes are kept per pitch and strength. Their first knobs are the Smart Controls.
+  - lilv's Python side wants `liblilv-0.so` (only in the development package) and frees its objects in no order at
+    exit (the process crashed on the way out): it's given the library itself, and its clean-ups are skipped at exit.
+    Its scale points are read through the C calls (its wrapper frees them before they can be read). LV2's own
+    descriptions of kinds of plugin are only in `lv2-dev` (1 MB), so that's in the image too.
+  - Tested (10 checks): a plugin synth plays its region in stereo and a preset changes it; a sampled kit's first
+    kick is heard; a reverb plugin adds a tail; drawing the x42 EQ's gain over time makes the second half 28.5 dB
+    louder; a missing plugin passes the sound through; three plugins take 1.4 ms of a 21 ms block. On screen: the
+    browser (search, kinds), adding Dragonfly Hall, the card and every control, a knob saved to the song, Calf
+    Monosynth from the library with its knobs as Smart Controls and its 21 presets.
+
+- *Tempo and time-signature changes* (`TempoMap`, `MeterMap` in the engine). A change jumps to its tempo or glides
+  there evenly from the one before (a glide's time is a logarithm, so beats and seconds convert exactly both ways,
+  to 1e-14). Everything follows: where regions start and each time a loop comes round, the notes inside a region
+  over a glide, recordings (lengths, takes, comps, splits), automation, the clock and display (tempo and signature
+  where the playhead is; changing the tempo there changes the change that governs it), the click and the count-in
+  (each beat of the signature, quarters in 4/4, eighths in 6/8), and MIDI files in and out (a glide as steps an
+  eighth apart: MIDI has none). Bars are counted in quarter notes, so 6/8 is three beats a bar (it was six); the
+  ruler, the bar lines, sections, the drummer, loops and new regions go by the bars where they are.
+  - The Tempo lane (Tempo in the toolbar): the tempo as a line along the song; double-click it to add a change,
+    drag one along or up and down, pick one for its tempo, Glide or removing it. Signature changes show there as
+    chips (double-click one to remove it); clicking the display's signature changes it from the playhead's bar on.
+  - Fixed on the way: starting play inside a cycle went silent on every pass after the first until the playhead
+    passed where it started, and the count-in's last block was a whole block long, putting the song's clock out by
+    up to a block.
+  - Tested (15 checks): a jump and a glide timed against working by hand, beats to seconds and back, bar lines
+    across 4/4, 3/4 and 6/8, a note after a change and one inside a region over a glide starting where the map says,
+    and MIDI keeping a jump, a glide and a signature change. On screen: the lane, adding a change, dragging it to
+    117, Glide, a 3/4 bar from bar 6 with the ruler, the lane's chip and the display following.
+
+- *Groove*: a region's swing (50 % straight to 75 %, 66 % for triplets, on eighths or sixteenths) and humanizing
+  (timing and strength a little off, the same each time), as it plays: the notes stay where they were written
+  (Region › Groove).
+- *Controllers*: a lane under the piano roll for each note's strength (drag its bar) and for the sustain pedal,
+  pitch bend (two semitones either way) and the mod wheel, drawn over the region. A plugin instrument gets them as
+  MIDI (pitch bend every 10 ms along a drawn line); Tempo's own instruments hold notes while the pedal is down and
+  bend and shake (vibrato, 5.5 Hz) each note by playing it faster and slower, as samplers do.
+  - Tested (9 checks): swung eighths a third of an eighth late at 66.7 %, humanizing a little off and the same each
+    time, the pedal holding a short note, a full bend taking Tempo's organ from 440 to 493.8 Hz and Calf's synth the
+    same over MIDI, a drawn bend gliding, the mod wheel's vibrato. On screen: notes' strength bars and a drawn bend.
+  - Not yet: controllers in MIDI files, and on the live keyboard.
+
+**Tempo, pro pass three: sound for games** (`apps/huginn_tempo_game.py`, new; `apps/huginn_tempo.py`,
+`apps/qml/Tempo.qml`). A studio making a game needs things from a music program that a songwriter never asks for.
+
+- *Export for a Game* (Export › For a Game…). What: the whole song, each section, or each region of a track (voice
+  lines, sound effects), and optionally a file per track (layers a game brings in and out). Files: WAV 16 or 24 bit,
+  Ogg Vorbis or FLAC, at 48, 44.1 or 22.05 kHz, stereo or mono. Names an engine takes (`boss_fight_loop`, with a
+  prefix; the same name twice is numbered). The sheet lists every file before anything is written, and exporting
+  again replaces the files, since exporting again into the game's folder is the point.
+  - *Loops that join.* The reverb and echo ringing after the last bar are laid under the first, so the file is
+    exactly its bars long and plays round with no gap and no cut-off tail. Loop points are written into the file: a
+    `smpl` chunk in a WAV (Godot, FMOD and Wwise read it), `LOOPSTART`/`LOOPLENGTH` tags in Ogg and FLAC.
+    Each row can be set to loop or play once; sections called Intro, Outro, End or Sting start as "plays once" and
+    keep their ringing.
+  - *One level for every file*: to a loudness (−16 or −23 LUFS, measured as BS.1770 says) or to a peak, never
+    above −1 dB true peak. Where the loudness asked for would clip, the file stops at the ceiling and the export
+    says how many fell short: no limiter is run over your sound behind your back. Layers of one piece share the
+    mix's gain, so played together they are still the mix.
+  - A folder inside a Godot or Unreal project is recognised (project.godot, a .uproject): the sheet offers its sound
+    folder and says what that engine does with a loop.
+- *Sound effects from numbers* (Effect in the toolbar): coin, laser, explosion, power-up, hit, jump, blip, or a
+  surprise; press a kind again for another, "A Little Different" to nudge one, or shape it with twenty sliders. It
+  is sfxr's method and sfxr's numbers (one wave whose pitch slides, steps and wobbles, an envelope, two filters),
+  drawn eight times finer than it is heard so sliding squares don't whistle. Add to the Song puts it on a Sound
+  Effects track as an ordinary recording.
+- *For recordings* (Region): **Strip Silence** cuts one long take into a region per stretch of sound (fifty voice
+  lines read in one go become fifty regions, named and numbered; nothing is deleted, each can be dragged wider);
+  **Normalize** sets a region's gain so it peaks 1 dB under full; **5 Variations** makes five slightly different
+  copies after a sound (pitch, level), so a footstep heard a hundred times isn't one footstep.
+- *Loudness as it plays*: the mixer's master strip shows short-term LUFS, the whole playing's LUFS and the peak, and
+  says OVER if the mix went past full. Click it to start again.
+- Fixed on the way: a one-channel file at any rate but 48 kHz came in 3 dB quieter than the same file at 48 kHz
+  (ffmpeg's mono-to-stereo); and asking for the tempo line with an absurd number of points hung Tempo (found by the
+  fuzz).
+
+`tempo_game_test.py`: 81 checks, among them: a loop's join is no bigger a step than the wave's own; the loop points
+read back from the WAV and from the Ogg's tags; files at the loudness asked for, and layers summing to the mix
+within 0.05; three voice lines found in a take with room noise and a click; sfxr's "0.3" being 321 Hz, slides,
+steps, both filters and a sweep; and the live meter agreeing with the offline measure to 0.3 LU. In the window:
+the game sheet exporting into a made Godot folder with real clicks, the effect maker, and the meter moving.
+Not checked: importing the files into a real Godot or Unreal editor (the loop chunk follows the WAV specification,
+and what each engine does with it is from their documentation), and how the effects sound to an ear, since the build
+machine has no sound card. Not in this pass: scoring to picture (a video track), an Ableton-style clip launcher, and
+surround.
+
+- *Freeze* and *Bounce in Place* (Smart Controls): freezing draws a track's instrument and effects once (their knobs
+  as drawn) and plays it back from the file, light on the computer however heavy its plugins; its fader, pan and
+  sends still work. Anything the sound depends on changing (its regions, instrument, effects, the song's key or
+  timing) puts it out of date: it plays live again and offers to freeze again. Bouncing puts the same sound on an
+  audio track of its own beside it, and mutes the original. Both in the background.
+  - Tested (9 checks): frozen in 0.6 s, played from the file and the same as live to 0.00001, the fader moving
+    it 12 dB, a new note making it out of date, a bounce beside the original with its sound, the original muted. On
+    screen: freezing, the snowflake on the track.
+
+- *Pitch correction* (Region › Pitch, on recordings): "Find the Notes" tracks the pitch every 10 ms (YIN on every
+  frame at once, through FFTs) and splits it into notes, drawn as blobs over the line as sung. "Tune to the key"
+  moves every note toward the nearest note of the song's key by as much as you like; a blob dragged to a pitch goes
+  exactly there (double-click: back to following the key). Each note is shifted on its own (the phase vocoder, then
+  played at the speed that keeps its length) and crossfaded in over 20 ms; between notes the recording is left as it
+  was. Not yet: flattening drift and vibrato within a note, keeping a voice's formants on big moves.
+  - Tested (7 checks) on a sung line of five notes off pitch (60.3, 62.4, 63.7, 65.1, 67.6, with vibrato): all five
+    found, to a few cents and where they are, in 0.09 s for 4 s; at 100 % they come out at 60.00, 62.01, 64.00,
+    65.00, 67.00, at 50 % half way; one dragged to B3 comes out at 59.00 and the rest as sung; between notes,
+    untouched. On screen: finding them, the blobs on the key's lines at 100 %.
+
+- *Mastering assistant* (beside the Mixer): it listens to the whole song and sets the master to it, in one of three
+  characters (Clean, Warm with a soft tape-like curve, Punchy with a slower, firmer compressor) and for where it's
+  going (streaming −14 LUFS, loud −9, podcast −16). Loudness is measured as streaming services do (ITU BS.1770:
+  K-weighted, gated); four bands are moved toward a balanced mix's (at most 4 dB), a nearly mono mix opened a little
+  and a very wide one narrowed, a glue compressor set just under the loud parts, the gain found by running the
+  whole chain and putting it right, and a limiter looking 5 ms ahead keeps every peak under −1 dB. It can be
+  switched off to hear the difference; a new character or loudness is worked out again from the same listening.
+  - Tested (10 checks): a 1 kHz sine at −20 dBFS on both sides reads −20.00 LUFS and on one side −23.01, as the
+    standard says; a dull mix at −23.9 LUFS comes out at −14.0 for streaming, −9.1 loud and −16.0 for a podcast,
+    peaks never past −1.00 dB, its balance nearer the reference (21.1 dB off before, 13.5 after); 1.5 ms a block.
+    On screen: mastering the test song, −18.2 → −14.3 LUFS, what it set.
+
+**Clips, pro round four** (`apps/huginn_clips.py`, `apps/qml/Clips.qml`)
+- *Speed ramps and held frames* (Speed). "Split Speed Here" gives the rest of a clip its own speed; split again
+  for a stretch in between, then pick each stretch's speed (10 % to 8×). Changes glide (the speed moves in a
+  straight line across up to 0.3 s of footage either side, so a ramp eases in and out) or step. "Hold This Frame"
+  holds the picture under the playhead for two seconds (any length after). A bar under the clip shows the stretches:
+  orange slower, blue faster, red held.
+  - Ramps are drawn with MLT's `timeremap` link on a chain: Clips works out which second of footage each frame of
+    the film shows (exactly, both ways: a glide's time is a logarithm) and gives MLT a point wherever the line bends
+    and every frame of a glide. Ramps belong to the footage, so trimming, cutting, tracking and the waveform meters
+    all go through the same mapping; a cut inside a held frame goes to where the hold starts.
+  - A clip that grows past the room after it moves what follows on its track along, rather than refusing.
+- *Green and blue screens* (a new Mask tab): Find It reads the screen's colour from the picture (the middle of the
+  pixels where green or blue stands clear of the others), or pick it in the picture. How much is keyed, a soft
+  edge, and taking away the screen's glow on the subject (FFmpeg's `chromakey` and `despill`). "Show the matte"
+  shows the clip alone as white (stays) and black (goes), to judge the edge.
+- *Shapes* (Mask): an oval, rectangle or diamond, soft-edged, the right way round or inside out, dragged and sized
+  in the picture. Either the clip shows only inside it (what's under shows outside; with a key, both apply), or the
+  Colour tab's grading only reaches inside it: a power window (`mask_start` / `mask_apply` round the grade). A shape
+  can go with what motion tracking followed, keeping its distance from it.
+- *Compound clips* (Compound in the toolbar, Alt+G): the picked clips become one, to move, trim, grade, key and
+  mask as one. Open it (double-click, Return or Open) to edit inside, with the way back above the track names
+  (Esc); it follows its insides' length, moving what's after it along when it grows. Break Apart puts its clips back
+  where they came from, trimmed as it was. Built as a tractor of its own inside the project, on a see-through
+  background so what's under it shows. Undo works inside and out; exporting from inside makes the whole film.
+- *Find Shots* (toolbar): cuts a clip wherever its footage cuts to another shot: a frame whose colours and layout
+  both jump, well above the usual change around it, so pans and busy shots don't count.
+- *The beat* (Sound): marks the music's beat on the clip (spectral flux in bands with the low ones leading, the
+  tempo from the strongest repeat between 70 and 180 a minute, the beats by dynamic programming, then nudged onto
+  where the sound actually jumps). Taller marks on each bar; cuts, trims and moves snap to them, and they go where
+  the clip goes.
+- *Match another shot* (Colour): a clip's light and colour made to sit like another's: a 3D LUT that gives its
+  lightness and two colour axes (CIE Lab) the other shot's average and spread (Reinhard's transfer), sampled over
+  both clips, applied before any other grading.
+- Fixed: exports were 16:15 pixels and pillarboxed (MLT's consumer, given a size and nothing else, assumed PAL's
+  pixel shape): the export now says square pixels and the shape. The timeline's pictures now show the part of the
+  footage a clip uses (trims, speed and ramps), not the whole file.
+- Tested (85 checks, on made-up footage whose frames carry their own number): a stepped ramp 6 s long with every
+  frame the footage it should be (±1 frame), four film frames per footage frame at 25 %, a held second, a glide
+  that only moves forward with no jump in speed, cutting a ramped clip and the pictures unchanged; the screen's
+  colour found (#1EC728 for #1EC828) and blue told apart, the background showing through and the subject kept,
+  less green at the edge with spill taken away, the matte black and white; an oval, a rectangle inside out, a key
+  and a shape together, a power window grey inside and coloured outside, a shape following a tracked thing 96 px
+  in 1.5 s; a compound looking exactly like the clips it was made of, edited inside, growing and moving what
+  follows, undone, trimmed and broken apart into the same pictures, see-through on top, graded as one; the two
+  cuts of a three-shot clip and none in a busy pan, 120.2 and 95.2 beats a minute with every beat within 18 ms of
+  the kick and none on the hats, in 0.1 s for 30 s; a warm shot matched to a cool one 97 % of the way on average;
+  and a real export of all of it (640×360, square pixels, the right length, with sound). On screen: the key and the
+  oval with its outline, dragging it, the matte, a ramp's stretches and slowing one, opening and leaving a compound
+  clip, Find Shots, matching a shot, the beat on a music clip.
+
+**Clips, pro round five** (`apps/huginn_clips.py`, `apps/qml/Clips.qml`): a fuzz run first, then five things an editor reaches for
+- *Fuzzed* (`scripts/tests/clips_fuzz.py`): random editing (45 commands, wrong arguments included: tracks that don't exist, words for
+  numbers, sizes of 40 and of none), with the project checked after every step: no clip without length, before the start, over
+  another or on a missing track; every number a number; undo giving back exactly what was there and redo the change; the film built
+  every 20 steps and played by `melt` every 140. Over 60,000 steps across some 40 sequences. What it found, now fixed:
+  - A short clip sped up (or ramped, or cut inside a held frame) could be left a fraction of a frame long: invisible and unpickable. No
+    clip is now left shorter than 0.08 s; the speed is held back, the cut not made, and Clips says why.
+  - A compound clip emptied from inside stayed as a clip of no length. It keeps a sliver while open and goes when closed (undo brings it back).
+  - A setting given the wrong kind of value could break the film's description (a name that was a number, a group of settings replaced by
+    one value, a fader given words). Every setting now has a kind and a furthest value: a clip 40 times its size is more picture than MLT
+    can hold (3 GB for one frame, here).
+  - A compound that couldn't be made left the clip order and id counter changed with nothing to undo.
+  - Not a leak: the viewer's memory follows the size of the film (about 7 MB a clip while it's loaded) and levels off; reloading the same
+    film 40 times adds nothing.
+- *Insert and overwrite* (library: click to pick, then `,` or `.`, or the buttons). Insert goes in at the playhead and everything after
+  moves along on every unlocked track (clips under the playhead are cut, markers move too); overwrite replaces what was there on its
+  track. With In and Out marked, it fills that stretch. Refused, with nothing changed, where the clip under the playhead can't be cut
+  (inside a held frame).
+- *Blend modes* per layer: Normal, Screen, Add, Lighten, Multiply, Darken, Overlay, Soft Light, Hard Light, Difference (the mode of the
+  track's `frei0r.cairoblend`). Click the word under a layer's name to go through them.
+- *Backwards* (Speed tab): MLT's `timewarp` at a negative speed, at any speed. Cutting, trimming, slipping and overwriting know the footage
+  runs the other way. Not with ramps, held frames or tracking, which belong to the footage's own time; each says so.
+- *J K L*: L plays, again goes 2, 4, 8 times as fast; J the same backwards; K stops; the other key slows a step first. Sound only at 1×.
+- *A frame as a picture* (camera under the viewer, Ctrl+Shift+S): the film's full size, from the originals, into Pictures/Clips.
+- *Missing footage*: a moved or renamed file shows as missing in the library and as a dark red card with its name in the film, which
+  still plays and exports. Find Missing looks by name in the usual folders, plugged-in drives and beside the footage that's still there;
+  a dropped file that has a missing one's name takes its place.
+- Tested (`scripts/tests/clips_round5_test.py`, 120 checks, on footage whose brightness is its own second): each blend mode's arithmetic
+  on two greys; backwards at 1× and 2×, trimmed, cut (the earlier piece keeps the later footage), slipped; insert (three pieces, the
+  music cut and moved, a marker moved, one undo) and overwrite (the tail untouched, a marked stretch filled exactly, a frame from a
+  clip's edge leaving no sliver); the saved frame's size and content; a missing file's card, found by name, not found, dropped back;
+  J K L's speeds, direction and stopping at the start; and each limit the fuzz found. Earlier rounds' tests give what they gave before
+  this round: 56 of 56, 23 of 23, 40 of 41 (a tolerance in an old check), and one that stops at a check written for an older undo. On screen: the missing tile and Find Missing, picking and
+  overwriting, the 2× chip, the Screen layer. Not tested: sound while shuttling (no sound card here).
+
+**Clips, pro round six** (`apps/huginn_clips.py`, `apps/qml/Clips.qml`): cutting by what's said, adjustment layers, one colour on its
+own, smooth slow motion, chapters
+- *Editing by what's said* (Words tab): whisper (whisper.cpp with `-ml 1`, or faster-whisper with word times) writes down a clip's footage
+  word by word, with a prompt full of ums so it keeps them (it leaves them out otherwise). The words are kept with the file
+  (`~/.cache/huginn/clips/heard`), so every clip of it can be cut by them. Picked words come out with Cut Words; Cut the Ums takes every um,
+  uh and er. Each cut reaches halfway into the quiet either side, neighbouring words go as one cut, and the track closes up (the same
+  blade-and-ripple as Cut Pauses, from the end, so earlier times hold).
+- *Adjustment layers*: a clip with nothing of its own on a picture track (never V1 or the captions), over the shot under the playhead. The
+  tracks under the highest layer are built as one tractor of their own, the layer's colour and effects go on that tractor over the
+  layer's span, and the rest is stacked over it; lower layers are found again inside it, so layers stack. Solos and mutes are decided over
+  the whole film before it's split.
+- *One colour* (Colour tab): an HSL secondary baked into a 33³ `.cube` LUT (kept by what it does, so the same change is the same file) and
+  put through `avfilter.lut3d` after the grade: the range's hue turned, its colour stronger or weaker, lighter or darker, with a soft
+  edge and greys left alone.
+- *Smooth slow motion* (Speed tab): ffmpeg's `minterpolate` (motion-compensated, both ways) makes 2, 4 or 8 times the pictures for the part
+  used and half a second either side, in the background like steadying; the clip plays as it was until it's ready, and says when a trim
+  has gone past what was made. From the steadied copy when there is one. Not with ramps or backwards (they belong to the footage's own
+  time); footage with enough pictures already is left alone.
+- *Chapters*: markers become the video's chapters (ffmpeg's metadata file, copied in without re-encoding, for .mp4, .mov, .m4a and
+  .webm), and a "0:00 Start" list beside it for video sites; a marked part gets its own chapters from its start.
+- Tested (`scripts/tests/clips_round6_test.py`, 85 checks): the word lists, cuts and whisper's commands; the LUT's arithmetic (red to
+  green, blue and grey untouched); an adjustment layer greying what's under it but not a clip over it, a second layer over both, undo;
+  the colour range on red and blue footage; listening (through a stand-in for whisper.cpp), the ums cut out to the hundredth of a second,
+  a picked word, locked tracks and backwards clips refused; smooth slow motion going from each picture shown twice to a new one every
+  frame, at the same moment of the footage, twice then four times the pictures, stale after a trim; an exported video's three chapters, named
+  and timed, and the list beside it. In the window (`clips_round6_ui.py`, 15 checks): the Words tab, its ums button, the one-colour and
+  smooth switches, an adjustment layer's tabs, the chapters line, no QML complaints. The fuzz has the new commands (1,500 steps, nothing
+  found); round five's test still gives 120 of 120.
+
+**Tempo, pro pass five** (`apps/huginn_tempo.py`, `apps/huginn_tempo_engine.py`, `apps/qml/Tempo.qml`): from a recording, its
+drums as notes and its chords; mastering toward a song you like; a film to score
+- *Drums to Notes* (region pane, on a recording): onsets from the rise in forty log-spaced bands; each onset's new sound (as power,
+  so hits at the same moment add up) split between a kick, a snare and a hi-hat by non-negative least squares on their spectra,
+  first guessed and then learnt from the recording's clearest hits (each only in its own range, so a kick's click isn't learnt as
+  a hat); what each drum leaves in the others' parts on its own is measured and taken away before deciding what else was hit.
+  The hits go on a drum track under the recording as notes, velocity from how hard. Where every kick comes with a hat, the hat
+  can't be told from the kick's click, and stays part of it.
+- *Find the Chords* (a recording, or a region of notes): twelve-note chroma beat by beat (60 Hz–1.2 kHz, peaks only, the low
+  notes counting a little more), major and minor triads with their overtones (an E's fifth overtone is a G#), and the best path
+  through them (a change must be worth more than staying; quiet beats count less). Drums and noise get no chord. Play the
+  Chords puts them on a pad under the region.
+- *A reference song* (Mastering): its loudness, balance and width; Master Like It moves the four bands 80 % of the way to its
+  balance (at most 6 dB) and makes the song as loud as it. Hear It in Place of Your Song plays the reference where the song is,
+  turned to the song's loudness as it plays (mastered or not), so the comparison is fair.
+- *Scoring a film*: a film dropped on Tempo becomes the song's picture: small pictures (ten a second, four for a film over a
+  quarter of an hour) are read once in the background and the Picture window shows the one at the playhead; its sound comes in on
+  a track of its own; where in the film the song starts can be moved. Export › The Film, With the Music copies the picture as it
+  is and puts the song under it (AAC), starting where it should.
+- Fuzzed (`apps_fuzz.py`, 1,600 calls): a region could be made any length, and a MIDI region is drawn whole, so one stretched
+  a thousand hours out asked for 10 GB while playing. Regions now go up to 2,000 beats; drum and chord tracks are no longer than
+  the sound they came from. Track names now stay words.
+- Tested (`scripts/tests/tempo_pass5_test.py`, 56 checks): a beat on Tempo's own studio kit, every one of its 40 hits found and
+  none made up, each to within 6 ms, a hit at the very start; three kits at two tempos, hits from half as hard to full under a
+  noise floor: 9 in 10 found, next to nothing made up; the chords of a progression of eight on an organ and an electric piano,
+  every one where it changes, six of eight on a bright plucked synth (a minor chord can read as major), written notes, a passing
+  note, silence; the reference's loudness and balance, a dull mix mastered nearer it than plain mastering gets, as loud as it;
+  in Tempo, a drum track made from a recording with its 40 notes, the chords of notes and of a recording, a pad playing them,
+  the reference heard sample for sample where the song is and as loud, mastered like it, undo; a film's length and sound, its
+  picture for each second, moved, and exported with the song under it (the picture copied, 4 s). In the window
+  (`tempo_pass5_ui.py`, 12 checks): the region pane's new buttons and chord chips, the Picture window following the playhead
+  and hiding, the film export, the reference box, no QML complaints. Pass three's test still gives 81 of 81.
+
+**Audit, first pass (static checks and the security surfaces)**. `scripts/lint.sh` runs all of it; `ruff.toml` holds
+the Python rules and says, rule by rule, why each one left out was left out.
+- *What was run*: ruff's bug and security rules (pyflakes, bugbear, bandit) over all 118 Python files (about
+  115,000 lines); shellcheck over the 36 shell scripts; clippy over the compositor (18,600 lines of Rust); a search
+  of every source file for hidden direction-changing characters.
+- *What it found*: no undefined names, no injection, no unsafe unpacking. shellcheck: nothing at warning level.
+  clippy: 22 style notes (15 of them "this if can be collapsed"), no correctness lints; left as they are. The
+  Python findings were read one by one: the SQL built from strings uses only fixed column names with bound values,
+  outside XML is refused if it carries a DOCTYPE or ENTITY, archives are unpacked with traversal blocked, the
+  closures flagged in loops are all used inside the loop that makes them.
+- *Read by hand*: the helpers that run as root (`/usr/libexec/huginn-*`) and their polkit actions, everything that
+  listens on a socket (all on 127.0.0.1 or a 0600 Unix socket with a peer check), the password vault (scrypt,
+  AES-GCM, `secrets`), every place a fixed /tmp path or a web address is used.
+- *Fixed*: a restore point's name went into GRUB's menu with only quotes removed, so a name with a new line in it
+  could add lines to the menu's script (it takes an administrator to make one; now it is one plain line,
+  `plain_reason`). Feeds and podcasts fetched whatever address a feed named, `file://` included; now only http(s)
+  (`web_only`). Six unused imports and 25 in the tests removed; invisible characters in Mail's source written as
+  escapes.
+- *Not done, and worth saying*: this is not a line-by-line reading of 135,000 lines. The QML (170 files) was not
+  linted or reformatted: it is the densest code here (1,700 lines over 200 characters) and the part a reader will
+  find hardest; reformatting it is a job to do app by app with each one checked on screen. No optimisation was made
+  in this pass: nothing was profiled, so nothing was changed on a guess.
+
+**Audit, second pass: every app opened for real** (`scripts/tests/apps_real_check.py`). The smoke test opens each
+app in its demo; this opens all 53 the way a person first meets them, as an ordinary user with an empty home folder,
+times each to its first picture and records everything it says. All 53 start and draw; once the disk is warm each
+is up in under a second beyond the test's own wait. Each picture was looked at. What that turned up:
+- *Translate* told people to run `pipx install argostranslate` when the image came without the translator (a build
+  with no route to PyTorch's server leaves it out). It now has an Add the Translator button that fetches it into the
+  person's own folder (`add_translator`: a venv, the processor-only PyTorch, Argos), with no password. The fetch
+  itself can't be tried from the build machine; the steps are the build's own, and its failure paths are checked.
+- *App Store*: if Flathub was known but its list of apps had never been fetched, the store said "No catalogue yet"
+  for good. It now fetches the list, and the empty screen has a Try Again button.
+- *System Monitor* asked the icon theme for other apps' icons and got nothing when no theme was in force; it now
+  looks in hicolor itself. Its footer said "1 apps".
+- *Counts that read wrongly at one* ("1 files", "1 matches", "1 events", "1 tracks", "1 notes"): Code, Tempo,
+  Archives, Backup, Online Accounts and Files. Every count in the windows and the Python was searched for.
+- *Disks* showed a virtual machine's drives as "0x1af4"; now "Virtual drive".
+- Seen and left: the first app started after boot takes far longer than the rest on a cold disk (19 s here, on a
+  slow virtual disk; the libraries are being read for the first time). Maps and Weather show nothing without the
+  network, and say so.
+This pass looks at each app's first screen. It does not click through each app's features: the fuzzers and the
+round tests do that for Code, Easel and Clips only.
+
+**Audit, third pass: every app's commands, called with anything** (`scripts/tests/apps_fuzz.py <kit> <app> [steps]
+[seed]`). One fuzz for all 53 apps: it opens the app as an ordinary user in a throwaway home, lists every command the
+window can call, and calls them hundreds of times with what the app is showing (names, paths, ids) mixed with awkward
+values (nothing, "/", "..", a billion, "not a number", the wrong kind of thing). It reports commands that fail, take
+over two seconds or never return (also when stuck inside Qt), stops an app that writes more than 400 MB, and keeps
+canary files beside the home and beside the app's own folders to show a delete that reaches too far. It never runs as
+root. Every app now comes through several seeds clean. What it found, all fixed:
+
+- **Deletes that reached too far.** Machines removed the folder named by whatever id it was given, so an id of "/"
+  or ".." would have emptied the home folder; the AI model list did the same. Both now act only on an entry from
+  their own list. Mail's "remove account" used its id in a file pattern ("*" matched every account). Camera and
+  Recorder would trash or rename any path handed to them: now only their own pictures and recordings.
+- **Signals to the wrong processes.** System Monitor's End, Force, Pause and Resume passed numbers straight to the
+  system, where 0 and below mean "this whole group" or "everything of yours". Only single real processes now; the
+  same guard is on the AI helper and Dictation, which read a process number back from a file.
+- **Backup in a folder of the home.** Choosing, say, Music as the place for backups left all of Music out of the
+  backup. Now only earlier backups are left out. Going back opens only a backup from the list and only a place
+  inside it (`backup_inside_test.py`, 7 checks).
+- **Text off the screen as a browser option.** Lens handed what it read to the browser as an argument; text starting
+  with a dash would have been taken as one of the browser's options. Leading dashes are dropped.
+- **Sheets.** A cell place before A1 was stored and then stopped the sheet saving (the column's name never
+  finished); a fill or copy to a billion rows ran the computer out of memory. Every command's cell places are now
+  brought onto the grid, selections named backwards are turned round, odd sizes and export kinds are refused
+  (`sheets_grid_test.py`, 13 checks).
+- **Tempo and Clips.** A seek or bar range a trillion beats out asked for all the memory there is; one clip placed at
+  "not a number" stopped the timeline drawing. Both apps now keep every number they are given finite and within a
+  million. About 80 Tempo commands that assumed a song was open now check; a long name when renaming is reported.
+- **Smaller ones.** Money: a picture picked as a bank statement is refused with a message, and an amount too long
+  to be real is refused. Maps: a place with no position is ignored. Calendar: stepping past year 1 or 9998. Store:
+  only apps it listed are installed or opened. Settings: screen sizes, rates, window rules and game ids are checked
+  before use. Scan, Screenshot, Slides, Notes, Code and Easel: a page, item or document that isn't there.
+
+**Sheets, quicker.** What looked like slow frozen panes was three things. Each cell carried about forty items, most
+of them decorations it almost never shows (selection edges, the fill handle, a note's corner, filter arrows, data
+bars, merged blocks): those are now made only by the cells that show them, which halves what a sheet builds (12,095
+items to 5,941 for an empty one) and takes opening a sheet from 0.54 s to 0.19 s here. Scrolling near the end of the
+grid, or typing in its last rows, started all four panes again (0.4 s each time): rows and columns are now added on
+(under 0.05 s). And opening or switching a sheet started the panes twice. The fuzz itself was also at fault: it never
+let Qt free what a window had thrown away, so items piled up until the app crawled; it does now.
+`sheets_grid_test.py` has 18 checks.
+
+**Code, round seven: for game developers** (Godot and Unreal are what the studio trying Huginn OS works in).
+
+- **Languages.** GDScript (annotations, `$Node` and `%Unique` paths, triple-quoted strings), Godot's scene and resource
+  files, Godot shaders, GLSL and HLSL (Unreal's `.usf`/`.ush` among them), `.uproject`/`.uplugin` as JSON, and `;`
+  comments and section heads in `.ini` files. A `.h` is C until it shows otherwise: C++ words in it, or a `.cpp` of
+  its name beside it or in Unreal's `Private/`. Snippets for Godot's callbacks and Unreal's macros (`uclass`, `uprop`,
+  `ufunc`, `uelog`); new-file templates; the folders engines fill (`.godot`, `Intermediate`, `Binaries`,
+  `DerivedDataCache`, `Saved`) are left out of the file list and the search.
+- **Build tasks** (`apps/huginn_build.py`; the Build tab in the bottom panel, Ctrl+Shift+B). A project is read for what
+  it can do: Godot (run, open in the editor, import, check scripts, export each preset), Unreal (build the editor and
+  the game, refresh clangd's code suggestions, open, play, generate project files, package, clean), CMake, Cargo,
+  Make (each target), Go, npm scripts, .NET, and your own in `.huginn-tasks.json`. The task you pick as the default is
+  kept per project. Tasks run in their own session, so Stop ends the compiler's children too.
+- **Errors you can click.** The output of gcc and clang, rustc, MSVC-style tools (Unreal's header tool, C#,
+  TypeScript), CMake, Godot, Go and Python tracebacks is read for places in real files: a line that names one opens it
+  there, F8 and Shift+F8 walk the errors, and the status bar shows the count. A path is tried against the project,
+  the build folders and the directory make says it entered; a file that isn't there is not a place.
+- **Tools, one step each.** Git LFS, C++ build tools, Godot 4 and Godot 4 (.NET) from Flathub, shader tools and
+  what Unreal's Setup.sh expects of the system, each added from the Build tab (Ubuntu's packages through the password
+  prompt, Flathub's into your own apps without one). Git LFS now ships in the image. A project that uses LFS without
+  it, or Godot or Unreal without the engine, says so in its task list. Unreal Engine itself comes from Epic: Code
+  finds it from `UE_ROOT`, Epic's own list of installs, the usual folders, or the folder you choose.
+- **GDScript suggestions** come from the Godot editor, which answers on a port while the project is open in it
+  (`huginn_lsp_tcp.py` carries the conversation; this computer only). Closed, Code says so instead of complaining.
+- After CMake configures or Unreal's suggestions task runs, `compile_commands.json` is put beside the sources and
+  clangd started again.
+
+`code_round7_test.py`: 93 checks, among them real builds with CMake and a C compiler and with Cargo (the error lands
+on its line; fixed, it builds), and Ubuntu's Godot 3 reporting a script error that lands on the script's line. Not
+checked here: Godot 4 itself (Flathub can't run in the build container), Godot's editor answering GDScript
+questions, and anything against a real Unreal Engine, which is far too large to fetch; those commands follow Epic's
+and Godot's documentation. Debugging inside Godot or Unreal came in round ten.
+
+**Code, round eight: what it takes from Visual Studio Code.** VS Code still ships for Linux (1.148, November 2026;
+only 32-bit ARM Linux was deprecated), so this isn't a rescue: it is so a project made there opens here as it is,
+and so Code has the features people miss. None of VS Code's code is used (it is TypeScript on Electron; Code is
+Python and QML): these are its file formats, read, and its features, written again. **Its extensions do not run in
+Code**: they are programs for VS Code's own extension host.
+
+- **A project's `.vscode` folder** (`apps/huginn_vscode.py`). `tasks.json`: its tasks lead the Build tab, with their
+  arguments, working folder, environment, `dependsOn`, Linux overrides, the default build task and `${file}`,
+  `${workspaceFolder}` and the rest filled in when run; a task that asks for an `${input:…}`, or belongs to an
+  extension, is listed with why it can't run. `launch.json`: Python (debugpy) and C, C++ and Rust (cppdbg, lldb and
+  gdb configurations, all through GDB) start from F5 or by name, their `preLaunchTask` first. `settings.json`:
+  indentation, format and trim on save, final newline, line endings, rulers, `files.exclude`, `files.associations`,
+  per language too; an `.editorconfig` still lies over it. `*.code-snippets`. A `.code-workspace` file opens its
+  first folder with its settings. JSON with comments and trailing commas is read as VS Code reads it.
+- **Settings** (Ctrl+,). Code's own are kept in `~/.config/huginn/code-settings.json` under VS Code's names
+  (`editor.tabSize`, `files.autoSave`…), so the same file means the same thing; the project's lie over yours, and the
+  page says which a value comes from. The file can be edited by hand, comments and all.
+- **Keyboard shortcuts** you choose: a page listing every command, click one and press its new keys (two-step
+  chords too); Code's own shortcut gives way, and so does whatever had those keys. A VS Code keymap is one switch.
+- **Brought from VS Code**: its colour themes (a theme's `.json`: editor and syntax colours), and from its folder in
+  the home (VSCodium's too) your snippets, the settings Code has, and your key bindings.
+- **In the editor**: folding (by indentation; arrows in the gutter, Fold All; text is never left hidden with nothing
+  over it), Emmet in HTML and CSS (`ul>li.item$*3` and Tab; `m10-20`), peek at a definition (Alt+F12), inlay hints
+  (gathered at the end of the line: this editor can't put words between yours), rulers, zen mode, a history of each
+  file (a copy at every save for a month, to compare with and go back to), and save automatically.
+- **Another computer over SSH** (`apps/huginn_remote.py`; "Remote: Open a Folder on Another Computer"). The other
+  computer needs only an SSH server. Its folder is mounted here with sshfs, so files, search, Git and the language
+  helpers work on it as they are; Run and the Build tab's tasks are sent over ssh and their errors come back as
+  places in the files here. One connection is shared, so ssh asks for a password or passphrase once, in the terminal:
+  Code never sees it. Not over SSH: debugging; and the language helpers run here, so they know this computer's
+  installed libraries, not the other's.
+
+`code_round8_test.py`: 142 checks. Shortcut changes, folding, peek, Emmet and zen mode were also driven with real key
+presses in the window. The SSH part ran for real against an SSH server on the build machine itself (a throwaway key,
+localhost only, removed afterwards): mount, read and write through it, build there with the error landing on its
+line here, fix, build, disconnect; without such a server the test says so and skips that part. Not checked: a
+password prompt in the terminal (the test used a key), another real machine, and a real VS Code installation's
+folder (a made one stood in). Not taken then: extensions, multi-root workspaces, notebooks, dev containers,
+attaching a debugger (round nine, next), and inlay hints between words.
+
+**Code, round nine: the six things round eight left.** What each one is, and where it stops.
+
+- **Attach to a running program** ("Debug: Attach to a Running Program…", `apps/huginn_debug.py`). A list of your own
+  running programs, found by name, command or number; Python ones are joined with debugpy, anything else with GDB.
+  Detaching leaves the program running. launch.json's attach entries work: pick a process, a process number, or a
+  port a program's own debugpy listens on (`python3 -m debugpy --listen 5678 app.py`), with path mappings. If the
+  kernel forbids attaching (Ubuntu's ptrace setting), Code says so and names the setting; it does not change it.
+- **Debugging where the project runs** (over SSH, and in a container). The debugger itself (gdb, debugpy) is run on
+  the other computer through the same ssh connection, or inside the container through the engine's exec, so the
+  program, its libraries and its debugger are one machine's; only the conversation comes here, and file paths are
+  translated both ways so breakpoints set in the files here stop there. The other side needs gdb 14+ or debugpy.
+- **Dev containers** (`apps/huginn_container.py`; "Container: Open This Project in Its Container…"). Reads
+  `.devcontainer/devcontainer.json` (image or Dockerfile build, workspace folder, user, environment, ports opened on
+  this computer only, mounts, run arguments, the create and start commands) and runs it with Docker or Podman. The
+  folder is shared in, so files are edited here as always; Run, Build, the debugger and "Open a Shell Inside" happen
+  in the container. Before the first start a sheet lists, in words, everything the file will do on this computer
+  (a privileged container is said loudly), because a project's devcontainer.json is someone else's instructions.
+  Not done, and said so: Dev Container Features, Docker Compose projects. Neither engine is preinstalled.
+- **Extensions** (`apps/huginn_extensions.py`; "Extensions…"). A VS Code extension is data (colour themes,
+  snippets, file types, key bindings) and usually also a program for VS Code's own extension host. That program
+  cannot run outside VS Code, so Code takes the data and says plainly what it left out; a package that is only a
+  program is refused with that reason. From a .vsix, only package.json and the data files it names are unpacked:
+  no program is written to disk and nothing in a package is run. Search and install from Open VSX (open-vsx.org,
+  https only, that host only). Code's own extensions have the same shape and may add commands, which are lines for
+  the terminal (`contributes.huginnCommands`), run only when picked, with `${file}` filled in as one shell word.
+- **Notebooks** (`apps/huginn_notebook.py`, `apps/huginn_nb_kernel.py`, `apps/qml/NotebookView.qml`). An .ipynb
+  opens as cells: Python with its output under it (text, errors, tables, pictures, matplotlib figures), and Markdown
+  between. Shift+Enter runs a cell and moves on; Run All, Stop, Restart, Clear Outputs. The file stays Jupyter's
+  format 4 with everything Code doesn't use kept, so Jupyter, VS Code and GitHub read what Code saved; "As JSON"
+  shows the file's own text. Cells are run by a plain Python Code starts itself (the project's .venv when there is
+  one): no Jupyter, no ipykernel. That is also the limit: IPython's `%magics` and `!shell` lines aren't Python and
+  are declined in words, `input()` isn't answered, there are no widgets, and other languages' kernels aren't run.
+- **Workspaces of several folders.** A .code-workspace file opens all its folders (before: the first only), and
+  "Workspace: Add a Folder…" makes one by hand; "Save as a .code-workspace File…" writes VS Code's own file. The
+  Files list has a heading per folder; quick open and search look in all of them. One folder is the working folder,
+  marked with a dot: Git, Build, Run, the debugger, tasks and .vscode settings are its, and it follows the file you
+  are in. That is the difference from VS Code, which shows every folder's Git at once.
+
+`code_round9_test.py`: 157 checks. For real: attaching to a running Python program (by process and by port) and to
+a compiled one, stopping at a breakpoint and leaving it running; debugging a Python and a C program on an SSH
+server (the build machine's own, throwaway key, localhost) with breakpoints, variables and stepping; notebooks end
+to end including a stopped cell and a crashed Python. With a stand-in: the container engine (a script named docker
+that runs commands in a linked folder: build, run, exec, the debugger inside, stop, remove) and the Open VSX
+registry (a local server). The new sheets, the notebook view and the workspace headings were also opened in the
+real window with real key presses.
+
+Then against the real things, where the build machine could reach them:
+- **Real Podman** (`code_container_real_check.py`, 16 checks; Podman 5.7 with runc, an image made from Ubuntu's
+  own packages since no registry can be reached from there). Code built the image from the project's Dockerfile
+  with its build argument, started the container, ran the create and start commands in the shared folder, ran a
+  Build inside (reading a file only the image has) with the error landing on its line here, debugged a Python file
+  inside with a breakpoint, variables and a step, found the running container again on reopening, stopped,
+  restarted without rebuilding, and removed it. Two faults only a real engine shows were fixed: Podman run by root
+  was asked for a mode only rootless Podman has (`--userns=keep-id`), and when a build failed Code went on waiting
+  with "starting…"; now the terminal's line leaves its result where Code reads it, and Code says at once that the
+  container didn't start. Not checked: rootless Podman (the build machine forbids user namespaces, so the run was
+  as root) and Docker.
+- **Real extensions** (`code_extensions_real_check.py`, 28 checks): Night Owl, Atom One Dark Theme,
+  JavaScript (ES6) code snippets and Dracula, from their makers' GitHub sources, packed as vsce packs a
+  .vsix. Every theme that ships went on with a background, text and syntax colours and the right light-or-dark;
+  the snippets arrived in JavaScript, TypeScript and the rest; only data files were unpacked. Dracula's sources hold
+  no theme file (it is built at publishing), which showed that Code counted what a manifest names instead of what a
+  package holds: it now counts what is there.
+- **matplotlib in a notebook**: two figures left open by a cell come out as two PNGs under it, not blank, closed
+  once shown, and kept in the file as Jupyter keeps them (4 checks, in `code_round9_test.py`).
+- **Still not checked: the real open-vsx.org.** The build machine's network doesn't allow that host (nor any
+  container registry), so searching and fetching have only met a local stand-in speaking Open VSX's documented
+  answers. Also unchecked: a second real machine over SSH, and a remote debugger behind a password prompt.
+Also fixed, found by the fuzz: completion asked for a line below zero raised an error.
+
+**Code, round ten: debugging the game itself** (for the studio trying Huginn OS; `apps/huginn_debug.py`,
+`apps/huginn_code.py`, `apps/qml/Code.qml`; `scripts/tests/code_round10_test.py`, 23 checks).
+- **Godot 4, GDScript.** Godot's editor is itself a debug adapter (Editor Settings › Network › Debug Adapter, port
+  6006) while the project is open in it. "Debug: The Game in Godot", "…the Scene Open in Godot's Editor" and "…This
+  Scene in Godot" (and F5 in a .gd or .tscn file) ask it to play the main scene, the current one or a res:// scene,
+  with Code's breakpoints; it stops there, and Code shows the call stack, locals and members, the game's printing,
+  stepping and expressions as for any program. The editor closed, Code says to open it (Build › Open in the
+  editor). Godot 3 can't be debugged from outside its editor, and says so.
+- **Unreal, C++.** "Debug: Unreal Editor with This Project" and "Debug: The Game on Its Own (Unreal)" run
+  `Engine/Binaries/Linux/UnrealEditor` with the .uproject (and `-game -log -windowed`) under GDB 14+, in the
+  project's folder, with the engine's own SIGUSR1/SIGUSR2 passed on rather than stopping, and Epic's pretty printers
+  (`Engine/Extras/GDBPrinters`) loaded when the engine has them, so FString, TArray and TMap show their contents.
+- The game-debugging commands appear in the palette only in a Godot or Unreal project.
+- Tested with a stand-in for Godot's editor that answers as Godot does (the request order Godot expects, launch
+  refused for the wrong project, breakpoints by real path, a stop with a two-frame stack, locals and members, the
+  game's output, carrying on to the end), and for Unreal with a small C program as UnrealEditor in a made-up engine
+  folder: GDB really stops at the breakpoint in it, shows its variables, and runs it to the end with `-game` passed.
+  Not tried: Godot 4's real editor and a real Unreal Engine (neither can run in the build container).
+
+**Code in glass panels** (`apps/qml/Code.qml`, with `GlassWindow.qml` and `Seg.qml`; `scripts/tests/code_glass_ui.py`,
+34 checks, with Reduce Transparency on as well). Code was the last big app still on opaque slabs, so it now wears the same glass as the rest:
+- **A rail and a panel.** The tools that switched the side panel now stand in their own slim rail (tips beside them,
+  badges for changes, problems and failed tests). Click the lit tool, or Ctrl+B, and the panel goes away while the rail
+  stays; the code moves up beside it. Zen still hides everything but the code.
+- **Glass, not slabs.** The panels, the top islands, the name island and the status pills are Code's own tinted glass,
+  and the code sits on a deeper, see-through pane with the window's light coming through (the light is turned up a
+  little for Code: `GlassWindow.glowBoost`). The current line is a faint wash of Code's colour. Reduce Transparency
+  makes all of it solid again, and an imported VS Code theme keeps its own paper.
+- **The status line as islands**: branch and changes, problems, remote, container and build at the left; where the
+  cursor is (click: Go to Line), wrapping, and the language (click: Languages) at the right.
+- **Run** is the island's one filled button (`Seg.primary`), so it's found at a glance.
+- Under Huginn's own top bar, maximised, the top islands keep the bar's colour, beside the shell's.
+
+**Clips and Tempo in glass panels** (`apps/qml/Clips.qml`, `apps/qml/Tempo.qml`; the glass itself is now
+`GlassWindow`'s, shared by Code, Clips and Tempo: `glass`, `glassLine`, `deepGlass`, `topGlass`;
+`scripts/tests/glass_islands_ui.py`, 31 checks). A lighter pass than Code's, keeping the dense parts dense:
+- **Glass panels.** Clips' library, mixer and inspector, and Tempo's bench, loops drawer and transport, are each app's
+  own tinted glass; the name island and the top toolbar match. Clips' timeline and Tempo's arrangement sit on the
+  deeper pane, with their lanes as they were. Clips' picture stays on black, so colour is still judged against nothing.
+- **Tools as islands.** The row of tools that sat inside Clips' timeline is now four islands over it (Select, Blade,
+  Slip · Ripple, Cut Here, Marker… · the tracks · Mixer and Captions), with the zoom in its own island at the right
+  (it narrows rather than run into the tools in a small window; the length it repeated is already under the picture).
+  Tempo's arrangement tools do the same: adding tracks and undo at the left; what to do with a picked region or
+  section, and the zoom, at the right, following the arrangement's edge when the loops drawer opens. What was under
+  the tools moved up into the room they left.
+- Tempo's transport display no longer runs into the toolbar.
+
+**Clips: three crashes, found by the app fuzz while checking the above** (`apps/huginn_clips.py`;
+`scripts/tests/clips_reload_test.py`, 9 checks, which crashes on the old code). None came from the new look.
+- *An edit while the film plays could crash Clips* (about one time in three: "Floating point exception"). Each edit
+  builds the project again with a new MLT profile, and the sound, on a thread of its own, was still reading the old
+  one after it was freed. The sound now stops before the swap and starts again on the new project, and keeps its own
+  profile alive meanwhile.
+- *A track asked for with a kind that isn't one* put a "<" into the XML's ids; MLT couldn't read it, and the next seek
+  crashed. Only video and audio tracks are made now, and XML MLT can't read shows nothing instead of crashing.
+- *A film named with a double quote* broke the XML the same way (the name is now quoted properly).
+- The fuzz can now replay what a run printed: `FUZZ_SAY=1` prints each call, `FUZZ_REPLAY=<file>` calls them again
+  in a fresh home, which is how these were pinned down.
+
+**The "grub>" prompt after installing** (seen on real hardware; `search --file` and `configfile` by hand started the
+system, so the menu was fine and the pointer to it was not). GRUB finds its menu through a small pointer file that
+names the system's disk by its id. A pointer naming an id that isn't there gives exactly that bare prompt: checked in
+QEMU with Ubuntu's signed GRUB. Two changes. The installer now writes its own pointer, which looks for the disk by
+id and then, if that finds nothing, by the menu file itself (the same test disk then starts). And, unless installing
+to a USB drive, it looks at the other disks' EFI partitions: a pointer there that names a system which no longer
+exists (an earlier Ubuntu or Huginn OS) is pointed at the new one, with the old file kept beside it; a pointer to a
+system that is still there is left alone (`boot_pointer_test.py`, 13 checks).
+
+**From the second run on real hardware (three screens, live session)**:
+- *The start menu opened on the wrong screen.* Its window named no screen, so the compositor chose one, often a
+  screen with no dock. It is now on the dock's screen, where it grows out of the orb (`shell/qml/Shell.qml`).
+- *Left alone, the live session ended at the sign-in screen asking for a password* the trial account doesn't have.
+  The live session no longer goes to sleep by itself (`huginn_sessiond.py`), and if its session ends for any reason
+  the sign-in service signs straight back in (`Relogin=true`, set by `casper-bottom/99huginn_session`). What ended the session on
+  that computer isn't known: sleep is the likeliest, a crash when the screens turned off is possible.
+- *Run in Code did nothing the first time.* The command was typed into the terminal the moment its shell was
+  started, and the shell throws away what arrives before its first prompt. `Shell.type_when_ready` holds it until
+  the prompt is up. Reproduced and checked in the nested session.
+- *Adding a language in Code failed in the live session.* The password prompt wouldn't take an empty password and
+  the trial account has no other. In the live session nothing asks for one now (the polkit rule the installer
+  removes), and the prompt accepts an empty password there. As an ordinary user and as root the install itself
+  (PackageKit: refresh, then install) works in the test system.
+- *The installer* now keeps GRUB's three-line pointer to its menu in both EFI/ubuntu and EFI/BOOT (`grub_pointers`).
+  This is a precaution, not the known cause of the "grub>" prompt seen after one installation: tried in QEMU, the
+  signed GRUB finds a pointer in either place.
+
+**Code, pro round six: finding your way round** (`apps/huginn_code.py`, `apps/huginn_code_more.py`, `apps/qml/Code.qml`;
+`scripts/tests/code_round6_test.py`, 49 checks):
+- *Back and forward* (Alt+Left, Alt+Right): a jump of more than a few lines, or to another file, is remembered as a
+  place (go to definition, a search result, a symbol, a click far away). Back returns through them, forward goes
+  again; a file since deleted is stepped over.
+- *The word under the cursor is highlighted* wherever else it is in view (or the selected word), so every use of a
+  name shows at a glance. Off with more than one cursor; can be switched off in the command list.
+- *Indent guides*: a faint line down each level of indentation, carried through empty lines. Follows the file's own
+  indentation; can be switched off.
+- *The cursor's place in each file is kept*: closing a file and opening it again, or opening the folder next week,
+  puts the cursor back where it was (400 places a project).
+- *Reopen Closed File* (Ctrl+Alt+W): the tab closed last comes back, then the one before, twenty deep.
+- *.editorconfig*: a project's own rules are followed. Indentation (`indent_style`, `indent_size`, `tab_width`) sets
+  what Tab, snippets, formatting and the guides use, and shows in the status bar; `trim_trailing_whitespace` and
+  `insert_final_newline` decide the tidying on save in either direction, whatever Code's own setting; `end_of_line`
+  is taken by new, empty files (a file that already has line endings keeps its own: Code doesn't rewrite a whole
+  file's endings behind your back). Nearer files win, sections in order, looking stops at `root = true`; globs
+  with `*`, `**`, `?`, `[…]`, `{a,b}` and `{1..9}`. Not used: `charset`, `max_line_length`.
+- The fuzz gained these commands and four awkward `.editorconfig` files; three seeds of 1,500 steps, no problems.
+  pytest joins the image (`48-huginn-code.list`): the Tests panel found no Python tests on a fresh install without it.
+  Checked on screen in the nested session. One thing found there: the reopen key was first Ctrl+Alt+T, which is the
+  desktop's own key for the Terminal.
+
+**Code, pro round five** (`apps/huginn_code.py`, `apps/huginn_code_more.py`, `apps/qml/Code.qml`): a fuzz run first, then
+three things an editor is expected to have.
+- *What the fuzz found, fixed* (`scripts/tests/code_fuzz.py`: awkward files and about seventy random commands, with what's
+  on disk checked after each save). Opening a pipe or a device hung Code for ever; Git output that wasn't UTF-8 crashed
+  staging, branches and commits; Replace Everywhere crashed on a replacement naming a group the pattern lacks, and
+  rewrote CRLF and Latin-1 files as LF and UTF-8; a file with mixed line endings was rewritten by opening and saving it
+  untouched; Rename and Move to Trash took any path at all, not only ones inside the project; a link leading through a
+  file broke the folder list; closing a folder crashed if a language server had failed to start; find-every-use and the
+  signature hint froze for up to a minute on a 400 000-character line. UTF-16 files (as Windows writes them) used to
+  open as "not text": they open and save as UTF-16 now.
+- *Whole lines at a time*: Alt+Up/Down move the line or the selected lines, with Shift they copy; Ctrl+Shift+K
+  deletes, Ctrl+J joins, Ctrl+L selects, Ctrl+Enter and Ctrl+Shift+Enter open a line below or above. Sort Lines, Remove
+  Repeated Lines and Upper, Lower and Title Case are in the command list. Each is one replacement in the editor, so
+  Undo takes it back.
+- *Change marks that follow your typing*: the gutter's marks used to refresh only on save. They now compare the
+  editor's text with the committed text a moment after each change (files up to 20 000 lines; longer ones keep the
+  on-save marks). F7 and Shift+F7 go to the next and previous change; Put This Change Back undoes the one under the
+  cursor.
+- *Nothing unsaved is lost*: Code had no warning at all when its window closed with unsaved tabs. Unsaved text is now
+  put by two seconds after each change (`~/.local/share/huginn/code-unsaved`, readable only by you) and brought back,
+  still unsaved, the next time the file or its folder opens: after a quit, a crash or a power cut. If the file changed
+  on disk meanwhile Code says so and asks before saving over it. Files over 4 MB aren't kept this way.
+- Tests: `scripts/tests/code_round5_test.py` (93 checks). Checked on screen in the nested session: move, copy, delete
+  and new line, the live marks, F7, put back, and work coming back after the app was killed. **The fuzz must not be run
+  as root** (it now refuses): an early run of mine was, with a folder list that included `/`, and its Replace
+  Everywhere reached files outside its own folder. Everything it touched was restored from the last push and the
+  upstream sources and compared file by file.
+
+**Code, pro round four** (`apps/huginn_code.py`, `apps/huginn_code_more.py`, new; `apps/qml/Code.qml`)
+- *More than one cursor*: Ctrl+D adds the next match of the selection (or picks the word), Ctrl+Shift+L puts a
+  cursor on every match, Alt+click adds one anywhere, Ctrl+Alt+Up/Down one on the line above or below. Typing,
+  Backspace, Delete, Enter (keeping each line's indent), Tab, arrows, Home and End work at all of them; a word typed
+  at all of them is one step of undo. Esc goes back to one.
+- *Snippets*: about 70 across Python, JavaScript and TypeScript, C and C++, Rust, Go, shell, Markdown and HTML,
+  offered in the completion list by name (`def`, `for`, `main`, `iferr`, `test`…). Tab goes from place to place;
+  a name used twice in a snippet is written in both. The language server's own snippet completions work the same.
+- *What the call wants*: typing `(` or `,` shows the function's parameters with the one being typed picked out
+  (`textDocument/signatureHelp`; for Python without a server, from its `def` in an open file).
+- *Quick fixes* (Ctrl+. or the light beside the line): the language server's code actions, and Code's own for
+  Python's commonest problems: an unused import taken out (or just that name from a `from … import` list), a name
+  never imported imported (standard modules, common names like `Path` or `dataclass`, the project's own modules)
+  after the imports already there. All one step of undo.
+- *Merge conflicts*: ours green, theirs blue, with "Keep ours", "Keep theirs" and "Keep both" over each (and for the
+  whole file in the palette); diff3's base is understood. A tick in the Git panel marks a settled file resolved (it
+  saves first, and won't while a conflict is left). A conflicted file's diff is against our side.
+- *Sticky scroll*: the lines that open the class and function the top of the view is inside stay pinned there
+  (click one to go to it). The *Outline* panel lists the file's classes, functions and headings, nested, with the
+  one the cursor is in lit.
+- *Markdown preview* (Ctrl+Shift+V): the file as it reads beside its text, scrolling with it.
+- *When saving*: spaces at the ends of lines go and the file ends in one newline (Markdown's two-space line breaks
+  kept); "Format When Saving" in the palette formats first with the language server (Python through autopep8, now
+  in the image). Formatting and renaming now change open files undoably, in place, instead of reloading them.
+- Fixed on the way: a translucent accent (`Qt.rgba(Theme.t.accent.r, …)`) came out black, because the theme's
+  colours are strings, whose `.r` is undefined: selections in Code were nearly invisible, and 43 other tints
+  across the apps and the shell were wrong. They use `Qt.alpha` now. A conflicted file was listed three times.
+- Tested (34 checks) against a real pylsp and a real Git merge: snippet tab stops, mirrored names and indentation;
+  pylsp's problems and its completions with the `def` snippet; three cursors typing and one undo taking all three
+  back; the parameter being typed, from pylsp and by hand; taking out `import os` and adding
+  `from pathlib import Path` after the imports; trimming a name from an import list; the sticky lines inside a
+  method and leaving when it ends; the outline's extents; formatting on save through pylsp and autopep8; Markdown's
+  line breaks kept; two conflicts read, theirs kept, both kept, undone, saved and marked resolved (Git says `M`);
+  diff3. On screen: the light and its fix, nine cursors renaming `self` and one undo, the call's parameters, the
+  `def` snippet tabbed through, the outline and sticky lines, a conflict settled and marked resolved, the Markdown
+  preview.
+
+**Easel, round twelve: actions and batches, photos merged** (`apps/huginn_easel_ui.py`, `apps/huginn_easel_more.py`,
+`apps/qml/Easel.qml`; `scripts/tests/easel_round12_test.py`, 30 checks, and `easel_round12_ui.py`, 11 in the window):
+- **Actions** (Automate › Start Recording … Stop Recording…): what's done to the whole picture or the layer in front is
+  kept as steps: filters, Image and Canvas Size, turns and flips, Trim, Flatten, select all/none/invert, Feather, Fill,
+  Duplicate, Merge Down, adjustment layers and their settings (a slider's run is one step), a layer's opacity, blend
+  and visibility. Strokes and other pointer work aren't (they belong to one picture). Image Size recorded in
+  proportion plays in each picture's own proportion. Kept in `easel-actions.json`, read back made safe (unknown steps,
+  odd arguments and nameless actions dropped). A red "Recording an action" badge shows while it records.
+- **Actions › Play** runs one on the open picture, each step its own in History. **On a Folder…** runs it on every
+  picture in a folder, one per turn of the event loop so the window stays alive (it waits behind a veil with the
+  count), each result exported to "Edited by Easel" beside them in its own format; a file that can't be opened is
+  named at the end and the rest go on; the picture that was open comes back.
+- **Merge Photos** (Automate, also with no picture open; tick two or more in the folder): **Panorama** (OpenCV's
+  stitcher; what no shot covered is clear), **Exposures** (exposure fusion, Mertens: shadows and highlights both
+  kept, nothing to tune), **Focus stack** (each part from the photo where it's sharpest, near-ties blended so seams
+  don't show). Brackets are lined up first (ECC, which doesn't mind one frame being darker or blurrier). The result is
+  a new picture on one layer. Up to 24 photos of 60 megapixels each.
+
+**Easel, round eleven: liquify, smooth tones, your own gradients, Colour Range**
+(`apps/huginn_easel.py`, `apps/huginn_easel_ui.py`, `apps/qml/Easel.qml`; `scripts/tests/easel_round11_test.py`, 76 checks):
+- *Liquify draws a patch at a time*, the last of the retouching tools to do so: under adjustment layers and blend
+  modes on a 6-megapixel picture it now keeps up with the pen. Each frame is checked to be the true picture.
+- *Gradients without steps.* A long gentle gradient in 8 bits has only so many levels to use, and drawn the plain way
+  shows them as bands. Easel now works the gradient in fine numbers and rounds with an even grain
+  (`ez.gradient_image`): averaged over a small patch the tone is right to a small part of a level everywhere, flat
+  colour stays exactly itself, and the grain is the same every time. While dragging on a big picture the quick
+  version is shown; what's kept on letting go is the fine one (a third of a second for 12 megapixels).
+- *Adjustment layers one over another are worked as one* (`apply_adjust_run`): plain ones in a row (full strength,
+  no mask, each channel on its own) carry fine numbers from one to the next and are rounded once. A stack of five
+  costs what one did, and darken-then-lighten no longer loses tones twice.
+- *Gradients of your own*: the gradient list has New from This…, which opens an editor (click the bar to add the
+  front colour, drag markers, Remove, Turn Round; Opacity makes a colour see-through, Middle moves the place where
+  it has half turned into the next). Kept in `easel-gradients.json` under the user's data; yours can
+  be changed or forgotten, the ready-made ones can't be overwritten.
+- *Select › Colour Range*: the front colour, highlights, midtones, shadows, or a family of hues, with a Range slider
+  and what would be chosen washed over the picture as you move it (in pink, or, on a picture that is itself pink
+  or red, whichever of green, blue and yellow shows best; the Quick Mask does the same). Soft where the picture is soft; inside the
+  selection if there is one.
+- Also: a selection of specks by the hundred thousand (a colour range over grain) is outlined by the patches the
+  specks make up; an outline round every speck took many seconds. What's selected is unchanged.
+
+**Easel, round ten: retouching speed, filter previews, Refine Edge, your own brushes, type spacing**
+(`apps/huginn_easel.py`, `apps/huginn_easel_ui.py`, `apps/qml/Easel.qml`; `scripts/tests/easel_round10_test.py`, 43 checks):
+- *Retouching brushes draw a patch at a time.* Dodge, burn, sponge, soften, sharpen, smudge, clone and heal used to
+  put the whole picture together again for every movement of the pen whenever an adjustment layer, blend mode or
+  clipping was in play. Now only the part under the brush is redrawn, as painting already did: on a 6-megapixel
+  picture under an adjustment layer a frame takes a few hundredths of a second instead of most of one. Each frame is
+  checked to be exactly the true picture.
+- *Filters are tried on the canvas.* Open a filter and the picture shows it as the slider moves, inside the selection
+  if there is one, with the sheet moved out of the way and nothing dimmed. Cancel puts it back; Apply is one step of
+  undo and gives exactly what was shown. Starting anything else puts the preview away first.
+- *Select › Refine Edge*: fits a rough selection's edge to the picture itself within a chosen reach (a guided
+  filter, in a band along the edge only, so 3 megapixels take well under a second). Loose selections snap to the
+  thing; fine strands come out partly selected instead of cut straight across.
+- *Select › Make a Brush from It*: what's selected becomes a brush tip (dark marks, or a cut-out's shape), trimmed,
+  brought down to 256 across, kept as a PNG under the user's data and there next time. It can be forgotten again.
+- *Type*: Spacing (between letters) and Lines (between lines) on the text bar, kept in saved pictures.
+- Also: the menu no longer runs under the panel on the right in a narrow window.
+
+**Easel, round nine: brushes, gradients, selections** (`apps/huginn_easel.py`, `apps/huginn_easel_ui.py`, `apps/qml/Easel.qml`):
+three of the gaps listed under round eight, narrowed.
+- *Brush tips and dynamics.* A brush's mark can be a picture instead of a disc (bristle, grain, flat, spray, splatter,
+  leaf: each made from numbers, the same every time), and can change as it goes: turn along the stroke, hold one
+  angle like a nib, or have each dab turned, sized and faded by chance. Seven new brushes use them: Dry Bristle,
+  Charcoal, Calligraphy Pen (thick across its nib, a hairline along it), Ribbon, Spray Can, Splatter, Leaves. The
+  eraser uses them too. Still missing: tips from your own pictures, textures, tilt, wet mixing.
+- *Gradients of several colours*: seven ready-made (Sunset, Sky, Fire, Chrome, Gold, Spectrum, Aurora) beside the two
+  from the colours in hand, straight or round, with Reverse. Still missing: an editor for your own.
+- *Quick Selection brush*: drag over a thing and the selection spreads to its edges, a little way from the brush at a
+  time; Alt takes away. Spread sets how alike a colour must be.
+- *Quick Mask* (Q): the selection becomes something you paint. The brush adds, the eraser takes away, any tip, soft
+  or hard, shown as a wash of colour; Undo works on the mask; Q again and what's painted is the selection (a soft
+  brush gives a soft edge). Any other command finishes it first.
+- *Select › Smooth* (closes the pinholes and drops the specks the magic wand leaves) and *Select › Border* (a band
+  along the edge).
+- Still missing from selections: Select Subject, and Refine Edge for hair.
+- Tests: `scripts/tests/easel_round9_test.py` (63 checks). On screen: a calligraphy stroke, the Quick Mask wash and the
+  selection it leaves, the brush and gradient lists.
+
+**Easel, round eight: toward the big editors** (`apps/huginn_easel.py`, `apps/huginn_easel_ui.py`, `apps/qml/Easel.qml`)
+- *The canvas is put together at the size it's shown.* A big picture fitted to a window is shown at a half, a quarter
+  or an eighth of its size, so that's the size it's now built at, from a smaller copy of each layer kept until that
+  layer changes (pictures of 2 megapixels and up, at 50% zoom or less; zoom in and it's the full picture again;
+  saving and exporting never use the copies). On the 4000 × 3000 test picture with an adjustment layer, a style and a
+  clipped layer, fitted to a window: a change to one layer redraws in 33 ms where the whole picture took 330; dragging
+  an adjustment's slider is 25 ms a step; a brush stroke 2 ms a frame, and 69 ms on letting go where it was 440.
+  Moving and free-transforming a layer preview from small copies too.
+- *Layer versions are never reused.* A layer's version was "the old one plus one", so undoing and then painting
+  something different arrived at a number already used for another picture, and anything kept by version (a style's
+  shadow, a thumbnail) could be stale. Versions now come from one counter, and a pixel layer comes back from Undo with
+  the version it had, so what was kept for it is still good. The fuzz checks every kept copy against a fresh one.
+- *Hue, Saturation, Colour and Luminosity blend modes*, the four Qt doesn't have, worked out by the W3C rules (checked
+  pixel by pixel against a plain reference), in bands on every core, through every path the other modes take:
+  painting live, groups, clipping, Merge Down. Kept in `.easel`, Photoshop and OpenRaster files.
+- *Four more adjustment layers*: Exposure (stops, offset, gamma), Colour Balance (midtones, black and white left
+  alone), Threshold, and Channel Mixer (greys stay grey). Exposure and Colour Balance use the 256-answer table.
+- *Five more filters*: Clarity (midtone contrast without sharpening's halos), High Pass (for an Overlay layer),
+  Reduce Noise (keeps edges), Soft Glow and Vignette.
+- *A tone histogram*: behind the curve in Curves (what the curve is given) and above every other adjustment's sliders
+  (what it makes of it), counted on a small copy and kept until the picture changes.
+- Also from the canvas fuzz: Enter or Escape in the middle of dragging a transform handle raised an error.
+- Tests: `scripts/tests/easel_round8_test.py` (72 checks). On screen: the histogram above an adjustment's slider and the
+  longer blend list. **What this does not make Easel**: see "Where Easel still falls short" below.
+
+**Where Easel still falls short of Photoshop and Affinity Photo** (so nobody is surprised; kept up to date, last after
+round twelve):
+- *Colour depth and management*: 8 bits a channel, sRGB only. No 16- or 32-bit pictures, no ICC profiles, no CMYK, no
+  soft proofing. This is the largest gap for print and for heavy tonal work, and it reaches into every pixel routine.
+  (Round eleven takes the worst of the visible symptom away, steps in smooth tones, for gradients and for
+  adjustment layers one over another; the pictures themselves are still 8-bit.)
+- *How pictures are held*: whole layers in memory, drawn on the processor. The big editors hold tiles, keep a pyramid
+  of sizes on disk and draw with the graphics card. Easel is comfortable at 12 megapixels and usable well past it; a
+  100-megapixel, 50-layer file is beyond it.
+- *Selections*: no Select Subject or object selection (those need a trained model). Refine Edge and Colour Range
+  have one control each, not Photoshop's whole workspaces.
+- *Brushes*: no textures, dual brushes, tilt, wet mixing or brush files from other programs (.abr).
+- *Type*: one style per text box. No paragraph controls (justify, indents, hyphenation), no OpenType features, and
+  type doesn't stay editable in a Photoshop file.
+- *Photography*: no raw files and no lens corrections. (Round twelve merges panoramas, exposures and focus stacks;
+  exposures are fused, not made into a 32-bit HDR picture to tone-map.)
+- *The rest*: actions can't record pointer work (strokes, a selection drawn) or pause for a choice; no artboards or
+  slices, no 3D or video, no plug-ins, no generative fill, no channels panel, no pattern fills.
+
+**Easel, the deep dives** (`apps/huginn_easel.py`, `apps/huginn_easel_ui.py`): four more ways in, after round six's
+command fuzz. Each has a script in `scripts/tests/` that runs as an ordinary user (they refuse root).
+- *Damaged and hostile files* (`easel_files_fuzz.py`: Easel's own, OpenRaster, Photoshop and plain pictures, bytes
+  flipped, cut short, manifests with values of the wrong kind, headers promising enormous pictures). **A Photoshop
+  file whose header claimed 300 000 pixels a side made Easel ask for all of that memory and the system killed it.**
+  Every reader now checks the size (and the size times the number of layers) before setting anything aside, and
+  says the size in the refusal. Whatever else a file gets wrong, opening it gives a sound picture or a message: layer
+  settings of the wrong kind go back to their usual value, pictures of the wrong size are fitted, shapes and styles
+  that can't be drawn are dropped (a star with a billion points would never have finished drawing), and a pipe, a
+  folder or a file over 2 GB is refused without being read. Place a Picture goes through the same door, and so can
+  now place a Photoshop or Easel file. 4 500 damaged files: none crashed, hung or opened into nonsense.
+- *What each format keeps* (`easel_formats_check.py`: one feature at a time, saved and opened again, compared pixel
+  for pixel). Easel's own files, PNG, TIFF, WebP and BMP were already exact. **PDF and SVG ignored blend modes,
+  adjustment layers and clipping** (a Multiply layer came out as Normal: off by up to 190 of 255); Photoshop and
+  OpenRaster export dropped adjustment layers outright, OpenRaster lost clipping, and Photoshop got a group's blend
+  mode wrong. All four now give the same picture: what the format can't say is merged, and only that (an adjustment
+  with what's under it; in SVG and PDF everything up to the last layer that needs more than "this over that", with
+  shapes above it still shapes), and the export message says when that happened.
+- *A big picture* (`easel_speed_check.py`, 4000 × 3000). **Painting under an adjustment layer redrew the whole
+  picture for every step of the brush: about a second a frame.** A stroke now puts together only the patch it
+  touched, through blends, adjustments, masks, groups and clipping alike (1044 ms a frame to 11), and every frame is
+  checked in the tests to be the true picture. Adjustments work in bands on every core, and the six that treat each
+  channel alone use a table of 256 answers: same output to the last bit, 1.1 s to 0.37 s for Hue & Saturation here on
+  two cores. **A ragged selection (the magic wand on a photograph) froze Easel for 13 seconds** joining its outline up;
+  it's traced instead (0.04 s). Saving a 12-megapixel photo layer took 8 seconds of PNG packing: 0.8 now, for a file a
+  sixth bigger, with layers packed side by side. A closed picture's memory wasn't given back (a transform or a
+  stroke preview still pointed at it): 564 MB kept after closing became 311.
+- *The canvas itself* (`easel_view_fuzz.py`: presses, drags, the wheel, keys and resizes on the item that draws the
+  picture, drawn after each and compared with the picture Easel holds). The wheel could scroll the picture away
+  into nowhere with only Fit to bring it back: a strip always stays in sight now. Enter in the middle of pulling a
+  pen handle raised an error.
+- *Selection outlines were of the wrong part*: the marching ants traced what was NOT selected, so they also ran round
+  the canvas edge, and Select All showed none. Found by a test of the new outline code; it was there from the start.
+- Tests: `scripts/tests/easel_round7_test.py` (93 checks). Checked on screen: a stroke under the demo picture's
+  adjustment layer looks the same while painting as after, the magic wand's outline, and Select All's. Two checks in
+  an older test now fail on purpose: with an adjustment layer on top, SVG and OpenRaster export one merged picture
+  where they used to export layers that looked different from the picture.
+
+**Easel, pro round six** (`apps/huginn_easel.py`, `apps/huginn_easel_ui.py`, `apps/qml/Easel.qml`): a fuzz run first, then four
+things a painter expects.
+- *What the fuzz found, fixed* (`scripts/tests/easel_fuzz.py`: about 110 commands at random with sensible and senseless
+  values; after one in a few it checks every layer, mask and the selection are the picture's size, that one command
+  undone gives back the very same pixels, and that a picture saved and opened is the same). A second press with no
+  release between, or Undo or a resize in the middle of a stroke, crashed Easel outright (the stroke's painter was
+  still open on a picture being thrown away): a drag in progress is now finished or closed first. A resize or a canvas
+  turn with a free transform open left a layer the old size: the transform is applied first. A pointer position that
+  wasn't a number hung the brush for ever. Image Size and Canvas Size had no upper limit (New Picture's 16 384 a side
+  now holds for both). Dropping a layer on its own group, moving a layer by nothing, ungrouping the only thing left,
+  nudging with a guide at the corner, an export quality out of range and about a dozen settings handed nothing or
+  not-a-number each raised an error; a layer's Visible could be set to a fraction.
+- *Undo from the keyboard showed nothing* until the pointer crossed the picture (found checking this round on screen;
+  it was there before). The canvas asked for a bare `update()`, which after a part-redraw (the brush outline following
+  the pointer) left the rest as it was. It now always names the whole rectangle.
+- *Clipping to the layer below* (Ctrl+Alt+G): the layer shows only where the one under it has something. Several layers
+  can share one; an adjustment can be clipped; the pair takes the lower layer's opacity and blend. Kept in `.easel`
+  files and read from and written to Photoshop files.
+- *Lock Transparency*: brushes, Fill, gradients and Outline colour only what's already painted; the eraser paints
+  the back colour.
+- *A steadier brush*: the Steady slider makes the brush trail the pointer and evens out wobble; the stroke still ends
+  where you let go.
+- *Outline the selection* (Select › Outline…): a line of the front colour inside, outside or on the selection's edge.
+- Tests: `scripts/tests/easel_round6_test.py` (65 checks); the three older Easel tests still pass (89, 34, 18). Checked on
+  screen in the nested session: clipping by key and from the sheet, the layer list's marks, Steady in the bar. Not
+  checked with a real pen tablet.
+
+**Easel, pro round four** (`apps/huginn_easel_more.py`, new; `apps/huginn_easel.py`, `apps/huginn_easel_ui.py`, `apps/qml/Easel.qml`)
+- *Layer styles* (the sparkle in Layers, or Layer › Layer Style): drop shadow (light angle, distance, softness,
+  spread), outer glow, outline (outside, centre or inside, any width), inner shadow and colour overlay, on any
+  layer or group, as you change them. Each is worked out from the layer's see-through edge (outlines from a true
+  distance transform) and kept until the layer changes. The sheet sits beside the picture so the effect shows.
+- *Layer groups* (Ctrl+G, Ctrl+Shift+G): folders in Layers that fold, nest, and have their own visibility,
+  opacity, blend, mask and styles. A group is drawn on its own and then placed, so its opacity treats it as one
+  picture and an adjustment inside it changes only the group. Layers step in and out of groups with the arrows or by
+  dragging; the Move tool moves everything in one; duplicate, delete and Merge Down (into one layer) take the whole
+  group. OpenRaster keeps groups as stacks; PSD gets their layers with the group's visibility and opacity (a group
+  with styles goes as one picture, so it looks the same).
+- *Smart objects* (Layer › Convert to Smart Object, or Place a Picture…): the original pixels are kept, so free
+  transform (shrink, turn, grow back) is always drawn from them and loses nothing. Filters on a smart object become
+  *smart filters*, listed under the layer: switch each off, change its strength or take it away.
+- *Retouching brushes*: dodge and burn (shadows, midtones or highlights), sponge (takes colour out), soften and
+  sharpen, each painting toward the effect with a soft edge and staying inside a selection; a smudge brush that
+  carries wet paint along; and liquify: push, bloat, pucker, twirl and restore, warping a displacement field
+  sampled smoothly from the original, so later strokes and Restore keep working from the unwarped picture.
+- *Rulers and guides* (View, Ctrl+R): rulers along the picture's top and left; drag a guide out of one, move it
+  with the Move tool, drag it off to remove it. *Snapping* (Ctrl+;): selections, shapes, crops and gradients snap
+  to guides and to the canvas's edges and middle; moving a layer, a group, shapes or a transform snaps its nearest
+  edge or middle. Guides are saved and follow canvas and image size changes.
+- The tools rail goes to two columns when the window is too short for one.
+- Tested (69 checks): every style against exact pixels (a 5 px outside outline exactly 5 px out, inner ones inside,
+  shadow and glow where the light says, cached until the layer changes); groups' order, nesting, isolated opacity,
+  hidden groups, adjustments inside, a group's outline round the group as a whole; .easel, OpenRaster and PSD round
+  trips giving the same picture; a smart object shrunk to a tenth and back still pixel-sharp, its filter on, off and
+  saved; dodge, burn, sponge, smudge and liquify (push, restore, bloat) moving the right pixels; and, through the
+  app, grouping, stepping in and out of groups, dropping on a group, folding, moving and undoing a group,
+  duplicating, deleting and merging one, one undo step for a dragged style slider, converting, transforming,
+  filtering and rasterising a smart object, placing a picture, the brushes, guides (added, snapped to by a
+  selection and a moved layer, dragged, dragged off, kept through a canvas change) and saving it all. On screen: a
+  grouped badge with styles, the sun as a smart object with its filter, rulers, a guide pulled out of the ruler, the
+  style sheet giving the group an orange outline, liquify pushing the card's edge.
+
+## From power-on to the desktop
+
+Every screen between pressing the power button and the desktop is now Huginn's own, and they flow into each other.
+
+- **Live wallpapers** (`config/overlay/usr/share/huginn-os/live`): each realm has a scene of its own, painted on the
+  graphics card and moving slowly. *Aurora*: northern lights folding over a range, stars, mist and a still lake.
+  *Bifröst*: the bridge of light with sparks crossing it, over a sea of cloud. *Muspelheim*: a volcano and rivers of
+  fire under smoke, embers rising. *Niflheim*: snowy ranges under a low winter sun, mist between them, snow falling.
+  They are GLSL shaders (`shaders/live`, built by `scripts/make-live-wallpapers.py` with Qt's qsb into `.qsb` files),
+  with a still of each for computers drawing without a graphics card, for Settings and for the boot screen. A scene
+  never jumps: told to stop, it eases to rest. In the light appearance the same scenes are painted by day.
+- **Boot screen** (Plymouth): the realm's scene, soft and dark, the mark, and a thin line of the realm's light that
+  fills as the computer starts. An encrypted disk asks for its password in a glass pill where the line was. Shutting
+  down shows the mark alone; updates say so, with how far along.
+- **Sign-in screen** (Huginn's own: `shell/huginn_greeter.py`, `shell/qml/GreeterView.qml`): the live wallpaper moves
+  behind a greeting and the time. You sign in in the dock: your picture, your name and your password sit where your
+  apps will be, other people are beside them (click one, or Left and Right with the field empty), then sleep, restart
+  and shut down. A quiet bar along the top has the date and time, the battery when there is one, and the session when
+  there's a choice ("Desktop" or "Game Mode"; click it to change). A wrong password shakes the field and says so; after five, the service makes that name
+  wait (30 seconds, doubling to ten minutes) and the wait counts down. Other screens show the wallpaper alone.
+- **The wake**: when the password is right it becomes a line of light, the dock clears to your picture, places for
+  your apps light up from the middle outwards, and the time blooms in the realm's colours and is gone. Then the
+  sign-in screen leaves and your session starts on the screen it left.
+- **Arrival** (`shell/qml/Arrival.qml`): the desktop starts with that last picture where it was (the dock, lit, your
+  picture in the middle) over the same scene, then it fades and the bar, the real dock and the widgets come in.
+- **On the desktop** the wallpaper is the same scene at rest. Settings › Appearance shows each realm's scene, keeps
+  it moving on the desktop too if you like ("Live wallpaper"; never with Reduce motion), and dresses the sign-in
+  screen in your realm ("Use Bifröst"), through Huginn's password prompt (`/usr/libexec/huginn-login-look`, polkit
+  action `org.huginn.login-look`, writes `/etc/huginn/signin.conf.d/10-look.conf`).
+- **Password prompts** (`apps/huginn_polkit.py`): Huginn's own polkit agent, a glass card.
+
+Tested: the scenes and stills rendered with Mesa's OpenGL (llvmpipe) on a virtual display; the boot screen run by
+Plymouth itself with its X11 renderer (starting, a disk password, shutting down); the shell's arrival and the
+Appearance page; the sign-in screen as below.
+Not tested here: how smooth the scenes are on real graphics cards (they are light: a few hundred operations a pixel).
+
+### The lock screen
+
+Locking (Super+L, the lid, going to sleep, the screen-off timer) shows the sign-in screen's own design
+(`shell/huginn_locker.py` as the "Host" of `GreeterView.qml`, through `Locker.qml`): your realm behind the time, you
+alone in the dock, Sleep and nothing else (Restart and Shut Down would close what you have open), and your sign-in
+widgets under the same rule (a private one says "Private while locked"). Five wrong passwords make you wait, as at the
+sign-in screen. When it's right the wake plays and the lock leaves with 0, which is what unlocks; a lock screen that
+crashes is started again and never unlocks. Tested: `scripts/tests/locker_test.py` (14 checks) and under the real
+compositor in a window. (`config/overlay/usr/share/huginn-os/lock/Lock.qml`, the earlier design, is now only the QML
+preview session's.)
+
+### Widgets on the sign-in screen
+
+None to begin with: the sign-in screen is the time and the dock. Settings › Sign-In Screen (`apps/qml/SetSignIn.qml`)
+adds them, up to six: **Today** (the next events in Calendar and Reminders), **Weather** (the first place in Weather),
+**This PC** (Huginn OS's own updates, downloads that finished in the last day, the battery) and **Now Playing** (what
+last played). Each is small, wide (two across) or tall (two down), packed in two columns at the right while the time
+moves to the left; the page shows the sign-in screen as it will look, and dragging a widget onto another's place
+changes the order. The sign-in screen itself offers no way to change them.
+
+Each widget has **Before sign-in**. On: it shows what the desktop last saw (anyone at the computer can read it). Off:
+its name and a lock, and none of its data ever leaves the person's own folder. Today and Now Playing start off.
+
+How the data gets there without the sign-in screen (or root) reading anyone's files (`apps/huginn_signin_widgets.py`):
+- Settings writes the choice to `~/.config/huginn/signin-widgets.json`.
+- The desktop (`SignInSnapshot` in `shell/huginn_shell.py`) writes, every minute, the data of the widgets allowed
+  before sign-in and only theirs to `~/.cache/huginn/signin-snapshot.json` (mode 600); with none allowed, no file.
+- The sign-in service reads both in a process that has become that person first (`read_as`: no root reads in
+  anyone's home, no links followed, regular files of at most 256 KB), keeps for each widget only the fields its tile
+  draws, as short text, and gives private ones nothing but their name. This PC's update line is the system's own
+  (`/var/lib/huginn-os-update`), read by the service.
+- The greeter (`shell/qml/GreeterTile.qml`) draws what it is given, and works out what's past: Today drops events
+  that are over, Weather says "As of …" after three hours and gives up after a day.
+
+Tested: `signin_test.py` (the layout and snapshot rules, what a private widget may carry, the service handing them
+over and carrying on past someone's broken files), `signin_real_check.py` as root (read as the person; a link from
+the snapshot to /etc/shadow reads nothing; a file the person can't read stays unread; an oversized layout is no
+widgets), `greeter_test.py` (four widgets on screen, two private, none of their data in any text on screen), the
+Settings page through its own controls (adding, sizes, before sign-in, dragging to reorder, rubbish input), and the
+desktop's snapshot (only allowed widgets, mode 600, gone when none are allowed).
+Not tested here: on a started computer, which needs a restart after the update so the sign-in service reads them.
+
+### Widgets from apps
+
+Apps can put a widget of their own on the sign-in screen (and the lock screen), as Code (**Last Build**: passed or
+failed, the project and task, when) and Tempo (**Current Song**: the song last worked on) do. No code of the app's
+ever runs there: an app declares the widget and writes what it says, and the sign-in screen draws those words in one
+of its own two templates, after checking and shortening every piece (`apps/huginn_signin_widgets.py`).
+
+1. Declare it, installed with the app: `/usr/share/huginn/signin-widgets/<id>.json`, or for one person
+   `~/.local/share/huginn/signin-widgets/<id>.json` (which can't take an id the system already has):
+
+       {"id": "com.example.raid", "name": "Raid Night", "app": "Example Studio", "about": "Who's in tonight",
+        "template": "list", "sizes": ["small", "wide"], "size": "wide", "before": false, "accent": "#E8505B"}
+
+   `template` is `status` (a big line, a small one, an optional state, good or bad, shown as a green or red dot, and
+   when) or `list` (up to four lines of two parts). `before` is whether it may show before sign-in when someone adds
+   it; leave it false for anything personal.
+2. Say what it says, whenever it changes: write `~/.cache/huginn/signin-widgets/<id>.json` (only yours to read), or
+   use `huginn-signin-widget set <id> --big "Build passed" --small "huginn-os · Build" --state good`, or from
+   Python `huginn_signin_widgets.publish("<id>", big=…, small=…, state=…, rows=[[…, …]], at=…)`.
+
+It then appears in Settings › Sign-In Screen › Add a widget as "Example Studio · Raid Night". Added, it's in the
+person's layout as `app:<id>` with its name, template and colour kept beside it, so the sign-in service needs nothing
+of the app's to draw it; the desktop copies what it says into the snapshot each minute if it may show before sign-in,
+and if not, the sign-in screen gets its name and a lock, as for Huginn's own. An app that's been removed leaves its
+widget saying nothing new until it's taken off.
+
+Tested: `signin_test.py` (declarations: odd ids, names, templates and colours; where they're found and in what order;
+what a layout keeps and what saving takes from the declaration; publishing: only yours, cut short, nothing unknown
+kept, oversized files ignored; the private one carries its name alone; the command; Code's and Tempo's own),
+`greeter_test.py` (Code's widget on the screen with its words and when, nothing else of the file's).
+
+### The sign-in screen's options
+
+Also in Settings › Sign-In Screen. Each person's own, kept beside their widgets in `signin-widgets.json`
+(`greet`, `clock`, `wake`) and used while they're the one chosen in the dock, and on their lock screen:
+- **Greet me by name**: "Good morning, Astrid" rather than "Good morning". Off to begin with, since anyone at the
+  computer reads it.
+- **The time**: in the middle or at the left when there are no widgets (with widgets it's always at the left).
+- **Play the wake when I sign in**: off, the sign-in screen simply fades to the wallpaper and the desktop's pieces
+  come in without the dock carrying over. Reduce Motion on in Accessibility does the same (the service reads it from
+  `~/.config/huginn-shell/settings.json`, as the person).
+
+For everyone (`[Look]` in `/etc/huginn/signin.conf.d/10-look.conf`, written by `huginn-login-look` as an
+administrator, like the realm):
+- **Who the dock shows** (`People=`): everyone; only whoever signed in last, with a Someone else button for anyone
+  else to type their name; or no one, and everyone types a name. A list that isn't shown isn't sent to the sign-in
+  screen either, nor is the last name when no one is shown.
+- **Light by day** (`LightByDay=`): between sunrise and sunset (`huginn_sun.is_day`: the time zone's own city; 7:00 to
+  19:00 where that can't be told) the sign-in screen and the lock screen wear their light look, the realm's day sky
+  with dark ink on frosted white.
+
+The desktop carries on from what the sign-in screen did: the greeter tells the service how it ended (`dock`,
+`dock-light` or `plain`), the service puts it in the session as `HUGINN_ARRIVAL`, and the shell's arrival
+(`shell/qml/Arrival.qml`) matches it.
+
+Tested: `signin_test.py` (the options' rules, the look's keys, who is and isn't sent for each choice, the arrival
+reaching the session and nothing else), `greeter_test.py` (greeted by name or not, the time at the left, the light
+and dark looks, Someone else and back, no one shown), `signin_real_check.py` as root (the options and Reduce Motion
+read as the person), `huginn-login-look` against a throwaway folder in dash and bash.
+
+### The sign-in service
+
+SDDM is not in the image. What stands between the computer starting and somebody's desktop is Huginn's own
+(`apps/huginn_signind.py`, root, from `huginn-signin.service`):
+
+- It shows the sign-in screen as the `huginn-greeter` account (made by `sysusers.d/huginn-signin.conf`; no shell, no
+  password, groups `video` and `render` only): `/usr/libexec/huginn-greeter-session` runs Huginn's compositor on the
+  screens with nobody's session in it and the greeter on top.
+- The greeter can do nothing by itself. It sends a name and a password down `/run/huginn-signin/greeter.sock` (the
+  greeter account's alone, mode 600, and the service checks who is on the other end) and is told yes or no. It may
+  also ask who can sign in, and for sleep, restart or shut down (only while nobody is signed in).
+- Each sign-in is done by a worker process of its own: PAM (`/etc/pam.d/huginn-signin`: the same modules Ubuntu's
+  SDDM file names) runs there, so a module that crashes takes a worker down, not the service. On a right password the
+  worker opens the session at once on a spare terminal (the kernel's `VT_OPENQRY`; logind hears of it from
+  `pam_systemd`: seat0, that VT, class `user`, type `wayland`), becomes the person (groups, gid, uid, checked
+  afterwards) and starts `/usr/bin/huginn-session` through their login shell, behind the sign-in screen while its
+  wake plays (the hand-over, below). The session's own
+  messages go to `~/.local/share/huginn/session.log` (the one before: `session.log.1`), which problem reports read.
+  When the session ends the worker closes the PAM session and the sign-in screen comes back.
+- Root, service accounts and accounts with no shell are refused before PAM is asked, as slowly as a wrong password.
+- Signing in by itself: `[Autologin] User= Session= Relogin=` in `/etc/huginn/signin.conf.d/*.conf` (the installer
+  and Settings › Users write `20-autologin.conf`; the installation drive writes `05-live.conf` with `Relogin=true`).
+  It uses a PAM file of its own that asks for nothing. A by-itself session that ends at once isn't tried again.
+- If the sign-in screen stops four times in quick succession the service gives up, and after three failed starts
+  in a minute `huginn-signin-fallback.service` takes over: SDDM where it is still installed (a system installed
+  before this and updated since), else a text sign-in on the first screen.
+
+**The hand-over.** The desktop is started behind the sign-in screen and shown only once it's ready, so there's no
+black screen between them:
+
+1. Right password: the person's service manager (`user@UID.service`) is started, the session opens on its own
+   terminal (above) and its compositor starts there unseen; the greeter plays its wake (its top bar fades, the dock
+   stays) and says `leaving`, keeping its last picture.
+2. Unseen, the compositor leaves the graphics card alone (the sign-in screen holds it): each screen's output exists
+   from the start, so the shell lays itself out, and apps are told their frames are done twenty times a second, so
+   they draw in full. The shell writes `$XDG_RUNTIME_DIR/huginn/shell-ready` once every screen's wallpaper and the
+   arrival have drawn a frame (six seconds at most); the worker tells the service.
+3. With the wake played and the desktop ready (or eight seconds gone), the service says `go`: the worker brings that
+   terminal to the front (`VT_ACTIVATE`) and logind gives the session the graphics card. The compositor sets its
+   screens up for drawing then, without resetting the card first, and its idle time (the screen lock) starts.
+4. The sign-in screen isn't ended yet. Its last picture stays on the screen until the session's compositor has put
+   its first frame over it (it writes `$XDG_RUNTIME_DIR/huginn/drawn`; fifteen seconds at most), then it is.
+5. The shell's arrival waits until its terminal is the one in front (`XDG_VTNR` against
+   `/sys/class/tty/tty0/active`), so it plays where it can be seen, carrying on from the sign-in screen's last
+   picture.
+
+If the desktop isn't ready after eight seconds it is shown anyway, with the sign-in screen's wallpaper as a still
+under everything for its first twenty seconds (`HUGINN_SPLASH`, `/usr/share/huginn-os/live/arrive/<realm>.png`;
+`compositor/src/render.rs`). A session that ends before it's shown brings a fresh sign-in screen. Signing in by
+itself, and a computer with no spare terminal, start on VT 1 after the greeter has gone, as before.
+
+How it is switched on is made of plain files, so an update can put it in place and Go Back can take it away exactly:
+`graphical.target.d/huginn-signin.conf` (Wants the service) and `sddm.service.d/huginn-signin.conf` (SDDM starts only
+when the fallback's flag exists). On a system updated from SDDM, who signs in by itself and the sign-in screen's
+realm are carried over (`config/hooks/47-sign-in.sh`), and SDDM's settings and Huginn theme are still shipped for
+that fallback alone; they go once the new sign-in has been seen working on real computers.
+
+Tested: the service's logic with stand-in workers (`scripts/tests/signin_test.py`, 100 checks: sign-in, the wait
+after wrong tries, odd and hostile requests, a stranger on the socket, workers dying, a greeter that won't leave or
+keeps dying, signing in by itself, Relogin, the hand-over's order and its time limits); the workers against real PAM and real accounts as root in a throwaway
+system (`signin_real_check.py`, 38 checks: wrong and unknown names, root and shell-less accounts, becoming the
+person with their groups, home, environment and nothing of the service's left open, the log, stop, the greeter's
+account); the screen against the real service (`greeter_test.py`, 25 checks, with pictures), and under the real
+compositor in a window, typed into through the compositor's keyboard, through to the greeter leaving with 0; the
+update from an SDDM image and its exact undo on a clean copy of the built image.
+Seen working in a virtual machine (QEMU, no 3D, an installed test system updated through Settings' way of
+staging): the update at boot, the sign-in screen, the session starting unseen on tty2, the wake, the hand-over
+in order (the sign-in screen's last picture stays up across the terminal switch until the desktop's first frame),
+the arrival and the desktop settling, and the text consoles still reachable. That machine draws
+everything in software and is far slower than a real computer (the shell takes minutes to load), so its time
+limits were stretched on the test disk to watch the order, and with the real limits it falls back as described
+above. Not seen: how smooth it looks on a real graphics card, more than one screen, and the fallback service.
+
+## Install Huginn OS: our own installer
+
+`apps/huginn_installer.py` + `apps/qml/Installer.qml` (the app, as the live user) and `apps/huginn_install_engine.py`
+(the engine, as root). Started from the installation drive, the installer opens by itself; closing it leaves you
+trying Huginn OS, and it waits in the launcher.
+
+- **The dock path** (2026-11-28, direction A of the installer mockups): the installer fills the screen with the night
+  sky. Its own top bar shows what it is, the network, the power, and help seeing, hearing and typing; each step sits in
+  a glass card; the steps are islands in a dock that keep their answers (any can be clicked; going forward stops at a
+  step with something missing), the one you're on raised and lit; the orb at the end is the last look, then Install.
+  Always dark (glass over the aurora), teal.
+  - New steps: **Ready?** (power from `/sys/class/power_supply`, room, the internet, Secure Boot from its EFI variable,
+    Windows' Fast Startup from the hibernation file's mark, BitLocker; graphics from `/sys/bus/pci`, Wi‑Fi, Bluetooth,
+    sound, a camera, memory; Wi‑Fi joined here); **Extras** (media formats downloaded from Ubuntu, built on the
+    computer, or not now; Microsoft's fonts with their licence; fonts for every script; NVIDIA's driver when there's an
+    NVIDIA card; printer drivers); **Apps** (what ships, game-development tools, Flathub, and the Linux versions of
+    apps found in Windows); **From Windows** (only when Windows stays: whose things, which folders with their counts,
+    copied or used where they are); **Safety** (encryption moved here, with an eight-word recovery key added as a
+    second LUKS key slot; restore points before updates, the firewall, security fixes by themselves). Help seeing and
+    typing (the screen reader, everything bigger, stronger contrast, less motion, the on-screen keyboard) works in the
+    installer at once and stays on for the person installed.
+  - `--probe-windows PART` (the engine, as root): Windows mounted read-only (ntfs3, else ntfs-3g) somewhere of its own,
+    its people and folders counted (for 12 s at most), apps found in Program Files, AppData and the Start menu,
+    unmounted.
+  - **After the first start** (`apps/huginn_first_start.py`, `huginn-first-start.service`): the engine writes what
+    needs the internet or time to `/var/lib/huginn/first-start.json`; the service, after the network, adds the
+    packages, NVIDIA's driver (`ubuntu-drivers`), apps from Flathub, builds FFmpeg with every format into `/usr/local`
+    (x264, x265, fdk-aac, libvpx, Opus, dav1d, LAME…), and copies the person's things from Windows (nothing
+    overwritten) or mounts Windows read-only at each start with a Windows folder in their home. Offline it exits 75 and
+    systemd tries again in ten minutes; each task is done once; one that fails three times is left and said in
+    `first-start.status.json`.
+  - Tested (`scripts/tests/installer_dock_test.py`, 54 checks): plans with the new parts and the ones refused (a
+    made-up recovery key, Windows on the disk being erased); what the first start is given; a made-up C: drive
+    surveyed (its people, not Public or Default; folders counted; four apps; Fast Startup on and off); the first
+    start's order, its dry run, copying without overwriting, mounting read-only once, waiting while offline, giving
+    up on a broken task after three tries; and the window: ten islands and the orb, answers kept, From Windows
+    there only when Windows stays, every new step's choices, the plan they make, the last look and the
+    installation's steps to the end, with no QML complaints.
+  - **Bookmarks from Windows**: From Windows counts the bookmarks in each person's Edge, Chrome, Brave, Vivaldi, Opera
+    and Firefox (Chromium's Bookmarks files, Firefox's places.sqlite opened read-only and immutable) and offers
+    "Bookmarks into Huginn". The first start adds them to Huginn's Favorites (its browser-data.json, after any there,
+    none twice); with Huginn already open it leaves "Bookmarks from Windows.html" in the home to import instead.
+    Saved passwords and Wi‑Fi keys stay in Windows.
+  - **The chip and a PIN** (Safety, with encryption, on computers with a TPM 2.0): the disk opens with a short PIN
+    on the boot screen instead of the password. initramfs-tools can't ask a TPM, so the installed system switches to
+    dracut: `dracut`, `systemd-cryptsetup` and `tpm2-tools` (dracut's TPM part needs it) ride on the ISO in
+    `pool/tpm` (fetched by the build, installed offline). In two steps, so nothing is swapped until the chip has
+    taken the PIN: systemd-cryptsetup and the TPM's tools first, beside initramfs-tools; then
+    `systemd-cryptenroll --tpm2-device=auto --tpm2-pcrs=7 --tpm2-with-pin=yes` seals the PIN to the chip with Secure
+    Boot's state (the password and PIN go in its environment, never on a command line or in the log); only then
+    dracut, crypttab's `tpm2-device=auto`, and a host-only dracut configuration. The password and recovery key keep working; with no chip, no packages, or the chip refusing,
+    it's the password alone and initramfs-tools stays. Tested (`scripts/tests/installer_gaps_test.py`, 29 checks)
+    against made-up browsers and a fake chip; not yet on a real TPM.
+- **Steps** (before the dock path), in a rail at the left that can be gone back along: Welcome (language, then Try or Install), Keyboard
+  (search, and a place to try it; picked from the language, applied to the live session at once), Network (Wi‑Fi
+  through NetworkManager; optional), Disk, You (name → user name and computer name suggested, password with its
+  strength, sign in by myself), Time zone (picked from the language), Ready (everything once more; the button says
+  "Erase and Install" when it will). Continue stays put, saying why, until a step is complete.
+- **Time zones** come from tzdata's `zone.tab` with their country (Qt's names) and what the zone is called there
+  ("Central"), each with its time now and UTC offset. The language's country's zones come first ("Suggested for
+  United States": the seven people mean, not zone.tab's 29), then them all; a search matches every word against the
+  city, country, zone name, abbreviations (CST, CET) and offset (`utc-6`), and Enter takes the first. The list is a
+  model filtered in Python (`ZoneModel`): QML had filtered a copy of all 418 zones at every key, which took about
+  0.9 s per key here (much longer on a slow computer), and was the installer "hanging". Each part of the installer
+  also says when it changes (language, layout, zone, you, …) instead of one signal for everything, so picking a
+  zone or typing a name no longer makes every list look again. The default zone is the language's (the live
+  system's clock is in UTC).
+- **Disks** are read without root (lsblk and /sys): the live drive itself is never offered; Windows, Linux, macOS,
+  EFI and recovery partitions are recognised; free space is found from the partition table. A bar shows the disk as
+  it will be. **Erase**: GPT, a 512 MB EFI partition and the rest (BIOS computers get a 1 MiB BIOS boot partition).
+  **Beside**: new partitions in the free space, sharing the disk's EFI partition with Windows (Windows' files left
+  alone, its fallback boot file too), and GRUB's menu offers both. **Your own partitions**: one for Huginn OS
+  (formatted) and the EFI one (shared). **Encryption** (erase or beside): LUKS2 for the system with a plain /boot
+  beside it, unlocked on the boot screen's glass pill.
+- **The engine** (`/usr/libexec/huginn-install-engine`, polkit action `org.huginn.installer`; on the live system a rule
+  lets the live user run it without a password) takes the plan as JSON on stdin, so passwords never touch a disk,
+  and reports each step as JSON lines: partition (sfdisk), format, copy the system (unsquashfs from the live
+  medium, with its percentage), the kernel (casper keeps it beside the squashfs), settings (fstab by UUID, crypttab,
+  hostname, language, keyboard for the console, the sign-in screen and the desktop, time zone, the person in the
+  groups that exist, password through chpasswd, signing in by yourself, a swap file sized to the memory and the
+  free space), tidying away the live system's pieces (casper, the installer, its polkit rule), a new initramfs,
+  GRUB with shim for Secure Boot (plus the firmware's fallback path when the disk is Huginn's alone) or BIOS GRUB,
+  GRUB's own package from the ISO's pool/ so it keeps itself up to date, and its log kept without passwords. If a
+  step fails it unmounts, closes what it opened and says why; the window offers the log and a way back.
+- While it installs, the window becomes the installation: a line of the realm's light filling, what it's doing,
+  and a slideshow of the apps waiting on the other side; Show Details for the log. Then Restart Now.
+
+Tested: the engine for real against disk images (each partition through its own loop device), with a small Ubuntu
+live system packed the way the ISO is: erase on UEFI, beside another system sharing its EFI partition, your own
+partitions, and encryption as far as this machine allows (it can make a LUKS2 volume, not open one); then the
+erased disk started in QEMU with UEFI firmware (shim, GRUB, the kernel, about 80 seconds without KVM), and signing
+in on its console as the person the installer made, with her password, then checking from inside: Oslo time,
+Norwegian, sudo, the EFI partition and the swap file. The window walked through every step in demo mode (21
+checks). Two things in this test machine stand in for a real computer's: the EFI partition goes through FUSE (no
+FAT in its kernel), and GRUB's which-disk questions are answered for it (no partition devices). Not tested here:
+real disks and a real ISO, BIOS installs, an encrypted system starting, Secure Boot with Microsoft's keys, and Wi‑Fi.
+
+## Screen Sharing from the compositor (2026-11-27)
+
+Sharing this screen no longer runs KDE's RDP server (`krdp`, now in not-wanted.list): Huginn's compositor serves it
+itself (`compositor/src/rdp.rs`, on IronRDP's server, in a thread of its own), so any Remote Desktop app (Windows'
+own, Microsoft's Windows App on a Mac or phone, FreeRDP) connects as before.
+
+- **Asked for over the bus** by Screen Sharing (`org.huginn.Compositor`: `ShareStart(screen, port, name, password,
+  certificate, key)`, `ShareStop`, `ShareStatus`), only while its window is open: the compositor stops sharing by
+  itself if the app hasn't asked how it's going for 20 seconds (it closed or crashed). The password is no longer on
+  any command line.
+- **Network Level Authentication only** (CredSSP): the one-time password is proved before anything is shown, over TLS
+  with this computer's own certificate (made the first time, `~/.local/share/huginn/sharing`, the key private to
+  you). One person at a time. IPv4 and IPv6, or IPv4 alone where IPv6 is off.
+- **The picture**: one screen (the first, or the one picked) or **all of them**, side by side as they're arranged
+  (at the largest screen scale; RDP allows 8192 pixels each way), with the pointer. After each frame the compositor
+  draws a shared screen again into a buffer of its own with a damage tracker of its own, so a picture is read back
+  only when something changed, at most 30 a second; each screen's newest waits in a slot of its own, so a slow
+  connection skips pictures rather than lag, and only the parts that changed go over the wire. Screens changing (one
+  plugged in, a new resolution or arrangement) start the share again to match, same password.
+- **Keys and the mouse** come back through the compositor's own input paths (`compositor/src/afar.rs`, an input
+  backend of their own), so shortcuts, sticky keys and the rest behave as at the computer; a text-console switch from
+  afar is ignored. **Characters** (phones' on-screen keyboards send characters, not keys) are typed with the keys the
+  layout in use has for them; ones it hasn't (é on a US layout, emoji) go straight into the focused app's text field,
+  the compositor acting as its input method (text-input; Qt and GTK apps take them).
+- **Sound**: what's playing here, recorded from the default output's monitor (`pw-record`, 44.1 kHz stereo) while the
+  viewer wants it (its "play on this computer" setting).
+- **The clipboard**: text both ways (`wl-paste --watch` tells the viewer when something's copied here; text copied
+  there is fetched at once and offered here with `wl-copy`).
+- **The island** says "Your screen is shared" with Stop while someone is looking (the Privacy Report's watcher only
+  sees PipeWire, which this doesn't use).
+- **Not yet**: files on the clipboard (text only), the viewer's microphone.
+- Seen with FreeRDP 3.32 in the nested session: the clipboard both ways with accented text; characters typed (é, ñ,
+  not on the US layout, into the launcher's search and a Qt app's text field, in order), and through the bus as
+  Phone's remote does; sound negotiated and streaming (from a stand-in for `pw-record`: the nested session has no
+  PipeWire). All screens at once was only seen with the nested session's one screen. The last build (control
+  characters from a viewer skipped) was only built, not run again.
+
+## Huginn's own Qt look, and every app's menus in the top bar (2026-11-27)
+
+Kvantum and qt6ct are gone (not-wanted.list). Qt apps that aren't Huginn's now load Huginn's own Qt look, two plugins
+built into the image from `qt/` (C++, against the image's Qt):
+
+- **The platform theme** (`qt/theme`, `QT_QPA_PLATFORMTHEME=huginn`): the realm's colours in dark or light, Inter and
+  JetBrains Mono and the icon theme chosen in Settings, all from `~/.config/huginn/qt.conf` (`huginn_look.py` writes
+  it from the realm; `/etc/xdg/huginn/qt.conf`, Aurora dark, until then). The theme watches the file, so open apps
+  change with the realm, dark or light or the icon theme at once. Open and Save go through Qt's portal theme (so the
+  windows are Huginn's own), asked for only when an app wants one; tray icons and the rest through Qt's plain Unix
+  theme.
+- **The widget style** (`qt/style`, "Huginn", Fusion underneath): rounded controls (7 px, as `radius.control`), cards,
+  tab panes and menus (10 px; menus and tool tips see-through at the corners), the accent for what's chosen and for
+  the button a dialog would press, ticks and dots in the accent, thin scroll bars with no arrows that widen under the
+  pointer, round slider knobs on an accent track, flat tool bars, headers and tabs, menus with their shortcuts in a
+  softer colour, and drop-down lists that open over themselves as a menu does.
+- **Menus in the top bar**: a Qt app's menu bar leaves its window, and its menus are in the app's menu at the top left
+  (and in the bar's row of menus), as Huginn's own apps' are: the plugin answers as `org.huginn.App.p<pid>` (`Menus`,
+  `Trigger`, the same JSON as `apps/huginn_menu.py`). The app's About and Preferences come first (as About <App> and
+  <App> Settings…) and its Quit last, with Huginn's window items around them; ticks and one-of-a-group choices show
+  as ✓ and •; submenus open beside the menu; menus an app fills as they open are filled before they're read; the
+  window in front is the one whose menus show; and shortcuts work as before with the bar out of the window. Only
+  while Huginn's shell is there (otherwise the bar stays in the window), and not where `HUGINN_QT_MENUS=0` is set or
+  `[Menus] top_bar=false` is in qt.conf.
+- **GTK apps' menus too**, where GTK can: the compositor speaks GTK's own protocol (`compositor/src/gtkshell.rs`,
+  gtk_shell1, written out in `compositor/resources/gtk-shell.xml`) and says it shows menu bars, so GTK 3 and 4 apps
+  built on GtkApplication hide theirs and say where their menus and actions are; the window list carries that
+  (`gtkMenus`) and the shell reads them (`shell/huginn_gtkmenus.py`: org.gtk.Menus, org.gtk.Actions) into the same
+  app menu, About, Settings and Quit moved the same way, and does what's chosen (`org.gtk.Actions.Activate`).
+- **What can't**: apps with no menu bar of their own (most GTK 4 and GNOME-style apps, browsers, Electron apps) keep
+  Huginn's basic app menu. GTK 3 apps whose menu bar is a plain GtkMenuBar keep it in the window: the module that
+  would hand those over (appmenu-gtk-module) fails on Wayland (it asks before the window exists). App Store
+  (Flatpak) Qt apps run their own Qt, which can't load Huginn's plugins: they take the realm's colours (kdeglobals)
+  in their runtime's own style and keep their menu bars; the App Store offers Ubuntu's own package of such an app
+  where Ubuntu has it (see the next section). X11 apps keep theirs.
+- **Updates** carry the two plugins ready-built (`prebuilt/huginn-qt-*`, made with `huginn_osupdate.py prebuilt-qt`),
+  for exactly `qt/`'s sources and the Qt they were built with: a system with another Qt minor version keeps what it
+  has and says so, and the session uses qt6ct where Huginn's theme isn't there. An update doesn't remove qt6ct or
+  Kvantum (updates don't take packages away); nothing uses them.
+- Seen in the nested session: a Qt app's menus in the top bar's app menu with its bar gone from the window (About and
+  Settings first, Quit last, a radio choice, a submenu filled as it opened), and clicking an item in that submenu did
+  it in the app; a GTK 3 app on GtkApplication the same way, its menus read through the compositor's window list.
+- Tested: `qt_look_test.py` (41, and 4 pictures) with real Qt apps: what `huginn_look.py` writes, the style, colours,
+  fonts and menu colour an app gets, an open app following a change of realm, the menu bar staying in the window with
+  no shell or when turned off and leaving it with one, every part of `Menus` and `Trigger`, shortcuts with the bar
+  hidden, a second window's menus, an app in a session called huginn starting at once (Qt's portal theme looks for a
+  base theme by the session's name, and so made this one again, endlessly: fixed) and Open and Save after it;
+  `gtk_menus_test.py` (21) with a real GTK 3 app on a bus of its own; `osupdate_test.py` for the ready-built plugins
+  (the wrong Qt, other sources, other bytes). **Not tried with real apps people use (KeePassXC, Kate, VLC, GIMP…)
+  or on real hardware**; Qt apps with unusual menus (made at the last moment, or on the window's own bar code) may
+  need a look.
+
+## The App Store's other source: Ubuntu's own packages (2026-11-27)
+
+A Qt app from Flathub brings its own Qt and can't load Huginn's look or hand its menus to the top bar. Ubuntu's own
+package of the same app runs on the system's Qt, so it can. The App Store now offers both, wherever Ubuntu has the app:
+
+- **Which apps**: Ubuntu's AppStream catalogue (DEP-11, which apt fetches with the package lists once `appstream`
+  is installed: now in the image), matched to Flathub's by AppStream id (ignoring case and `.desktop`), the ids an
+  app says it provides, and its launcher's name (`apps/huginn_debapps.py`). Ubuntu's packages that only install a
+  Snap (Firefox, Thunderbird, Chromium) are left out. A fresh system has no package lists: the store fetches them
+  (PackageKit's refresh, no password) when they're missing or more than two days old, then says which apps Ubuntu has.
+- **An app's page** says "Get it from" with both, side by side: **Ubuntu** (the system's own package, its version
+  and size from apt; fits in fully; updates with Software Update; installing asks for the password) and **Flathub**
+  (usually newer, sandboxed, updates in the App Store; for a Qt app, that its look and menus stay in its window).
+  Apps on KDE's runtime (Qt apps) start on Ubuntu's, the rest on Flathub's; Get on a shelf takes that default. Once an
+  app is in, the page says which it came from, the facts strip and Information show that one's, and Open starts it
+  from its launcher (`gio launch`). Remove takes away the one that's in, and the store keeps the one left if both were.
+- **Installing and removing** Ubuntu's go through PackageKit (`pkgcli`, which asks for the administrator's password
+  itself; the lists fetched first when old), else apt under the password prompt, in the same queue and with the
+  same progress as Flathub's. Only package names from the catalogue, checked, are ever handed on.
+- Tested: `store_sources_test.py` (32): the catalogue reader and matching against made-up and Ubuntu's real
+  catalogues (VLC, KeePassXC, Kate, Krita and OBS found; Firefox and Thunderbird left to Flathub), and the store
+  itself with stand-ins for flatpak, pkgcli and apt-cache: defaults, install, open, remove, the queue, a failure.
+  The page in two pictures (preview mode). **Not tried installing a real package** from the store.
+
+## Zero KDE: the sweep of 2026-11-28
+
+Checked again from the package lists (every list's packages and their dependencies, as apt walks them with
+recommends off): no KDE package comes in. The one door left was GnuPG's: gpg-agent needs a pinentry, and the only
+graphical one that could be chosen (pinentry-qt) brings two KDE Frameworks libraries. So GnuPG now asks in Huginn's
+own window: **`apps/huginn_pinentry.py`** (`/usr/libexec/huginn-pinentry`, named in `/etc/gnupg/gpg-agent.conf`)
+speaks gpg-agent's Assuan protocol (descriptions, prompts, errors, a new passphrase typed twice, CONFIRM and MESSAGE,
+cancel as GnuPG's own error), shows `apps/qml/Pinentry.qml` (the administrator prompt's glass card, with a key), and
+hands over to pinentry-curses on a text console. Before, a passphrase asked for in the graphical session (Git signing
+from Code, Passwords' exports) had only the text pinentry, with no terminal to show it. pinentry-qt joined
+`not-wanted.list`. The build now also clears KDE libraries an older chroot kept marked as asked for (built with
+`--from customise` on a chroot from before KDE left, 80 such packages were still there: marked as dependencies, apt
+takes the ones nothing needs), then lists any KDE package still in the image (`kde-left.txt` in the work folder)
+and says so loudly. Kept on purpose: `kimageformat-plugins` (KDE's plugins for Qt's own image reading, so Photos
+and Easel open HEIC, AVIF, JPEG XL and more) and the small archive library they need. `pinentry_test.py`: 16 checks, among them a real gpg-agent encrypting and decrypting
+with a passphrase through the pinentry's own conversation.
+
+## Zero KDE: the shell's windows on Huginn's own module (2026-11-27)
+
+The last KDE code in the image was what the shell stood on: KDE's layer-shell-qt (how the bar, dock, launcher,
+widgets, sign-in and lock screen become layers of the desktop), two QML modules for NetworkManager and BlueZ, and
+KConfig's command-line tools. All four are gone; a fresh install brings no KDE program or library, only Breeze's
+icons (under Huginn's) and pointers, as artwork.
+
+- **`org.huginn.layershell`** (`qt/layershell/`, C++, built with the Qt look by `build_qt`): a QML module that makes
+  a Qt window a layer surface (wlr-layer-shell, version 5) through QtWaylandClient's own shell-integration hook. It
+  takes the same properties the shell already set (layer, anchors, exclusive zone, keyboard focus, scope, screen,
+  "on the active screen"), so `Shell.qml`, `Greeter.qml`, `Locker.qml` and `SessionLayer.qml` changed only their
+  import. Popups (menus, tooltips) hang from the layer as `get_popup` children. The protocol file is wlroots' (MIT),
+  with one argument renamed (`namespace` is a word C++ keeps for itself).
+- **A system updated from before** has the module once its update brings the Qt parts (Software Update's prebuilt
+  `huginn-qt-layershell*`), and until then `shell/huginn_layerfallback.py` points the shell, sign-in and lock screen
+  at a stand-in of the same name that loads KDE's module, which such a system still has (updates don't take packages
+  out). A fresh install has no stand-in to fall back on and doesn't need one: `build_qt` stops the build without the module.
+- **Networks and Bluetooth**: the shell already asked NetworkManager and BlueZ itself over D-Bus; the KDE modules for
+  them were installed and never imported.
+- **Settings** writes its INI files itself (`kconfig_write`; kwriteconfig6 is gone) and no longer calls KWin over
+  D-Bus: the compositor reads the same files (night light, zoom, colour filters, sticky and bounce keys, the pointer's
+  size) when told to `ReloadAccess` / `ReloadInput`, and mice and touchpads come from its `Pointers`. The unused
+  KWin rounded-corners build step is gone from `build.sh` too.
+- `config/not-wanted.list` names all of them, so a chroot built before loses them as well.
+- Tested: the nested session on the new module (the bar's exclusive zone, the dock, widgets, the tour, the
+  launcher taking the keyboard and finding Calculator, the lock screen) and the same with the stand-in;
+  `greeter_test.py` (46) and `locker_test.py` (14) both ways; `osupdate_test.py` (70, the five Qt parts);
+  `qt_look_test.py` (41); `ci-smoke.py` (56). A fresh install simulated from the package lists brings no KDE code.
+
+## Older GTK 3 apps' menu bars in the top bar (2026-11-27)
+
+GtkApplication apps already hand their menus to the top bar through the compositor (gtk_shell1). Older GTK 3 apps
+build a menu bar widget themselves (GtkMenuBar: Audacity, Geany, Thunar, FileZilla, Pidgin, wxWidgets apps), and
+appmenu-gtk-module, which once moved those, doesn't work on Wayland. Huginn now has its own: `gtk/menus.c`, a GTK 3
+module (`libhuginn-menus.so`).
+
+- **Loaded into every GTK 3 app** of the session: `huginn-desktop-session` sets `GTK_MODULES=huginn-menus` when the
+  module is installed. (GTK on Wayland takes modules from nowhere else; settings.ini's `gtk-modules` is for X11.)
+- **While Huginn's shell is on the bus**, an app answers as `org.huginn.App.p<pid>` (`Menus`, `Trigger`), like Qt
+  apps and Huginn's own, so the shell needed no change. A window's menu bar is hidden (no room is kept for it); one
+  in a header bar, toolbar or popover is left where it is. Its shortcuts keep working: GTK only lets a menu item's
+  shortcut act while its menu bar is showing, so the module tells it yes (`can-activate-accel`). If the shell goes
+  away the menu bar comes back, and whatever the app did with it meanwhile (shown, hidden) is kept.
+  `HUGINN_GTK_MENUS=0` leaves an app's menu bar alone.
+- **The menus as GTK shows them**: each one is opened as GTK opens it (`activate`), so menus an app fills as they
+  open have their items (Open Recent); labels without mnemonics; shortcuts from an accel group, an accel path
+  (GtkUIManager) or a GMenuModel; check and radio items, greyed and hidden ones, separators; About, Preferences and
+  Quit moved to where Huginn has them. The window in front decides, and a dialog counts as its window.
+- **Built** by `build_gtk_menus` (`gtk/build.sh`, against the image's GTK; the compiler and headers go again).
+  **Updates** carry it ready-built (`prebuilt/huginn-gtk-menus.xz`, `huginn_osupdate.py prebuilt-gtk`), for exactly
+  its sources; GTK 3 keeps its module interface, so any GTK 3 loads it.
+- Not reached: GTK 3 apps from Flathub (their sandbox has its own GTK and no Huginn module) and GTK 2 apps (which
+  print a one-line note that they couldn't load it).
+- Tested: `gtk3_menus_test.py` (49) with a real GTK 3 app (`gtk3_menubar_app.py`: a menu bar built item by item and
+  one from a GMenuModel, with a stand-in shell on a bus of its own): the menu bar leaving and coming back with the
+  shell, the menus as read, doing items, shortcuts with the menu bar gone, a dialog, a header bar's menu bar left
+  alone. In the nested Wayland session with Huginn's shell: the menu bar gone from the window, Sketchbook's menus in
+  the top bar (picture checked), Large chosen there and Ctrl+N pressed in the window both reaching the app. And with
+  **Geany 2.1** (Ubuntu's): its whole menu bar in the top bar (File … Help, greyed Save, shortcuts, Preferences as
+  Settings), File › New from there and Ctrl+N in the window both opening a document. An app that gives itself no name
+  goes by GDK's ("geany" → "Geany"). `osupdate_test.py` (81). Not yet tried: wxWidgets apps (Audacity, FileZilla).
+
+## Huginn's shapes for GTK 3 apps (2026-11-28)
+
+GTK 3 apps wore Huginn's colours on Adwaita's shapes. `themes/Huginn/gtk-3.0/shapes.css` (brought in by both
+`gtk.css` and `gtk-dark.css`) now gives them Huginn's shapes over Adwaita's drawing, as Huginn's Qt style does over
+Fusion's, so a GTK app and a Qt app side by side look alike:
+
+- Controls with 7 px corners (the tokens' control radius), roomier buttons, and a soft ring of the accent round
+  whatever has the keyboard; linked buttons stay joined.
+- Pill switches with a round, shadowed knob; round radio buttons and softly squared checks; thin pill sliders,
+  progress and level bars; scroll bars as thin pills that thicken under the pointer.
+- Lists, sidebars and cards with 10 px corners, sidebar rows rounded within them; tabs rounded at the top, the chosen
+  one underlined in the accent (Adwaita's own, more specific rule had kept drawing it in Adwaita's blue: fixed).
+- Menus and pop-ups with 10 px (12 px) corners, room round their items and the items rounded within them; rounded
+  tooltips.
+- Windows GTK draws itself with Huginn's 14 px corners (square when maximised or tiled), a roomier header bar with a
+  semibold title, and round window buttons on a soft pill, the close one red under the pointer.
+- Each person's copy of the theme (`~/.local/share/themes/Huginn`, for App Store apps) follows at their next sign-in,
+  and updates bring the file like any other.
+- Tested: `gtk_shapes_test.py` (8) in a real GTK 3 window: GTK reads it with no parsing error or warning; buttons,
+  entries and the suggested button come out with 7 px corners, switches as pills, menus with 10, the header bar 44 px
+  tall; and a picture of the same controls before and after (checked: rounded controls, pill switch, round window
+  buttons, the accent under the chosen tab).
+
+## Huginn's icon theme on its own: no Breeze underneath (2026-11-28)
+
+Huginn's icon theme used to inherit Breeze's for anything it didn't draw itself. It now answers every name apps ask
+for, and Breeze's icons leave the image: with the pointers above, nothing of KDE's is left, artwork included.
+
+- **What "every name" means** (`scripts/icon_names.py`): freedesktop's Icon Naming Specification in every context
+  (actions, apps, categories, devices, emblems, faces, file kinds, places, statuses) and what GTK and Qt ask for
+  themselves (menus, entries, sidebars, Wi‑Fi and battery levels, power profiles, alignment, call states…): 432
+  names. 191 were missing.
+- **New line glyphs** (`scripts/icon_glyphs_more.js`, 77 of them, in `Glyph.qml`'s own drawing language and read
+  only when the theme is drawn, so the shell's glyphs don't grow): 21 faces, signal and battery levels, view layouts,
+  check and radio marks, alignment, text direction and indents, an aeroplane, a gauge for power profiles, a dial
+  pad, a touchpad, a floppy, a tape, an hourglass, a spinner and more.
+- **Composed from glyphs already drawn** (`COMPOSED` in `scripts/icon_symbols.py`, 98 names): a glyph with a small
+  one at its foot in a gap of its own (contact-new is a person with a plus; printer-error a printer with "!"), one
+  crossed out (notifications-disabled, bluetooth-disabled), mirrored or turned (sidebar end, rotate left, the
+  vertical alignments), and emblems (the glyph in a ring). The small glyphs are drawn heavier so they keep the
+  stroke's weight.
+- **Standard app and category names** (accessories-calculator, applications-games, preferences-desktop…) show
+  Huginn's own app tiles (`APP_TILES` in `scripts/make-icons.py`).
+- `index.theme` inherits only `hicolor` (the apps' own icons); `breeze-icon-theme` and `kf6-breeze-icon-theme` are in
+  `not-wanted.list`, and a fresh install simulated from the package lists brings no KDE package at all. The icon
+  wrapper no longer looks in Breeze for apps' own icons.
+- Fixed on the way: the settings portal still told apps their GTK theme was "Breeze" (gone since Huginn's own GTK
+  theme came in); it says "Huginn" now. Drawing the theme again also brought 40 device and status pictures up to
+  date with their current sources (they had been drawn with an older fitting).
+- Tested: `icon_coverage_test.py` (16): all 432 names found by Qt's own lookup (`QIcon.hasThemeIcon`) and GTK's
+  (`Gtk.IconTheme`), a -symbolic one as an icon GTK recolours, every one of the theme's pictures valid SVG, the line
+  icons in the text colour, the tree's icons exactly what the sources make, and what the compositions draw (a badge
+  in the corner, a line across, a true mirror, a ring). `ci-smoke.py` (56), `portal_more_test.py` (23),
+  `osupdate_test.py` (82).
+
+## Huginn's own pointers (2026-11-28)
+
+Breeze's pointers (KDE's artwork) are replaced by Huginn's own: `pointers/make_pointers.py` draws every pointer an
+app can ask for and packs them as an X cursor theme.
+
+- **The look** (redrawn the same day: the first shapes were generic and the finish wasn't the shell's): shapes of
+  Huginn's own and the shell's glass. The arrow is a notched dart (a raven's quill, no stem); a link lights Huginn's
+  orb inside the dart; things to take hold of are rounded grips with dots, not hands; the two-way pointers end in dart
+  heads; the pencil is a quill. Each is dark glass lit from above (a gradient, then a sheen across its top half), a rim
+  running teal to violet over a dark hairline (so it holds on white too), a soft teal glow and a shadow. Frost (light
+  glass) is a flag away. The busy pointer is the orb with a light running round it (16 frames, 55 ms each); "working
+  in the background" is the dart with a small turning orb. Copy, link, menu, ask, no-drop and move are the dart with
+  a badge in the orb's colours.
+- **The realm's colours, and a busy pointer of its own** (later the same night): the busy pointer is now a solid drop
+  of the realm's light, with no ring round it: bands that run into each other like the aurora (not macOS's pinwheel of
+  separate colours), an inner layer turning the other way and fading out, so it seems to swirl, lit from the top left
+  (QConicalGradient, drawn with QPainter). The rims, the link's orb, the badges, grips and the quill's line take the
+  realm's colours, and the glow is fainter. Each realm has its own theme (`--realms`: Huginn is Aurora's, then
+  Huginn-Bifrost, Huginn-Muspelheim, Huginn-Niflheim); Settings lists Huginn once, and the look (`huginn_look.py`)
+  swaps to the realm's own when the realm changes, as long as the pointers are Huginn's. Updates draw all four. QtSvg can't clip or blur, so the sheen, glow and shadow are drawn in layers with
+  QPainter.
+- **Huginn Plain**: the same pointers with an ordinary outline, white round the dark glass (near-black round frost),
+  and no glow round them, for anyone who finds the realm's rim too much. The marks, badges and busy drop keep the
+  realm's colours. Each realm has its plain theme too (Huginn-Plain, Huginn-Bifrost-Plain, …; `--plain` for one);
+  Settings › Appearance › Pointer lists Huginn Plain just after Huginn, and the look keeps plain ones plain when the
+  realm changes.
+- **Every name**: 30 drawn (CSS's names: default, pointer, text, wait, progress, help, grab, the eight resizes and
+  the rest), 120 names in all with X's old ones, GTK's, and Qt's hashed ones. Sizes 24, 32, 48 and 64.
+- **Made with Qt alone** (QtSvg, offscreen), so the image build and updates draw them on the machine itself and no
+  pictures are kept in the tree. `--sheet` makes a picture of the looks.
+- **Where**: inside Huginn's icon theme (`/usr/share/icons/Huginn/cursors`, as Adwaita keeps its pointers in its
+  icons), so Settings › Appearance lists them as "Huginn", first. The image makes the other names links (1.9 MB) and
+  sets X11's default (`x-cursor-theme`, `cursor.theme`); updates draw them too and put files in place (7 MB), leaving
+  links that are already there. The sign-in screen, the session, GTK (`gtk-cursor-theme-name`), the compositor and
+  Settings now default to them. Anyone still on Breeze's (the old default) moves to Huginn's once, at sign-in
+  (`huginn_look._huginn_pointers`, with X11 apps' `~/.icons/default`); another theme chosen in Settings stays.
+- `breeze-cursor-theme` and `oxygen-cursor-theme` leave the image (`not-wanted.list`); Adwaita's and DMZ's stay to
+  choose from.
+- Tested: `pointers_test.py` (30): every name there, as links and as copies; X's own library (libXcursor) reads every
+  one at every size, premultiplied, with the arrow's hotspot at its tip and the hand's at its fingertip; the busy
+  orb's frames and delay; the update drawing and placing them, leaving links alone; the move from Breeze's (and not
+  from Adwaita or an Oxygen theme still there). The compositor loaded them in the nested session without falling
+  back (its pointer isn't in a screen grab there, being the host window's).
+
+## App Store Qt apps: Huginn's look and the top bar's menus (2026-11-27)
+
+A Qt app from Flathub runs on KDE's Flatpak runtime with its own Qt, so Huginn's Qt look (`qt/`) can't load into it.
+That runtime does carry KDE's own platform theme, which takes its colours, fonts and widget style from kdeglobals and
+hands menu bars over as dbusmenu. Huginn now works with that:
+
+- **The look**: the system-wide Flatpak override (`/var/lib/flatpak/overrides/global`) sets
+  `QT_QPA_PLATFORMTHEME=kde` (it already let them read `~/.config/kdeglobals`). `huginn_look.py` writes there, with
+  the realm's colours, `widgetStyle=Huginn` and Huginn's fonts (fonts someone chose there are kept). Huginn's widget
+  style reaches the sandbox as an extension Flatpak doesn't manage, `org.kde.KStyle.Huginn`
+  (`/var/lib/flatpak/extension/org.kde.KStyle.Huginn/x86_64/<branch>/styles/`): the KDE runtime's own extension
+  point for styles. It's built against the system's Qt 6.10 and needs only glibc 2.4 and GCC 12's C++ library, so it
+  goes in for runtimes 6.10, 6.11 and 6.12 (a Qt plugin loads in a newer Qt, not an older one); apps on older
+  runtimes get the colours and fonts but their own style. `build.sh` puts the copies in, and updates keep them the
+  same as the style (`huginn_osupdate.kstyle_paths`). Their icons stay the runtime's.
+- **The menus**: an app on KDE's theme exports its menu bar only while `com.canonical.AppMenu.Registrar` is on the
+  bus, and says per window where it is through KDE's Wayland protocol `org_kde_kwin_appmenu`. The compositor now
+  speaks it (`compositor/src/appmenu.rs`, the protocol file from plasma-wayland-protocols, MIT) and puts the address
+  in its window list (`appMenu`, checked to be a sound bus name and path); the shell owns the registrar and reads
+  the menu bar (`shell/huginn_appmenu.py`: GetLayout, AboutToShow for menus filled as they open, Event to do an item)
+  into the same menu as every other app's, About, Settings and Quit where Huginn has them. The override lets
+  sandboxed apps see the registrar.
+- **X11 apps** that use the registrar the classic way (Electron and Chromium under XWayland, Qt apps on X11), which
+  hide their own menu bar once it's there, register their window's number: the window list now carries X11 windows'
+  numbers (`xid`), and a registration counts only for a window of the process that made it.
+- Tested: `appmenu_test.py` (31) with a real Qt app handing its menu bar to the registrar on X11 (registration under
+  its own name and process, the menus as read, doing items, greyed ones not, another app unable to unregister it,
+  forgotten when it goes); `qt_look_test.py` (43: kdeglobals); the compositor's address check (`cargo test`). In the
+  nested Wayland session: a Qt app on KDE's platform theme (the theme the Flatpak runtime carries, here from
+  Ubuntu's package) loaded Huginn's style and Inter from kdeglobals, told the compositor where its menu bar is, and
+  showed it in the top bar (picture checked), where choosing Large reached the app. **Not tried inside a real
+  Flatpak**: Flathub can't be reached from here, so the extension being mounted and the override's effect are
+  untested; nor with a real Electron app. The App Store's cards now say Flathub Qt apps keep their own icons rather
+  than their own look; Ubuntu's package stays the default for Qt apps (it fits in fully).
+
+## Phone's own link (2026-11-27)
+
+Phone no longer needs KDE Connect's desktop program: `apps/huginn_phoned.py` speaks its protocol (version 8) itself,
+so the free KDE Connect app on Android or iPhone (and GSConnect, and KDE Connect on other computers) pairs with Huginn
+OS directly. It starts with the session (and by D-Bus when Phone asks): `org.huginn.Phone` at `/org/huginn/Phone`.
+
+- **Finding each other**: a greeting by UDP on port 1716, to every network the computer is on (again when it joins
+  a new one, and when Phone opens or you press Look again), and straight to paired phones' last addresses. A phone
+  that isn't paired is greeted back so that it connects (then its certificate is seen before anything is trusted);
+  a paired one is connected to.
+- **Trust**: each side has its own certificate (an EC key in `~/.config/huginn/phone`, private to you); everything
+  goes over TLS. Pairing shows the same 8-character code on both screens (KDE Connect's: both public keys and the
+  request's time, hashed) and pins the phone's certificate; a device claiming a paired id with another certificate is
+  refused, and so is any payload from one. Before pairing nothing it sends is acted on. A request from a clock more
+  than 30 minutes out is refused with a reason; one not answered in 30 seconds runs out. Pair or Not Now from the
+  notification or in Phone.
+- **From the phone**: its battery (and a word when it runs low); calls to the island (Silence, a text back); its
+  notifications in Huginn's, with their buttons and inline reply, cleared on one side when cleared on the other (what
+  was already on the phone when it connected isn't shown again); files to Downloads (never over another file; one
+  that stops short isn't kept); web addresses opened (anything else only copied); words and its clipboard copied;
+  "ring my computer".
+- **To the phone**: files, words, a web address, the clipboard, ping, ring it, silence a call, a text message.
+- **Coming from KDE Connect**: the first time, a computer that had it brings its id, key and paired phones along, so
+  phones paired before stay paired. `kdeconnect` is in not-wanted.list; on a system updated from before, it stays
+  installed but nothing starts it.
+- **The phone as a remote** (the app's Remote input and Presentation remote): its touchpad moves the pointer, taps
+  click (double, right, middle, drag), two fingers scroll, and its keyboard types here, modifiers and special keys
+  included, through the compositor's keys and mouse from afar (`org.huginn.Compositor`: `PointerBy`,
+  `PointerButton`, `Scroll`, `Key`, `TypeText`; see Screen Sharing for how characters go in).
+- **Music here, from the phone** (the app's Multimedia control): every MPRIS player by name, what's playing (title,
+  artist, album, length, where), play/pause/next/previous/stop, seek and a place in the song, volume, repeat and
+  shuffle; the cover, when it's a file here, and only the file the player says is its cover. Changes reach the phone
+  as they happen.
+- **Not carried over yet**: browsing the phone's files, whole text conversations, running commands.
+- Tested: `phone_test.py` (98) against a stand-in phone written from the protocol (TLS the other way round, pairing
+  both ways, payloads on ports of their own, a wrong certificate, a clock out, the timeout), a second copy of the link
+  (a paired computer, found by its greeting and connected to), KDE Connect's files coming along, the remote's and the
+  media controls' packets, and the D-Bus service with its signals, against stand-ins for the compositor's keys and
+  mouse from afar and for a music player; `phone_real_check.py` (22, as root) against **KDE Connect's own daemon** (`kdeconnectd` 25.12, as
+  Ubuntu ships it) across two network namespaces: they find each other, pair both ways with the same code, ping,
+  words and a file each way, ring, reconnect both ways round, and unpair. **Not tried with a real phone.**
+
+## Not yet our own
+
+The goal is a desktop that is Huginn's from the first screen to the last. Where it stands:
+- **Ours:** the boot screen, sign-in, lock screen (`/usr/share/huginn-os/lock/Lock.qml`, in both sessions), the
+  installer, the shell (top bar, dock, launcher, control centre, widgets), the session daemon that replaced Plasma's
+  background services (notifications, power, the hardware keys, Wi‑Fi passwords, Bluetooth pairing), and every app.
+- **The desktop portal is ours** for nearly everything apps ask the desktop (`huginn-portals.conf`):
+  - Open and Save (`apps/huginn_portal.py`): remembers the view, the sort and each app's last folder.
+  - Screenshots for apps: the screen holds still, drag the part to share or take it all; a quiet screenshot first
+    asks "Allow …?" once. Colour picking: the screen holds still with a magnifier (`apps/huginn_portal_ask.py`).
+  - "Allow <app> to …?" (camera, screenshots, running in the background…) and **Open With**.
+  - Keeping the screen on or the computer awake while an app asks (a film, a call, a game): the screen through the
+    session daemon (`org.freedesktop.ScreenSaver`), sleep through logind, let go when the app is done; and App Store
+    apps asking to start at sign-in (an entry in `~/.config/autostart` that Startup Apps lists)
+    (`apps/huginn_portal_more.py`).
+  - Settings apps read: dark or light, the realm's accent, contrast, less motion, fonts (`apps/huginn_portal_settings.py`,
+    a small resident process, so a change reaches every app at once). GTK's settings come after Huginn's.
+  - **Screen sharing and recording** (PipeWire): xdg-desktop-portal-wlr, from Huginn's compositor.
+  - What's left goes to **GTK's portal** (printing, email, your name and picture, web apps added to the start menu).
+    KDE's portal is gone (2026-11-27), and with it the wrapper that started it in Huginn's session.
+- **Qt apps that aren't Huginn's** wear Huginn's own Qt look (`qt/`, `QT_QPA_PLATFORMTHEME=huginn`; see "Huginn's
+  own Qt look, and every app's menus in the top bar" above): the realm's colours, the icon theme chosen in Settings,
+  Inter, the portal's Open and Save (Huginn's own), and their menu bars in the top bar. KDE's integration
+  (plasma-integration), KIO's extras, KDE's command-line tools, qt6ct and Kvantum are gone, and the session calls
+  itself `Huginn` alone (it was `Huginn:KDE`, so Qt and other apps took it for KDE).
+- **Everyone else's apps wear the realm** (`apps/huginn_look.py`, run by the shell at sign-in and on every change):
+  Qt apps get Huginn's own Qt look in the realm's colours (`~/.config/huginn/qt.conf`, followed by open apps at
+  once), and apps built on KDE's libraries (from the App Store) the realm's colours in kdeglobals. GTK 3 apps get
+  Huginn's own theme (`/usr/share/themes/Huginn`: Adwaita's drawing, which GTK carries, with Huginn's shapes
+  (`shapes.css`) and Huginn's colours on every surface, control and selection; the realm's and mode's colours come from `~/.config/gtk-3.0/colors.css`, generated
+  as `Huginn<Realm><Mode>-gtk3.css`, and a copy in `~/.local/share/themes` lets App Store apps wear it too), and
+  libadwaita apps its named colours. Breeze's Qt style and Breeze-GTK are gone (2026-11-27); Breeze's icons (under
+  Huginn's) and pointers stay, as artwork. Inter is the font everywhere. Icons are Huginn's own theme (see "Icons and looks"); Papirus is gone.
+- **Nothing of KDE's is left** (2026-11-28): the shell's windows are layers through Huginn's own module
+  (`org.huginn.layershell`, see "Zero KDE" above), the pointers are Huginn's own, and the icon theme answers every
+  name itself, so Breeze's artwork is gone too.
+- **The compositor**: being replaced with Huginn's own, in Rust on Smithay (see "Huginn's own compositor" below): it
+  is now the session **"Huginn OS (own compositor, preview)"**. The earlier preview in Python
+  (`shell/huginn_compositor.py`, `shell/qml/Compositor.qml`, inside cage) is what the notes below describe; it stays
+  for `huginn_shell.py --compositor` until the Rust one has caught up with it.
+  - **X11 apps** open as windows of their own through xwayland-satellite (built with a small patch:
+    `scripts/build-xwayland-satellite.sh`, `patches/xwayland-satellite/`; no longer put in the image, since the new
+    compositor has XWayland built in).
+  - **Frosted glass**: the bar, dock, launcher and control centre blur what's behind them, desktop cards the wallpaper
+    only — when a GPU draws the scene (a VM without one gets plain glass).
+  - **Several screens**: cage spans them; the bar, dock and panels stay on the main one, windows open on the screen
+    of the window in front, and Maximise fills the screen a window is on.
+  - **KWin stays the default** until the preview has been used on real computers. A few apps that need newer Wayland
+    protocol versions than Qt's compositor offers (the foot terminal) still won't start in it.
+- **In the KWin session** the top bar and control centre now show the real computer: the app in front and its menu
+  (Help, Minimise, Close Window — told by a small KWin script, `huginnactive`), battery, Wi‑Fi or wired, Bluetooth,
+  Do Not Disturb, night light, brightness and volume, and the notifications that came, with Clear. The dock brings a
+  running app's window forward instead of starting another.
+
+## Apps handing things to each other
+
+- **Files → Mail**: right-click files → "Send by Mail" starts a message with them attached.
+- **Anything → Mail**: an email link (`mailto:` with to, cc, subject, body, attach) opens a draft. Only one Mail runs:
+  a second start hands its link to the open one and leaves. A link can only attach ordinary files in your home
+  folder, never hidden files, keys, system files or folders, and nothing is ever sent without you pressing Send.
+- **Mail → Contacts**: the person button beside a sender adds them; a contact card (.vcf) in a message says "Add to
+  Contacts" instead of "Save".
+- **Mail → Calendar**: an invitation (.ics) in a message says "Add to Calendar"; Calendar also opens .ics files from
+  Files or the browser. Times are converted to this computer's time zone.
+- **Invitations**: a message carrying one shows what, when, where and who from, with Accept, Maybe and Decline. The
+  answer goes to the organiser in the form calendar programs understand (an iTIP reply); Accept and Maybe also put
+  the event in Calendar. A newer version of an invitation updates the event in place; a cancellation offers
+  "Remove from Calendar" (a whole event, or one day of a series); one moved day of a series moves just that day.
+  Sending your own: the envelope button on an event in Calendar starts a message in Mail that goes out as a real
+  invitation to everyone in To and Cc, and their answers read as "Ada accepted …". Not yet: Calendar keeping a
+  list of who has answered, and sending an update or cancellation to guests when you change or delete the event.
+- **Repeating events** in Calendar: daily, weekly, monthly, yearly, when adding one and from calendar files (with
+  end date, count, weekdays and skipped days), plus every weekday, "the last Friday of the month", "the 15th and
+  the last day", "the fourth Thursday of November". One day of a series can be skipped; the bin removes the series.
+  Only patterns that pick the n-th of a set or go by week number still come in once, on their first day.
+- **Photos, Notes, Documents → Mail**: a "Send by Mail" button. A photo or document goes as an attachment; a note
+  goes as the words of the message, its first line as the subject.
+- **Dock badge**: the Mail tile shows how many inbox messages are unread. Any app can show a number the same way (a
+  small file in `$XDG_RUNTIME_DIR/huginn/badges/`). Closing Mail's window leaves it running without one, so it keeps
+  checking, notifying and updating the badge; the session also starts it that way at login when there is an account
+  (`huginn_app.py mail --background`). Ctrl+Q quits it; "Check when closed" in Accounts turns all of this off. After a
+  login it can't check until the vault is unlocked once, in Mail, Passwords or the browser.
+- **Mail, further**: conversations (replies gathered into one row, with the others a click away; a switch in
+  Accounts turns it off), a signature per account, and an Outbox: a message written offline waits there and is sent
+  when the server answers, while a refusal (wrong address, sign-in) is still told straight away. If the line drops
+  after a message has started going out, Mail can't know whether it arrived, so it never resends by itself: it says
+  so, and a queued message is held in the Outbox with "Send Anyway" and "Don't Send".
+- Calendar and Contacts can be open in two windows (or get a hand-over while open) without one undoing the other.
+- Tested with 22 + 33 checks here (`mailto` parsing and its attachment rules, the single-Mail hand-over, calendar files,
+  repeats, sharing, badges, two windows at once) and about 40 more in Mail's own (invitations both ways, conversations, signatures, Outbox, dropped connections, staying on). Not tested on a real desktop: the windows actually coming to the front.
+
+## Mail sign-in: registering Huginn with Google and Microsoft
+
+Google and Microsoft no longer take an ordinary password from a mail app. They want the person to sign in on the
+provider's own web page, which then hands the app a token good for mail and nothing else. For that the app has to be
+registered with the provider, and the registration belongs to whoever ships the app: it can't be done by this kit.
+Until it is, Gmail still works with an app password, and Outlook.com, Hotmail and Live can't be added at all.
+
+1. **Google**: Google Cloud console → new project → enable the Gmail API → OAuth consent screen (External) with the
+   scope `https://mail.google.com/` → Credentials → OAuth client ID, type "Desktop app". That scope is a "restricted"
+   one: while the app is in testing only the test users you list can sign in (and Google expires their sign-in
+   after seven days); opening it to everyone needs Google's verification and a security assessment.
+2. **Microsoft**: Entra admin centre → App registrations → New, for "accounts in any organizational directory and
+   personal Microsoft accounts" → Authentication → add "Mobile and desktop applications" with the redirect
+   `http://localhost` → API permissions (delegated): `IMAP.AccessAsUser.All`, `SMTP.Send`, `offline_access`. No secret.
+3. Put the ids in `/etc/huginn/mail-oauth.json` (everyone on the computer) or `~/.config/huginn/mail-oauth.json`:
+   `{"google": {"client_id": "…", "client_secret": "…"}, "microsoft": {"client_id": "…"}}`. Google issues desktop
+   apps a "secret" that it doesn't treat as secret; to ship the ids in the image, add the file under
+   `config/includes.chroot/etc/huginn/`.
+
+Mail then shows "Sign in with Google / Microsoft", opens the page in the browser, and waits on `127.0.0.1` for the
+one-time code. Known wrinkle: some newly made personal Outlook.com mailboxes refuse sending over SMTP even with a
+valid token; Mail keeps such an account for reading and says that sending was refused.
+
+Tested against stand-ins on localhost (a token-only IMAP/SMTP server and a small sign-in service): the whole flow,
+a refused sign-in, a forged answer, renewal, rotated tokens, a withdrawn sign-in and signing in again. Not tested
+against Google or Microsoft themselves, which needs the registrations above.
+
+## Tested in a VM (2026-11-11)
+
+Run on a Windows host in VirtualBox 7.2, inside a Kubuntu 26.04.1 live session and then from the built ISO.
+
+- `scripts/build.sh` builds a 2.1 GB ISO end to end (about 5 minutes on 6 cores, lz4).
+- The ISO boots (BIOS) straight into the Huginn session; the shell, dock and Welcome tour appear.
+- All 20 apps start on Qt 6.10.2 / KWin Wayland.
+
+Known gaps: `snapshot.ubuntu.com` was unreachable from the test VM, so that ISO came from the live archive
+(set `SNAPSHOT=""` to do the same); UEFI boot, installing to disk, Flatpak installs and media playback are untested.
+
+## Tested in a VM (2026-11-15): the whole path, and every app
+
+QEMU without KVM (2 CPUs, software drawing), from the ISO this kit builds, with an empty 32 GB disk:
+
+- **Boot**: GRUB, then Plymouth's Huginn screen; the installation drive signs in to the Huginn session by itself and
+  the installer opens over the desktop.
+- **Installing** through the installer's own windows: language, keyboard, network, disk (erase), you, time zone,
+  summary, Erase and Install; it copied, set up and finished with "Huginn OS is ready".
+- **The installed system**: Huginn's sign-in screen (now on Wayland), signing in, the arrival, the desktop, the lock
+  screen after idle and with Super+L in both sessions (wrong password, then the right one), Open and Save windows
+  through the portal, and the preview session (cage + Huginn's compositor) with apps in it.
+- **Every app** started on the image's own Python 3.14 and Qt 6.10 (inside the build chroot) and checked for QML and
+  Python errors; idle CPU measured at 0–0.1%.
+
+Fixed along the way:
+
+- The browser's install step replaced `/usr/share/huginn`, deleting the live wallpapers and the lock screen with it:
+  they now live in `/usr/share/huginn-os/`.
+- The installation drive signed in to Plasma's session (casper picks it): `huginn-live-session.service` points it at
+  Huginn's.
+- The sign-in screen needed an X server that isn't installed: SDDM now runs its greeter on Wayland (KWin).
+- Everything asking for the font "Inter" got Noto Sans (the image has "Inter Variable"): a fontconfig alias.
+- KDE's screen locker (Plasma 6.6) takes its lock screen from a Plasma *shell* package, not the look-and-feel one,
+  so Huginn's lock showed KDE's emergency fallback: it's now `/usr/share/plasma/shells/org.huginn.desktop`. It also
+  quits straight after a right password, and recovers if a password arrives while an old question is pending.
+- The preview session's cage aborted when the compositor asked for full screen before its first frame; it no longer
+  asks (cage fills the screen anyway), and windows bigger than a small screen are asked to fit.
+- The file chooser answers the portal at once (and opens its window once the compositor is listening): a slow start
+  made the portal give up on it for the whole session.
+- The live wallpaper settles on its still when drawing is slow (software drawing, most VMs), which kept the arrival,
+  the sign-in and lock screens from responding.
+- The desktop's cards showed made-up weather, trackers and events: they now read Weather, Privacy Report, Calendar
+  and Reminders, with an empty state that says how to fill each.
+- The preview session sorted first at the sign-in screen and became the default: renamed so "Huginn" stays first.
+- Smaller: the installer looked for Wi‑Fi on its window's thread (it froze for up to 25 s) and said "Looking for
+  Wi‑Fi networks…" for ever on computers without Wi‑Fi; "Use the free space" was offered on an empty disk; Tempo
+  needed SciPy; Shortcuts had a QML warning; unused imports across the apps; Scan's "Look Again" wasn't a button;
+  "Welcome back" greeted someone signing in for the first time.
+
+## Tested (2026-11-15, second round): the real top bar, the portal, the compositor's extras, other apps' look
+
+Every suite again on the new pieces, plus the ISO in QEMU (no KVM, software drawing):
+
+- **The KWin session** (KWin on a virtual screen in the image, and the ISO): KWin's script tells the top bar which app
+  is in front; Minimise from its menu and the dock bringing the window back; a restarted shell asks KWin itself. In
+  the VM the top bar named the installer, Screenshot and Terminal as they came forward, and the control centre showed
+  the wired connection, night light, sound and an empty notification list.
+- **The portal** through the real xdg-desktop-portal (1.18 in a container, 1.21 in the image): settings (dark, accent,
+  GTK theme, a change reaching apps at once), "Allow … to Take Screenshots?" then quiet screenshots, a dragged part,
+  Escape, the colour picker with its magnifier, Access with choices, Open With with UpdateChoices and the app giving up
+  (26 checks); Open and Save still pass (22). In the VM: the "Allow" card for the Screenshot app, a screenshot taken
+  through KWin, nothing left in Pictures, and screen sharing offered (it wasn't before).
+- **The compositor** (32 checks, and 13 more): two screens (bar and dock on the main one, Maximise on the second
+  screen fills it and stays there), an X11 app with its island, frosted glass, the launcher's Enter and Escape.
+- **Other apps' look**: a plain Qt app came up in Huginn's Kvantum style, the realm's colours and Inter with nothing
+  set by hand; GTK 3 apps in Breeze with Huginn's colours (screenshots in two realms).
+- **Headless**: `scripts/ci-smoke.py` opens all 54 apps and the shell with no screen: 54 of 54 fine.
+
+Fixed along the way:
+
+- **Screen sharing was missing in Huginn's session**: KDE's portal backend only offers it (and screenshots, global
+  shortcuts) when `XDG_CURRENT_DESKTOP` is exactly `KDE`, and KWin only lets it in when KWin knows the installed apps
+  (`XDG_MENU_PREFIX=plasma-`). Both are set now.
+- **The home folders weren't made** in Huginn's session (other desktops run `xdg-user-dirs-update` from their autostart
+  folder, which this session doesn't): no Pictures, Documents or Downloads on a first sign-in. The session makes them.
+- **Five programs turned GLib's loop by hand** from a Qt timer although Ubuntu's Qt already runs it: Qt's events ran
+  inside Qt's events, a window could be drawn in the middle of drawing another, and in the VM the desktop sometimes
+  stayed at the arrival's first picture. Removed; the shell also has a safety net that ends the arrival after a few
+  seconds and maps again any surface Qt has stopped drawing.
+- **The apps and the shell are compiled at build time**: users can't write next to them, so every start compiled
+  them again (seconds per sign-in on a slow computer).
+- **The launcher** didn't close after opening an app, and Enter did nothing: Enter now opens the first app found, a
+  click or Enter closes it, and so does Escape.
+- The look for other apps is put in place a few seconds after sign-in (it makes KWin and KDE's apps reload), and the
+  build leaves no stray folders under `/home`.
+- Still slow in a VM without a graphics card: KWin draws with the CPU, so signing in takes a minute or two there and
+  animations stutter. A real computer with a GPU doesn't have that.
+
+## Tested on a real PC (2026-11-15): what changed
+
+Booted from USB on a desktop (AMD Radeon RX 9070 XT, Ethernet and Wi‑Fi, two and three monitors). What it found,
+and what changed:
+
+- **The start menu, rebuilt** (Super). Islands over the dock: a greeting and the app search on top; in the middle the
+  groups, Recent and every app, scrolling, lit in the colour of the app under the pointer; below, you and Lock, Sleep,
+  Restart, Shut Down, Sign Out (the last three ask once more). It grows out of the dock's orb as the realm's light
+  sweeps up through the glass and each app appears as it passes; closing pulls it back into the orb (Reduce Motion: a
+  fade). Tab hands what you typed to Search everything.
+- **Search everything** (Super+Space, or the magnifier in the top bar): a bar in the middle of the screen and results
+  as islands: the top hit big (a picture shows itself), then apps, files, Settings pages and Huginn's open tabs in a
+  fixed order, and the web always last. Before you type: pick up where you left off (recent files, paused music),
+  suggested apps and quick actions. Sums, units and temperatures are worked out on the computer. Nothing typed
+  leaves it unless you choose "Search the web".
+- **Each app's own island** (right-click, a long press, or the Menu key / Shift+F10), the same in the start menu, the
+  dock and Search: its recent files (the desktop's shared recent list, which Huginn's apps now write to), its own
+  actions (New Window, New Private Window…), Keep in the dock (now remembered) and Uninstall for App Store apps.
+- **Installing beside Windows.** The installer offered only "erase" or existing free space; now it can shrink
+  Windows' partition (ntfsresize, after asking it first whether it can: Fast Startup, a pending disk check and
+  BitLocker are explained in words), with a slider for how much room Huginn OS gets. A USB drive the live session had
+  opened is closed first instead of refused, and an install on a USB drive puts its boot files only on that drive,
+  leaving the computer's boot list and Windows alone.
+- **Screenshots.** KWin hands pictures of the screen only to programs it knows by their executable, and Huginn's apps
+  are Python; a small native helper (native/huginn-grab.c, built into /usr/libexec/huginn) is the one it knows now.
+  The Screenshot app falls back to it and says why if a picture still fails (~/.cache/huginn/screenshot.log). Print
+  saves the whole screen to Pictures › Screenshots at once; Shift+Print and Super+Shift+S open Screenshot.
+- **The third monitor was black**: the wallpaper was drawn on one screen only. Every screen has its own now (and a
+  screen plugged in later gets one).
+- **Animations.** KWin's window effects are on explicitly (open/close, minimise, popups); the start menu, Search, the
+  control centre and app islands move instead of popping.
+- **The App Store queues** a second install (or removal) instead of refusing it, and store apps wear Huginn's look:
+  a system-wide Flatpak override lets them read the GTK, Kvantum and KDE colour settings, Huginn's Kvantum theme is
+  copied where they can see it, and the matching style extensions come along with an app.
+- **Every window has rounded corners**, other apps' too: KDE-Rounded-Corners (a KWin effect, GPL-3.0) is built into
+  the image against its KWin, at Huginn's window radius.
+- **The control centre** shows the Wi‑Fi network you're on even while Ethernet carries the internet.
+- **Huginn's welcome tour** counts as shown only once it has been on screen, so a first start that ends early (Huginn
+  restarting itself to finish setting up) no longer skips it.
+
+## The live island (2026-11-15)
+
+Worked out with mockups (bubbles for more than one thing, it opens when you point at it, screen sharing treated like the
+camera and microphone, and the two-players rule), then built:
+
+- **What it hears about** (`shell/huginn_island.py`): anything with the standard media controls (MPRIS: Huginn's
+  Music, Podcasts and Media Player now publish them; the Huginn browser and Spotify-like apps already do), apps that
+  report over `org.huginn.Live` on the session bus (`apps/huginn_live.py`: Clock's timer, App Store installs,
+  Screenshot's recording), the Privacy Report's watcher (screen, camera, microphone), files arriving in Downloads,
+  Calendar events starting within 10 minutes, and calls on your phone (Phone's link, `org.huginn.Phone`).
+- **The rules**: one island for the most important thing (a call, a timer or alarm going off, something playing, a
+  timer counting down, an event, downloads and installs); up to two more as round bubbles beside it, a "+N" when
+  there's more; clicking a bubble or scrolling swaps it in. The screen, camera and microphone aren't in that order:
+  each says so in the island for 4 seconds, then stays as a bubble (and a dot in the top bar) for as long as it's on,
+  never bumped and not counted. Two things playing: the one whose window isn't in front wins, else the newest.
+- **The island itself** (`LiveIsland.qml`): grows out of the dock's end and resizes as what it shows changes (the old
+  content fades as the new one comes in); bubbles pop in and out and slide. Point at it for 0.3 s and it opens
+  (`LivePanel.qml`): a full player with the cover, a scrubber you can drag and the transport; a timer's ring with
+  +1 min / Pause / Cancel; a call with its replies; an event with Join; installs with their progress; who is using the
+  screen, camera or microphone; and below, everything else going on. Calls and alarms open it by themselves. The
+  play/pause key works on whatever it shows (the session daemon asks the island first). All of it follows Reduce
+  Motion.
+- **Calls on your phone** (the KDE Connect app on it): the computer can't answer or decline a phone call, so the island offers Silence,
+  quick text replies and Phone. Apps that can answer (a calling app reporting `kind: "call"` with Answer/Decline) get
+  those buttons.
+- Tested: the rules on their own; a real session bus with two player processes and a reporting app (what wins, the
+  buttons reaching the apps, two players and the window in front, the media key, the screen shared and stopped,
+  apps quitting); Clock's timer driven from the island (start, pause, +1 min, resume, cancel); KWin nested on X11
+  with a player and a ringing call (the island opens by itself); both compositor suites; every app in the smoke test.
+
+## Huginn's own compositor, round 1 (2026-11-15)
+
+KWin was holding the design back (glass, islands, the dock's animations, phone pairing), so Huginn gets a compositor of
+its own: `compositor/`, in Rust, built on [Smithay](https://github.com/Smithay/smithay) (pinned to a commit of its main
+branch; it started as a copy of Smithay's example compositor, Anvil, MIT: `LICENSE-Smithay.txt`). It's done in rounds:
+1. **The core** (this round): drawing on the GPU, inputs, windows, X11 apps, locking, and everything the shell and
+   the session daemon already asked of a compositor.
+2. **Huginn's look**: glass and blur, rounded corners, islands, the dock's Ring and streak, snapping (done:
+   see "The desktop, round 2" and "Huginn's compositor, round 2").
+3. **What KWin did besides**: screen sharing and screenshots for apps, screen and input settings, night light,
+   accessibility.
+4. **The default**: it becomes the "Huginn" session and KWin goes.
+
+What round 1 does:
+- **Drawing**: on the GPU through DRM/KMS (with a nested window for development: `huginn-compositor --winit`).
+  A game or video filling the screen goes straight to it (direct scanout), and FreeSync/adaptive sync turns on for it
+  on screens that have it. X11 apps through XWayland, built in.
+- **The session** (`/usr/bin/huginn-session-preview`): `huginn-compositor -- /usr/libexec/huginn-session-apps`: it
+  starts the session services and the shell once it's listening (with `WAYLAND_DISPLAY` and `DISPLAY` set), and ends
+  when the shell does. The keyboard layout is the system's (`/etc/default/keyboard`).
+- **Windows**: a new window opens centred in the space the bar and dock leave, a little offset from one already there,
+  and gets the keyboard; when one closes, the one under it does. Super+drag moves a window; Super+Up / Super+Down
+  fill the screen / hide; Alt+F4 closes; Alt+Tab and Alt+Shift+Tab go through them.
+- **The shell**: it hears which window is in front (`org.huginn.Shell.Active`), Super on its own (the launcher),
+  Super+Space (search) and Print / Shift+Print / Super+Shift+S (the picture itself comes in round 3); the dock brings a running app forward and the top
+  bar's app menu minimises and closes through the compositor (`org.huginn.Compositor`: `ActivateApp`,
+  `WindowAction`, `Windows`), with KWin's scripts still used in the KWin session. The hardware keys (volume,
+  brightness, media, power) go to the session daemon.
+- **Locking** (`shell/huginn_locker.py`, `shell/qml/Locker.qml`): Super+L, the session daemon's timers, logind
+  (`loginctl lock-session`, the lid) and going to sleep lock. The compositor starts the lock screen with a connection
+  made only for it; while locked it draws nothing else and sends the keyboard and mouse nowhere else. The lock screen
+  is the same `Lock.qml` as the KWin session's, the password checked through PAM; it unlocks by exiting with success,
+  and if it crashes it's started again, so a broken lock screen never unlocks. `loginctl unlock-sessions` (from a text
+  console) unlocks too.
+- **Idle and the screen**: `IdleTime`, `Lock`, `Blank` and `Locked` as the session daemon already used them; a video
+  that asks the screen to stay on (idle-inhibit) does; the screen-off timer switches the screens off (DPMS) and any
+  key or movement brings them back.
+- **Not yet** (rounds 2 and 3): the glass and corners, title bars for other apps (X11 apps get a plain bar for now),
+  a visible Alt+Tab switcher, snapping, screenshots and screen sharing for apps, and per-screen settings.
+- **Computers without a GPU driver** (a virtual machine without 3D, "safe graphics", a card Mesa doesn't know): it
+  draws in software instead of refusing to start, as KWin does.
+- **The installation drive's session**: its account has no password, so nothing locks it by itself any more (in
+  either session), and the lock screen there takes an empty password.
+- Tested nested on X11 (`--winit`, the software renderer) with the shell and apps: the bar, dock, widgets and
+  launcher; launching from the launcher; the dock bringing an app forward; minimise and close from D-Bus and the keys;
+  Alt+Tab; focus after closing; an X11 app; locking, a wrong password, the right one (a test password set in a
+  throwaway copy of the image), and the lock screen being killed and coming back.
+- Tested on DRM in a VM (QEMU without KVM or 3D, from the built ISO, started from a text console): the screen, the
+  keyboard and mouse, the shell and the installer, Super and the launcher, locking with Super+L and unlocking with
+  `loginctl unlock-sessions`, switching consoles and back. Found and fixed there: no GPU driver made it stop, and it
+  kept trying to draw while on another console. Seen then in that VM (where the shell took minutes to start): the
+  bar, dock and widgets stayed hidden until the mouse moved or a key was pressed. Checked again with the 2026-11-16
+  ISO, touching nothing: they come by themselves in both sessions, just slowly under emulation (about five minutes).
+
+## The desktop, round 2 (2026-11-15): the dock, Today, menus, the Overview, the tour
+
+Everything chosen on the design canvas (the dock, Downloads, Today, app menus, the Overview, notifications, motion,
+Settings and the welcome tour) is built, and Huginn's compositor got its second round (snapping, spaces, the
+Overview, windows folding into the dock). The KWin session does what KWin allows (its scripts in
+`config/overlay/usr/share/kwin-wayland/scripts/huginnactive`); the preview session does all of it.
+
+- **The dock** (`shell/qml/Dock.qml`, `AppWindows.qml`): a bar under an app for each window (up to three), the Ring
+  (a light in the app's colour round its tile while it starts), clicking the app in front hides it (a ring spreads
+  round its tile) and again brings it back, an app's windows as an island (pointing or clicking), middle-click for a
+  new window, scrolling through them, files dropped on an app. Size, hiding style and the rest: Settings.
+- **Stacks** (`shell/huginn_stacks.py`, `StackIsland.qml`, `FileArt.qml`): Downloads as a pile at the end of the apps
+  (a badge while something's arriving, a file flying in when it lands), opening as a list or grid; open, show in
+  Files, copy, rename, move to the Bin, drag out. Any folder dropped on the end of the dock becomes a stack
+  (`~/.config/huginn-shell/stacks.json`).
+- **Today** (`shell/huginn_today.py`, `TodayIslands.qml`): the date in the bar or Super+T: the month, weather, what's
+  coming and clocks as islands. Typing adds an event or reminder, read from plain words (`parse()`, with a preview);
+  `~/.config/huginn-shell/today.json` keeps which islands and clocks.
+- **App menus** (`apps/huginn_menu.py`, `AppMenuIsland.qml`): each Huginn app tells the shell its menus over D-Bus
+  (`org.huginn.App.p<pid>`: `Menus`, `Trigger`), and the bar shows them as the One menu: search, About and Settings
+  at the top, the groups opening to the side, Open Recent cascading. Only what the app can actually do is listed.
+  Other apps get a basic menu (hide, close, quit). "A row of menus" puts the groups along the bar instead. Alt on its
+  own opens it (KWin: a modifier-only shortcut in `kwinrc`; the compositor: Alt pressed and let go alone).
+- **The Overview and spaces** (`compositor/src/wm.rs`, `OverviewOverlay.qml`): Super+Tab or three fingers up:
+  the compositor glides the windows apart into a grid (and dims the rest), the shell draws the names and the spaces
+  strip over them. Spaces: add, rename, remove, reorder, drag a window onto one; Super+Ctrl+←/→, Super+1–9,
+  Super+Shift+←/→ (taking the window), three fingers left/right; the space's name shows for a moment.
+- **Snapping** (`wm.rs`, `SnapGlass.qml`, the fill button in `apps/qml/GlassWindow.qml`): drag to an edge or corner
+  (lit glass shows where it'll go), Super+arrows through halves, thirds and two-thirds, Snap Assist offering the other
+  windows for the other half, the fill button's layouts island. Snapped pairs come forward together.
+- **Hiding into the dock**: the window folds into its app's tile with light (drop and ring, line, or comet; the
+  shell tells the compositor where the tiles are, `DockLayout`), and comes back out as a line.
+- **Alt+Tab**: the compositor reports the order and the pick (`Switcher`), the shell draws the island.
+- **Notifications** (`apps/huginn_sessiond.py`, `SessionUi.qml`): bloom from the top right with the app's colour once
+  round the edge, piles per app (three at most on screen), inline replies (`inline-reply`), a ghost when one leaves;
+  they wait while something fills the screen or it's being shared, except calls and alarms.
+- **Motion in apps** (`apps/qml/GrowFrom.qml`, `MotionList.qml`, `Wash.qml`, `Shimmer.qml`, `Pressable.qml`,
+  `Toggle.qml`): opening something grows out of what you clicked (or slides in, if picked in Settings); Photos uses it
+  first. Reduce Motion turns them into short fades.
+- **Settings › Desktop & Dock** (`apps/qml/SetDesktop.qml`, `apps/huginn_deskprefs.py`; was "Top Bar & Dock"): one
+  page with a live preview that plays the choice you point at: dock size, hiding style, clicking hides, stacks, the
+  top bar, Today's islands and clocks, snapping, the Overview's opening (glide, or glide with light), the hot corner,
+  spaces on every screen, and how things open in apps. The shell follows changes as they're made.
+- **The welcome tour** (`shell/huginn_tour.py`, `TourHost.qml`; the Welcome app now only asks the shell to play it):
+  two full-screen pages (hello; light or dark and the realm), then an island walks the real desktop, led by a line of
+  light: the dock, the date and Today, the app's One menu, snapping, the Overview, each with a "Try it" that moves on
+  by itself when done. Once per account at first sign-in; again from Welcome or Help. After an update that brings
+  something new (`/usr/share/huginn-os/version`), a short "What's new" tour shows just that.
+- Tested nested (`--winit`) with the shell, Files, Writer, Photos and the session daemon: the dock (hiding, the
+  windows island, the Ring, size), Downloads, Today (typing to add), the One menu (from Writer's bus, search, Alt
+  alone), the tour (pages, realm changing live, the line of light, Try it moving on), the Overview, spaces, hiding
+  into the dock, Super+arrows, Super+drag with the lit preview, Snap Assist (and it going away with Alt+Tab), the fill
+  button's layouts, Alt+Tab, notifications piling, Photos growing a picture out of its tile, and the Settings page.
+  Not testable here: the KWin paths (no KWin in the test root). Still open: dragging the line between two snapped
+  windows to size both, live thumbnails in the windows island, and pausing a download from the stack.
+
+## Huginn's compositor, round 2: the look (2026-11-15)
+
+The second half of round 2 (the first half, snapping, spaces and the Overview, is in "The desktop, round 2"):
+Huginn's compositor now draws the look itself (`compositor/src/look.rs`). Everything is GLES shaders, compiled
+once per GPU; if a GPU can't compile them, windows are drawn plain as before.
+
+- **Shadows**: a soft shadow under every window (the Gaussian of a rounded box, worked out in the shader, nothing
+  drawn under the window itself), deeper under the window in front. None for maximised or full-screen windows.
+- **Rounded corners**: every window is cut to a 14-pixel rounded outline (the same as Huginn's own windows draw),
+  while its own texture is drawn. The outline is worked out where the window is actually drawn, so it holds while
+  windows move and scale in the Overview or fold into the dock. Rounded windows can't go straight to the screen, so
+  a full-screen game or video (not rounded) still does.
+- **Frosted glass**: the shell's glass surfaces (the bar, the dock, Today, menus, the launcher, Search, the control
+  centre, notifications, the switcher…, by their layer names) are drawn over a blur of what's behind them. Just
+  before one is drawn, what's already on screen under it is copied at half size, blurred (dual Kawase, down to a
+  sixteenth and back) and shows through the glass's translucent parts only, so shadows and soft edges stay clear.
+  It's only redone when what's behind changes. Reduce Transparency and High Contrast turn it off (the shell says so
+  with the dock's layout).
+- **Title islands for other apps**: apps that don't draw their own title bar (X11 apps, and Wayland apps asking for
+  one) get Huginn's: an island across the top with the three lights at the left (close, minimise, fill; grey
+  when the window isn't in front, a mark on the one under the pointer) and the window's title in Inter, cut with an
+  ellipsis. Drag it to move the window. X11 windows are now told where they really are after a move, so their
+  menus open in the right place.
+- Every layer, window and the dim are now drawn by Huginn's own scene code instead of Smithay's, so the frost can
+  wrap the shell's surfaces.
+- Tested nested (`--winit`, llvmpipe): shadows, corners (also while moving and in the Overview), the frost (Today
+  over a document, against the same with the frost off), an X11 app's title island, its lights, moving it. And on
+  DRM in a VM (QEMU without KVM, from the built ISO): the preview session draws the desktop with rounded windows and
+  the shell's glass, and the bar and dock come up on their own (the KWin session too).
+
+Also fixed: the start screens of Writer, Sheets, Slides, Notes, Documents and Archives sat right of centre (centred
+beside the side island, which is short when there's nothing in it). They're centred in the window now, and only move
+over when the side island would reach them (`GlassWindow.middleX`).
+
+## Huginn's compositor, round 3: the computer's own settings (2026-11-15)
+
+- **Pictures of the screen.** Print, Shift+Print, the Screenshot app and apps asking through the portal now work on
+  Huginn's own compositor, not just under KWin: it answers `org.huginn.Compositor.Capture` with a picture of each
+  screen and where it sits, and `huginn_capture.py` puts them together (`compositor/src/capture.rs`).
+- **Screen sharing and recording for apps** (video calls, OBS, the browser): the compositor speaks
+  ext-image-copy-capture, and xdg-desktop-portal-wlr turns that into a PipeWire stream. The own-compositor session
+  says `XDG_CURRENT_DESKTOP=Huginn-Own:Huginn:KDE`, so the portal reads `huginn-own-portals.conf`, which sends
+  screen sharing there. With more than one screen, Huginn asks which one to share (`apps/huginn_pick_screen.py`, the portal's chooser).
+- **Settings › Displays on Huginn's own compositor**: resolution, refresh rate, size of things (scale), rotation and
+  where each screen sits. The compositor lists its screens on the bus in kscreen-doctor's JSON and takes the same
+  changes (`displays.rs`), so Settings speaks to it as it does to KWin. Each screen's settings are kept in
+  `~/.config/huginn/displays.json` by make, model and serial number, and come back when it's plugged in again.
+  Turning a screen off keeps it dark and out of the desktop until it's turned on again (or plugged in again); the
+  main screen, where the top bar and dock go, is kept in the same file for the shell.
+- **Settings › Keyboard & Mouse** there too: keyboard layouts and options and key repeat come from the files KWin
+  reads (kxkbrc, kcminputrc), read again when Settings changes them; mice and touchpads (tap to click, natural
+  scrolling, left-handed, speed, ignore while typing) are listed and changed over the bus and kept by device name in
+  `~/.config/huginn/input.json` (`input.rs`).
+- **Accessibility** there too (`access.rs`, from the settings KWin and KAccess read): colour filters for colour
+  blindness through each screen's colour matrix (where the graphics card has one), inverted colours through its
+  gamma, sticky, bounce and slow keys, mouse keys (the number pad moves the pointer, 5 clicks), zoom (Super+= and
+  Super+-, Super+0 for the whole screen again; what's under the pointer stays put), the on-screen keyboard
+  (Squeekboard), and Reduce Motion (no sliding windows or Overview, no fading in).
+- **Night light** there too: the session daemon reads Settings' night light (kwinrc's [NightColor], as KWin does)
+  and sets every screen's gamma through the compositor, easing in and out over half an hour.
+- New windows fade in (160 ms), and windows closed from Huginn (the close light, Alt+F4, the dock) fade out and
+  shrink a little once they're gone (a picture taken as they're asked to close); not with Reduce Motion.
+- The line between two windows snapped side by side can be dragged: both windows follow it (each keeps at least a
+  fifth of the screen).
+- The dock's window cards show each window live (a small picture every second and a half while they're open,
+  `WindowPicture` on the bus).
+- Icons: the pictures inside the smoked glass are solid now, as macOS and iOS draw theirs (the app's colour with
+  white details, a soft shadow, no glow; `STYLE` in make-icons.py). Huginn OS's and the browser's ravens are in the
+  same glass, and Calendar's tile shows today's date.
+
+## Huginn's compositor, rounds 4 and 5: staying up, and day-to-day polish (2026-11-16)
+
+- **The shell comes back by itself** if it stops (a crash): `huginn-session-apps` starts it again, up to five times
+  a minute, and the windows stay where they are.
+- **Apps reopen when you sign in** (Settings › Desktop & Dock): the session daemon notes the open apps every minute
+  and opens them again next time.
+- **Windows open where they were**: each app's window comes back at its size and place (`places.rs`,
+  `~/.config/huginn/places.json`), and **window rules** for particular apps can be written by hand in
+  `~/.config/huginn/window-rules.json` (open on a space, filled, at a size or place).
+- **Sharing one window** in calls and recordings: the compositor lists its windows for other programs
+  (ext-foreign-toplevel-list) and draws one window alone for them (ext-image-copy-capture), so the portal's
+  chooser offers windows as well as screens.
+- **Touchpad**: three or four fingers up for the Overview, down to leave it, sideways between spaces; pinch in
+  with three or more for the start menu, spread for the Overview.
+- **Adaptive sync** (FreeSync, G-Sync compatible) can be turned off in Settings › Desktop & Dock; it's on while a
+  game or video fills the screen. Screens are driven at 10 bits per colour where they can be.
+- **Sharp older apps** (Settings › Displays): XWayland runs at the largest screen scale and X11 apps are told to
+  draw bigger (Xft.dpi, through xrdb) instead of being stretched; apps that ignore Xft.dpi look small, so it can be
+  turned off.
+- **Screen sharing that doesn't drop**: xdg-desktop-portal-wlr 0.9.0 is built from `third_party/` (MIT) in place of
+  Ubuntu's 0.8.1, whose frames could outlive their buffers when a viewer restarted the stream.
+- **GameMode by itself** (Settings › Desktop & Dock, "Game mode for games", on by default; `gamemode.rs`): while a
+  game fills a screen, the compositor registers it with Feral's GameMode (`RegisterGameByPID` on the session bus),
+  as `gamemoderun` would, and lets it go when it stops. A game is a fullscreen window that is Proton's (X11 class
+  `steam_app_…`), was started by Steam (`SteamGameId`/`SteamAppId` in its environment), is a Windows program
+  (`….exe`), or asked to tear. X11 windows' process ids come from the X server (XRes), so games in Steam from
+  Flathub (their own process numbering) count too. `/etc/polkit-1/rules.d/50-huginn-gamemode.rules` lets GameMode's
+  helpers run for whoever is at the computer (its own rule wants a `gamemode` group Ubuntu doesn't make, so the
+  processor governor never changed). Tested with a stand-in game in the nested session (`gamemoded -s`: active);
+  not yet with a real game.
+- **Games that start fullscreen** (`shell/x11.rs`): an X11 window that has `_NET_WM_STATE_FULLSCREEN` before it maps
+  (Wine/Proton, SDL) is made fullscreen as it maps, and the first-picture placing leaves it be; before, it opened
+  as a small window wherever new windows go.
+- **Tearing for games** (Settings › Desktop & Dock, "Let games tear"): a game that asks for it (wp-tearing-control,
+  as with V-Sync off) gets page flips that don't wait for the refresh while it fills the screen. Smithay is vendored
+  in `third_party/smithay` with that one patch (`AtomicDrmSurface::set_tearing`: an async atomic flip first, a
+  normal one when the driver refuses).
+- **HDR** (Settings › Displays, on screens whose connection offers it): the connection is set to BT.2020 and PQ
+  with HDR metadata and 10 bits a colour, and everything drawn (sRGB, as every app draws) is turned into the HDR
+  signal by a last pass (`look.rs`: HdrElement), with SDR white at a brightness of your choosing. Apps can't send
+  HDR pictures of their own yet (that needs the colour-management protocol); `HUGINN_DEBUG_HDR=1` shows the pass in
+  a window.
+
+### HDR from apps, and KWin's gone
+
+- **Apps' own HDR** (`color.rs`, wp-color-management-v1): games and video players can ask what each screen wants
+  (BT.2020 and PQ with its SDR white while HDR is on, else sRGB), be told when that changes, and mark a surface as
+  HDR. Parametric descriptions with named primaries (sRGB, BT.2020) and transfer functions (sRGB, gamma 2.2, PQ) and
+  luminances; ICC profiles and scRGB are refused. On an HDR screen such a surface goes out as it is: the HDR pass
+  skips it, except where something is over it (another window, the bar or dock, notifications, the pointer).
+  Checked with a small client (`wayland-scanner` + libwayland): the descriptions and their information, the change
+  events when HDR or SDR brightness changes, and a PQ window's pixels unchanged while the rest is converted.
+  (wayland-backend fills in a new object's data after the request that made it, so the information object, which
+  its own `done` ends, is answered from an idle callback: answering at once was a use-after-free.)
+  On a screen not in HDR, an app's HDR (or BT.2020) picture is shown in sRGB instead of washed out (`look.rs`:
+  the HDR element's other pass): PQ decoded, brightness above a knee rolled off so the picture's brightest (its
+  content light level, else the mastering display's, else what its luminances say) just reaches white, colours
+  brought into sRGB's. It's drawn under the pointer and under zoom, and goes into screen pictures. Checked: a PQ
+  grey of 128 comes out at 181 as worked out by hand, and switching HDR on and off while it's open swaps between
+  that and passing it through. Subsurfaces count (players often put the picture in one), and a window filling the
+  screen is found where it's drawn.
+- **KWin and Plasma's workspace are out of the image** (`config/not-wanted.list`): Huginn's compositor is the only
+  session (`/usr/bin/huginn-session`, "Huginn OS" at sign-in) and draws the sign-in screen too (SDDM's
+  `CompositorCommand`). Screen sharing goes through xdg-desktop-portal-wlr, everything else through KDE's portal.
+  Gone with them: the KWin script, Plasma's lock-screen package, the rounded-corners effect and huginn-grab.
+  What Plasma's workspace used to bring that's still used is listed now (plasma-integration, geoclue, hwdata), and
+  every listed package is marked as installed on purpose, so `apt autoremove` keeps it.
+- "Lock when waking" in Settings › Privacy & Security is honoured by the compositor (it was KDE's locker's).
+- **Icons, polished**: every picture is brought to the same visual size and centred (`fit()` in make-icons.py:
+  half how much it covers, half how far it reaches, at most a quarter bigger or smaller, never past 164 of 256),
+  so a list or a bolt no longer looks small beside a wallet or a controller. The pictures that were only lines
+  are solid objects with white details now, like the rest: Activity Monitor's screen, the Passwords key, the
+  Screenshot frame, Podcasts and Backup as discs, Contacts as a card. Writer's page is solid (it was see-through,
+  murky on the dark glass). Terminal and Reminders keep their own drawings (preferred as they were), only placed
+  like the rest.
+  Calendar keeps its exact drawing: the dock writes the date at fixed places on it.
+- **Signing out** goes through the compositor (`org.huginn.Compositor.SignOut`): every window is asked to close, and
+  once they've gone the compositor ends the session itself. Ending it through logind (as before) also ended SDDM's
+  helper, which SDDM takes for a crash: no sign-in screen came back. A window still open after 20 seconds (an app
+  asked whether to save, and was told Cancel) calls signing out off; signing out again within two minutes goes
+  through even so.
+- **The sign-in screen** on the compositor: with no session of anyone's it never locks, and the first key goes to the
+  greeter (a layer that otherwise only takes keys once clicked). Checked in the VM: the greeter comes up on our
+  compositor, takes the password, and signs in to the desktop.
+
+## Fixes from testing on the PC (2026-11-19)
+
+- **Settings that did nothing now work.** Every Huginn process watched the settings file's folder, which only says
+  when a file is added or replaced, while the settings were written over in place: a realm, the wallpaper, the dock's
+  size and the rest only showed after signing in again. The file is now written whole and put in place
+  (`save_atomically`), and the file itself is watched too. Separately, every switch on the Desktop & Dock page called
+  a function that made the change instead of making it; they all work now. "Bars under open apps", "Keep snapped
+  windows together" and "Spaces on every screen" (off: only the main screen has spaces) were never wired up; they are.
+- **The dock makes room** (Settings › Desktop & Dock, on by default): while a window covers its place (filled, full
+  screen, or just big, like Settings) the dock slides down out of the way and its surface becomes a strip along the
+  bottom edge; pointing there brings it back. It reserves no strip of the screen, so filled windows use the whole
+  height; the start menu, an app's island and stacks still open above it.
+- **Panels close when you click away.** The Control Centre is now over the whole work area like Today and the menus,
+  so a click on a window or the desktop closes it (Escape too).
+- **New apps show up at once.** The start menu watches every folder of `.desktop` files (the user's, the system's,
+  Flatpak's), and reads them again when one changes; before, a new app appeared only after a restart.
+- **Other apps in the dock.** A window is matched to its app by app id, X11 class, the process that made it (a
+  Flatpak's own id), and looser likenesses (`org.foo.Bar` ~ bar, `steamwebhelper` ~ steam). A window from a program
+  with no `.desktop` file at all (an AppImage, a game a launcher started) still gets a tile, named and pictured from
+  the window, with Show and Quit in its island; the bar names it the same way.
+- **An app's island stays on the screen.** In the start menu it was placed by the height of the island shown before
+  (the rows are laid out a moment later), so a tall one under a tile low in a scrolled list ran off the bottom. It's
+  placed again whenever its height changes, above the tile when there's no room below.
+- **App menus that fit their apps.** Edit (Undo, Cut, Copy, Paste) is only in apps about typing, or while you're
+  typing in a field of another app. Easel, Clips and Tempo have their own groups (File, Edit, Select, Layer, View;
+  Clip, Playback, Tools; Transport), as do Books, Passwords, Scan, Contacts, Reminders, Documents, Camera, Machines
+  and Recorder, each item only if the app really has it. The menu is taken from the app whose name is in the bar
+  (it could be the previous app's while the window list was a moment behind), and `StandardKey` shortcuts are
+  recognised, so Undo and friends find Easel's own.
+- **Wi‑Fi & Network**: the network in use (Wi‑Fi or the cable) has its own card with its name; its addresses (IP,
+  router, DNS, hardware) show as dots until "Show addresses", and hide again when you leave the page. The Ethernet row
+  names the connection instead of showing the address.
+- **The welcome tour** opens Files for the "Windows and spaces" step when nothing's open (if "open an app" was
+  skipped), and points at the window once it's there.
+- **Files**: Desktop, Documents, Videos… in the places bar are made if they aren't there yet (clicking one did
+  nothing), and the places bar works from the Trash.
+- **Software Update tells the truth.** The list is what apt would really put in (`apt-get -s dist-upgrade`), not
+  `apt list --upgradable`, which also lists the updates Ubuntu is holding back (phased updates): those were shown as
+  ready, "installed", and still there afterwards. After installing, it looks again and says how many went in and what
+  is still waiting, with the reason the tool gave. Its arrows now turn the way they point.
+- **Code**: suggestions come likeliest first, not in alphabetical order: how well each matches what's typed (the
+  same start, any case, the capitals or parts of a name: `gV`, `get_v` → getValue), what you picked lately (kept
+  across runs), and what's used near the cursor and often in the file, with the language server's own order as a
+  hint. **New File** without a folder asks for a language and starts with a few lines of it; in a folder, "In a
+  Language…" does the same. **Languages…** (the start screen, the palette) lists every language with what's there,
+  and **Add** puts in its helper and tools: Ubuntu's packages through the system's password prompt (clangd and
+  build-essential, Rust, Go and gopls, Node and npm, a JDK, Qt's qmlls, Lua, SQLite, CMake), and the helpers Ubuntu
+  doesn't package (TypeScript, Bash, YAML, HTML/CSS/JSON) from npm into `~/.local/share/huginn/code-tools`.
+- **Easel paints without lag.** The canvas was put together from every layer (styles and adjustment layers
+  included) for each pointer movement, even just hovering with a brush. Now it's made at most once a frame, hovering
+  only moves the brush's outline, and during a stroke what's under and over the layer is put together once and each
+  frame only the patch the new dabs touched is made again (pixel for pixel the same: checked against the full
+  picture). On a 4000×3000 picture a brush step went from about a fifth of a second to under a millisecond.
+- **Steam's overlay** (Shift+Tab): nothing in Huginn takes Shift+Tab; the overlay only works in games that draw
+  through X11, and SDL 3 picks Wayland on a compositor that offers what Huginn's does. The session now asks SDL games
+  for X11 (`SDL_VIDEODRIVER=x11`, overridable per game).
+- **Menus and sheets that did nothing.** In Code's file list, New Folder Here, New File Here, Rename, Show in Files
+  and Move to Trash closed the menu first, which took the clicked row (and what it was about to do) away with it. The
+  same in a dozen other places (Characters, Contacts, Easel, Feeds, Files, Mail, Money, Passwords, Recorder,
+  Settings, Tempo, Today): each now reads what it needs, does it, and closes last.
+
+## Huginn AI (2026-11-19)
+
+One AI service for the whole desktop (`apps/huginn_ai.py`), **off until it's turned on** in Settings › AI, which
+also says where it runs. Nothing is sent anywhere until it's on and a place is chosen; then only what you ask about,
+when you ask.
+
+- **On this computer.** llama.cpp from Ubuntu's archive (`llama.cpp-tools`, with `libggml0-backend-vulkan` and
+  Mesa's Vulkan drivers, so it runs on AMD, Intel or NVIDIA cards, or the processor). Four models, downloaded when
+  chosen (resumable, with the space checked first) into `~/.local/share/huginn/ai-models`: Gemma 4 E2B (3 GB),
+  Gemma 4 E4B (5 GB), gpt-oss 20B (12 GB) and Gemma 4 26B-A4B (15 GB). Settings suggests the one that fits the
+  card's memory (16 GB: gpt-oss 20B). One `llama-server` serves every app: started on the first question, on
+  127.0.0.1 only and with a token, stopped after 15 minutes unused so a game gets the card's memory back; "Use the
+  graphics card" can be turned off.
+- **With an account.** Claude (Anthropic), OpenAI, Gemini, GitHub Models (Copilot's models, with a GitHub token),
+  Azure OpenAI, OpenRouter (Sign In: their PKCE flow, the key comes back by itself) and anything that speaks
+  OpenAI's API (Ollama, LM Studio, your own). Each lists the models the key offers, likeliest first. Keys are kept
+  in Passwords (its "ai" drawer) when it's set up and unlocked, else in a 0600 file; if they're in a locked
+  Passwords, Huginn AI says so. Chat subscriptions (ChatGPT Plus, Claude Pro, Gemini Advanced, Copilot Pro) can't be
+  used by other apps; Settings and Help › Huginn AI say so plainly, and that Gemini's and GitHub's keys have free
+  tiers.
+- **Search**: Ctrl+Enter (or the "Ask Huginn AI" row) asks what's typed; the answer streams into an island under the
+  bar, follow-ups keep the conversation, Escape goes back to the results.
+- **Writer**: the sparkle on the formatting island: clearer, shorter, friendlier, more formal, simpler, proofread,
+  summarise, carry on writing; on the selection or the whole document; Replace or Insert is one undo.
+- **Mail**: summarise a message, draft a reply (or one saying yes, no, or asking for time) that opens ready to edit;
+  **Improve** while writing rewrites only what you wrote, not the signature or the quoted message.
+- **Code**: the palette's AI: Explain This Code, Fix This Code (told about the problems Code found there), Change
+  This Code… and Write Code…; the code is shown first and Replace or Insert puts it in.
+- Settings › AI › Where it shows turns it off per app; there's a box to try it; Help has a guide.
+- Tested in the nested session against a pretend OpenAI-style and Anthropic-style service (streaming, wrong key,
+  models listed and ranked), a pretend llama-server (started once for every app, reused, stopped), and a pretend
+  Hugging Face (a download cut short, then resumed). The real downloads and the Vulkan backend on the 9070 XT are
+  for the PC.
+
+## System-wide pass and an app round (2026-11-19)
+
+Measured first (every app started with no screen, its time to first picture, memory and messages; the session left
+alone, each process's CPU), then fixed what the numbers showed:
+
+- **The theme** is now a `QQmlPropertyMap` made once (`shell/huginn_shell.py`, `Theme`). QML reads `Theme.t.accent`
+  straight from it; when dark mode, the realm or an accessibility setting changes, only the values that changed are
+  set again. Before, `Theme.t` was a map built afresh in Python on every read: Tempo built it over 5,000 times while
+  opening, and any setting at all (the dock's size, say) rebuilt every binding in every open app. Apps start 25–45%
+  faster (warm, no screen: Files 0.72 → 0.50 s, Writer 0.87 → 0.57 s, Easel 1.54 → 1.04 s, Tempo 2.75 → 1.03 s).
+- **A quiet desktop.** A part file left behind in Downloads kept the live island's progress and the Downloads stack
+  animating for ever, so the shell used a quarter of a core and the compositor half of one, doing nothing. Only a
+  download that is still growing shows as one now; one that stopped says "didn't finish" and stays still. Idle, in
+  the test window: shell 25% → 0.7%, compositor 50% → 10%.
+- **The compositor rests** (`compositor/src/udev.rs`): a screen with nothing new for half a second looks again every
+  100 ms instead of at every refresh (three screens at 144 Hz were over 400 empty looks a second); any client
+  drawing or any input wakes it at once.
+- **Lazy imports**: Tempo imports scipy in the background once its window is up (a second at start), Messages imports
+  matrix-nio when it first talks to a server (half a second).
+- **Bugs found on the way**: Tempo's loop recording with takes ended in a NameError; a slot defined twice; Money gave
+  the same warning twice; demo data that used personal names and places (now Astrid's, in
+  Reykjavík); folders shown as raw paths ("Pictures › Screenshots" now).
+
+The app round, for every app at once:
+
+- **Every key a menu shows works.** The top bar's menus showed Ctrl+F, Ctrl+N, Ctrl+W, Ctrl+Q, F1… but most apps
+  had no shortcut behind them. Each app's menu now handles its own keys (after the app's own shortcuts, and only
+  keys with Ctrl or Alt, or the function keys, so nothing typed is taken; Terminal keeps Ctrl+W and friends).
+- **Menu entries that pointed at nothing now do something**: Files (new folder and tab, open, trash, find, icons or
+  list, hidden files, back, forward, up, the places), Notes (new note, find, heading, checklist, list), Calendar (new
+  event, import, month or week), Writer, Sheets and Slides (Open… and export; new, duplicate and delete slide),
+  Terminal. New menus: Music and Video (play, next, louder…), Photos (next, edit, rotate, details, trash), Weather,
+  Feeds, Messages, Games and Clock.
+- **Find… and Ctrl+F in every app with a search box**, and **Escape closes the open sheet** in every app.
+- **Open…** (`apps/huginn_picker.py`): any app can ask for Huginn's own Open window through the desktop portal;
+  Writer, Sheets, Slides and Calendar's Import use it.
+- Writer's formatting island fits a narrow window (the colours go first, then the sizes).
+- Checked: the numbers before and after; each new key and menu in the nested session; `scripts/ci-smoke.py` 54/54.
+  The compositor's resting is for real screens (the window backend can't show it): try the PC, and if a screen
+  ever seems slow to wake, say so.
+
+## Huginn AI, round two (2026-11-19)
+
+Huginn AI in four more apps, each with its own switch in Settings › AI › Where it shows:
+
+- **Notes**: the sparkle on the note's island: tidy up (spelling, headings, lists, nothing dropped), make a checklist
+  (inserted below, or in place of the text), summarise, carry on writing. On the selection or the whole note.
+- **Documents**: summarise a PDF or a text, or **ask about it**: a question box over the answers, each question
+  answered from what the document says (a PDF's text is read with QtPdf, up to 300 pages; a scanned PDF with no
+  text says so).
+- **Feeds**: Summarise, while reading a story.
+- **Translate**: with no offline language packs, Huginn AI does the translating, into any of 22 languages, as you
+  type (the fold says it's Huginn AI, and where it runs). With packs, "With Huginn AI" is there for a second opinion
+  or a language the packs don't have. Without either, the empty screen says Huginn AI can do it.
+- The panel can now hold a question box (`AiPanel.question()`), for asking about something more than once.
+
+## Pro apps, round five (2026-11-19)
+
+### Code
+- **Branches**: click the branch in the status bar (or Git › Branches…, or "Git: Switch Branch…" in the palette) to see every branch with when it last changed, switch with a click, start a new one from where you are, or delete one (Git keeps a branch that isn't merged yet and says so). Unsaved files are saved before switching and every open file reloads; a merge or rebase under way, or changes that would be lost, are explained in plain words.
+- **Suggest as I type** (Huginn AI, off until you turn it on in the palette or Settings › AI): pause and a suggestion shows in grey after the cursor; Tab takes it, Escape or typing on drops it. A suggestion of several lines says how many. Only the part of the file around the cursor is sent, with a short limit on the answer.
+- **Matching brackets**: the bracket by the cursor and its partner are outlined (in red when nothing closes it); Ctrl+Shift+\\ jumps between them.
+- **Breadcrumbs** in the status bar: where the cursor is (Shop › add); click one to go to it.
+- The signature tip no longer stays up after the call's closing bracket, and messages now show over sheets in every app.
+
+### Easel
+- **Distort and perspective** in free transform: Ctrl-drag a corner to put it anywhere, Ctrl-drag an edge to skew, Ctrl+Shift-drag a corner for perspective (the corner across the edge moves the mirror way). Drawn as a true projective map (`QTransform.quadToQuad`), on pixels, selections and smart objects; smart objects keep the distortion (saved in .easel) and it follows moves, crops, resizes and turns of the canvas. Straighten goes back to the box.
+- **History** (the clock by Undo, or Edit › History…): every step, to jump back to any one; the undone ones stay, greyed, until something changes.
+- **Mirror painting**: the brush and eraser paint across, down or both ways at once, about the first guide or the picture's middle (shown dashed).
+- New adjustment layers: **Vibrance** (lifts dull colours most, leaves strong ones) and **Gradient Map** (from the two colours in hand, darker for the shadows; balance, strength, turn round).
+- The tool bar fits a narrow window: the sliders lose their numbers and Mirror becomes one button.
+- Tested (44 checks): corners, perspective and skew land where dragged, the pixels go there, flips keep the outline, a folded quad still draws; smart objects distorted, saved and opened again; vibrance and gradient map against exact values; history back, forward, to the start and a change dropping what was undone; mirrored strokes across, four ways and about a guide.
+
+### Clips
+- **In and Out** (I and O, Alt+X clears): the part is shown on the ruler, and Make the Video can make only it (melt's `in`/`out`), captions included from its start.
+- **Slip** (Y, or Alt-drag a clip): the footage slides inside a clip that stays where it is and as long, stopping at either end of the file.
+- **Cut Pauses**: takes the pauses out of the picked clip's speech and closes up its track. The bar between quiet and voice comes from the clip itself (a quarter of the way, in decibels, from its quietest tenth to its loudest), pauses shorter than half a second stay, and a little of each pause is kept so words aren't clipped.
+- Tested (23 checks, real ffmpeg and melt): the pauses in a made-up talk found to within 80 ms and a short one left alone, the clip cut into three with no gaps and one undo; slips and their limits; the marked part made into a video two seconds long.
+
+### Tempo
+- **Make MIDI** from a recording (Region › Pitch, after Find the Notes): the notes sung or played, as tuned, on a new instrument track just under it, timed through the song's tempo map (and a recording that follows the tempo).
+- **Tap tempo**: click TEMPO · TAP in the display along with the music; from the third tap the tempo where the playhead is follows (the middle of the last few taps), and a run of taps is one undo step.
+- Piano roll: **Legato** (each note held until the next starts, chords together) and **Key** (the song's key shaded on the rows, its root stronger, and new notes put on the nearest row of the key).
+- **Controllers in MIDI files**, both ways: the sustain pedal (CC 64), the mod wheel (CC 1) and pitch bend go out with the notes (loops repeated) and come in as the region's drawn controllers.
+- Tested (17 checks): pedal, wheel and bend through a MIDI file and back, into a region and out again; legato with a chord; taps at 120 and 100 a minute and a lone late tap ignored; three sung notes (A3, E4, C4) found and made into MIDI at the right beats, under the recording, and tuned into C major when asked.
+
+## Office, pro round one (2026-11-19)
+
+Writer, Sheets and Slides get the treatment the pro apps had: measured against Word, Excel and PowerPoint, the
+biggest gaps first. (`huginn_convert.py`, the old converters, is gone: each app has its own now.)
+
+### Writer (`apps/huginn_writer.py`, `apps/huginn_docx.py`, both new; `apps/qml/Writer.qml`)
+- **Real pages.** The editor's own text document is laid out in pages: Qt's text layout moves a paragraph that
+  doesn't fit to the next page when the document has a page height, so each page is the paper plus a gap, the root
+  frame's margins are the page's (the gap added to the bottom one), and the window draws a sheet behind each page.
+  Letter, A4, Legal or A5, portrait or landscape, four margin sizes; the paper follows the country (Letter in the
+  Americas). Page breaks (Ctrl+Enter). The size fits the window until it's zoomed (Ctrl+wheel, or the zoom island).
+- **Headers, footers and page numbers**, with {page}, {pages}, {title} and {date}; a title page can go without them.
+  Double-click a page's top or bottom to change them.
+- **Formatting**: styles (Title, Heading, Subheading, Heading 3, Body, Quote, Code), any installed font and size,
+  bold, italic, underline, strike, raised and lowered, text colour and highlight, alignment, line spacing and space
+  after paragraphs, clear formatting; Word's keys (Ctrl+E/L/R/J, Ctrl+Alt+1-3, Ctrl+Shift+N, Ctrl+Shift+L, Ctrl+=,
+  Ctrl+Space). Formatting asked for with nothing selected goes on what's typed next; inside a word it takes the word.
+  Return after a heading or quote goes back to body text; Return on an empty list item ends the list.
+- **Lists** with nine levels (Tab and Shift+Tab, bullets • ◦ ▪, numbers 1. a. i.) and **checklists** (click the box).
+- **Tables**: pick the size from a grid; add and remove rows and columns, merge and split cells, a shaded header row;
+  Tab goes to the next cell and adds a row at the end.
+- **Pictures**, kept inside the document, sized as a share of the text width. **Links** (Ctrl+K; Ctrl+click opens).
+  A line across, today's date, and **Contents** made from the headings with their page numbers.
+- **Headings** in the left island: every heading with its page, to jump to.
+- **Find and replace** (Ctrl+F, Ctrl+H): every match marked, matching capitals or whole words, replace one or all.
+- **Spelling** through enchant and hunspell's dictionaries (US and British English, German, French, Spanish, Italian,
+  Dutch, Brazilian Portuguese in the image): red waves under words spelled wrong (drawn by the window: Qt Quick's text
+  only draws plain underlines), suggestions on the right button, add to the dictionary (~/.config/huginn/words.txt)
+  or ignore; the language in Page.
+- **Printing** through CUPS (`lp`): printer, copies, pages, both sides; or a PDF instead.
+- **PDF** drawn page by page with the headers, footers and numbers.
+- **Word files, both ways** (`huginn_docx`): styles, fonts, sizes, colours and shading, raised and lowered text,
+  links, pictures, lists with levels (each numbered list starting again from 1), checklists, tables with merged cells
+  and shading, page breaks, line spacing and indents, and the page (size, orientation, margins, header, footer, page
+  numbers as fields, a title page). Word files read the same things back, nested lists and merged cells included,
+  and say what didn't come across (comments, tracked changes, footnotes, equations, shapes, charts, columns, pictures
+  placed beside the text, more than one section).
+- `fonts-crosextra-carlito`, `fonts-crosextra-caladea` and `fonts-liberation2` are in the image, so Calibri, Cambria,
+  Arial, Times New Roman and Courier New text measures the same and Word files keep their line and page breaks.
+- Tested (61 checks): every style and format, lists in and out of levels, checklists, tables (rows, columns,
+  merging, header row), pictures and their size, page breaks, links, find and replace, the outline, headers and
+  footers, spelling (a mistake found with "spelling" suggested, a word learned), saving and opening with the page
+  setup, PDF, and Word out and back in with all of it. Our .docx opened in python-docx (styles, the table, the
+  picture, the page and footer) and in LibreOffice, whose rendering matches ours. On screen: pages with header,
+  footer and number, a picture moving to the next page, spelling waves and suggestions, Find, Headings, the page
+  setup, a table from the grid with Tab and a header row, formatting typed on.
+
+### Sheets (`apps/huginn_sheet_engine.py`, `apps/huginn_sheets.py`, `apps/huginn_xlsx.py`, all new; `apps/qml/Sheets.qml`)
+- **An Excel-compatible engine** (`huginn_sheet_engine`): a tokenizer and parser for Excel's formula language
+  (precedence, percent, ranges, whole rows and columns, other sheets with quoted names, `$` anchors, array arguments),
+  error values that travel like Excel's (#DIV/0!, #N/A, #REF!, #NAME?, #VALUE!), dates as Excel's serial numbers, and
+  about 120 functions: SUMIFS/COUNTIFS/AVERAGEIFS, XLOOKUP, VLOOKUP/HLOOKUP, INDEX/MATCH, IF/IFS/IFERROR/SWITCH,
+  text (TEXTJOIN, TEXT, SUBSTITUTE…), dates (EDATE, EOMONTH, NETWORKDAYS, WEEKDAY…), rounding, statistics and money
+  (PMT, FV, PV, NPV, IRR). References shift when copied or filled and follow rows and columns that are inserted or
+  deleted, in every sheet; renaming a sheet renames it in formulas.
+- **Four panes** (frozen rows and columns above and left, each a TableView of the same cells) with headers that stay
+  in step, so a frozen heading row stays put while the rest scrolls. Rows and columns grow as you scroll.
+- **Excel's way of working**: typing replaces, F2 edits, Enter/Tab (and Enter back to the row's first column),
+  arrows finish a cell typed from scratch; Ctrl+arrows, Ctrl+Home/End, Page Up/Down, Shift to extend, Ctrl+A twice;
+  Ctrl+C/X/V as tab-separated text with other apps (formulas shift when pasted); Ctrl+D/R, Ctrl+;, Alt+= (sum),
+  Ctrl+B/I/U, Ctrl+Z/Y; a right-click menu. Function names are suggested as a formula is typed, with their arguments;
+  cells are pointed at with the mouse or the arrows, and each reference is outlined in its own colour.
+- **Fill handle**: drag to carry numbers, dates, months and days on as series and formulas along; double-click to
+  fill down beside a column.
+- **Formatting**: bold, italic, underline, strike, text and fill colours, alignment, wrapping, size and font, number
+  formats (number, whole, currency, percent, dates, ISO date, long date, time, scientific, text) and decimal places;
+  column widths by dragging (double-click to fit) and row heights.
+- **Sort** by a column (a heading row recognised), **filters** with each column's values to show or hide (the hidden
+  rows skipped by the arrows and left out of the sum), **freeze** panes, and a summary (sum, average, count) of the
+  chosen cells beside the formula.
+- **Charts** over the cells: columns, bars, lines, area and pie, with title and legend, drawn from the cells and
+  redrawn when they change; move, resize, change the kind or the cells.
+- **Several sheets** in a file: add, rename, duplicate, reorder, delete; formulas reach across them.
+- **Excel files, both ways** (`huginn_xlsx`): values, formulas (with the `_xlfn.` names newer functions need, and the
+  cached results so other apps show numbers before calculating), shared formulas, fonts, colours, fills, alignment,
+  wrapping, number formats, column widths and row heights, frozen panes, filters, merged cells and charts (as
+  DrawingML bar, line, area and pie charts). Reading says what didn't come across (functions Sheets doesn't know,
+  conditional formatting, data validation, comments, pictures, pivot tables). CSV in and out, and PDF.
+- Tested: 79 engine checks (parsing, precedence, errors, every family of functions, dates, reference shifting and
+  moving, formats, series) and 47 checks of the app (typing and guessing formats, formulas across sheets, fill,
+  copy and paste, insert and delete with references and charts following, sort, filter, freeze, find and replace,
+  undo, sheets, charts, and Excel out and back in). Our .xlsx opened in openpyxl (formulas, formats, bold, fill,
+  frozen pane, widths, filter, chart) and in LibreOffice. On screen: an Excel file with a frozen heading row,
+  filter arrows and a chart; a formula typed with suggestions and pointed cells; the fill handle; the filter list;
+  the right-click menu; number formats; a narrow window.
+
+### Slides (`apps/huginn_slides.py`, `apps/huginn_slides_model.py`, `apps/huginn_pptx.py`, all new; `apps/qml/Slides.qml`, `apps/qml/SlideFace.qml`)
+- **Free canvas.** A slide is 1920 by 1080 units (1440 for 4:3; one unit is 6350 EMU, so 13.33 by 7.5 inches as in
+  PowerPoint) with items anywhere on it: text boxes, 17 shapes (with text in them), pictures, lines and arrows.
+  Click to choose, click again (or type) to write; drag to move with smart guides to the slide's middle and edges and
+  to other items' edges and middles; eight handles to size (pictures keep their shape), a handle to turn, two ends on
+  a line; Shift to keep straight; rubber-band and Shift-click to choose several; arrows to nudge; Ctrl+D, copy and
+  paste (between presentations too, and pictures or text from other apps).
+- **Layouts with placeholders** (title, title and text, section, two columns, title only, blank) that keep their text
+  when the layout changes; empty placeholders say what goes in them. Titles and text shrink to fit, as PowerPoint's
+  placeholders do; text boxes grow with their text.
+- **Text** in Qt's rich text: fonts, sizes, bold, italic, underline, strike, colours, alignment, line spacing, bullets
+  and numbering with nine levels (Tab, Shift+Tab), sizes that step down by level. A run keeps only what differs from
+  its place's defaults, so a new theme re-colours and re-fonts everything not set by hand.
+- **Six themes** (Realm, Paper, Night, Dawn, Ocean, Chalk: colours, heading and body fonts, a decoration) and slide
+  backgrounds (theme, colour, gradient, picture; one slide or all). Shapes filled with a theme colour follow the theme.
+- **Arrange**: forward, back, to the front or the back; align left, centre, right, top, middle, bottom (to the slide or
+  to each other) and spread evenly.
+- **Transitions** (fade, push, wipe, zoom, cover, with their time) and **builds** (appear, fade, rise, zoom; whole items
+  or one paragraph at a time, in an order shown beside each item). Hidden slides.
+- **Presenting**: full screen with transitions and builds; click, Space and arrows, B and W to blank, a number and Enter
+  to jump, Esc to stop. With two screens the show goes to the other one and this one has the **presenter view** (the
+  slide as shown, what comes next, notes in a size you choose, a timer and the clock, every slide to jump to);
+  Alt+F5 opens it on one screen to rehearse.
+- **PowerPoint files, both ways** (`huginn_pptx`). Out: a master, a layout for each layout used, the theme's colours and
+  fonts, every item where it is (text runs, bullets, levels, alignment, autofit; preset shapes; pictures), slide
+  backgrounds, notes, transitions, builds as entrance effects (by paragraph too) and hidden slides. In: placeholders
+  take their place and text styles through the layout and the master; theme colours (with their tints and shades) and
+  fonts; shape styles; groups flattened; pictures cropped; tables as cells; the master's and layout's own shapes (logos,
+  bands) kept as the deck's design frame; backgrounds, notes, transitions and entrance builds; the file's design kept
+  until another theme is picked. Footers, charts, SmartArt and other effects are listed as not carried over.
+- **PDF** drawn by Qt's painter from the same model the window uses: vector shapes and real text.
+- Tested: 75 checks of the model and the backend (placeholders, typing and formatting through the editor, lists and
+  levels, numbering toggles, alignment, shapes and theme fills, pictures, text boxes growing, moves as one undo step,
+  aligning and ordering, lines both ways, duplicate, copy and paste, builds, transitions, notes, backgrounds, layout
+  changes keeping text, shrink to fit, hidden slides, themes, find and replace, saving and opening, the first format
+  upgraded, PDF, and PowerPoint out and back in with all of it), checked in python-pptx and rendered by LibreOffice;
+  17 checks reading a deck made with python-pptx's PowerPoint template (layouts, inherited places and bullets, theme
+  fills, white text from a shape's style, pictures, a text box, notes, a table). On screen: typing into placeholders,
+  bullets and levels, the shapes menu, dragging with guides, builds by paragraph while presenting, the presenter view,
+  a PowerPoint file opened and re-themed.
+
+## Ready for real hardware (2026-11-19)
+
+Before the first start on a desktop PC (a Radeon RX 9070 XT and three screens):
+
+- **Waking from sleep.** The lock screen used to start when the computer was already going to sleep, so it was
+  still starting when the computer woke (a black screen for a second or two). The compositor now holds a logind
+  "delay" inhibitor: going to sleep, it locks, waits until the lock screen has been on screen for a couple of frames
+  (3 s at most), then lets the computer sleep; waking shows the lock screen at once. Waking also counts as someone
+  being there: a screen switched off before the computer slept comes back on (the key that wakes it never reaches the
+  compositor), and the idle time starts again.
+- **Screens.** A screen plugged in for the first time runs at its own resolution and the fastest refresh rate it
+  offers at that resolution (many 144 Hz screens name a 60 Hz mode as the one they prefer), and gets a size of things
+  from how sharp it is: pixels to the inch, a desktop screen seen from further away than a laptop's, in quarter steps
+  (a 27" 4K screen 150 %, a 27" 1440p one 100 %); screens that report only their shape are left at 100 %. Anything
+  set in Settings › Displays still wins. The graphics stack in the image already covers the RX 9070 XT (RDNA 4):
+  Linux 7.0, Mesa 26.0.8 with RADV, and linux-firmware 2026-03 with its gc_12_0_1, psp_14_0_3, smu_14_0_3 and
+  dcn_4_0_1 firmware.
+- **A problem report** (`apps/huginn_report.py`, Settings › About › Make a Problem Report, or `huginn-report` from a
+  terminal or a text console): the system's log since the computer started, its warnings and errors and the errors of
+  the start before, the kernel's messages, the desktop session's own log, crashes of the last week with their stacks,
+  the hardware (PCI and USB devices, the graphics drivers through glxinfo and vulkaninfo, the screen connectors and
+  the screens as the compositor has them, sound, network devices, Bluetooth, temperatures), services that failed and
+  Huginn OS's version, as plain text files in one .zip in Documents. Your name, user name and computer's name,
+  network and Bluetooth device names, IP and MAC addresses and e-mail addresses are replaced before anything is
+  written; nothing from your own files goes in. `usbutils`, `mesa-utils`, `vulkan-tools`, `rfkill` and `lm-sensors`
+  are in the image for it (`57-huginn-report.list`).
+
+## Daily use, round one (2026-11-19)
+
+- **Clipboard history** (`apps/huginn_clipboard.py`, `shell/qml/ClipPanel.qml`, both new): Super+V shows what was
+  copied lately, text and pictures (50, plus any pinned), newest first; type to find, Up/Down and Enter or a click to
+  pick, Delete to remove, a pin to keep one. Picking puts it back on the clipboard (`wl-copy`), waits until the
+  clipboard really holds it, then asks the compositor (`org.huginn.Compositor.Paste`) to press Ctrl+V into the window
+  in front once the panel has let go of the keyboard. A watcher started with the session (`wl-paste --watch`) keeps
+  the history in `~/.local/share/huginn/clipboard` (0700), only while it's on: off until turned on (the first Super+V
+  asks, or Settings › Privacy, which also clears it). Copies marked as secret (`x-kde-passwordManagerHint`, as
+  Passwords and Authenticator now mark theirs) and copied files are never kept.
+- **The keyboard comes back.** When one of the shell's panels that takes the keyboard (Search, the start menu, the
+  app's menu, Today, clipboard history) closes, the window in front gets the keyboard back at once; before, typing
+  after closing Search went nowhere until a click.
+- **A top bar on every screen** (Settings › Desktop & Dock › Top bar › On every screen, on by default): each other
+  screen gets its own bar, with the clock, the app in front and the status icons. The dock and the widgets stay on
+  the main screen. Today, the app's menu, the control centre, Search and clipboard history open on the screen the
+  pointer is on (the compositor now puts a layer surface that asks for no screen there, not on the first one).
+- **Files: pictures of documents.** Besides pictures, videos and PDFs, Files now shows the first page of Writer's
+  documents (.html with Writer's mark, .docx), the first slide of presentations (.hslides, .pptx), the top-left of
+  spreadsheets (.hsheet, .xlsx, worked out), and the picture LibreOffice keeps in every OpenDocument file. Writer's
+  .docx and Slides' .pptx now carry a small picture of their first page as Word and PowerPoint do
+  (`docProps/thumbnail.jpeg`), so other file managers show it too.
+- **Printers by address** (Print & Scan): "Add a printer by its address" takes an address, a name on the network or an
+  ipp:// address and adds it as a driverless printer (`lpadmin -m everywhere`, which asks the printer what it can
+  do); for printers on another network or that don't announce themselves. Remove takes one off (asking first). Jobs
+  waiting to print were already listed with Cancel. The first user is in the `lpadmin` group, so no password.
+- Tab now moves between text boxes everywhere (`TextBox.qml`).
+
+## Office, round two (2026-11-19)
+
+- **Writer: comments and tracked changes** (`apps/huginn_review.py`, new). Select words and Ctrl+Alt+M (or right-click
+  › Comment): comments, with replies, Resolve and Delete, in a Review tab on the left. Track changes (Ctrl+Shift+R, or
+  the Review tab): what is typed is underlined in blue and what is deleted stays, struck through in red, signed with
+  the account's name, until accepted or rejected one at a time (the tab, the right-click menu, Review › Next change)
+  or all at once; deleting your own unaccepted insertion just removes it. The marks live in the characters' format
+  (the tool tip, Qt's HTML title attribute) with who and when in a `huginn-review` meta tag; because Qt 6.10 reads
+  title attributes but doesn't write them, the saved file also lists where each mark is, with a checksum of the text,
+  and puts them back on opening. Word's `w:ins`, `w:del`, `w:moveFrom`/`w:moveTo`, comments (`comments.xml`, replies
+  as further paragraphs) and `trackRevisions` come in from .docx and go out to it; Writer no longer reports them as
+  dropped.
+- **Sheets: Highlight cells** (conditional formatting, `apps/huginn_sheet_rules.py`, new): greater/less than, between,
+  equal to, text that contains, duplicates and unique values, top and bottom N, above and below average, empty,
+  errors, colour scales (two or three colours) and data bars, the first matching rule colouring a cell (scales and
+  bars add to it); rules follow inserted and deleted rows and columns, can be reordered, and go to Excel's
+  `conditionalFormatting` with `dxfs` and come back (icon sets and formula rules are reported as not come across).
+- **Sheets: Pivot tables** (Data › Pivot table): rows by one column, optional columns by another, and the sum, count,
+  average, smallest or largest of a third, on a new sheet built from SUMIFS-family formulas, so its numbers follow
+  the table; Refresh (an island on the sheet, or Data › Refresh the pivot table) brings in new names and rows added
+  under the table. Gaps are left empty, as in a pivot table.
+
+- **Slides: tables and charts.** A table (rows of text, a heading row, stripes, a theme colour and three text sizes)
+  and a chart (columns, bars, lines or a pie, with a title and a key) are items like the others: moved, sized, turned
+  and built in. They are drawn by `huginn_slides_model.paint_table`/`paint_chart` (the window shows them as pictures
+  from the cache, redrawn when they change; PDF export, thumbnails and the show draw them the same way), and edited
+  in a grid (double-click, or Edit the Cells / Edit the Data), a chart's series along the top and labels down the side.
+  PowerPoint gets real `a:tbl` tables and real charts (`ppt/charts/chartN.xml`, with the numbers written in rather
+  than a workbook behind them); from PowerPoint, tables without merged cells and column, bar, line, area and pie
+  charts come in as Slides' own (tables with merged cells still come in as separate cells, to keep their look).
+- The menus' Cut, Copy, Paste, Select All, Undo and Redo in Slides now go to a box being typed in (a table cell, the
+  notes, Find) before the slide's items.
+
+## Daily use, round two (2026-11-19)
+
+- **Keyboard shortcuts of one's own** (`compositor/src/shortcuts.rs`, new; Settings › Keyboard Shortcuts, `SetKeys.qml`):
+  the compositor's shortcuts now come from a table, `~/.config/huginn/shortcuts.json` over the defaults, read again when
+  Settings asks (`org.huginn.Compositor.ReloadShortcuts`). Every one of Huginn's can be given other keys or turned off;
+  a key taken from another shortcut is said. "Your own" open an app (`app:<desktop id>`) or run a command, through the
+  shell (`run:` keys), so the dock shows them starting. While Settings listens for new keys it pauses the shortcuts
+  (`PauseShortcuts`, 30 s at most), so Super+E reaches it. Keys are matched without Shift and in the Latin layout,
+  so Super+. is the same key in any layout. Fixed: Super and Alt on their own, Super+1…9, Alt+Tab, the consoles and the
+  hardware keys.
+- **New keys**: Super+E Files, Super+I Settings, Ctrl+Alt+T Terminal, Super+D shows the desktop (every window on the
+  space out of the way; again, and they're back), Super+Alt+←/→ moves the window in front to the screen beside it
+  (by where the screens are, going round), at the same place on it and snapped or full as it was.
+- **Emoji and symbols on Super+.** (`shell/qml/EmojiPanel.qml`, `huginn_chars.EmojiPicker`): Characters' emoji (from
+  Unicode's emoji-test.txt) and symbols, read the first time it opens; type to find, arrows and Enter, recent ones
+  first, skin tones. The one picked is typed into the window in front through the clipboard and Ctrl+V
+  (`huginn_clipboard.type_text`), and what was on the clipboard is put back after; clipboard history leaves both alone.
+- Checked: today's ISO in QEMU (no KVM): GRUB, the boot splash, the live session with the installer, then the
+  desktop, widgets and the Welcome tour. Without a graphics card the shell takes a few minutes to come up the first
+  time.
+
+## Several screens, round two (2026-11-19)
+
+- **The top bar and dock go to the main screen.** Settings › Displays › Make Main only reached the widgets: Qt puts a
+  window on the screen the compositor names first, so the bar and dock stayed there. They're placed on the main screen
+  now (`Shell.qml`: `mainScreen`), and move when it changes; a layer surface can't change screens, so it's made again
+  on the other one (`moveTo`).
+- **Windows stay on their screens** (`wm.rs`: `screens_changing`, `screens_changed`). Before the screens change (one
+  plugged in or out, switched on or off in Settings, a monitor that drops off its connection while asleep, or screens
+  moved on the map) the compositor notes which screen each window is on (by its make, model and serial number) and
+  where on it; after, a window stays there, at the same place, snapped or full as it was. A window whose screen went
+  away goes to the main screen and remembers its own; when that screen comes back it goes home, unless it was moved
+  since. Windows on other spaces and minimised ones too. Which screen a window is on is now the one its middle is on
+  (the space's own list lags a move just made), so maximising and snapping right after a move use the new screen.
+- **The pointer can't get lost.** It was clamped as if the screens stood in a row from the top left; with screens of
+  different sizes, or set above or below each other, it could go where no screen is. It now slides along the edge of
+  the nearest screen; a tablet's (or a virtual machine's) pointer spans the box round them all.
+- **The Overview on every screen**: each screen's windows spread out on it, with their names; the spaces and the search
+  are on the screen the pointer is on (`OverviewOverlay.qml`: `main`, `screenName`).
+- **The dock comes to you** (Settings › Desktop & Dock › Moves to the screen you're using, on): rest the pointer at the
+  bottom edge of another screen for a moment and the dock moves there. The compositor tells the shell when the pointer
+  reaches a screen's bottom edge (`edge:<screen>`, only with more than one screen).
+- **Identify** (Settings › Displays): each screen's name over it for a few seconds, with its size and "Main screen".
+  Screens are named by their model ("DELL U2723QE") where it's known, with the socket when two are the same model.
+- Checked with a second screen added to the compositor's window for trying it (`HUGINN_DEV=1
+  HUGINN_DEV_SECOND_SCREEN=1280x800`, the window backend only): Super+Alt+→ and snapping on the second screen,
+  turning it off and on (snapped and maximised windows went and came back), Make Main moving the widgets and the bar,
+  the dock moving there and back, Identify, and the Overview showing only the first screen's windows on it.
+
+## Office, round three (2026-11-19)
+
+- **Writer: footnotes** (Ctrl+Alt+F, Insert › Footnote, right-click › Footnote…). A footnote's mark is a raised number
+  that links to the note (`#fn-<id>`), the notes' words kept with the document (`huginn-footnotes`). They number
+  themselves in order; each page keeps room at its bottom for its footnotes (the most any page needs, so pagination
+  stays Qt's own), drawn above the footer on screen, in print and in PDF. Text typed straight after a mark (Qt carries
+  a link on to it) is given its own look back. Word's footnotes come in and go out as Word's own (`footnotes.xml`,
+  with the separator lines and Word's footnote styles); endnotes come in as footnotes.
+- **Sheets: choices** (Excel's data validation, `apps/huginn_sheet_checks.py`, new): a list to pick from (typed out, or
+  the cells of a range, on this sheet or another), whole numbers, numbers, dates or a length of text, between, at
+  least, at most, exactly, not. The cell in front shows the list's arrow (or Alt+↓); anything else is turned away and
+  the cell stays open, or let in with a warning. Checks follow rows and columns inserted and deleted, and go to and
+  come from Excel's `dataValidations` (list formulas from a range or quoted, dates as serial numbers, stop or
+  warning); ones by formula or a named range are reported.
+- **Sheets: notes on cells**: a red corner, the note shown when the pointer rests on the cell, written from the
+  right-click menu; they move with rows, columns and sorting, and go to and come from Excel's comments (with the VML
+  drawing Excel needs to show them).
+- **Slides: groups** (Ctrl+G, Ctrl+Shift+G, Arrange, right-click): a click chooses the group, a second click the item
+  in it; the group's box has handles that size everything in it together, as one undo step. A group stays together in
+  front-to-back order; copies are groups of their own. PowerPoint's groups come in as groups (a group in a group joins
+  it) and go out as `p:grpSp`.
+- **Slides: numbers, date and footer** (Slide › Numbers, date and footer…): the slide's number, today's date or one
+  typed, and a line of text, where PowerPoint puts them, on title slides or not; shown while editing and presenting
+  and in PDF, and written to PowerPoint as its own `sldNum`, `dt` and `ftr` placeholders (a field for the number and
+  for today's date), read back from them.
+- **Slides: see-through colours** from PowerPoint (`a:alpha`) are kept (as #AARRGGBB) and written back; the Realm
+  theme's orb came back solid after a trip through PowerPoint.
+- Tested: 35 checks of choices and notes (lists typed and from cells, spelling as listed, turning away and warning,
+  whole numbers, dates, splitting a check, rows inserted, notes moving and sorting, undo, .hsheet and Excel out and
+  back, openpyxl reading both), 21 of Slides (footers on and off title slides, dates, groups kept together through
+  ordering, copies, a group of one coming apart, sizing as one step, PowerPoint out and back), 23 of footnotes
+  (numbering and renumbering, typing after a mark, deleting, saving and opening, Word out and back, endnotes, PDF);
+  the earlier suites still pass (Sheets 47 and 79, Slides 69 and 12, Writer 61, review 40). On screen: a list picked
+  from and a value turned away, a note shown on hover, the Choices panel, a group chosen and sized, the footer on a
+  slide, a footnote written and shown at the bottom of its page.
+
+## Three screens, first start (2026-11-19)
+
+- **Arrange them, once**: two or more screens that have never been arranged (no place saved for any in
+  `~/.config/huginn/displays.json`) stand side by side in the order their sockets come, which may not be how they
+  stand on the desk. Fifteen seconds after signing in, a notification ("Huginn OS found three screens") offers
+  Arrange Them, which opens Settings › Displays (drag the screens, Identify, Make Main). It's asked once
+  (`~/.local/state/huginn/asked-to-arrange`), and tried again a little later if the notification server isn't up
+  yet. Checked in the nested session with a second screen: the banner and its button.
+
+## Office, round four (2026-11-19)
+
+- **Sheets: merged cells** (Format › Merge and centre, Unmerge; right-click): Excel's merged cells were kept but shown
+  as separate cells; now the first cell draws over all of them (its value, fill and alignment), the cells it covers
+  draw nothing, and a selection never cuts one (clicking a covered cell chooses the whole of it; arrows step over it).
+  Merging keeps the first cell's value, as Excel does, and says how many others went. Merged cells move with rows
+  and columns put in and taken out (and go when all their rows or columns do), undo with the sheet, and go to and
+  come from Excel as `mergeCells` (openpyxl reads them back).
+- **Writer: pictures beside the text** (the picture's island › Text beside: No, On its right, On its left): the
+  picture floats to that side and the text wraps round it (Qt's `float`). Word's pictures with Square, Tight or
+  Through wrapping come in that way (the side from their alignment, else from where they sit across the text), and
+  go out as Word's anchored pictures with Square wrapping (`wp:anchor`, `wp:wrapSquare`, aligned left or right).
+  Pictures placed freely elsewhere (in front of the text, behind it) still come in line, and the notice says so.
+- **Writer: text boxes' words**: they were dropped. A text box (Word 2010's `wps:txbx`, or VML's `v:textbox`; only
+  the first of `mc:AlternateContent`'s choices, so not twice) comes in as boxed text, a one-cell table with a thin
+  border, after the paragraph it was anchored to, at its width and to the right when Word had it there.
+- **Slides: SmartArt** comes in as the shapes PowerPoint last drew it with (the diagram's drawing part, which
+  PowerPoint keeps beside its data for apps that can't lay diagrams out, found through the data part's
+  `dataModelExt`): its boxes, arrows and words, where they were, as a group. Only a diagram without that drawing is
+  still left out.
+- Tested: 21 checks of merged cells (an openpyxl workbook in, shown, merging and unmerging, rows and columns in and
+  out, undo, out to Excel and read back by openpyxl), 11 of Word's side pictures and text boxes (python-docx files in,
+  Qt keeping the float, out to Word and read back by python-docx, and in again), 9 of setting a picture's side in
+  Writer (left, right, back in line, saved and opened), 7 of SmartArt (a python-pptx deck with a diagram); the
+  earlier suites still pass (Writer 57, review 40, footnotes 24, Sheets 47, 37 and 79, Slides 75, 22 and 12). On
+  screen: a sheet with a title merged across five columns, a label down two rows and a note block.
+
+## Huginn's compositor, round six (2026-11-19)
+
+- **Keep on top** (Super+Ctrl+T, the app's menu › Window › Keep on Top, which reads "Stop Keeping on Top" while it is):
+  a window kept on top has a z-index one above the others (`shell/element.rs`), so whatever comes forward stays under
+  it; the window list says so (`above`). **Picture-in-picture** windows (Firefox's "Picture-in-Picture", Chromium's
+  "Picture in picture") are kept on top and on every space by themselves.
+- **Show the same on two screens** (Settings › Displays › Show: its own desktop, or the same as another): the screen
+  goes over the other on the desktop at a size of things that fits all of it, and draws that screen's bar, dock and
+  wallpaper (`displays.rs`: `MirrorOf`, `update_mirrors`; `render.rs`). Windows, the Overview, snapping, new panels
+  and the dock's edge never take it for a screen of its own. Kept in displays.json, so it comes back when plugged in
+  again; stopping puts it back at its own size, to the right of the others.
+- **Where apps open** (Settings › Desktop & Dock): an app's windows on a chosen screen (by make, model and serial, so
+  the same monitor whatever socket it's in, or "the main one"), on a space, filling the screen, kept on top. Written
+  to the window rules (`window-rules.json`), which now take `screen` and `ontop`.
+- **Dialogs**: a window with a parent (a dialog) opens over the middle of it, not where the app's main window last was
+  (which also sized dialogs like the main window); its dialogs stay over it when it comes forward, and a modal one
+  (xdg-dialog-v1, which Qt and GTK use) takes the keyboard when its window is clicked.
+- **Apps told you've stepped away** (ext-idle-notify-v1: chat apps' "away"), held off while something keeps the
+  screen awake.
+- **Pointer shapes**: apps can ask for them by name (cursor-shape-v1), and the compositor draws the shape asked for
+  (resize arrows, the text I-beam, the hand…) from the cursor theme instead of always the arrow, with its hotspot;
+  at the screen's size of things (a 150 % screen gets the 48-pixel pointer, not a blurry 24).
+- **Frame times** (Super+Alt+F, Settings › Displays › Frame times): each screen's frames a second, the time between
+  frames and the longest, how long drawing took, and frames that came late (over one and a half refreshes), over the
+  last second, in its top-right corner (`frames.rs`, `org.huginn.Compositor.FrameStats`). "Resting" when nothing
+  changes, because then nothing is drawn.
+- **Lighter glass** (Settings › Displays › Glass: Full, Light, Off): Light blurs from a quarter of the pixels with
+  three levels instead of four.
+- Dragging between X11 apps and Wayland apps was already wired in (Smithay's XWayland drag and drop); not tried here.
+- Checked in the compositor's window with a second screen: keep on top (the window stayed over one brought forward),
+  the menu's label, frame times on screen, Show the same (on and off, with the window list unchanged), a rule opening
+  Files on the second screen kept on top, Settings' rule editor writing it, a Qt dialog opening over its window and a
+  click on that window leaving the modal dialog in front with the keyboard.
+
+## Settings, gone over (2026-11-19)
+
+Every page checked against what really acts on it in Huginn's own session. What didn't take effect:
+
+- **Language & Region**: nothing read plasma-localerc, and only en_US existed. `huginn-session` now exports `LANG`,
+  `LANGUAGE` and the `LC_*` formats from it when the system has the locale, and choosing one it hasn't makes it first
+  (`/usr/libexec/huginn-system-settings locale ll_CC`, through pkexec: `org.huginn.system-settings`).
+- **Notification sounds**: nothing played one. The session daemon now plays the app's own (`sound-file`,
+  `sound-name`) or Huginn's for each new notification, unless sounds are off for every app or that one, Do Not
+  Disturb holds it, or the app asked for none (`suppress-sound`). **Show what a notification says** is used: Never
+  keeps banners to the app's name ("Open the Control Centre to read it"); When unlocked does that while locked.
+- **Screen lock › Lock after**: only turning the screen off locked it. The daemon now locks after the minutes chosen
+  (kscreenlockerrc's Autolock and Timeout), once each time it's left, held off like the screen by anything keeping
+  it awake; a screen that turns off sooner stays unlocked until then. Lock before sleep follows LockOnResume.
+- **Empty the Trash by itself**: nothing emptied it. The daemon deletes what's been in the Trash longer than the days
+  chosen (ktrashrc), a minute after signing in and every six hours, by each item's DeletionDate.
+- **Remember recent files** (off): Huginn's apps still noted files. It's now kdeglobals' `[RecentDocuments]
+  UseRecent` (which `huginn_recent.note` and KDE's apps read) and GNOME's `remember-recent-files` for GTK apps.
+- **Pointer size**: the compositor drew 24 pixels whatever was chosen. It reads kcminputrc's `cursorSize` and
+  `cursorTheme` (again on `ReloadAccess`, for X11 apps' pointer too), and the session exports them.
+- **Zoom › When the pointer moves**: only "follow it" worked. Keep it centred and Push at edges now work
+  (`look::zoom_origin`), and the pointer is drawn over what it points at as the zoom shows it.
+- **Flash the screen for alert sounds**: nothing rang. The compositor now has the system bell (xdg-system-bell-v1):
+  it flashes every screen white for 0.3 s (`render.rs`: `flash`) when Accessibility says so, else the shell plays
+  the alert sound.
+- **Keyboard layouts**: no way to switch, and the page named Search's shortcut. Super+Ctrl+Space (or a click on the
+  letters the top bar now shows with more than one) goes to the next (`org.huginn.Compositor.KeyboardLayout`,
+  `SetKeyboardLayout`). **Super+Alt+S** (screen reader), which Accessibility named, now exists.
+- "Meta" became "Super" where Settings still said it.
+
+Added:
+
+- **Appearance › Wallpaper › A picture**: one of your own (the newest in Pictures, or any through the Open window),
+  copied to ~/.local/share/huginn/wallpapers; the shell's `wallpaper` setting, drawn over the realm's scene, which
+  then isn't drawn.
+- **Sound › Alerts**: the alert sound (Bell, Chime, Soft, Knock, Question, Warning, None), its volume, and a click
+  when the volume keys change it (`huginn_sounds.py`, ~/.config/huginn/sound.json).
+- **Keyboard & Mouse**: Num Lock when you sign in (kcminputrc's NumLock), and for each mouse and touchpad: mouse
+  acceleration (off is libinput's flat profile, for games), scroll speed (the compositor scales what the device
+  sends), and a touchpad's right-click (two fingers or the corner).
+- **Displays › Brightness** for monitors over the cable (DDC/CI, with ddcutil, now in the image, i2c-dev loaded and a
+  uaccess rule), each by its own slider; only the last value waiting goes, as monitors answer slowly. **Night light**
+  "Sunset to sunrise" uses the real times, from the time zone's city (`huginn_sun.py`, zone1970.tab): nothing asks
+  where the computer is.
+- **Users › Sign in by itself** (the sign-in service's [Autologin], the file the installer writes; through the same helper).
+- **About › Name › Rename…** (hostnamed: the pretty name, and the host name made from it).
+- **Wi‑Fi & Network › DNS › Change…**: servers of your own for the network in use (NetworkManager, reapplied at once).
+- **Printers & Scanners**, a page of its own: the printers CUPS knows, which is used first, removing one, adding one
+  by its address, the print queue, and the scanners (as Print & Scan reads them).
+- Search finds all of these.
+
+Checked in the compositor's window: the wallpaper picture, switching layouts by keys and by the top bar, the alert
+sound saved, Num Lock written, night light's sunset times, the bell flashing (measured), the three zoom modes, the
+screen reader's shortcut, every page drawn in the preview with no new QML warnings. Tests: settings_r_test (40),
+notify_r_test (10), lock_r_test (8). Not checked here: monitors' brightness, mouse acceleration and scroll speed, Num
+Lock's light, automatic sign-in and renaming (they need the real hardware and system services).
+
+## Make it yours: live wallpapers, icons and pointers (2026-11-19)
+
+- **Live wallpapers you make** (Settings › Appearance › Wallpaper › Made by you › Make one; `SetLiveMaker.qml`): a
+  realm's scene (its shader) in colours of your own, a picture of yours (drift, breathe or still) or a video of yours
+  (looping, without sound), with snow, rain, stars, fireflies, lights, leaves or embers over it (Qt Quick Particles,
+  sprites in `live/sprites`), how many, their colour, the speed, and darkening a picture or video under them. A live
+  preview plays as you go; five ideas start you off. Kept in ~/.local/share/huginn/wallpapers/live/<id>/ (wallpaper.json,
+  its picture or video copied in, still.jpg for the choices); `CustomWallpaper.qml` (next to the realms' scenes) draws
+  it on the desktop and in the preview. Share… makes a .huginn-wallpaper (a zip of the folder) in Documents; Add from a
+  file takes only its wallpaper.json, its one picture or video and its still (`huginn_looks.py`).
+- **Every live wallpaper rests while a window fills its screen** (≥ 88 % of it, on the space in view: a game, a film,
+  a filled window), the realms' scenes too (`Shell.qml`: `filled`). Measured here: the shell's work fell to what it is
+  with the wallpaper still.
+- **Icons** (Appearance › Icons): each icon theme shown with its own folder and six app icons (Huginn's own with its
+  glass tiles); choosing one sets Qt's theme in Huginn's shell and apps at once (`iconTheme` in the shared settings,
+  `follow_icons`), kdeglobals for KDE's and Qt's apps and GNOME's setting for GTK's. Other apps' icons are on Huginn's
+  glass only with Huginn's own; with another theme they show that theme's. **Change an app's icon…**: a picture of
+  yours made a 256-pixel icon (on Huginn's glass with `huginn_iconwrap`, or as it is) and the app's .desktop file in
+  ~/.local/share/applications pointing at it (a marked copy; **Its Own Again** takes it away, or puts the icon back in a
+  file of your own).
+- **Pointer** (Appearance › Pointer): each pointer theme shown by its own arrow, hand, text, wait and move pointers
+  (read from its Xcursor files), with the size; choosing one sets the compositor's pointer at once (`ReloadAccess`),
+  kcminputrc, GNOME's setting and X11's default (~/.icons/default).
+- **While an app opens**: the shell tells the compositor (`Launching` on org.huginn.Compositor), and the pointer is the
+  realm's turning drop beside the arrow until the app's first window appears, or for 8 seconds at most. A pointer an app
+  asks for itself (text, hand…) is left alone.
+- **Themes from a file** (both cards: Add from a file, Find More → gnome-look.org): a downloaded .tar.gz, .tar.xz, .tar.bz2
+  or .zip, unpacked with tarfile's "data" filter (nothing outside, no odd links), every icon or pointer theme in it put in
+  ~/.local/share/icons; ones added can be removed (the system's can't).
+- In the image: elementary's icons and pointers, DMZ (white, black) and Oxygen's pointers (five colours).
+- Checked in the compositor's window: making, saving and using a live wallpaper (scene, picture, video), the ideas,
+  effects coming and going, a window filling the screen resting it, switching icon themes (the start menu's other apps
+  changed, Huginn's kept their tiles), a pointer theme written everywhere, Files given a picture of its own in the dock.
+  looks_test (42).
+
+## Helpers out of the start menu (2026-11-19)
+
+Every app in the start menu is now Huginn's own. The programs that work behind them (KDE Connect behind Phone, FreeRDP
+behind Screen Sharing and Machines, Calf and setBfree behind Tempo, Kvantum's manager behind Huginn's theming of Qt
+apps) showed up in the start menu and Search too; `config/hooks/42-helpers-out-of-the-menu.sh` gives each a copy in
+/usr/local/share/applications with NoDisplay=true, so they still run and open files as before.
+
+## Gaming, round two (2026-11-20)
+
+- **The screen stays on while you play**: the compositor counts a fullscreen game (the same test as GameMode's,
+  `gamemode.rs`) as a reason not to dim, turn off, lock or sleep, so playing with only a controller (no keyboard or
+  mouse input) no longer blanks the screen. `huginn_sessiond.py` now also answers `org.freedesktop.ScreenSaver` on
+  the session bus (`Inhibit`/`UnInhibit`, `GetActive`, `GetSessionIdleTime`, `SimulateUserActivity`, `Lock`), which
+  Steam, SDL games, browsers and video players use to keep the screen on; an inhibitor goes when its program leaves
+  the bus. Checked in the nested session: idle time stays 0 while the stand-in game is fullscreen, and an Inhibit
+  call is listed until UnInhibit.
+- **Game stats in the corner** (Super+Alt+G, or Settings › Desktop & Dock › Game stats; `frames.rs`,
+  `shell/huginn_hwstats.py`, new): the frames a game hands over each second, counted by the compositor at each commit
+  of its window (so a game that tears can show more than the screen's Hz), with the average and longest frame time;
+  graphics card load, temperature, memory, clock and power; processor load and temperature; memory in use. Read from
+  the kernel's files once a second while it shows (NVIDIA's driver: `nvidia-smi`, from a thread). Checked in the
+  nested session over a window.
+- **A bigger shader cache**: `huginn-session` sets `MESA_SHADER_CACHE_MAX_SIZE=10G` (Mesa's default is 1 GB, which a
+  few big games outgrow and then compile shaders again, stuttering, on every start).
+- **Xwayland told its main screen afresh** when it restarts, so X11 games open on the main screen again after it has.
+- **Game bar on Super+G** (`shell/qml/GameBar.qml`, new): over the game, on the screen it's on: frames per second,
+  graphics card load, its memory, processor load; switches for Do Not Disturb, the microphone (`wpctl` on the
+  default source), the stats in the corner, and a screenshot (taken once the bar has gone); a volume slider; whether
+  GameMode is on. Super+G again, or Escape, closes it. The shortcut can be changed in Settings › Keyboard. For this
+  the compositor now draws Overlay-layer surfaces above a fullscreen window and gives them the pointer and keyboard
+  first (`render.rs`, `input_handler.rs`); before, a fullscreen window covered everything.
+- **Settings › Graphics** (`apps/qml/SetGraphics.qml`, new): the card's name and driver, Mesa's version, and live
+  readings (busy, temperature, power against its cap, memory, fan, clocks) from the amdgpu files in sysfs
+  (`shell/huginn_hwstats.py`, `Readings.card()`). For AMD cards, Performance: Automatic, Highest clocks or Quietest
+  (`power_dpm_force_performance_level` auto/high/low), set through `huginn-system-settings gpu-level` (pkexec),
+  kept in `/etc/huginn/gpu-level` and applied again when the card appears at start
+  (`/etc/udev/rules.d/61-huginn-gpu.rules`). Readings and levels were tried on stand-in sysfs files only; the
+  RX 9070 XT on Friday is the first real card.
+- **Proton-GE in one click** (Games › Proton-GE; `apps/huginn_games.py`): asks GitHub for GloriousEggroll's newest
+  `GE-Proton` release, downloads the archive and its SHA-512 sum, checks the sum, refuses an archive with anything
+  outside its own folder, unpacks it (Python's `data` filter) into Steam's `compatibilitytools.d` (Flathub's Steam
+  included), and lists what's installed with Update and Remove. Nothing changes until the download checks out; a
+  half-done download is cleaned away. Tested against a stand-in server (good archive, wrong sum, no sum offered, an
+  archive that reaches outside its folder, a release name that isn't GE's); the sandbox here can't reach GitHub.
+- Sheets: a merged cell's outline no longer complains about cells that aren't merged (found by `ci-smoke`).
+
+## Gaming, round three: Game Mode and less memory (2026-11-20)
+
+Measured first: the installation drive in a virtual PC (one 1024×768 screen, software drawing), signed in and idle,
+used about 1.3 GB (PSS over every process). The biggest were the shell (405 MB, much of it the software renderer's
+pictures, which a graphics card keeps in its own memory), a MIDI synthesiser nothing used (163 MB), the session
+daemon (85), the file chooser portal (82), the password prompt (76) and four small helpers (85 together).
+
+- **Game Mode** (as SteamOS's): Steam's big-screen interface (`-gamepadui -steamos3`) on Valve's gamescope
+  (Ubuntu's, from multiverse), filling the main screen (Settings › Displays) with the others dark, adaptive sync on,
+  and Steam told it may offer its frame-rate, tearing and upscaling controls. Pick it on the sign-in screen
+  ("Huginn OS Game Mode"), in Games (Game Mode, top right) or in the start menu's bottom row (the controller, where
+  gamescope is installed). `huginn-session` now runs the desktop (`huginn-desktop-session`) or Game Mode
+  (`huginn-game-session`) one after the other in the same signed-in session, so switching needs no password: the
+  desktop writes `game` to `~/.local/state/huginn/next-session` and ends; Steam's Power › Switch to Desktop runs
+  `steamos-session-select`, which writes `desktop` and closes Steam. Restart and Shut Down in Steam work through
+  SteamOS's sentinel files. Steam from Flathub gets these helpers (`/usr/libexec/huginn-steamos`) in its own folder
+  and on its PATH; Ubuntu's Steam on the system PATH. If Game Mode can't start (no Steam, no gamescope, or Steam or
+  gamescope closing within 20 seconds), the desktop comes back and says why. Tested with stand-ins for gamescope,
+  Flatpak and Steam (`session_test.sh`, 20 checks, including Flathub's PATH and the main screen); gamescope itself
+  needs a real graphics card (its DRM extension), so the RX 9070 XT is its first real run.
+- **HDR and Steam's performance overlay in Game Mode** (added the same morning): gamescope runs with `--hdr-enabled`
+  and its WSI layer on (`ENABLE_GAMESCOPE_WSI`, `ENABLE_HDR_WSI`, `DXVK_HDR`), and Steam is told it may offer HDR
+  (Settings › Display › Enable HDR, shown on an HDR screen). Games reach gamescope's HDR through its WSI layer: Ubuntu's
+  gamescope package has it for the system; for Flathub's Steam the App Store adds Flathub's
+  `org.freedesktop.Platform.VulkanLayer.gamescope` for Steam's runtime (Game Mode adds it too, in the background, if
+  Steam came first), and Steam's sandbox is given gamescope's socket (`xdg-run/gamescope-0`). The overlay levels in
+  Steam's quick menu › Performance come from `mangoapp` (Ubuntu's `mangoapp` package), run by gamescope
+  (`--mangoapp`) and set by Steam through `MANGOHUD_CONFIGFILE`, kept in Steam's own folder so its sandbox can write
+  it; it starts hidden. Each is used only where gamescope offers it (`gamescope --help`). Tested with stand-ins
+  (`session_test.sh`, now 29 checks); whether a game inside Flathub's Steam really reaches HDR through Flathub's layer
+  is for the PC to show.
+- **Faster Windows games**: `ntsync` is loaded at start (`/etc/modules-load.d/huginn-ntsync.conf`, with
+  `/dev/ntsync` open to games: `62-huginn-ntsync.rules`); Wine 11 and GE-Proton use it by themselves in place of
+  esync/fsync. As SteamOS does, the kernel no longer slows down games that do split locks (`kernel.split_lock_mitigate
+  = 0`), and background memory compaction, which shows as stutter, is off (`vm.compaction_proactiveness = 0`;
+  `/etc/sysctl.d/60-huginn-games.conf`). Ubuntu already raises `vm.max_map_count`.
+- **Making room while a game plays**: the compositor keeps `$XDG_RUNTIME_DIR/huginn/game-playing` while a game fills
+  a screen (whether or not GameMode is on), and Game Mode keeps it all along. The local AI model (llama-server) is
+  unloaded within five seconds, giving its memory and the graphics card's back (the next question starts it again);
+  automatic updates wait until the game ends; the shell lets go of its windows' cached pictures, its JavaScript
+  garbage and freed heap (about 50 MB in the nested session, logged as "a game has the screen").
+- **Compressed memory (zram)**: a swap in RAM compressed with zstd, up to 8 GB (`/etc/systemd/zram-generator.conf`,
+  `systemd-zram-generator`), with the settings that suit swap in RAM set once it's there (swappiness 180, no
+  read-ahead). Huginn OS makes no swap on the disk, so before this there was none.
+- **No more freezing when memory runs out**: earlyoom closes the program using the most when both memory and the
+  compressed swap are nearly gone, leaving Huginn's compositor, shell, session daemon, portal and password prompt,
+  Xwayland, gamescope and sound alone, and taking a browser's page processes first (`/etc/default/earlyoom`). For
+  that, Huginn's own processes now give themselves names (`huginn-shell`, `huginn-sessiond`, `huginn-writer`…), which
+  top and Monitor show too.
+- **Less memory at idle**: Ubuntu's fluidsynth user service is off (Tempo runs fluidsynth itself; −163 MB); the
+  password prompt loads its window only when polkit asks and lets it go five minutes after (`huginn_polkit.py`); the
+  shortcuts agent, privacy watcher, automatic updates and accounts run as threads of one process
+  (`huginn_helpers.py`: 44 MB in place of about 85).
+- **Measured again** the same way on the rebuilt drive: about 1.04 GB in place of 1.30 GB (−256 MB, −20%), with
+  /dev/zram0 (2.9 GB in that 3 GB virtual PC), /dev/ntsync, earlyoom running and fluidsynth not. The password prompt
+  saved less than hoped (76 → 70 MB: most of it is Qt itself, which the agent needs while it waits).
+
+## Controllers, a smaller image, and memory measured (2026-11-20)
+
+- **Settings › Controllers** (`apps/qml/SetControllers.qml`, `apps/huginn_pads.py`): the game controllers connected
+  now (the kernel's input devices a joystick handler took; motion sensors and touchpads left out), whether by USB or
+  Bluetooth, which maker's, and the battery and charging where the controller reports it. Test draws the controller
+  and lights each button, the D-pad, bumpers and triggers (how far) and both sticks (where they point, with their
+  numbers, so a drifting stick shows) as they move, read straight from its event device; the face buttons wear the
+  maker's marks (✕ ○ △ □, A B X Y). Looked at again every two seconds while the page shows. Pairing goes to Bluetooth.
+  Tested on a made-up device list and battery (15 checks) and drawn in demo mode; a real controller is for the PC.
+- **One kernel in the image**: the build kept the kernel it started with beside the one the upgrade brought (7.0.0-43
+  and -44: images, modules, headers and initramfs). `purge_old_kernels` (`scripts/build.sh`) now takes out every
+  kernel but the newest.
+- **Memory, measured rather than guessed**: building the shell's search, emoji, clipboard and game bar panels only when
+  opened saved nothing (the shell was 111 MB either way in the nested session: its memory is Qt and drawing, not those
+  panels), so that change was taken back. The password prompt now also loads Huginn's look only with its window
+  (70 → 64 MB while it waits, in the virtual PC). The rebuilt drive (one kernel) was booted in the virtual PC: it
+  starts 7.0.0-44 and reaches the desktop and installer as before. KDE's portal and secret service (about 50 MB each in the virtual PC) start in the live
+  session after the installer opens, not in the desktop session here, so they were left as they are.
+
+## Testing on the PC, round three (2026-11-20)
+
+From the testing on the PC and its problem report:
+
+- **Code's languages and the local AI model wouldn't go in**: the drive and a fresh installation carry no package lists,
+  so every package looked unknown ("Could not find package: golang-go"). `apps/huginn_packages.py` (new) fetches them
+  first whenever they're missing or more than two days old, through PackageKit (`pkgcli refresh`, then `install`), or
+  apt-get under one password prompt without it. Checked against Ubuntu's archive in the build root: from no lists,
+  `pkgcli refresh` then finds golang-go and gopls.
+- **Software Update said "Everything is up to date"** with no lists to look in. It now fetches them whenever they're
+  missing or stale, asked or not, and if it can't it says so ("Couldn't look for every update", with why) in place of
+  up to date. Its mark also comes to rest upright after spinning (it stayed tilted).
+- **Huginn AI's model on this computer**: on the USB drive's live session every file is kept in memory, so a model
+  filled it and the download was stopped to save the system; it now says to install Huginn OS first. After a download
+  the model is started once ("Checking it starts…"): if the graphics card can't run it, it tries the processor and
+  switches to it, and anything else shows the engine's own words.
+- **Code**: right-click the files panel (empty space or the heading) for the project folder's menu: New File Here, New
+  Folder Here, Open Terminal Here, Copy Path, Show in Files; folders and files get theirs (Rename…, Move to Trash). The
+  toolbar is two islands, New File · Search · Terminal · Split, then Debug · Run, so a fast double click on Terminal
+  can't land on Run.
+- **Easel lagged while painting**: every pointer move updated the "x, y px" readout through Easel's one big signal,
+  which made the Layers panel rebuild with its thumbnails each time (182 ms a painting step, measured with the whole
+  window offscreen; 3 ms now). The readout has its own signal, and while a brush stroke goes on only the patch its new
+  dabs touched (and the brush's outline) is drawn again on the canvas.
+- **Settings › Storage** (new): the drive (apps, games, what apps share, everything else, free), every app you
+  installed with the space it takes (the app and what it keeps in your home), biggest first, each with Uninstall
+  (keeping or deleting what it saved), Remove Unused for runtimes left behind, and Steam's games from Steam's own
+  records (Uninstall asks Steam). `apps/huginn_storage.py`; 13 checks.
+- **An app just installed was slow to open the first time**: Flatpak sets up its sandbox and fontconfig reads every font
+  on an app's first start. The App Store now does that quietly at low priority right after an install, the image's
+  font cache is brought up to date last (`config/hooks/44-font-cache.sh`), and an app opened from the start menu or
+  Search gets a tile in the dock with its starting ring at once (up to 25 s), not only once its window shows.
+- **The App Store is in the dock** from the start (before Settings; docks set up before get it once).
+- **Widgets**: right-click the desktop › Edit Widgets: each gets a button to take it off and arrows to move it, and the
+  rest can be added from the list under them; Settings › Desktop & Dock › Widgets turns each on or off. New: Clock,
+  Calendar (this month, today marked), System (processor, memory, drive), Now Playing (with its controls) and Photo (a
+  picture from Pictures, a new one each hour), beside Weather, Privacy Report and Up Next. The desktop's menu also has
+  Change Wallpaper… and Desktop & Dock Settings….
+- **The control centre** is as tall as what's in it (it ran to the bottom of the screen), with you and Screenshot,
+  Lock and Settings at the top, switches that light up when on (Dark wide beside Do Not Disturb when there's no night
+  light), bigger sliders with their level, what's playing, the realm and the app menus in one card, and the
+  notifications under them.
+- **The dock's pop-ups** (an app's windows, the live island, names, the browser's tabs) sit above the dock again, not
+  past the bottom of the screen; the part of their surface over the dock lets clicks through to it.
+- **Japanese, Chinese and Korean text** showed as boxes: Noto CJK is in the image.
+- **The pointer copies in a photo** of the control centre were the camera catching the pointer as it moved, not the
+  screen. Looking for them turned up one real fault nearby, fixed: the HDR pass turned a line beside each damaged part
+  a second time every frame. (`HUGINN_SOFT_POINTER=1` makes the nested session draw the pointer itself, for testing.)
+
+## System Monitor, redesigned (2026-11-20)
+
+Not a copy of another desktop's any more: Huginn's own, and easier to read. `apps/huginn_monitor.py` (new; the old
+backend in `huginn_app.py` went) and `apps/qml/Monitor.qml`.
+
+- **Five live cards** across the top: Processor, Memory, Graphics, Disk and Network, each with its number, a line
+  under it (speed and heat, how much of how much, read and write, down and up) and its last two minutes. A card opens
+  it in Performance.
+- **Apps** (the start): what's running put together the way you think of it. An app and its helpers are one row with
+  its icon (the browser's 17 processes are Huginn; a Huginn app by its name; a Flatpak by its sandbox; a Steam game
+  by its own name, from Steam's records), unfolding to its processes. Then the session's helpers (Background), named
+  and said what they do (the compositor, the shell, PipeWire…), then other users' and the system's (System, folded).
+  Columns: processor (a share of the whole processor, so the rows add up to the card), memory (what each has to
+  itself plus its share of what's shared, PSS), **graphics** (the share of the card's time, from the driver's
+  per-process counters) and disk. Bigger numbers are tinted so they stand out.
+- **Processes**: every process with its number, owner, processor, memory, graphics, disk and threads, sorted by any of
+  them, yours or everyone's, each with the app it belongs to beside its name.
+- **Performance**: the last two minutes large, with a key, then: the processor's model, speed now and top speed,
+  temperature and each thread's use; what memory holds (in use, cache, free, available, compressed swap) and why the
+  cache isn't lost; the graphics card's busy, video memory, temperature, power against its limit, clocks and fan; each
+  drive (model, kind, size, how busy, reading and writing, how full each place on it is); each connection (kind,
+  address, down and up, since it started). Under each, what's using it the most.
+- **Doing something about it**: select a row for End App or End Process and More…; right-click for Pause or Resume,
+  Run in the background (lower priority) or Normal priority, Show program location, Details and Force stop. Ending an
+  app ends its helpers too. Search finds an app or a process by name or number.
+- Read every two seconds on a thread of its own, so the window never waits; checked against this machine's /proc,
+  in the nested session (real icons and grouping) and in a preview of a gaming afternoon, dark and light. The start
+  menu finds it as task manager, processes or activity too.
+
+## Startup programs, and apps running in the background (2026-11-20)
+
+- **Programs set to start when you sign in now start.** Huginn's session never ran `~/.config/autostart`, so Steam's
+  and Discord's "start with the computer" and Settings › Default Apps › Start-up apps did nothing.
+  `apps/huginn_autostart.py` (new) runs from `huginn-session-apps` four seconds into the session: yours, and the
+  system's own entries that are for this desktop and that Huginn doesn't do another way (its own password prompt,
+  network, sound, the accessibility bus, KDE Connect on demand…). It follows the XDG rules (Hidden, GNOME's off switch,
+  OnlyShowIn/NotShowIn, TryExec, the file conditions, delays) and starts each in a session of its own.
+- **How heavy each is**, as Windows' Task Manager has it: a minute after sign-in, each program's processor time and
+  disk reading (everything it started, found by its session) are added up: High over a second of the processor or 3 MB
+  read, Medium over 0.3 s or 300 KB, else Low. Kept in `~/.local/state/huginn/startup.json`.
+- **System Monitor › Startup**: each sign-in program with its switch, its impact badge, what it cost at sign-in and
+  what it uses now, why one won't start (not installed, another desktop's, a terminal). More…: Details, Show where it's
+  set up, Remove from sign-in (yours; the system's own can only be turned off, for you, the XDG way). Add an App… opens
+  Settings › Default Apps. 22 checks, including a real run that measures a busy program High and an idle one Low.
+- **Control centre › Running in the background**: apps still running with no window (closed to the tray: Discord,
+  Steam; or watching: Mail). Click one for its window again; right-click for Open, Quit and Force Quit, or the × that
+  shows on hover. Quit asks the app to close (Steam with its own `-shutdown`, so it closes cleanly); Force Quit stops
+  it and what it started at once.
+
+## Tray icons, lighter pop-ups, and a pass over the apps (2026-11-21)
+
+- **Tray icons work.** Nothing in the session answered for the StatusNotifier tray, so Steam, Discord and the like
+  had nowhere to put their icon when you closed them. The shell is now the tray (`shell/huginn_tray.py`: the watcher
+  and the host), and those apps show in Control centre › Running in the background with their own icon, their own
+  menu on right-click (with its submenus and checkmarks) and their own action on click. An app whose window you closed
+  is matched to its tray icon by its process, or for a Flatpak by its sandbox, so it shows once.
+- **The control centre, Today, the menus and the start menu are lighter.** Each covers the whole screen (so a click
+  beside it closes it), and the compositor used to blur the whole screen behind it again whenever anything moved
+  there — a video, a live wallpaper, a game. Now the shell tells the compositor where each pop-up's glass actually is
+  (as it's drawn, sliding and fading), and only that is blurred (`look.rs`: `Backdrop`; the D-Bus `SetGlass`). Search
+  still blurs the whole screen, on purpose.
+- **A pass over every app, dark and light.** System Monitor's preview showed "NaN%" for its apps (a comment that ate
+  half a line), and numbers that aren't numbers now show as "–" anywhere in it. Weather's week puts each day's low by
+  the bottom of its bar, not halfway up. Settings' list scrolls to the page that's open (About, Users… were below it).
+- **The top bar reads in the light appearance.** Its text floats on the wallpaper, and every realm's scene stays dusky
+  in the light appearance, so its dark text was hard to see. The shell measures how light the wallpaper is under the
+  bar (the realm's still, your picture, a made wallpaper's picture or scene, darkened as it is) and turns the bar to
+  glass where the text wouldn't read: dark text on a dusky scene, light text on a bright picture.
+- **Day stills.** Each realm now has a still of its light appearance too (`stills/<realm>-day.jpg`, painted by
+  `scripts/make-live-wallpapers.py` with the light appearance's tints, as the shell gives the scene), shown where
+  there's no graphics card (a virtual machine) instead of the night — which had left the light appearance's dark
+  text on a dark desktop there.
+- The shell's design preview opens the app menu with `--menus` again (it had stopped doing anything).
+- Tray icons without a picture show their first letter (the shell's smoke test caught the demo's missing icons).
+
+## Restore points, layouts on every screen, sync, and settings per game (2026-11-21)
+
+- **Undo for updates: restore points.** Huginn OS now installs onto btrfs, in subvolumes: `@` the system, `@home` your
+  files, `@snapshots` and `@swap` (the installer engine; zstd compression; the swap file made by btrfs itself). Before
+  apt or Software Update changes anything, `huginn-snapshot` (`apps/huginn_snapshots.py`, run from an apt hook) takes
+  a read-only snapshot of the system, at most one every ten minutes and never stopping apt; the newest six are kept,
+  with the ones you make yourself and the installer's "Just installed". Settings › Software Update lists them: Go Back
+  to This (through polkit, `org.huginn.snapshot`), then a restart. If the computer won't start, the start-up menu has
+  "Huginn OS restore points": an initramfs script (`huginn.undo=N`) moves the system aside and puts a writable copy of
+  the restore point in its place before anything is mounted. Going back never touches `@home`, and keeps what was there
+  as `@before-undo-<time>` until you remove it. Encrypted installs keep a copy of each restore point's kernel in /boot.
+  Tested on loop disks: the tool's 17 checks, the installer's btrfs steps, and the start-up menu's swap.
+- **Snap layouts on every screen, and window sets (Super+Z).** Layouts opens for the window in front: six templates of
+  parts (halves, thirds, the middle third, two thirds and a third, quarters, top and bottom) on any of your screens,
+  and Fill the screen. Window sets remember where every window is on every screen under a name and put them all back
+  later, starting the apps that aren't open. A part narrower than a window can be drawn is widened to its minimum size
+  instead of cutting the window off (Writer in a third of a small screen). The compositor gained the new parts and
+  `snap:<part>@<screen>` / `place:<screen>:x,y,w,h` on D-Bus; the panel is frosted like the other pop-ups.
+- **Huginn sync (Settings › Sync).** Notes, Reminders and Huginn OS's settings, across your computers, in the same
+  group as the browser's Bifröst sync (Favorites, Reading List, passwords, open tabs): the same key (in the keyring),
+  the same folder you choose (Syncthing, Nextcloud, a network share, a USB stick), each device writing only its own
+  sealed file, so nothing there ever conflicts. `apps/huginn_sync.py` carries the browser's sealing and merging
+  unchanged (ci-smoke checks both read each other's files), runs from the session's helpers when something changes,
+  and keeps both versions of a note changed on two computers at once (by the version each was changed from). A
+  computer that joins takes the group's settings; screens and hardware settings stay with their computer. Pairing keys
+  (HB1-/HB2-) work both ways between Settings and the browser.
+- **Volume per app.** Under the control centre's sound slider, Apps lists everything playing sound with its own slider
+  and mute (PipeWire through pactl).
+- **Settings per game.** Frame-rate cap, FSR upscaling, GameMode and, for Steam games, the Proton version, kept for each
+  game and applied however it's started (a small `huginn-game` wrapper in Steam's launch options, written into Steam's
+  own settings only while Steam is closed).
+
+## A full install tested, dictation, earlier versions of files (2026-11-21, later)
+
+- **A whole install, tested start to finish.** The new ISO's system was installed by the installer engine onto a
+  virtual disk, started in a virtual PC (btrfs root in `@`, GRUB finding it, the desktop and the Welcome tour), then
+  sent back to its "Just installed" restore point through the start-up menu's entry: the system came back as it was,
+  what had been there was kept as `@before-undo-…`, and the finishing service recorded it. Two fixes came out of it:
+  apt's restore-point hook ran inside the installer (an extra, half-installed restore point, with the live session's
+  kernel named), so it now stays quiet while Huginn OS is being installed (`HUGINN_INSTALLING`); and a restore point
+  names a kernel that's actually in its /boot.
+- **Dictation (Super+H).** Talk, and what you say is typed where you're typing (`apps/huginn_dictate.py`). It listens
+  through PipeWire and ends by itself after a pause (or Super+H again, or Done in the live island), then whisper.cpp
+  turns it into text on this computer and it's typed in as the emoji picker types. whisper.cpp's `whisper-cli` (MIT,
+  v1.9.5) is built into the image for any processor with AVX2: one 3 MB program. Its speech models are downloaded
+  when chosen in Settings › Keyboard & Mouse › Dictation (Quick 142 MB, Balanced 466 MB, Accurate 547 MB), checked
+  against whisper.cpp's published SHA-1, into the folder Clips also uses for captions.
+- **Earlier versions of your files.** Every hour (a system timer) `huginn-snapshot home` takes a read-only snapshot of
+  `@home` into `/home/.versions` — inside it, so each person reads their own files with their own permissions — and
+  thins them: every one from the last day, then one a day for a week, fewer when the disk is short. The installer
+  makes `~/.cache`, Steam's folder and Flatpak apps' data subvolumes of their own, so snapshots never hold on to a
+  deleted game. Files: right-click › Earlier Versions…, with Open and Put Back a Copy (nothing is replaced).
+- **Calendar and Contacts in Sync**, by event and by card; Calendar and Contacts now take in changes from outside
+  (another computer, another window) whole, not only additions, so nothing removed elsewhere comes back.
+- **What's new for 0.4**, after updating: layouts, dictation, earlier versions and sync. The first tour mentions
+  Super+Z and Super+H.
+
+## Ideas from Googlebook, done Huginn's way (2026-11-21, evening)
+
+- **Look Up (Super+A)**, like Circle to Search: the screen freezes, you circle or drag over anything (or click on
+  words), and its words are read on this computer with tesseract (as Scan uses). Copy Text, Translate (opens
+  Translate), Search the Web (in Huginn), Copy or Save Picture, or ask Huginn AI about it. The picture comes from the
+  compositor's Capture before the window shows (`apps/huginn_lens.py`, `Lens.qml`); copying goes through wl-copy, so
+  it stays after the window closes. Also on a screen corner.
+- **Dictation, tidied.** Settings › Keyboard & Mouse › Dictation › Tidy it up: what you said goes through Huginn AI
+  before it's typed (punctuation, paragraphs, no filler, lists where you listed things), like Googlebook's Rambler.
+  On this computer with a local model; what was heard is typed if it can't.
+- **Summaries in Files.** Quick Look on a document, PDF or text file has Summarize (Huginn AI); summaries are kept
+  until the file changes. `Files.doc_text` reads Word, OpenDocument, PowerPoint, PDF, HTML and text.
+- **Notification history.** The Control Centre's History: every notification of the last week, grouped by day.
+  Clear all now empties the list and keeps the history; Settings › Notifications › Keep a history turns it off.
+- **Screen corners.** Each corner of your screens can open the Overview, show the desktop, open the start menu, the
+  Control Centre, Today, Search or Look Up, start the screen saver, or lock. Only the outer corners of all your
+  screens together count, so crossing from one screen to the next never sets one off. (The old top-right hot corner
+  carries over.)
+- **Screen savers.** The time (drifting a little every minute), your photos (crossfading, from Pictures, screenshots
+  left out) or the realm's scene, after 1–30 minutes left alone and before the screen dims; never over a film, a game
+  or while an app keeps the screen on. The session daemon starts it (org.huginn.Shell.Key "saver"); Settings ›
+  Appearance has a Preview.
+- Huginn AI's new places (Dictation, Files, Look Up) each have their switch in Settings › AI › Where it shows, and a
+  one-shot call (`huginn_ai.ask_once`) for tools without a window of their own.
+
+## Shortcuts at a glance, live captions, the wallpaper's colour (2026-11-21, afternoon)
+
+- **Hold Super to see every shortcut.** The compositor notices Super held on its own for 0.7 s (`sheet_later` in
+  `input_handler.rs`) and tells the shell (`keys-show`); letting go, another key or a click hides it, and that Super
+  no longer opens the start menu. The sheet (`KeysSheet.qml`) reads Settings › Keyboard Shortcuts as they are
+  (`huginn_system.shortcut_sheet`), with your own shortcuts last, grouped into as many columns as the screen takes. It
+  takes no clicks and no keys, so a shortcut pressed while it shows works. Settings › Keyboard Shortcuts › Hold Super
+  to see them all turns it off.
+- **Live captions (Super+Ctrl+L, the Control Centre, Settings › Accessibility).** `apps/huginn_captions.py` reads what
+  the speakers play (PipeWire's monitor of the default output: `pw-record` with `stream.capture.sink`, which the
+  privacy dot doesn't count as the microphone), cuts it where the speech pauses or every 5 s, and has whisper-cli
+  write each piece out with the quickest of dictation's models (greedy, no second tries, the last words as its
+  prompt); pieces that wait meanwhile go together, so it never falls far behind. Whisper's stock lines for music
+  and silence are dropped. The shell (`huginn_livecaptions.py`) runs it while Settings says captions are on and shows
+  the last two lines in `CaptionBar.qml`: a dark bar over everything (full-screen games and films too), dragged
+  anywhere and kept there; only the bar takes the pointer. Text size, model and Put Back are in Accessibility.
+- **Accent colour from the wallpaper.** Settings › Appearance › Accent colour: the realm's, or From wallpaper.
+  `huginn_shell.wall_accent` reads the wallpaper small (a 48-pixel-wide decode) and finds the hue its vivid,
+  middling-bright parts are most about; `accent_colour` makes that bright enough for the dark text on it in dark
+  mode, deep enough for white text in light mode (contrast 5:1 and 3.6:1). A picture, a live wallpaper's picture or
+  scene, or the realm's still; a grey one keeps the realm's. Every process works it out the same way (cached by the
+  picture's time), so the shell and Settings change together, and each app keeps its own colour.
+- What's new (0.5) shows these after an update; the first tour mentions holding Super.
+
+## Every app gone over (2026-11-21, evening)
+
+How it was checked, so it can be done again: a harness (not in the kit) loads each app with its sample content and
+(1) checks every `Backend.x`, `Settings.x`, `Theme.t.x` and glyph name its QML uses against the Python object behind
+it, and every menu item against the window's functions; (2) presses everything clickable for half a minute, every
+Settings page included, collecting QML errors and Python tracebacks. The shell's QML got the first check too.
+
+Bugs it found, fixed:
+- **Slides: the resize, line-end and turn handles did nothing.** Inside the handles `layer` meant the item's own
+  `layer` property, not the slide layer's id (renamed `slideLayer`).
+- **Settings › Keyboard & Mouse: adding or removing a keyboard layout failed** (a list from QML reaches a `QVariant`
+  slot wrapped; `setKeyboard` now unwraps it).
+- **Rows that close their own sheet** ran the rest of their handler in a context that was gone, so the action never
+  happened: Contacts' and Passwords' and Money's and Feeds' recent-file import, Easel's New from a preset size, Code's
+  Open Folder from the list, Mail's move-to-folder, Translate's language choice, Settings › Online Accounts' Sign In
+  Again.
+- Code: This File's History showed the whole project's (`relOf` didn't exist), and errors when the last file closed.
+- Media Player: a video opened from Files didn't play, the next one didn't follow, and there were no keys at all.
+- Music: clicking a row moved the "now playing" mark without playing; searching changed which song Next went to.
+- Photos: no keys at all (← → Esc now browse). Terminal: closing the last tab raised errors; Money, Clock, the
+  text boxes' focus warning. Menu items that were hidden because their function was missing now work: Terminal ›
+  Find, Monitor › Your programs / All programs, the office apps' Send by Mail.
+
+Added where an app was missing what such an app has:
+- **Clock: alarms** (`apps/huginn_alarms.py`), rung by the live island with Stop and Snooze whether or not Clock is
+  open, with a sound that repeats until stopped (a finished timer rings the same way now); your own world-clock
+  cities; timer lengths you type.
+- **Calculator:** scientific keys and functions (powers, roots, trig in degrees or radians, logs, factorials, π, e),
+  implied multiplication, copy and paste, history kept between openings.
+- **Media Player:** keys for everything, speed, repeat, subtitles from a file beside the video, carrying on where a
+  long video was stopped, dropping files on the window. **Music:** each file's own tags and length (ffprobe, in the
+  background, kept), shuffle, repeat, a queue that survives searching.
+- **Terminal:** selecting with the mouse (word on double-click), copy of the selection, Find, text size.
+  **Photos:** a slideshow. **Podcasts:** a sleep timer. **Writer, Sheets, Slides:** Send by Mail as PDF.
+- Scan and Clips open about half a second sooner: OpenCV is brought in when first needed (`huginn_lazy.py`).
+
+## The desktop, loosened (2026-11-21, night)
+
+- **Widgets anywhere.** While editing, a widget drags to any spot; it's kept as parts of its screen
+  (`Settings.widgetPlaces`: kind → screen, x, y), so it survives a change of resolution, and the shell draws one
+  `Widgets { only: [kind] }` per placed widget on its screen (a widget whose screen is gone waits on the main one).
+  With several screens a button sends it to the next. The column on the main screen holds the rest.
+- **The start menu searches everything.** Typing asks Search's own data (`SearchData.find`, 140 ms after the last
+  key) and lists an answer, Settings pages and files under the apps; arrows and Enter work through both.
+- **Files on the desktop.** `Stacks` (huginn_stacks.py) reads and watches the Desktop folder; `DesktopIcons.qml` lays
+  the files on a grid from the top right, keeps where each was dragged (`desktop-icons.json`), drags them out as
+  files and takes files dropped in. The desktop's menu gained New Folder, and a file's own Open / Show in Files /
+  Move to Trash.
+- **Quick tiles you arrange** (`Settings.quickTiles`, eight kinds) in the Control Centre.
+- **A dock on every screen** (`Settings.dockEverywhere`): the other screens show stand-in docks, and the one real
+  dock (whose islands, live island and stacks open over it) trades places with a stand-in the moment the pointer
+  reaches it. Not yet tried on real second and third screens: the nested test session has one.
+
+## The top bar as islands (2026-11-21, late)
+
+Concept "M6" from the desktop mockups. `TopBar.qml` draws three `Glass` cards behind what it already held (orb and
+date; the app and its menus; status), and the bar grows from 30 to 40 px (`shell.barH`) so they have air.
+`LiveIsland` gained a `slim` form (one line, no buttons, 28 px) that sits in the middle of the main screen's bar;
+`LivePanel` hangs under it (`fromTop`) from a top-anchored surface whose input region is just the panel.
+`Settings.barStyle` ("islands" | "plain") and `Settings.liveAt` ("top" | "dock") choose; with "dock" the island and
+its panel are where they were, at the dock's right end. A filled app sharing the bar's row ("M8") was built, tried and turned down (off: `SHARE_BAR_ROW` in
+`apps/huginn_menu.py`); how it works, should it come back: `GlassWindow` apps
+tell the shell they can (`org.huginn.Shell.Lift`), the shell passes their ids to the compositor (`DockLayout`:
+`liftApps`), and `maximize_request` lets those windows reach up behind the bar. The shell writes where its islands end
+to `$XDG_RUNTIME_DIR/huginn/bar.json`; `AppMenu.bar` watches it and `GlassWindow.lifted/topY/liftLeft/liftRight`
+place the title island (now just the three buttons) and the tool island in the row; each app's own top islands use
+`win.topY`. The bar's surfaces take the pointer only on their islands (`Status.setInputRects`), so the app's islands
+between them are clickable, and the live island goes `tiny` meanwhile.
+
+## Huginn, the browser
+
+Inside the Huginn repository (this kit is its `os/` folder) the image ships the repository's own browser. A kit used
+on its own ships Huginn from `vendor/huginn` (the commit is in `vendor/huginn/SOURCE`); to move it to a newer Huginn:
+`scripts/update-huginn.sh /path/to/Huginn`, then rebuild.
+
+- Installed to `/usr/share/huginn`, started by `/usr/bin/huginn`, and set as the default browser.
+- It uses the system's Python and Qt WebEngine (`config/package-lists/50-huginn-browser.list`), not a
+  private copy fetched with pip, so engine security fixes come with system updates.
+- The per-user installer (`Install Huginn (Linux).sh`) is left out of the image.
+- Sandbox: Ubuntu blocks unprivileged user namespaces for programs without an AppArmor profile, and the
+  browser engine needs them. `/etc/apparmor.d/huginn` grants that to `/usr/bin/huginn`, which is why the
+  launcher is a Python script and not a shell wrapper. A live session loads no profiles, so
+  `casper-bottom/98huginn_live_userns` lifts the block there (Ubuntu's own live images do the same).
+- Huginn's own "make me the default browser" check only looks for a per-user install, so inside
+  Huginn OS that setting is not shown; the system default already points at Huginn.
