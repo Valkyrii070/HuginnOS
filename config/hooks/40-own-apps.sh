@@ -5,9 +5,10 @@ set -e
 update-alternatives --install /usr/bin/x-terminal-emulator x-terminal-emulator /usr/bin/huginn-terminal 60
 update-alternatives --set x-terminal-emulator /usr/bin/huginn-terminal
 
-# Programs Huginn's own apps use behind the scenes (Screen Sharing uses FreeRDP, the look uses Kvantum), and KDE
-# Connect's windows on a system that had it before Phone's own link, stay out of the start menu: a copy with NoDisplay in /usr/local/share, which comes first, so the
-# packages' own files are untouched and the programs still run.
+# Programs Huginn's own apps use behind the scenes (Screen Sharing uses FreeRDP), and KDE Connect's windows and
+# Kvantum's manager on a system that had them before Phone's own link and Huginn's own Qt look, stay out of the start
+# menu: a copy with NoDisplay in /usr/local/share, which comes first, so the packages' own files are untouched and
+# the programs still run.
 mkdir -p /usr/local/share/applications
 for f in org.kde.kdeconnect.app org.kde.kdeconnect.nonplasma org.kde.kdeconnect.sms sdl-freerdp kvantummanager; do
     src=/usr/share/applications/$f.desktop

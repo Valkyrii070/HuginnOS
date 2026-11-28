@@ -626,8 +626,8 @@ def unstick(shell, on_screen=None) -> None:
 
 
 def follow_look(settings) -> None:
-    """Everyone else's apps wear the realm too (apps/huginn_look.py: Kvantum and KDE colours for Qt, Breeze-GTK in
-    Huginn's colours for GTK). Done off the main thread: it runs a couple of small programs."""
+    """Everyone else's apps wear the realm too (apps/huginn_look.py: Huginn's own Qt look and KDE colours for Qt,
+    Huginn's GTK theme in the realm's colours for GTK). Done off the main thread: it runs a couple of small programs."""
     import threading
     for d in (HERE.parent / "apps", Path("/usr/share/huginn-apps")):
         if (d / "huginn_look.py").exists() and str(d) not in sys.path:

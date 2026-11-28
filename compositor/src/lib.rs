@@ -24,6 +24,7 @@ pub mod drawing;
 pub mod focus;
 pub mod frames;
 pub mod gamemode;
+pub mod gtkshell;
 pub mod huginn;
 pub mod input_handler;
 pub mod look;

@@ -21,6 +21,8 @@ serde = "1"
 libc = "0.2"
 zbus = { version = "5", default-features = false, features = ["blocking-api", "async-io"] }
 ab_glyph = "0.2"
+# GTK's own protocol (gtkshell.rs: resources/gtk-shell.xml), made into Rust as Smithay's protocols are
+wayland-scanner = "0.31.11"
 # Screen Sharing: this screen over RDP (rdp.rs), with Network Level Authentication (CredSSP)
 ironrdp-server = { version = "0.13", default-features = false, features = ["helper"], optional = true }
 tokio = { version = "1", default-features = false, features = ["rt", "net", "sync", "time", "macros"], optional = true }

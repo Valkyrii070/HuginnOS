@@ -29,14 +29,14 @@ plasma-session-wayland
 kscreen
 # Papirus: replaced by Huginn's own icon theme (2026-11-19)
 papirus-icon-theme
-# KDE's desktop portal and its integration for Qt apps: Huginn's portal and GTK's answer apps, and qt6ct carries
-# Huginn's look and Open and Save windows to Qt apps (2026-11-27)
+# KDE's desktop portal and its integration for Qt apps: Huginn's portal and GTK's answer apps, and Huginn's own Qt
+# look carries Huginn's look and Open and Save windows to Qt apps (2026-11-27)
 xdg-desktop-portal-kde
 plasma-integration
 kde-cli-tools
 kio-extras
 kde-config-gtk-style
-# KDE's Breeze style for Qt and for GTK, and what came with it: Kvantum and Huginn's own GTK 3 theme do their work
+# KDE's Breeze style for Qt and for GTK, and what came with it: Huginn's own Qt look and GTK 3 theme do their work
 # (Breeze's icons and pointers stay: 20-desktop.list) (2026-11-27)
 breeze
 breeze-gtk-theme
@@ -50,3 +50,10 @@ kdeconnect
 plasma-desktoptheme
 # KDE's RDP server: Screen Sharing is the compositor's own now (compositor/src/rdp.rs) (2026-11-27)
 krdp
+# qt6ct and Kvantum: Huginn's own Qt look (qt/: a platform theme and a widget style) does their work, and puts Qt
+# apps' menu bars in the top bar (2026-11-27)
+qt6ct
+qt6-style-kvantum
+qt6-style-kvantum-l10n
+qt6-style-kvantum-themes
+qt-style-kvantum-themes

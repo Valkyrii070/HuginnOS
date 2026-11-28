@@ -15,7 +15,8 @@ when it is built; this does the same on a running system, from a newer commit of
 What it will not touch: your files; settings you changed (a few system settings files, listed in YOURS, are only
 replaced while they are still exactly what Huginn OS put there); Ubuntu's packages (Software Update's System part).
 The compositor is a compiled program: it is replaced only when the tree carries a ready-built one for exactly its
-compositor sources (prebuilt/), else it is left as it is and that is said.
+compositor sources (prebuilt/), else it is left as it is and that is said. Huginn's Qt look (qt/: the platform
+theme and widget style other apps' Qt loads) is the same, and also only for the Qt this system has.
 
 Trust: the tree is fetched over HTTPS from the one repository and branch named in a root-owned file, by commit, and
 nothing else is asked. It is not signed: this trusts GitHub and whoever can push to that branch.
@@ -292,9 +293,6 @@ def tree_hash(*folders: Path) -> str:
 def make_theme(kit: Path, root: Path, out: Path, runner=run) -> bool:
     """The look's files from the tree's tokens (tokens/gen_theme.py), into `out`. False when it couldn't be made."""
     argv = [sys.executable, str(kit / "tokens/gen_theme.py"), str(kit / "tokens/tokens.json"), str(out)]
-    kvantum = Path(root) / "usr/share/Kvantum"
-    if (kvantum / "KvAdaptaDark/KvAdaptaDark.svg").is_file():      # (Qt apps' style is KvAdapta's drawing recoloured: only where it is installed)
-        argv.append(str(kvantum))
     code, _text = runner(argv, 300)
     return code == 0 and (out / "color-schemes").is_dir()
 
@@ -326,10 +324,8 @@ def wanted_files(kit: Path, theme: Path = None) -> dict:
         for f in (theme / "qml").glob("*"):
             if f.is_file():
                 out[f"usr/lib/x86_64-linux-gnu/qt6/qml/org/huginn/tokens/{f.name}"] = (f, 0o644)
-        for d in (theme / "kvantum").glob("*/"):
-            for f in d.glob("*"):
-                if f.is_file():
-                    out[f"usr/share/Kvantum/{d.name}/{f.name}"] = (f, 0o644)
+        for f in (theme / "qt").glob("*.conf"):
+            out[f"usr/share/huginn-os/qt/{f.name}"] = (f, 0o644)
         made = theme / "_made"                                     # the three settings files the image writes from the look
         made.mkdir(exist_ok=True)
         aurora = theme / "color-schemes/HuginnAuroraDark.colors"
@@ -345,9 +341,12 @@ def wanted_files(kit: Path, theme: Path = None) -> dict:
                     keep.append(line)
             (made / "kdeglobals").write_text(out["etc/xdg/kdeglobals"][0].read_text(encoding="utf-8") + "\n".join(keep) + "\n", encoding="utf-8")
             out["etc/xdg/kdeglobals"] = (made / "kdeglobals", 0o644)
-        (made / "kvantum.kvconfig").write_text("[General]\ntheme=HuginnAuroraDark\n", encoding="utf-8")
-        out["etc/xdg/Kvantum/kvantum.kvconfig"] = (made / "kvantum.kvconfig", 0o644)
-        (made / "settings.ini").write_text("[Settings]\ngtk-theme-name=Breeze\ngtk-icon-theme-name=Huginn\ngtk-application-prefer-dark-theme=true\ngtk-font-name=Inter Variable 10\n", encoding="utf-8")
+        qt = theme / "qt/HuginnAuroraDark.conf"
+        if qt.is_file():                                           # Qt apps' look until the shell writes each person's
+            text = qt.read_text(encoding="utf-8")
+            (made / "qt.conf").write_text(QT_DEFAULT + text[text.index("[Colours]"):], encoding="utf-8")
+            out["etc/xdg/huginn/qt.conf"] = (made / "qt.conf", 0o644)
+        (made / "settings.ini").write_text("[Settings]\ngtk-theme-name=Huginn\ngtk-icon-theme-name=Huginn\ngtk-application-prefer-dark-theme=true\ngtk-font-name=Inter Variable 10\n", encoding="utf-8")
         for v in ("3.0", "4.0"):
             out[f"etc/gtk-{v}/settings.ini"] = (made / "settings.ini", 0o644)
     return out
@@ -369,6 +368,50 @@ def compositor_ready(kit: Path) -> tuple:
     if hashlib.sha256(binary).hexdigest() != note.get("sha256") or binary[:4] != b"\x7fELF":
         return None, "the ready-built compositor isn't the one its note describes"
     return binary, ""
+
+
+QT_PLUGINS = "usr/lib/x86_64-linux-gnu/qt6/plugins"
+QT_PARTS = {"theme": f"{QT_PLUGINS}/platformthemes/libhuginntheme.so", "style": f"{QT_PLUGINS}/styles/libhuginnstyle.so"}
+QT_DEFAULT = "; Huginn OS: Qt apps' look until the shell writes each person's own (~/.config/huginn/qt.conf)\n[Look]\nscheme=dark\nicons=Huginn\nfont=Inter Variable,10\nfixed=JetBrains Mono,10\n\n[Menus]\ntop_bar=true\n\n"
+
+
+def qt_version(root) -> str:
+    """The Qt this system has ("6.10.2"), from dpkg's records, or ""."""
+    try:
+        status = (Path(root) / "var/lib/dpkg/status").read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return ""
+    for block in status.split("\n\n"):
+        if re.search(r"^Package: libqt6core6(t64)?$", block, re.M) and re.search(r"^Status: install ok installed$", block, re.M):
+            found = re.search(r"^Version: (?:\d+:)?(\d+\.\d+\.\d+)", block, re.M)
+            if found:
+                return found.group(1)
+    return ""
+
+
+def qt_ready(kit: Path, root) -> tuple:
+    """({path on the system: bytes} of the ready-built Qt look in a tree, or {}; why not). It must be for exactly
+    the tree's qt/ sources and for this system's Qt (the same major and minor version: the platform theme uses Qt's
+    own inner interfaces), and be the bytes its note says."""
+    kit = Path(kit)
+    note = read_pairs(kit / "prebuilt/huginn-qt.for")
+    if not note:
+        return {}, "this update carries no ready-built Qt look"
+    if note.get("sources") != tree_hash(kit / "qt"):
+        return {}, "the Qt look's sources changed after its ready-built copy was made"
+    have = qt_version(root)
+    if not have or have.split(".")[:2] != note.get("qt", "").split(".")[:2]:
+        return {}, f"the ready-built Qt look is for Qt {note.get('qt', '?')}, and this system has {have or 'no Qt'}"
+    out = {}
+    for part, rel in QT_PARTS.items():
+        try:
+            data = lzma.decompress((kit / f"prebuilt/huginn-qt-{part}.xz").read_bytes())
+        except (lzma.LZMAError, OSError, EOFError):
+            return {}, "the ready-built Qt look couldn't be unpacked"
+        if hashlib.sha256(data).hexdigest() != note.get(f"{part}_sha256") or data[:4] != b"\x7fELF":
+            return {}, "the ready-built Qt look isn't the one its note describes"
+        out[rel] = data
+    return out, ""
 
 
 def plan(kit: Path, root, theme: Path = None) -> dict:
@@ -401,7 +444,7 @@ def plan(kit: Path, root, theme: Path = None) -> dict:
         for f in sorted(here.iterdir()) if here.is_dir() else []:
             if f.is_file() and f.name.endswith(endings) and f"{folder}/{f.name}" not in want:
                 remove.append(f"{folder}/{f.name}")                # a module or a page this version no longer has
-    looks = ("usr/share/color-schemes/", "usr/share/huginn-os/gtk/", "usr/lib/x86_64-linux-gnu/qt6/qml/org/huginn/tokens/", "usr/share/Kvantum/")
+    looks = ("usr/share/color-schemes/", "usr/share/huginn-os/gtk/", "usr/lib/x86_64-linux-gnu/qt6/qml/org/huginn/tokens/", "usr/share/huginn-os/qt/")
     held = {rel: was for rel, was in old.items() if rel.startswith(looks)} if theme is None else {}       # the look couldn't be made: its files stay
     for rel, was in old.items():                                   # a system file this version no longer ships, still as it was put
         if rel not in want and rel not in held and rel.startswith("usr/") and rel not in remove and (root / rel).is_file() and sha256(root / rel) == was:
@@ -410,7 +453,10 @@ def plan(kit: Path, root, theme: Path = None) -> dict:
     here = root / "usr/bin/huginn-compositor"
     if binary is not None and here.is_file() and hashlib.sha256(binary).hexdigest() == sha256(here):
         binary = None                                              # (already this one)
-    return {"write": write, "remove": remove, "kept": kept, "compositor": binary, "note": note, "want": want, "held": held}
+    qt, qt_note = qt_ready(kit, root)
+    qt = {rel: data for rel, data in qt.items() if not ((root / rel).is_file() and hashlib.sha256(data).hexdigest() == sha256(root / rel))}
+    return {"write": write, "remove": remove, "kept": kept, "compositor": binary, "note": note, "qt": qt, "qt_note": qt_note,
+            "want": want, "held": held}
 
 
 # ------------------------------------------------------------------------------------------------ putting it in place
@@ -436,6 +482,8 @@ def apply_plan(p: dict, root, keep: Path) -> dict:
     work = dict(p["write"])
     if p.get("compositor") is not None:
         work["usr/bin/huginn-compositor"] = (p["compositor"], 0o755)
+    for rel, data in (p.get("qt") or {}).items():
+        work[rel] = (data, 0o644)
     for rel in list(work) + list(p["remove"]):
         dest = root / rel
         if dest.is_file():
@@ -601,7 +649,8 @@ def apply(root, runner=run, log=print) -> dict:
     stamp_release(root, staged["date"])
     failed = after(root, done["written"], done["removed"], kit, runner)
     result = {"sha": staged["sha"], "date": staged["date"], "written": len(done["written"]), "removed": len(done["removed"]), "kept": p["kept"],
-              "compositor": "replaced" if p["compositor"] is not None else (p["note"] or "already this version's"), "failed": failed, "from": have["commit"], "when": int(time.time())}
+              "compositor": "replaced" if p["compositor"] is not None else (p["note"] or "already this version's"),
+              "qt": "replaced" if p.get("qt") else (p.get("qt_note") or "already this version's"), "failed": failed, "from": have["commit"], "when": int(time.time())}
     shutil.rmtree(state_dir(root) / "staged", ignore_errors=True)
     save_state(root, staged=None, applied=result, previous={"commit": have["commit"], "date": have["date"]}, skip="", problem="")
     (state_dir(root) / "ready").unlink(missing_ok=True)
@@ -663,6 +712,27 @@ def make_prebuilt(kit, binary) -> dict:
     return note
 
 
+def make_prebuilt_qt(kit, theme_so, style_so, qt: str) -> dict:
+    """The same for Huginn's Qt look (qt/): its two plugins, noted as being for exactly the tree's qt/ sources and
+    for the Qt they were built with (systems with another major or minor Qt version keep theirs)."""
+    kit, out = Path(kit), Path(kit) / "prebuilt"
+    if not re.fullmatch(r"\d+\.\d+\.\d+", qt or ""):
+        raise Problem("That isn't a Qt version (6.10.2, say).")
+    parts = {"theme": Path(theme_so).read_bytes(), "style": Path(style_so).read_bytes()}
+    if any(data[:4] != b"\x7fELF" for data in parts.values()):
+        raise Problem("Those aren't built plugins.")
+    out.mkdir(exist_ok=True)
+    note = {"sources": tree_hash(kit / "qt"), "qt": qt}
+    note.update({f"{k}_sha256": hashlib.sha256(v).hexdigest() for k, v in parts.items()})
+    if read_pairs(out / "huginn-qt.for") != note or not all((out / f"huginn-qt-{k}.xz").is_file() for k in parts):
+        for k, v in parts.items():
+            (out / f"huginn-qt-{k}.xz").write_bytes(lzma.compress(v, preset=6))
+        (out / "huginn-qt.for").write_text("# Huginn's Qt look (qt/), built for exactly these sources and this Qt.\n"
+                                           + "".join(f"{k}: {v}\n" for k, v in note.items()), encoding="utf-8")
+        note["written"] = True
+    return note
+
+
 # ------------------------------------------------------------------------------------------------ the command
 def main(argv: list) -> int:
     what = argv[0] if argv else "look"
@@ -674,6 +744,9 @@ def main(argv: list) -> int:
             return 0
         if what == "prebuilt" and len(argv) >= 3:                  # prebuilt <tree> <built compositor>
             print(json.dumps(make_prebuilt(argv[1], argv[2])))
+            return 0
+        if what == "prebuilt-qt" and len(argv) >= 5:               # prebuilt-qt <tree> <libhuginntheme.so> <libhuginnstyle.so> <Qt version>
+            print(json.dumps(make_prebuilt_qt(argv[1], argv[2], argv[3], argv[4])))
             return 0
         if what == "look":                                         # anyone may ask
             say(look(root))
@@ -708,6 +781,7 @@ def main(argv: list) -> int:
             print(f"Huginn OS is now {done['date']} ({done['sha'][:7]}): {done['written']} file{'' if done['written'] == 1 else 's'} put in place, {done['removed']} taken away."
                   + (f" Left alone because you changed them: {', '.join(done['kept'][:6])}." if done["kept"] else "")
                   + ("" if done["compositor"] == "replaced" else f" The compositor: {done['compositor']}.")
+                  + ("" if done.get("qt", "replaced") in ("replaced", "already this version's") else f" Qt apps' look: {done['qt']}.")
                   + (f" Not everything afterwards worked: {'; '.join(done['failed'][:3])}." if done["failed"] else ""))
             return 0
         if what == "back":

@@ -1,19 +1,17 @@
 #!/usr/bin/env python3
 """Generate OS theme files from tokens.json.
 
-Usage: gen_theme.py <tokens.json> <output-dir> [<Kvantum themes folder>]
+Usage: gen_theme.py <tokens.json> <output-dir>
 
 Writes, for every realm x {Light, Dark}:
   color-schemes/Huginn<Realm><Mode>.colors   KDE colour scheme (KDE and Qt apps' colours)
   gtk/Huginn<Realm><Mode>.css                named colours for libadwaita (GTK 4)
   gtk/Huginn<Realm><Mode>-gtk3.css           the colours of Huginn's own GTK 3 theme (/usr/share/themes/Huginn)
-  kvantum/Huginn<Realm><Mode>/               a Kvantum widget style for Qt apps (when the Kvantum themes folder is
-                                             given: KvAdapta's drawing, recoloured with the realm and the mode)
+  qt/Huginn<Realm><Mode>.conf                the colours of Huginn's own Qt look (qt/: its platform theme and style)
 and once:
   qml/Tokens.qml                             singleton for the shell's QML (panel, dock, control centre)
 The shell puts the realm's set in place for each user when the realm or dark changes (apps/huginn_look.py).
 """
-import colorsys
 import json
 import re
 import sys
@@ -149,78 +147,19 @@ def gtk3_css(base: dict, tones: dict, danger: str, dark: bool) -> str:
     return "\n".join(lines) + "\n"
 
 
-# Kvantum: KvAdapta's drawing (flat, gently rounded), every colour in it moved onto Huginn's: the greys onto the
-# mode's surfaces (keeping how much lighter or darker each was than KvAdapta's window colour), the cyans and teals
-# onto the realm's accent, the reds onto Huginn's danger colour.
-def _hls(hexv: str) -> tuple:
-    r, g, b = rgb(hexv)
-    return colorsys.rgb_to_hls(r / 255, g / 255, b / 255)
-
-
-def _hex(h: float, l: float, s: float) -> str:
-    r, g, b = colorsys.hls_to_rgb(h % 1.0, max(0.0, min(1.0, l)), max(0.0, min(1.0, s)))
-    return "#%02x%02x%02x" % (round(r * 255), round(g * 255), round(b * 255))
-
-
-def recolour(colour: str, src_window: str, src_accent: str, window: str, accent: str, danger: str) -> str:
-    h, l, s = _hls(colour)
-    if s > 0.35 and l > 0.15:
-        hue = h * 360
-        if 160 <= hue <= 210 or 260 <= hue <= 300:                    # KvAdapta's cyans, teals (and its purple)
-            ah, al, as_ = _hls(accent)
-            sh, sl, _ = _hls(src_accent)
-            return _hex(ah, al + (l - sl), as_)
-        if hue < 20 or hue > 340:
-            dh, dl, ds = _hls(danger)
-            return _hex(dh, dl, ds)
-        return colour
-    wh, wl, ws = _hls(window)
-    _, swl, _ = _hls(src_window)
-    return _hex(wh, wl + (l - swl), ws)
-
-
-def kvantum(name: str, base: dict, tones: dict, danger: str, dark: bool, src: Path, out: Path) -> None:
-    kind = "KvAdaptaDark" if dark else "KvAdapta"
-    svg = (src / kind / f"{kind}.svg").read_text(encoding="utf-8")
-    cfg = (src / kind / f"{kind}.kvconfig").read_text(encoding="utf-8")
-    src_window = "#263238" if dark else "#e7e8eb"
-    found = re.search(r"window\.color=(#[0-9a-fA-F]{6})", cfg)
-    if found:
-        src_window = found.group(1)
-    src_accent = "#00bcd4"
-    win, accent = base["window"], tones["accent"]
-    svg = re.sub(r"#[0-9a-fA-F]{6}\b", lambda m: recolour(m.group(0), src_window, src_accent, win, accent, danger), svg)
+def qt_colours(name: str, base: dict, tones: dict, danger: str) -> str:
+    """The [Colours] Huginn's Qt look draws with (qt/theme reads them from ~/.config/huginn/qt.conf, which
+    apps/huginn_look.py makes from this file and the person's icons and fonts)."""
+    accent = tones["accent"]
     on_accent = "#0B1512" if luminance(accent) > 0.35 else "#FFFFFF"
-    colours = {
-        "window.color": win, "base.color": base["view"], "alt.base.color": mix(base["view"], win, 0.5),
-        "button.color": hexa(base["capsule"], win), "light.color": mix(win, "#FFFFFF", 0.12), "mid.light.color": mix(win, "#FFFFFF", 0.06),
-        "dark.color": mix(win, "#000000", 0.35), "mid.color": mix(win, "#000000", 0.15),
-        "highlight.color": accent, "inactive.highlight.color": mix(accent, win, 0.4),
-        "text.color": base["text"], "window.text.color": base["text"], "button.text.color": base["text"],
-        "disabled.text.color": base["text_tertiary"], "tooltip.text.color": base["text"], "highlight.text.color": on_accent,
-        "link.color": accent, "link.visited.color": mix(accent, base["text_secondary"], 0.5), "progress.indicator.text.color": base["text"],
-    }
-
-    def general_colours(m: re.Match) -> str:
-        body = m.group(0)
-        for k, v in colours.items():
-            body = re.sub(rf"^{re.escape(k)}=.*$", f"{k}={v}", body, flags=re.M)
-        return body
-    cfg = re.sub(r"#[0-9a-fA-F]{6}\b", lambda m: recolour(m.group(0), src_window, src_accent, win, accent, danger), cfg)
-    cfg = re.sub(r"\[GeneralColors\][^\[]*", general_colours, cfg)        # after: these are Huginn's exactly
-
-    def on_accent_text(m: re.Match) -> str:                         # picked rows and menu items sit on the accent
-        body = m.group(0)
-        for k in ("text.press.color", "text.toggle.color") + (("text.focus.color",) if m.group(1) == "MenuItem" else ()):
-            body = re.sub(rf"^{re.escape(k)}=.*$", f"{k}={on_accent}", body, flags=re.M)
-        return body
-    cfg = re.sub(r"\[(ItemView|MenuItem)\][^\[]*", on_accent_text, cfg)
-    cfg = re.sub(r"^author=.*$", "author=Huginn OS (from KvAdapta by Tsu Jan)", cfg, count=1, flags=re.M)
-    cfg = re.sub(r"^comment=.*$", f"comment={name}: Huginn's look for Qt apps", cfg, count=1, flags=re.M)
-    folder = out / "kvantum" / name
-    folder.mkdir(parents=True, exist_ok=True)
-    (folder / f"{name}.svg").write_text(svg, encoding="utf-8")
-    (folder / f"{name}.kvconfig").write_text(cfg, encoding="utf-8")
+    win = base["window"]
+    c = {"window": win, "view": base["view"], "alternate": mix(base["view"], win, 0.5), "text": base["text"],
+         "secondary": base["text_secondary"], "disabled": base["text_tertiary"], "button": hexa(base["capsule"], win),
+         "button_border": hexa(base["capsule_border"], win), "accent": accent, "on_accent": on_accent,
+         "tooltip": hexa(base["tooltip_bg"], win), "menu": hexa(base["menu_bg"], win), "border": hexa(base["menu_border"], win),
+         "separator": hexa(base["separator"], win), "link": accent, "visited": mix(accent, base["text_secondary"], 0.5),
+         "danger": danger, "header": tones["tint_b"], "sidebar": tones["tint_a"]}
+    return f"; {name} (generated by tokens/gen_theme.py)\n[Colours]\n" + "".join(f"{k}={v}\n" for k, v in c.items())
 
 
 def qml_tokens(t: dict) -> str:
@@ -243,13 +182,12 @@ def qml_tokens(t: dict) -> str:
 
 
 def main() -> int:
-    if len(sys.argv) not in (3, 4):
+    if len(sys.argv) != 3:
         print(__doc__)
         return 2
     tokens = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
     out = Path(sys.argv[2])
-    kv_src = Path(sys.argv[3]) if len(sys.argv) == 4 else None
-    for sub in ("color-schemes", "gtk", "qml"):
+    for sub in ("color-schemes", "gtk", "qml", "qt"):
         (out / sub).mkdir(parents=True, exist_ok=True)
     failures = []
     for realm, spec in tokens["realms"].items():
@@ -260,8 +198,7 @@ def main() -> int:
             (out / "color-schemes" / f"{name}.colors").write_text(color_scheme(name, base, tones, danger), encoding="utf-8")
             (out / "gtk" / f"{name}.css").write_text(gtk_css(base, tones, danger, tokens["radius"]), encoding="utf-8")
             (out / "gtk" / f"{name}-gtk3.css").write_text(gtk3_css(base, tones, danger, mode == "dark"), encoding="utf-8")
-            if kv_src is not None:
-                kvantum(name, base, tones, danger, mode == "dark", kv_src, out)
+            (out / "qt" / f"{name}.conf").write_text(qt_colours(name, base, tones, danger), encoding="utf-8")
             # Contrast gate: body text on window >= 7, secondary >= 4.5, accent as text on view >= 3.
             checks = [("text/window", contrast(base["text"], base["window"]), 7.0),
                       ("secondary/window", contrast(base["text_secondary"], base["window"]), 4.5),

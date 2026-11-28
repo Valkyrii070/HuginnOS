@@ -5,10 +5,9 @@ xwayland
 # (printing, email, your name and picture). KDE's is gone.
 xdg-desktop-portal-gtk
 xdg-user-dirs
-# Qt apps that aren't Huginn's: their style (Kvantum, below), icons and fonts, and Open and Save through the portal
-# (Huginn's own), from qt6ct's settings (huginn_look.py writes them; QT_QPA_PLATFORMTHEME=qt6ct). KDE's
-# integration (plasma-integration) is gone.
-qt6ct
+# Qt apps that aren't Huginn's wear Huginn's own Qt look (qt/, built into the image: QT_QPA_PLATFORMTHEME=huginn),
+# which opens and saves through the portal (Huginn's own) by Qt's portal theme, kept for that. KDE's integration
+# (plasma-integration), qt6ct and Kvantum are gone.
 qt6-xdgdesktopportal-platformtheme
 # Location for Weather and Maps (the Privacy settings), screen makers' names in Displays.
 geoclue-2.0
@@ -19,11 +18,8 @@ libnotify-bin
 wireplumber
 bluez
 upower
-# Theming: Qt apps in a Kvantum style generated from Huginn's tokens (Kvantum isn't KDE's; KvAdapta's drawing, from
-# its themes, is what's recoloured); GTK 3 apps in Huginn's own theme (/usr/share/themes/Huginn: Adwaita's shapes,
-# which GTK carries, in the realm's colours). KDE's Breeze style and Breeze-GTK are gone.
-qt6-style-kvantum
-qt-style-kvantum-themes
+# Theming: GTK 3 apps in Huginn's own theme (/usr/share/themes/Huginn: Adwaita's shapes, which GTK carries, in the
+# realm's colours); Qt apps in Huginn's own (above). KDE's Breeze style and Breeze-GTK are gone.
 # Icons: Huginn's own theme (scripts/make-icons.py, in the overlay), with Breeze's underneath for anything it doesn't
 # draw; and Breeze's pointers (Settings › Appearance offers Huginn's own and others). Artwork, kept as it is.
 breeze-icon-theme

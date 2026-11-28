@@ -262,6 +262,33 @@ build_whisper() {
     rm -rf "$CHROOT/tmp/wh" "$CHROOT"/tmp/wh-*.txt
 }
 
+build_qt() {
+    # Huginn's own Qt look (qt/): the platform theme (colours, fonts, icons, Open and Save through the portal, menu
+    # bars in the top bar) and the widget style that Qt apps other than Huginn's load. Built against the image's Qt;
+    # the compiler and Qt's headers are taken out again afterwards. Without it Qt apps work, in Qt's plain look.
+    local src="$ROOT/qt" plugins=/usr/lib/x86_64-linux-gnu/qt6/plugins
+    [ -f "$src/CMakeLists.txt" ] || return 0
+    rm -rf "$CHROOT/tmp/hq"; mkdir -p "$CHROOT/tmp/hq/src"
+    cp -r "$src/." "$CHROOT/tmp/hq/src/"
+    in_chroot sh -c "dpkg-query -W -f='\${Package}\n' | sort > /tmp/hq-before.txt"
+    if in_chroot env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends cmake g++ make qt6-base-dev qt6-base-private-dev > "$WORK/qt-deps.log" 2>&1 \
+       && in_chroot sh -c "cd /tmp/hq && cmake -S src -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build -j$(nproc)" > "$WORK/qt-build.log" 2>&1; then
+        install -D -m 644 "$CHROOT/tmp/hq/build/libhuginntheme.so" "$CHROOT$plugins/platformthemes/libhuginntheme.so"
+        install -D -m 644 "$CHROOT/tmp/hq/build/libhuginnstyle.so" "$CHROOT$plugins/styles/libhuginnstyle.so"
+        # (kept for whoever makes the ready-built copy updates carry: apps/huginn_osupdate.py prebuilt-qt)
+        mkdir -p "$WORK/qt-built"
+        cp "$CHROOT/tmp/hq/build/"libhuginn*.so "$WORK/qt-built/"
+        in_chroot dpkg-query -W -f='${Version}' libqt6core6t64 2>/dev/null | sed 's/^[0-9]*://; s/[^0-9.].*//' > "$WORK/qt-built/qt-version"
+    else
+        warn "Huginn's Qt look didn't build (see $WORK/qt-build.log): Qt apps other than Huginn's look plain"
+        tail -15 "$WORK/qt-build.log" "$WORK/qt-deps.log" 2>/dev/null || true
+    fi
+    in_chroot sh -c "dpkg-query -W -f='\${Package}\n' | sort > /tmp/hq-after.txt; comm -13 /tmp/hq-before.txt /tmp/hq-after.txt > /tmp/hq-new.txt"
+    in_chroot sh -c 'grep -E -- "-dev\$|^(cmake|cmake-data|g\+\+|g\+\+-[0-9]+|make|cpp|cpp-[0-9]+|gcc|gcc-[0-9]+|qmake6|qmake6-bin|qt6-base-dev-tools)\$" /tmp/hq-new.txt | xargs -r env DEBIAN_FRONTEND=noninteractive apt-get purge -y' > "$WORK/qt-purge.log" 2>&1 || true
+    in_chroot env DEBIAN_FRONTEND=noninteractive apt-get autoremove -y --purge >> "$WORK/qt-purge.log" 2>&1 || true
+    rm -rf "$CHROOT/tmp/hq" "$CHROOT"/tmp/hq-*.txt
+}
+
 build_compositor() {
     # Huginn's own compositor (compositor/, Rust, built on Smithay): the "own compositor" session at the sign-in screen.
     # Rust and the headers are put in the image only while it builds, then taken out again, as for rounded corners.
@@ -342,26 +369,23 @@ stage_customise() {
     # Theme files generated from the design tokens.
     local theme="$WORK/theme"
     rm -rf "$theme"
-    # (Kvantum's themes for Qt apps are KvAdapta's drawing in Huginn's colours: KvAdapta comes from the image.)
-    [ -f "$CHROOT/usr/share/Kvantum/KvAdaptaDark/KvAdaptaDark.svg" ] || die "Kvantum's KvAdapta theme is missing (qt6-style-kvantum-themes)"
-    python3 "$ROOT/tokens/gen_theme.py" "$ROOT/tokens/tokens.json" "$theme" "$CHROOT/usr/share/Kvantum"
-    install -d "$CHROOT/usr/share/color-schemes" "$CHROOT/usr/share/huginn-os/gtk" \
+    python3 "$ROOT/tokens/gen_theme.py" "$ROOT/tokens/tokens.json" "$theme"
+    install -d "$CHROOT/usr/share/color-schemes" "$CHROOT/usr/share/huginn-os/gtk" "$CHROOT/usr/share/huginn-os/qt" \
                "$CHROOT/usr/lib/x86_64-linux-gnu/qt6/qml/org/huginn/tokens"
     install -m 644 "$theme"/color-schemes/*.colors "$CHROOT/usr/share/color-schemes/"
     install -m 644 "$theme"/gtk/*.css "$CHROOT/usr/share/huginn-os/gtk/"
+    install -m 644 "$theme"/qt/*.conf "$CHROOT/usr/share/huginn-os/qt/"
     install -m 644 "$theme"/qml/* "$CHROOT/usr/lib/x86_64-linux-gnu/qt6/qml/org/huginn/tokens/"
-    local kv
-    for kv in "$theme"/kvantum/*/; do
-        install -d "$CHROOT/usr/share/Kvantum/$(basename "$kv")"
-        install -m 644 "$kv"* "$CHROOT/usr/share/Kvantum/$(basename "$kv")/"
-    done
     # Everyone else's apps start in Huginn's look (the shell then follows each user's realm: apps/huginn_look.py):
-    # Qt and KDE apps in the Kvantum style and the Aurora colours, GTK apps in Breeze-GTK with them.
+    # Qt apps in Huginn's own Qt look and the Aurora colours (and App Store apps built on KDE's libraries in those
+    # colours), GTK apps in Huginn's GTK theme with them.
     sed -n '/^\[Colors:/,$p' "$theme/color-schemes/HuginnAuroraDark.colors" | sed '/^\[General\]/,$d' >> "$CHROOT/etc/xdg/kdeglobals"
-    install -d "$CHROOT/etc/xdg/Kvantum" "$CHROOT/etc/gtk-3.0" "$CHROOT/etc/gtk-4.0"
-    printf '[General]\ntheme=HuginnAuroraDark\n' > "$CHROOT/etc/xdg/Kvantum/kvantum.kvconfig"
+    rm -rf "$CHROOT/etc/xdg/Kvantum"
+    install -d "$CHROOT/etc/xdg/huginn" "$CHROOT/etc/gtk-3.0" "$CHROOT/etc/gtk-4.0"
+    { python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import huginn_osupdate as u; print(u.QT_DEFAULT, end="")' "$ROOT/apps"
+      sed -n '/^\[Colours\]/,$p' "$theme/qt/HuginnAuroraDark.conf"; } > "$CHROOT/etc/xdg/huginn/qt.conf"
     for v in 3.0 4.0; do
-        printf '[Settings]\ngtk-theme-name=Breeze\ngtk-icon-theme-name=Huginn\ngtk-application-prefer-dark-theme=true\ngtk-font-name=Inter Variable 10\n' > "$CHROOT/etc/gtk-$v/settings.ini"
+        printf '[Settings]\ngtk-theme-name=Huginn\ngtk-icon-theme-name=Huginn\ngtk-application-prefer-dark-theme=true\ngtk-font-name=Inter Variable 10\n' > "$CHROOT/etc/gtk-$v/settings.ini"
     done
 
     # Huginn Shell and the tokens it reads.
@@ -388,6 +412,7 @@ stage_customise() {
     [ -n "$commit" ] || warn "HUGINN_COMMIT isn't set and this tree isn't a git checkout: the system's first update will bring everything again"
 
     build_compositor
+    build_qt
     build_whisper
     # KWin is gone (config/not-wanted.list): its rounded-corners effect and the screenshot helper it authorised
     # (huginn-grab) go with it; Huginn's compositor rounds corners and takes the pictures itself.

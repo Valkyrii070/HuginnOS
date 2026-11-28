@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """What took KDE's place for apps: Huginn's portal keeping the screen on and starting App Store apps at sign-in
-(apps/huginn_portal_more.py), qt6ct's settings from Huginn's look (apps/huginn_look.py), and the control centre's
+(apps/huginn_portal_more.py), Qt apps' settings from Huginn's look (apps/huginn_look.py), and the control centre's
 night light (shell/huginn_system.py), on a D-Bus of its own with a stand-in for the session daemon.
 
     portal_more_test.py <kit root>        (not as root; needs dbus-daemon)
@@ -127,19 +127,15 @@ check("…and an entry the person made themselves is left alone", (home / ".conf
 got = call("Background", "NotifyBackground", GLib.Variant("(oss)", ("/r/2", "org.example.Chat", "Chat")), "(ua{sv})")
 check("running on with no window: allowed", got == (0, {"result": 1}), got)
 
-# qt6ct's settings from Huginn's look
+# Qt apps' settings from Huginn's look (Huginn's own Qt look reads them; qt_look_test.py has the rest)
 import huginn_look as hl  # noqa: E402
 (home / ".config/kdeglobals").write_text("[Icons]\nTheme=Papirus\n")
-qt = home / ".config/qt6ct/qt6ct.conf"
-qt.parent.mkdir(parents=True)
-qt.write_text("[Interface]\nwheel_scroll_lines=7\n")
-check("qt6ct: written once", hl.write_qt6ct() and not hl.write_qt6ct())
+qt = home / ".config/huginn/qt.conf"
+check("Qt apps' look: written once", hl.write_qt("aurora", True) and not hl.write_qt("aurora", True))
 text = qt.read_text()
-check("…Kvantum, the chosen icon theme, Open and Save through the portal, Huginn's fonts (quoted: they have commas)",
-      "style=kvantum" in text and "icon_theme=Papirus" in text and "standard_dialogs=xdgdesktopportal" in text
-      and 'general="Inter Variable,10,' in text, text)
-check("…and what the person set in qt6ct stays", "wheel_scroll_lines=7" in text)
-check("…a new icon theme reaches it", hl.write_qt6ct("Huginn") and "icon_theme=Huginn" in qt.read_text())
+check("…the chosen icon theme, Huginn's fonts, dark", "icons=Papirus" in text and "font=Inter Variable,10" in text and "scheme=dark" in text, text)
+check("…a new icon theme reaches it", hl.write_qt(icons="Huginn") and "icons=Huginn" in qt.read_text())
+check("…and nothing is written for qt6ct or Kvantum any more", not (home / ".config/qt6ct").exists() and not (home / ".config/Kvantum").exists())
 
 # GTK apps: Huginn's own GTK 3 theme in the realm's colours, in place of Breeze-GTK
 share = home / "share"

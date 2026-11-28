@@ -5434,9 +5434,10 @@ class Store(QObject):
                                         "fc-cache >/dev/null 2>&1; exit 0"])
 
     def _dress(self, app_id: str) -> None:
-        """So an app from the App Store wears Huginn's look too: the style its toolkit needs, from Flathub, quietly
-        after it. Qt/KDE apps get the Kvantum style for their runtime (it reads ~/.config/Kvantum); GTK apps get
-        the Breeze theme (Flatpak usually adds it by itself, as the system's GTK theme is Breeze)."""
+        """So an app from the App Store wears Huginn's look too, as far as its sandbox lets it: GTK 3 apps find Huginn's
+        own theme in ~/.local/share/themes and Qt/KDE apps take the realm's colours from kdeglobals (both readable
+        through the system-wide override; Huginn's own Qt style is built for the system's Qt, not theirs). Here:
+        what else an app needs from Flathub, quietly after it."""
         try:
             runtime = subprocess.run([self._flatpak, "info", "--show-runtime", app_id], capture_output=True, text=True, timeout=20).stdout.strip()
         except (OSError, subprocess.TimeoutExpired):
@@ -5444,9 +5445,6 @@ class Store(QObject):
         name, _, rest = runtime.partition("/")
         branch = rest.rpartition("/")[2]
         wanted = []
-        if name.startswith("org.kde.Platform") and branch:
-            wanted.append(f"org.kde.KStyle.Kvantum//{branch}")
-        # (GTK 3 apps find Huginn's own theme in ~/.local/share/themes, which the system-wide override lets them read)
         # Steam: the performance overlay (MangoHud) as the Vulkan layer its sandbox can see; Games' profiles turn it
         # on for a game with MANGOHUD=1 in its launch options (the system's mangohud isn't inside Steam's sandbox)
         # And gamescope's, whose WSI layer gives games HDR (and better frame pacing) in Game Mode (huginn-game-session)

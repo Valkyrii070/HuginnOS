@@ -1,5 +1,6 @@
-# Huginn OS's defaults for KDE's parts and for Qt apps. The Aurora colours are added below at build time; each
-# user's realm and dark-or-light are put in place by the shell (apps/huginn_look.py).
+# Huginn OS's defaults for apps built on KDE's libraries (from the App Store; the system's Qt apps wear Huginn's own
+# Qt look, qt/). The Aurora colours are added below at build time; each user's realm and dark-or-light are put in
+# place by the shell (apps/huginn_look.py).
 [General]
 TerminalApplication=huginn-terminal
 TerminalService=huginn-terminal.desktop
@@ -13,8 +14,4 @@ fixed=JetBrains Mono,10,-1,5,400,0,0,0,0,0,0,0,0,0,0,1
 [Icons]
 # Huginn's folders and files in smoked glass (scripts/make-icons.py); Breeze for everything else
 Theme=Huginn
-
-[KDE]
-# Huginn's look for Qt apps: Kvantum with Huginn's theme (/usr/share/Kvantum/Huginn*)
-widgetStyle=kvantum
 

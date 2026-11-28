@@ -40,7 +40,8 @@ reaches the archive through an HTTPS proxy (used during the build only; removed 
     apps/                        the apps: one Python host + QML per app, the shared kit, the portal backends
     shell/                       Huginn Shell: Python host + QML (top bar, dock, launcher, control centre, widgets)
     tokens/tokens.json           design tokens (single source of truth, shared with Huginn)
-    tokens/gen_theme.py          tokens -> KDE colour schemes, GTK colours, Kvantum styles, QML singleton
+    tokens/gen_theme.py          tokens -> KDE colour schemes, GTK colours, Huginn's Qt colours, QML singleton
+    qt/                          Huginn's own Qt look: a platform theme (menus in the top bar too) and a widget style
     scripts/                     host setup, build, QEMU test, CI smoke test, xwayland-satellite
     patches/                     small patches to software built from source (xwayland-satellite)
     mockups/                     design previews rendered from the tokens
@@ -1749,6 +1750,57 @@ own, Microsoft's Windows App on a Mac or phone, FreeRDP) connects as before.
   PipeWire). All screens at once was only seen with the nested session's one screen. The last build (control
   characters from a viewer skipped) was only built, not run again.
 
+## Huginn's own Qt look, and every app's menus in the top bar (2026-11-27)
+
+Kvantum and qt6ct are gone (not-wanted.list). Qt apps that aren't Huginn's now load Huginn's own Qt look, two plugins
+built into the image from `qt/` (C++, against the image's Qt):
+
+- **The platform theme** (`qt/theme`, `QT_QPA_PLATFORMTHEME=huginn`): the realm's colours in dark or light, Inter and
+  JetBrains Mono and the icon theme chosen in Settings, all from `~/.config/huginn/qt.conf` (`huginn_look.py` writes
+  it from the realm; `/etc/xdg/huginn/qt.conf`, Aurora dark, until then). The theme watches the file, so open apps
+  change with the realm, dark or light or the icon theme at once. Open and Save go through Qt's portal theme (so the
+  windows are Huginn's own), asked for only when an app wants one; tray icons and the rest through Qt's plain Unix
+  theme.
+- **The widget style** (`qt/style`, "Huginn", Fusion underneath): rounded controls (7 px, as `radius.control`), cards,
+  tab panes and menus (10 px; menus and tool tips see-through at the corners), the accent for what's chosen and for
+  the button a dialog would press, ticks and dots in the accent, thin scroll bars with no arrows that widen under the
+  pointer, round slider knobs on an accent track, flat tool bars, headers and tabs, menus with their shortcuts in a
+  softer colour, and drop-down lists that open over themselves as a menu does.
+- **Menus in the top bar**: a Qt app's menu bar leaves its window, and its menus are in the app's menu at the top left
+  (and in the bar's row of menus), as Huginn's own apps' are: the plugin answers as `org.huginn.App.p<pid>` (`Menus`,
+  `Trigger`, the same JSON as `apps/huginn_menu.py`). The app's About and Preferences come first (as About <App> and
+  <App> Settings…) and its Quit last, with Huginn's window items around them; ticks and one-of-a-group choices show
+  as ✓ and •; submenus open beside the menu; menus an app fills as they open are filled before they're read; the
+  window in front is the one whose menus show; and shortcuts work as before with the bar out of the window. Only
+  while Huginn's shell is there (otherwise the bar stays in the window), and not where `HUGINN_QT_MENUS=0` is set or
+  `[Menus] top_bar=false` is in qt.conf.
+- **GTK apps' menus too**, where GTK can: the compositor speaks GTK's own protocol (`compositor/src/gtkshell.rs`,
+  gtk_shell1, written out in `compositor/resources/gtk-shell.xml`) and says it shows menu bars, so GTK 3 and 4 apps
+  built on GtkApplication hide theirs and say where their menus and actions are; the window list carries that
+  (`gtkMenus`) and the shell reads them (`shell/huginn_gtkmenus.py`: org.gtk.Menus, org.gtk.Actions) into the same
+  app menu, About, Settings and Quit moved the same way, and does what's chosen (`org.gtk.Actions.Activate`).
+- **What can't**: apps with no menu bar of their own (most GTK 4 and GNOME-style apps, browsers, Electron apps) keep
+  Huginn's basic app menu. GTK 3 apps whose menu bar is a plain GtkMenuBar keep it in the window: the module that
+  would hand those over (appmenu-gtk-module) fails on Wayland (it asks before the window exists). App Store
+  (Flatpak) Qt apps run their own Qt, which can't load Huginn's plugins: they take the realm's colours (kdeglobals)
+  in their runtime's own style and keep their menu bars. X11 apps keep theirs.
+- **Updates** carry the two plugins ready-built (`prebuilt/huginn-qt-*`, made with `huginn_osupdate.py prebuilt-qt`),
+  for exactly `qt/`'s sources and the Qt they were built with: a system with another Qt minor version keeps what it
+  has and says so, and the session uses qt6ct where Huginn's theme isn't there. An update doesn't remove qt6ct or
+  Kvantum (updates don't take packages away); nothing uses them.
+- Seen in the nested session: a Qt app's menus in the top bar's app menu with its bar gone from the window (About and
+  Settings first, Quit last, a radio choice, a submenu filled as it opened), and clicking an item in that submenu did
+  it in the app; a GTK 3 app on GtkApplication the same way, its menus read through the compositor's window list.
+- Tested: `qt_look_test.py` (41, and 4 pictures) with real Qt apps: what `huginn_look.py` writes, the style, colours,
+  fonts and menu colour an app gets, an open app following a change of realm, the menu bar staying in the window with
+  no shell or when turned off and leaving it with one, every part of `Menus` and `Trigger`, shortcuts with the bar
+  hidden, a second window's menus, an app in a session called huginn starting at once (Qt's portal theme looks for a
+  base theme by the session's name, and so made this one again, endlessly: fixed) and Open and Save after it;
+  `gtk_menus_test.py` (21) with a real GTK 3 app on a bus of its own; `osupdate_test.py` for the ready-built plugins
+  (the wrong Qt, other sources, other bytes). **Not tried with real apps people use (KeePassXC, Kate, VLC, GIMP…)
+  or on real hardware**; Qt apps with unusual menus (made at the last moment, or on the window's own bar code) may
+  need a look.
+
 ## Phone's own link (2026-11-27)
 
 Phone no longer needs KDE Connect's desktop program: `apps/huginn_phoned.py` speaks its protocol (version 8) itself,
@@ -1811,13 +1863,14 @@ The goal is a desktop that is Huginn's from the first screen to the last. Where 
   - **Screen sharing and recording** (PipeWire): xdg-desktop-portal-wlr, from Huginn's compositor.
   - What's left goes to **GTK's portal** (printing, email, your name and picture, web apps added to the start menu).
     KDE's portal is gone (2026-11-27), and with it the wrapper that started it in Huginn's session.
-- **Qt apps that aren't Huginn's** get their platform theme from qt6ct (`QT_QPA_PLATFORMTHEME=qt6ct`): its settings,
-  written by `apps/huginn_look.py`, name the Kvantum style, the icon theme chosen in Settings, Inter, and the portal's
-  Open and Save (Huginn's own). KDE's integration (plasma-integration), KIO's extras and KDE's command-line tools are
-  gone, and the session calls itself `Huginn` alone (it was `Huginn:KDE`, so Qt and other apps took it for KDE).
+- **Qt apps that aren't Huginn's** wear Huginn's own Qt look (`qt/`, `QT_QPA_PLATFORMTHEME=huginn`; see "Huginn's
+  own Qt look, and every app's menus in the top bar" above): the realm's colours, the icon theme chosen in Settings,
+  Inter, the portal's Open and Save (Huginn's own), and their menu bars in the top bar. KDE's integration
+  (plasma-integration), KIO's extras, KDE's command-line tools, qt6ct and Kvantum are gone, and the session calls
+  itself `Huginn` alone (it was `Huginn:KDE`, so Qt and other apps took it for KDE).
 - **Everyone else's apps wear the realm** (`apps/huginn_look.py`, run by the shell at sign-in and on every change):
-  Qt apps get a Kvantum style generated from the tokens (KvAdapta's shapes, Huginn's colours, all four realms dark and
-  light), and apps built on KDE's libraries (from the App Store) the realm's colours in kdeglobals. GTK 3 apps get
+  Qt apps get Huginn's own Qt look in the realm's colours (`~/.config/huginn/qt.conf`, followed by open apps at
+  once), and apps built on KDE's libraries (from the App Store) the realm's colours in kdeglobals. GTK 3 apps get
   Huginn's own theme (`/usr/share/themes/Huginn`: Adwaita's shapes, which GTK carries, with Huginn's colours on every
   surface, control and selection; the realm's and mode's colours come from `~/.config/gtk-3.0/colors.css`, generated
   as `Huginn<Realm><Mode>-gtk3.css`, and a copy in `~/.local/share/themes` lets App Store apps wear it too), and

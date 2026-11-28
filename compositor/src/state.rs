@@ -837,6 +837,7 @@ impl<BackendData: Backend + 'static> HuginnState<BackendData> {
         let image_copy_capture_state = ImageCopyCaptureState::new::<Self>(&dh);
         let foreign_toplevel_list = ForeignToplevelListState::new::<Self>(&dh);
         crate::tearing::init::<BackendData>(&dh);
+        crate::gtkshell::init::<BackendData>(&dh);
         crate::color::init::<BackendData>(&dh);
         let toplevel_capture_source_state = ToplevelCaptureSourceState::new::<Self>(&dh);
 

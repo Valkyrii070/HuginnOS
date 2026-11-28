@@ -4,10 +4,16 @@
 export XDG_CURRENT_DESKTOP=Huginn
 export XDG_SESSION_DESKTOP=huginn
 export QT_QPA_PLATFORM=wayland
-# Qt apps that aren't Huginn's: Huginn's look, icons and fonts, from qt6ct's settings (huginn_look.py writes them).
-export QT_QPA_PLATFORMTHEME=qt6ct
+# Qt apps that aren't Huginn's: Huginn's own Qt look (qt/: its colours, icons, fonts and widget style, from
+# ~/.config/huginn/qt.conf, which huginn_look.py writes), and their menu bars in the top bar. (qt6ct only on a
+# system that hasn't got it yet: an update that couldn't bring it, for another Qt.)
+if [ -e /usr/lib/x86_64-linux-gnu/qt6/plugins/platformthemes/libhuginntheme.so ]; then
+    export QT_QPA_PLATFORMTHEME=huginn
+else
+    export QT_QPA_PLATFORMTHEME=qt6ct
+fi
 # Every app's Open and Save windows are Huginn's own (huginn_portal.py, through xdg-desktop-portal):
-# Qt apps through qt6ct (its dialogs: the portal's), GTK apps through GTK's portal support, sandboxed apps always.
+# Qt apps through Huginn's Qt look (its dialogs: the portal's), GTK apps through GTK's portal support, sandboxed apps always.
 export GTK_USE_PORTAL=1
 export GDK_DEBUG=portals
 # Games made with SDL (most native Linux games, and Steam's runtime) draw through X11 (XWayland): Steam's overlay

@@ -89,10 +89,9 @@ def get(url, timeout=60, cap=0):
 root = home / "root"; (root / "etc").mkdir(parents=True); (root / "etc/os-release").write_text('NAME="Huginn OS"\nBUILD_ID=20261120\n')
 ok("a system that doesn't say what it is can't be updated, and says to install once", "Install the newest image once" in problem(up.look, root, get))
 theme1 = home / "theme1"
-if Path("/usr/share/Kvantum/KvAdaptaDark/KvAdaptaDark.svg").is_file():      # (as on a real Huginn OS: Qt apps' style is made too)
-    (root / "usr/share").mkdir(parents=True); os.symlink("/usr/share/Kvantum", root / "usr/share/Kvantum")
 made = up.make_theme(kits[1], root, theme1)
-ok("the look's files are made from the tree's own tokens", made and len(list((theme1 / "color-schemes").glob("*.colors"))) >= 2 and (theme1 / "qml").is_dir())
+ok("the look's files are made from the tree's own tokens", made and len(list((theme1 / "color-schemes").glob("*.colors"))) >= 2 and (theme1 / "qml").is_dir()
+   and len(list((theme1 / "qt").glob("*.conf"))) == 8)
 p0 = up.plan(kits[1], root, theme1)
 up.apply_plan(p0, root, home / "discard")                          # (the image's build, standing in: version 1 put in place)
 n_rec = up.record(kits[1], root, SHA[1], DATE[1], theme1)
@@ -102,7 +101,9 @@ ok("an image records what it is and what each of its own files was", have == {"r
 ok("modes are kept: programs can run, the rest can't", (root / "usr/bin/huginn-session").stat().st_mode & 0o777 == 0o755 and (root / "usr/share/huginn-apps/qml/Code.qml").stat().st_mode & 0o777 == 0o644
    and (root / "usr/share/huginn-apps/huginn_code.py").stat().st_mode & 0o777 == 0o755)
 ok("the look's settings were written the way the image writes them (the colours added to kdeglobals)", "[Colors:Window]" in (root / "etc/xdg/kdeglobals").read_text() and (root / "etc/xdg/kdeglobals").read_text().startswith("[KDE]")
-   and (root / "etc/gtk-4.0/settings.ini").is_file() and "HuginnAuroraDark" in (root / "etc/xdg/Kvantum/kvantum.kvconfig").read_text())
+   and "gtk-theme-name=Huginn" in (root / "etc/gtk-4.0/settings.ini").read_text()
+   and "[Colours]" in (root / "etc/xdg/huginn/qt.conf").read_text() and "scheme=dark" in (root / "etc/xdg/huginn/qt.conf").read_text()
+   and (root / "usr/share/huginn-os/qt/HuginnAuroraDark.conf").is_file())
 for bad, why in (("repo: https://evil.example/x/y.git\nbranch: main\n", "another site"), ("repo: https://github.com/a/b.git\nbranch: ../../x\n", "a branch that climbs"),
                  ("repo: https://github.com/a/b/../../c.git\nbranch: main\n", "a repository that climbs")):
     r2 = home / "bad"; (r2 / "usr/share/huginn-os").mkdir(parents=True, exist_ok=True); (r2 / up.SOURCE).write_text(bad)
@@ -212,6 +213,36 @@ ok("a ready-built one for other sources isn't used", up.compositor_ready(kits[3]
 up.make_prebuilt(kits[3], home / "built"); (kits[3] / "prebuilt/huginn-compositor.xz").write_bytes(lzma.compress(b"\x7fELF" + b"tampered"))
 ok("nor one whose bytes aren't what its note says", up.compositor_ready(kits[3])[0] is None and "isn't the one" in up.compositor_ready(kits[3])[1])
 ok("a thing that isn't a program can't be put in a tree as the compositor", "isn't a program" in problem(up.make_prebuilt, kits[3], kits[3] / "apps/huginn_app.py"))
+
+# ------------------------------------------------------------------------------------------------- Huginn's Qt look
+(kits[3] / "qt/theme").mkdir(parents=True); (kits[3] / "qt/theme/theme.cpp").write_text("// theme\n")
+theme_so, style_so = b"\x7fELF" + os.urandom(3000), b"\x7fELF" + os.urandom(2000)
+(home / "theme.so").write_bytes(theme_so); (home / "style.so").write_bytes(style_so)
+qnote = up.make_prebuilt_qt(kits[3], home / "theme.so", home / "style.so", "6.10.2")
+ok("Huginn's Qt look, built, is put in a tree, noted as for its sources and its Qt", qnote.get("written") and qnote["qt"] == "6.10.2"
+   and qnote["sources"] == up.tree_hash(kits[3] / "qt") and (kits[3] / "prebuilt/huginn-qt-theme.xz").is_file())
+ok("…made again from the same, the tree doesn't change", not up.make_prebuilt_qt(kits[3], home / "theme.so", home / "style.so", "6.10.2").get("written"))
+ok("…not with a Qt version that isn't one", "isn't a Qt version" in problem(up.make_prebuilt_qt, kits[3], home / "theme.so", home / "style.so", "six"))
+(root / "var/lib/dpkg").mkdir(parents=True, exist_ok=True)
+dpkg = root / "var/lib/dpkg/status"
+dpkg.write_text("Package: libqt6core6t64\nStatus: install ok installed\nVersion: 6.9.1+dfsg-2\n\n")
+got, why = up.qt_ready(kits[3], root)
+ok("a system with another Qt keeps its own, and says why", got == {} and "for Qt 6.10.2" in why and "6.9.1" in why, why)
+dpkg.write_text("Package: libqt6core6t64\nStatus: deinstall ok config-files\nVersion: 6.10.2+dfsg-1\n\nPackage: libqt6core6t64\nStatus: install ok installed\nVersion: 6.10.3+dfsg-1\n\n")
+got, why = up.qt_ready(kits[3], root)
+ok("one with the same Qt (another patch) gets both plugins, where Qt looks for them", got == {up.QT_PARTS["theme"]: theme_so, up.QT_PARTS["style"]: style_so}, why)
+p_qt = up.plan(kits[3], root, None)
+ok("…in the plan", set(p_qt["qt"]) == set(up.QT_PARTS.values()))
+up.apply_plan(p_qt, root, home / "discard-qt")
+ok("…put in place, readable by everyone", (root / up.QT_PARTS["theme"]).read_bytes() == theme_so and (root / up.QT_PARTS["style"]).stat().st_mode & 0o777 == 0o644)
+ok("…and not again when they are already the ones", up.plan(kits[3], root, None)["qt"] == {})
+(kits[3] / "qt/theme/theme.cpp").write_text("// changed\n")
+ok("ready-built plugins for other sources aren't used", up.qt_ready(kits[3], root) == ({}, "the Qt look's sources changed after its ready-built copy was made"))
+up.make_prebuilt_qt(kits[3], home / "theme.so", home / "style.so", "6.10.2"); (kits[3] / "prebuilt/huginn-qt-style.xz").write_bytes(lzma.compress(b"\x7fELFx"))
+ok("…nor ones whose bytes aren't what the note says", up.qt_ready(kits[3], root)[0] == {} and "isn't the one" in up.qt_ready(kits[3], root)[1])
+for f in ("huginn-qt.for", "huginn-qt-theme.xz", "huginn-qt-style.xz"):
+    (kits[3] / "prebuilt" / f).unlink()
+shutil.rmtree(kits[3] / "qt")
 
 # ----------------------------------------------------------------------------- what a real system is told afterwards
 ran = []

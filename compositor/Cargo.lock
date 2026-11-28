@@ -1639,6 +1639,7 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "wayland-scanner",
  "x11rb",
  "xcursor",
  "xkbcommon 0.8.0",

@@ -203,6 +203,7 @@ class System(QObject):
     keyWanted = Signal(str)                                # a key for the shell: "today" (Meta+T)…
     tourWanted = Signal()                                  # Huginn's menu: Take the tour again
     shellMenuAction = Signal(str)                          # a menu item the shell itself does (about, aboutApp, appWindows, pin)
+    _gtkMenusRead = Signal(object, object, object, object) # (a GTK app's menus, read on a thread: see loadMenus)
 
     def __init__(self, demo: bool, apps=None):
         super().__init__()
@@ -221,6 +222,8 @@ class System(QObject):
         self._windows = []                                 # every window (the dock, the Overview): see _read_windows
         self._spaces = {"current": 0, "names": ["Main"]}
         self._menus = {}                                   # the app in front's menus (the top bar's one menu)
+        self._gtk_where, self._gtk_refs = None, {}         # a GTK app's: where they are, and what each item does
+        self._gtkMenusRead.connect(self._gtk_menus_read)
         self._overview, self._snap_preview, self._snap_assist, self._switcher = {}, {}, {}, {}
         self._menu_bus = ""
         self._bt_path = ""
@@ -338,7 +341,8 @@ if (!w || w.normalWindow || w.dialog)
                          "name": self.app_for_window(app_id, w.get("cls", ""), pid),
                          "title": w.get("title", ""), "minimised": bool(w.get("minimised")), "active": bool(w.get("active") or w.get("focused")),
                          "space": int(w.get("space", 0)), "full": bool(w.get("full")), "x": w.get("x", 0), "y": w.get("y", 0), "w": w.get("w", 0), "h": w.get("h", 0),
-                         "above": bool(w.get("above")), "screen": w.get("screen", ""), "snap": w.get("snap", ""), "max": bool(w.get("max"))})
+                         "above": bool(w.get("above")), "screen": w.get("screen", ""), "snap": w.get("snap", ""), "max": bool(w.get("max")),
+                         "gtkMenus": w.get("gtkMenus") if isinstance(w.get("gtkMenus"), dict) else None})
         self._windows = rows
         self._others = self._other_apps(rows)
         self._spaces = {"current": int(data.get("current", 0)), "names": list(data.get("spaces") or ["Main"])}
@@ -511,9 +515,27 @@ for (var i = 0; i < all.length; i++) {{ var w = all[i]; if (String(w.internalId)
             return
         self._menus = self._on_top_label(self._basic_menus(name), front)
         self._menu_bus = ""
+        self._gtk_where, self._gtk_refs = None, {}
         self.menusChanged.emit()
         pid = (front or {}).get("pid", 0)
-        if self._demo or not self.sb or not pid:
+        if self._demo or not self.sb:
+            return
+        where = (front or {}).get("gtkMenus")
+        if where and where.get("bus") and where.get("menubar"):
+            # a GTK app that handed its menu bar to the top bar (Huginn's compositor: gtk_shell1): read it off the
+            # main thread (a few calls to the app, each answered quickly or given up on)
+            conn, wid = self.sb, front.get("id")
+
+            def work():
+                import huginn_gtkmenus
+                try:
+                    menus, refs = huginn_gtkmenus.read(conn, where, name)
+                except GLib.Error:
+                    return
+                self._gtkMenusRead.emit(wid, where, menus, refs)
+            threading.Thread(target=work, daemon=True).start()
+            return
+        if not pid:
             return
         bus = f"org.huginn.App.p{pid}"
 
@@ -530,6 +552,14 @@ for (var i = 0; i < all.length; i++) {{ var w = all[i]; if (String(w.internalId)
                 self.menusChanged.emit()
         self.sb.call(bus, "/org/huginn/App", "org.huginn.App", "Menus", None, GLib.VariantType("(s)"),
                      Gio.DBusCallFlags.NO_AUTO_START, 1500, None, got)
+
+    def _gtk_menus_read(self, wid, where, menus, refs) -> None:
+        front = self._front_window()
+        if not front or front.get("id") != wid:
+            return                                         # (another window came to the front meanwhile)
+        self._menus = self._on_top_label(menus, front)
+        self._gtk_where, self._gtk_refs = where, refs
+        self.menusChanged.emit()
 
     @staticmethod
     def _on_top_label(menus: dict, front) -> dict:
@@ -597,6 +627,12 @@ for (var i = 0; i < all.length; i++) {{ var w = all[i]; if (String(w.internalId)
                         self.windowDo(w["id"], "minimise")
             else:
                 self.shellMenuAction.emit(what)
+            return
+        if act.startswith("gtk:"):
+            ref = self._gtk_refs.get(act)
+            if ref and self.sb and self._gtk_where:
+                import huginn_gtkmenus
+                huginn_gtkmenus.activate(self.sb, self._gtk_where, ref)
             return
         if self._menu_bus and self.sb:
             self.sb.call(self._menu_bus, "/org/huginn/App", "org.huginn.App", "Trigger", GLib.Variant("(s)", (act,)), None,

@@ -604,9 +604,13 @@ impl<B: Backend + 'static> HuginnState<B> {
         let at = at.unwrap_or_default();
         let screen = self.output_of(w).map(|o| o.name()).unwrap_or_default();
         let snap = self.snapped_as(w).map(|s| s.name()).unwrap_or("");
+        // a GTK app's menu bar, handed to the top bar (gtkshell.rs): where to read it
+        let gtk = w.0.toplevel().and_then(|t| crate::gtkshell::menus_of(t.wl_surface())).map(|m| {
+            serde_json::json!({"bus": m.bus, "menubar": m.menubar, "app": m.app, "window": m.window, "appId": m.app_id})
+        });
         serde_json::json!({"id": window_id(w).to_string(), "app": app, "title": title, "minimised": minimised,
                            "active": !minimised && Some(w) == focused, "space": Self::window_space(w).unwrap_or(0), "pid": pid, "full": full, "x": at.x, "y": at.y, "w": size.w, "h": size.h,
-                           "above": crate::wm::is_above(w), "screen": screen, "snap": snap, "max": Self::is_maximised(w)})
+                           "above": crate::wm::is_above(w), "screen": screen, "snap": snap, "max": Self::is_maximised(w), "gtkMenus": gtk})
     }
 
     /// Every window (bottom to top, then the hidden ones) and the spaces, for the shell.

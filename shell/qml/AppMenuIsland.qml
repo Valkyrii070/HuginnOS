@@ -62,17 +62,26 @@ Item {
         else if (e.key === Qt.Key_Return || e.key === Qt.Key_Enter) { run(rows[Math.max(0, cursor)]); e.accepted = true }
     }
 
+    function hasChecks(items) { for (var i = 0; i < (items || []).length; i++) if (items[i].checked !== undefined) return true; return false }
+
     component MenuItemRow: Rectangle {
         id: r
         property var it: ({})
         property string where: ""
         property bool lit: false
+        property bool checks: false     // the list has items that can be ticked: a column for the ticks
+        property bool inside: false     // in the list beside the menu (pointing at it keeps that list open)
         width: parent ? parent.width : 200; height: it.sep ? 9 : (where !== "" ? 40 : 28); radius: 8
         readonly property bool hot: !it.sep && it.enabled !== false && (hit.containsMouse || lit)
         color: hot ? om.tone : "transparent"
         Rectangle { visible: r.it.sep === true; anchors.centerIn: parent; width: parent.width - 16; height: 1; color: Theme.t.line }
+        Label {   // ticked (✓), or the one chosen of a group (•)
+            visible: !r.it.sep && r.it.checked === true; x: 9; anchors.verticalCenter: parent.verticalCenter
+            text: r.it.radio ? "•" : "✓"; font.pixelSize: r.it.radio ? 16 : 12; font.weight: Font.DemiBold
+            color: r.hot ? "white" : Theme.t.text; opacity: r.it.enabled === false ? 0.4 : 1
+        }
         Column {
-            visible: !r.it.sep; x: 11; anchors.verticalCenter: parent.verticalCenter; width: parent.width - 90
+            visible: !r.it.sep; x: r.checks ? 27 : 11; anchors.verticalCenter: parent.verticalCenter; width: parent.width - 90 - (r.checks ? 16 : 0)
             Label { width: parent.width; text: r.it.label || ""; elide: Text.ElideRight; font.pixelSize: 13; opacity: r.it.enabled === false ? 0.4 : 1; color: r.hot ? "white" : Theme.t.text }
             Label { visible: r.where !== ""; text: r.where; font.pixelSize: 11; color: r.hot ? Qt.rgba(1, 1, 1, 0.8) : Theme.t.text_secondary }
         }
@@ -85,7 +94,7 @@ Item {
             id: hit; anchors.fill: parent; hoverEnabled: true; enabled: !r.it.sep
             onContainsMouseChanged: if (containsMouse) {
                 if (r.it.children && r.it.children.length) { om.cascade = r.it; om.cascadeY = r.mapToItem(om, 0, 0).y - 6 }
-                else if (!r.where) om.cascade = null
+                else if (!r.where && !r.inside) om.cascade = null
             }
             onClicked: om.run(r.it)
         }
@@ -150,7 +159,8 @@ Item {
                         width: om.only === "" ? parent.width - 104 - 13 : parent.width
                         Repeater {
                             model: om.shownGroup ? om.shownGroup.items : []
-                            MenuItemRow { required property var modelData; required property int index; it: modelData; lit: om.cursor >= 0 && !modelData.sep && om.posOf(index) === om.cursor }
+                            MenuItemRow { required property var modelData; required property int index; it: modelData; lit: om.cursor >= 0 && !modelData.sep && om.posOf(index) === om.cursor
+                                          checks: om.hasChecks(om.shownGroup ? om.shownGroup.items : []) }
                         }
                     }
                 }
@@ -160,7 +170,7 @@ Item {
             }
         }
     }
-    // Open recent (and anything else with more inside) opens beside the menu
+    // Open recent (and anything else with more inside: an app's submenus) opens beside the menu
     Glass {
         id: side
         visible: om.cascade !== null && om.query === ""
@@ -171,8 +181,12 @@ Item {
         Column {
             id: sideCol
             x: 6; y: 6; width: parent.width - 12
-            Repeater {
-                model: om.cascade ? om.cascade.children : []
+            Repeater {   // an app's submenu: rows like the menu's
+                model: om.cascade && om.cascade.id !== "recent" ? om.cascade.children : []
+                MenuItemRow { required property var modelData; it: modelData; inside: true; checks: om.hasChecks(om.cascade ? om.cascade.children : []) }
+            }
+            Repeater {   // Open recent: the documents
+                model: om.cascade && om.cascade.id === "recent" ? om.cascade.children : []
                 Rectangle {
                     id: rf
                     required property var modelData

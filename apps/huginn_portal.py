@@ -17,8 +17,8 @@ with Huginn's own windows:
 
 Settings (dark or light, accent, contrast) are answered by huginn_portal_settings.py, which stays running; screen
 sharing is xdg-desktop-portal-wlr's (PipeWire, from Huginn's compositor), printing and the rest GTK's portal's. Qt apps
-reach the portal through qt6ct (its dialogs set to the portal's), GTK apps through GTK_USE_PORTAL /
-GDK_DEBUG=portals, Flatpak and Snap apps always.
+reach the portal through Huginn's own Qt look (qt/theme: its dialogs are the portal's), GTK apps through
+GTK_USE_PORTAL / GDK_DEBUG=portals, Flatpak and Snap apps always.
 
     python3 huginn_portal.py                 the backend (D-Bus activated as org.freedesktop.impl.portal.desktop.huginn)
     python3 huginn_portal.py --demo [what]   one window on its own: open, save, access, apps, shot or colour
