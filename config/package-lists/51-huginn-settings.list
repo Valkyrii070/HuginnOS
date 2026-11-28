@@ -1,13 +1,11 @@
 # Settings: the tools each page talks to.
-#   Sound (pactl), battery and power (power profiles, brightness), users (AccountsService), KDE config changes that
-#   take effect at once (kwriteconfig6), VPN files (OpenVPN; WireGuard is built into NetworkManager), and the radio
-#   switch for airplane mode (rfkill, from util-linux).
+#   Sound (pactl), battery and power (power profiles, brightness), users (AccountsService), VPN files (OpenVPN;
+#   WireGuard is built into NetworkManager), and the radio switch for airplane mode (rfkill, from util-linux).
 pulseaudio-utils
 power-profiles-daemon
 upower
 brightnessctl
 accountsservice
-libkf6config-bin
 network-manager-openvpn
 util-linux
 pciutils

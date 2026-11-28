@@ -1,6 +1,6 @@
 import QtQuick
 import QtQuick.Window
-import org.kde.layershell 1.0 as LayerShell
+import org.huginn.layershell 1.0 as LayerShell
 
 // The lock screen under Huginn's own compositor (huginn_locker.py): the sign-in screen's own design (GreeterView.qml,
 // as "Host" sees it: you alone in the dock, Sleep only), a full-screen overlay on every screen; the main one asks for

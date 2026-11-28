@@ -1,6 +1,6 @@
 import QtQuick
 import QtQuick.Window
-import org.kde.layershell 1.0 as LayerShell
+import org.huginn.layershell 1.0 as LayerShell
 
 // Session shell: every piece is its own Wayland layer-shell surface on KWin.
 // The root is a plain object, not an Item: windows nested in an Item that has no window of its own never map.

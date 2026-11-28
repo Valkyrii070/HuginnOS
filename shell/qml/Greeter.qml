@@ -1,6 +1,6 @@
 import QtQuick
 import QtQuick.Window
-import org.kde.layershell 1.0 as LayerShell
+import org.huginn.layershell 1.0 as LayerShell
 
 // Huginn's sign-in screen (huginn_greeter.py): one full-screen layer on every screen. The main one signs you in
 // (GreeterView.qml); the others show the realm's wallpaper and nothing else. The Python side is "Host".

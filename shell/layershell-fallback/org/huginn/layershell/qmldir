@@ -1,0 +1,5 @@
+# Huginn OS: a stand-in for Huginn's own layer-shell module (qt/layershell) on a system that hasn't got it yet (an
+# update that couldn't bring it, built for another Qt): KDE's layer-shell-qt, while that is still installed, under
+# Huginn's name. shell/huginn_layerfallback.py adds this folder only when the real module isn't there.
+module org.huginn.layershell
+import org.kde.layershell 1.0

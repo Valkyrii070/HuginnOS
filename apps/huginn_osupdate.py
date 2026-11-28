@@ -308,7 +308,8 @@ def wanted_files(kit: Path, theme: Path = None) -> dict:
             out[rel] = (f, 0o600 if rel.startswith("etc/netplan/") else 0o755 if f.stat().st_mode & 0o111 else 0o644)
     for pattern, where, mode in (("shell/*.py", "usr/share/huginn-shell", 0o755), ("shell/qml/*.qml", "usr/share/huginn-shell/qml", 0o644), ("shell/qml/*.js", "usr/share/huginn-shell/qml", 0o644),
                                  ("apps/*.py", "usr/share/huginn-apps", 0o755), ("apps/qml/*.qml", "usr/share/huginn-apps/qml", 0o644), ("apps/qml/*.png", "usr/share/huginn-apps/qml", 0o644),
-                                 ("apps/help/*.md", "usr/share/huginn-apps/help", 0o644)):
+                                 ("apps/help/*.md", "usr/share/huginn-apps/help", 0o644),
+                                 ("shell/layershell-fallback/org/huginn/layershell/qmldir", "usr/share/huginn-shell/layershell-fallback/org/huginn/layershell", 0o644)):
         for f in kit.glob(pattern):
             out[f"{where}/{f.name}"] = (f, mode)
     data = kit / "apps/data"
@@ -371,7 +372,13 @@ def compositor_ready(kit: Path) -> tuple:
 
 
 QT_PLUGINS = "usr/lib/x86_64-linux-gnu/qt6/plugins"
-QT_PARTS = {"theme": f"{QT_PLUGINS}/platformthemes/libhuginntheme.so", "style": f"{QT_PLUGINS}/styles/libhuginnstyle.so"}
+QT_QML = "usr/lib/x86_64-linux-gnu/qt6/qml/org/huginn/layershell"
+# each part of Huginn's Qt look as built (qt/: the folder cmake built into) and where it goes
+QT_PARTS = {"theme": ("libhuginntheme.so", f"{QT_PLUGINS}/platformthemes/libhuginntheme.so"),
+            "style": ("libhuginnstyle.so", f"{QT_PLUGINS}/styles/libhuginnstyle.so"),
+            "layershell": ("org/huginn/layershell/libhuginnlayershell.so", f"{QT_QML}/libhuginnlayershell.so"),
+            "layershell-qmldir": ("org/huginn/layershell/qmldir", f"{QT_QML}/qmldir"),
+            "layershell-types": ("org/huginn/layershell/huginnlayershell.qmltypes", f"{QT_QML}/huginnlayershell.qmltypes")}
 QT_DEFAULT = "; Huginn OS: Qt apps' look until the shell writes each person's own (~/.config/huginn/qt.conf)\n[Look]\nscheme=dark\nicons=Huginn\nfont=Inter Variable,10\nfixed=JetBrains Mono,10\n\n[Menus]\ntop_bar=true\n\n"
 
 
@@ -403,12 +410,13 @@ def qt_ready(kit: Path, root) -> tuple:
     if not have or have.split(".")[:2] != note.get("qt", "").split(".")[:2]:
         return {}, f"the ready-built Qt look is for Qt {note.get('qt', '?')}, and this system has {have or 'no Qt'}"
     out = {}
-    for part, rel in QT_PARTS.items():
+    for part, (built, rel) in QT_PARTS.items():
         try:
             data = lzma.decompress((kit / f"prebuilt/huginn-qt-{part}.xz").read_bytes())
         except (lzma.LZMAError, OSError, EOFError):
             return {}, "the ready-built Qt look couldn't be unpacked"
-        if hashlib.sha256(data).hexdigest() != note.get(f"{part}_sha256") or data[:4] != b"\x7fELF":
+        program = built.endswith(".so")
+        if hashlib.sha256(data).hexdigest() != note.get(f"{part}_sha256") or (data[:4] == b"\x7fELF") != program:
             return {}, "the ready-built Qt look isn't the one its note describes"
         out[rel] = data
     return out, ""
@@ -712,22 +720,28 @@ def make_prebuilt(kit, binary) -> dict:
     return note
 
 
-def make_prebuilt_qt(kit, theme_so, style_so, qt: str) -> dict:
-    """The same for Huginn's Qt look (qt/): its two plugins, noted as being for exactly the tree's qt/ sources and
-    for the Qt they were built with (systems with another major or minor Qt version keep theirs)."""
-    kit, out = Path(kit), Path(kit) / "prebuilt"
+def make_prebuilt_qt(kit, built, qt: str) -> dict:
+    """The same for Huginn's Qt parts (qt/): the platform theme, the style and the shell's layer-shell module, from the
+    folder cmake built them into, noted as being for exactly the tree's qt/ sources and for the Qt they were built
+    with (systems with another major or minor Qt version keep theirs)."""
+    kit, built, out = Path(kit), Path(built), Path(kit) / "prebuilt"
     if not re.fullmatch(r"\d+\.\d+\.\d+", qt or ""):
         raise Problem("That isn't a Qt version (6.10.2, say).")
-    parts = {"theme": Path(theme_so).read_bytes(), "style": Path(style_so).read_bytes()}
-    if any(data[:4] != b"\x7fELF" for data in parts.values()):
-        raise Problem("Those aren't built plugins.")
+    parts = {}
+    for part, (name, _rel) in QT_PARTS.items():
+        try:
+            parts[part] = (built / name).read_bytes()
+        except OSError:
+            raise Problem(f"{name} isn't in {built}: build qt/ there first.") from None
+        if (parts[part][:4] == b"\x7fELF") != name.endswith(".so"):
+            raise Problem(f"{name} in {built} isn't what it should be.")
     out.mkdir(exist_ok=True)
     note = {"sources": tree_hash(kit / "qt"), "qt": qt}
     note.update({f"{k}_sha256": hashlib.sha256(v).hexdigest() for k, v in parts.items()})
     if read_pairs(out / "huginn-qt.for") != note or not all((out / f"huginn-qt-{k}.xz").is_file() for k in parts):
         for k, v in parts.items():
             (out / f"huginn-qt-{k}.xz").write_bytes(lzma.compress(v, preset=6))
-        (out / "huginn-qt.for").write_text("# Huginn's Qt look (qt/), built for exactly these sources and this Qt.\n"
+        (out / "huginn-qt.for").write_text("# Huginn's Qt parts (qt/), built for exactly these sources and this Qt.\n"
                                            + "".join(f"{k}: {v}\n" for k, v in note.items()), encoding="utf-8")
         note["written"] = True
     return note
@@ -745,8 +759,8 @@ def main(argv: list) -> int:
         if what == "prebuilt" and len(argv) >= 3:                  # prebuilt <tree> <built compositor>
             print(json.dumps(make_prebuilt(argv[1], argv[2])))
             return 0
-        if what == "prebuilt-qt" and len(argv) >= 5:               # prebuilt-qt <tree> <libhuginntheme.so> <libhuginnstyle.so> <Qt version>
-            print(json.dumps(make_prebuilt_qt(argv[1], argv[2], argv[3], argv[4])))
+        if what == "prebuilt-qt" and len(argv) >= 4:               # prebuilt-qt <tree> <folder qt/ was built in> <Qt version>
+            print(json.dumps(make_prebuilt_qt(argv[1], argv[2], argv[3])))
             return 0
         if what == "look":                                         # anyone may ask
             say(look(root))

@@ -214,15 +214,19 @@ up.make_prebuilt(kits[3], home / "built"); (kits[3] / "prebuilt/huginn-composito
 ok("nor one whose bytes aren't what its note says", up.compositor_ready(kits[3])[0] is None and "isn't the one" in up.compositor_ready(kits[3])[1])
 ok("a thing that isn't a program can't be put in a tree as the compositor", "isn't a program" in problem(up.make_prebuilt, kits[3], kits[3] / "apps/huginn_app.py"))
 
-# ------------------------------------------------------------------------------------------------- Huginn's Qt look
+# ------------------------------------------------------------------------------------------------- Huginn's Qt parts
 (kits[3] / "qt/theme").mkdir(parents=True); (kits[3] / "qt/theme/theme.cpp").write_text("// theme\n")
-theme_so, style_so = b"\x7fELF" + os.urandom(3000), b"\x7fELF" + os.urandom(2000)
-(home / "theme.so").write_bytes(theme_so); (home / "style.so").write_bytes(style_so)
-qnote = up.make_prebuilt_qt(kits[3], home / "theme.so", home / "style.so", "6.10.2")
-ok("Huginn's Qt look, built, is put in a tree, noted as for its sources and its Qt", qnote.get("written") and qnote["qt"] == "6.10.2"
-   and qnote["sources"] == up.tree_hash(kits[3] / "qt") and (kits[3] / "prebuilt/huginn-qt-theme.xz").is_file())
-ok("…made again from the same, the tree doesn't change", not up.make_prebuilt_qt(kits[3], home / "theme.so", home / "style.so", "6.10.2").get("written"))
-ok("…not with a Qt version that isn't one", "isn't a Qt version" in problem(up.make_prebuilt_qt, kits[3], home / "theme.so", home / "style.so", "six"))
+built = home / "qt-built"
+parts = {}
+for part, (name, _rel) in up.QT_PARTS.items():
+    data = (b"\x7fELF" + os.urandom(2000)) if name.endswith(".so") else f"module org.huginn.layershell\n# {part}\n".encode()
+    (built / name).parent.mkdir(parents=True, exist_ok=True); (built / name).write_bytes(data); parts[part] = data
+qnote = up.make_prebuilt_qt(kits[3], built, "6.10.2")
+ok("Huginn's Qt parts, built, are put in a tree, noted as for their sources and their Qt", qnote.get("written") and qnote["qt"] == "6.10.2"
+   and qnote["sources"] == up.tree_hash(kits[3] / "qt") and all((kits[3] / f"prebuilt/huginn-qt-{k}.xz").is_file() for k in up.QT_PARTS))
+ok("…made again from the same, the tree doesn't change", not up.make_prebuilt_qt(kits[3], built, "6.10.2").get("written"))
+ok("…not with a Qt version that isn't one", "isn't a Qt version" in problem(up.make_prebuilt_qt, kits[3], built, "six"))
+ok("…nor from a folder without them all", "isn't in" in problem(up.make_prebuilt_qt, kits[3], home / "nowhere", "6.10.2"))
 (root / "var/lib/dpkg").mkdir(parents=True, exist_ok=True)
 dpkg = root / "var/lib/dpkg/status"
 dpkg.write_text("Package: libqt6core6t64\nStatus: install ok installed\nVersion: 6.9.1+dfsg-2\n\n")
@@ -230,17 +234,18 @@ got, why = up.qt_ready(kits[3], root)
 ok("a system with another Qt keeps its own, and says why", got == {} and "for Qt 6.10.2" in why and "6.9.1" in why, why)
 dpkg.write_text("Package: libqt6core6t64\nStatus: deinstall ok config-files\nVersion: 6.10.2+dfsg-1\n\nPackage: libqt6core6t64\nStatus: install ok installed\nVersion: 6.10.3+dfsg-1\n\n")
 got, why = up.qt_ready(kits[3], root)
-ok("one with the same Qt (another patch) gets both plugins, where Qt looks for them", got == {up.QT_PARTS["theme"]: theme_so, up.QT_PARTS["style"]: style_so}, why)
+ok("one with the same Qt (another patch) gets every part, where Qt looks for it", got == {rel: parts[k] for k, (_n, rel) in up.QT_PARTS.items()}, why)
 p_qt = up.plan(kits[3], root, None)
-ok("…in the plan", set(p_qt["qt"]) == set(up.QT_PARTS.values()))
+ok("…in the plan", set(p_qt["qt"]) == {rel for _n, rel in up.QT_PARTS.values()})
 up.apply_plan(p_qt, root, home / "discard-qt")
-ok("…put in place, readable by everyone", (root / up.QT_PARTS["theme"]).read_bytes() == theme_so and (root / up.QT_PARTS["style"]).stat().st_mode & 0o777 == 0o644)
+ok("…put in place, readable by everyone", (root / up.QT_PARTS["theme"][1]).read_bytes() == parts["theme"]
+   and (root / up.QT_PARTS["layershell-qmldir"][1]).stat().st_mode & 0o777 == 0o644)
 ok("…and not again when they are already the ones", up.plan(kits[3], root, None)["qt"] == {})
 (kits[3] / "qt/theme/theme.cpp").write_text("// changed\n")
-ok("ready-built plugins for other sources aren't used", up.qt_ready(kits[3], root) == ({}, "the Qt look's sources changed after its ready-built copy was made"))
-up.make_prebuilt_qt(kits[3], home / "theme.so", home / "style.so", "6.10.2"); (kits[3] / "prebuilt/huginn-qt-style.xz").write_bytes(lzma.compress(b"\x7fELFx"))
+ok("ready-built parts for other sources aren't used", up.qt_ready(kits[3], root) == ({}, "the Qt look's sources changed after its ready-built copy was made"))
+up.make_prebuilt_qt(kits[3], built, "6.10.2"); (kits[3] / "prebuilt/huginn-qt-style.xz").write_bytes(lzma.compress(b"\x7fELFx"))
 ok("…nor ones whose bytes aren't what the note says", up.qt_ready(kits[3], root)[0] == {} and "isn't the one" in up.qt_ready(kits[3], root)[1])
-for f in ("huginn-qt.for", "huginn-qt-theme.xz", "huginn-qt-style.xz"):
+for f in ["huginn-qt.for"] + [f"huginn-qt-{k}.xz" for k in up.QT_PARTS]:
     (kits[3] / "prebuilt" / f).unlink()
 shutil.rmtree(kits[3] / "qt")
 

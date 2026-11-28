@@ -106,16 +106,9 @@ def kconfig_read(path: Path, groups, key: str, default: str = "") -> str:
 
 
 def kconfig_write(path: Path, groups, key: str, value) -> None:
-    """Change (or add) one value, leaving everything else in the file as it was. Uses kwriteconfig6 when the system
-    has it, because it also tells KDE's programs (KWin, PowerDevil) that the file changed, so they act on it at once."""
+    """Change (or add) one value in an INI-style settings file (the compositor's kwinrc, kxkbrc and the rest keep the
+    names they had), leaving everything else in the file as it was."""
     value = "true" if value is True else "false" if value is False else str(value)
-    if HAVE("kwriteconfig6"):
-        argv = ["kwriteconfig6", "--file", str(path)]
-        for g in groups:
-            argv += ["--group", g]
-        code, _, _ = RUN(argv + ["--key", key, "--notify", value], None, 10)
-        if code == 0:
-            return
     want = _group_header(groups)
     try:
         lines = path.read_text(encoding="utf-8").splitlines()
@@ -648,30 +641,15 @@ POINTER_PROPS = ("name", "touchpad", "pointer", "keyboard", "tapToClick", "natur
                  "disableWhileTyping", "supportsDisableWhileTyping", "tapFingerCount", "scrollFactor")
 
 
-def kwin_pointers() -> list:
-    own = own_compositor("Pointers")                  # Huginn's own compositor lists them in the same shape
+def pointer_devices() -> list:
+    """The mice and touchpads, as Huginn's compositor lists them (touchpads first)."""
+    own = own_compositor("Pointers")
     if own:
         try:
             return sorted(json.loads(own), key=lambda p: (not p["touchpad"], p["name"].lower()))
         except (ValueError, KeyError, TypeError):
             return []
-    rows = busctl("user", "get-property", "org.kde.KWin", "/org/kde/KWin/InputDevice", "org.kde.KWin.InputDeviceManager", "devicesSysNames")
-    if not rows:
-        return []
-    out = []
-    for sysname in plain(rows[0]) or []:
-        got = busctl("user", "call", "org.kde.KWin", f"/org/kde/KWin/InputDevice/{sysname}", "org.freedesktop.DBus.Properties", "GetAll", "s", "org.kde.KWin.InputDevice")
-        if not got:
-            continue
-        props = plain(got[0])
-        props = props[0] if isinstance(props, list) and props else props
-        if not isinstance(props, dict) or not (props.get("pointer") or props.get("touchpad")) or props.get("keyboard") and not props.get("touchpad"):
-            continue
-        out.append({"sys": sysname, "name": props.get("name", sysname), "touchpad": bool(props.get("touchpad")),
-                    "tap": bool(props.get("tapToClick")), "natural": bool(props.get("naturalScroll")), "left": bool(props.get("leftHanded")),
-                    "speed": float(props.get("pointerAcceleration", 0.0)), "dwt": bool(props.get("disableWhileTyping")),
-                    "canDwt": bool(props.get("supportsDisableWhileTyping")), "canTap": int(props.get("tapFingerCount", 0) or 0) > 0})
-    return sorted(out, key=lambda p: (not p["touchpad"], p["name"].lower()))
+    return []
 
 
 def xkb_layouts(path: Path = Path("/usr/share/X11/xkb/rules/evdev.lst")) -> list:
@@ -799,7 +777,7 @@ def load_input() -> dict:
     options = [o for o in kconfig_read(xkb, ["Layout"], "Options", "").split(",") if o]
     layouts = [l for l in kconfig_read(xkb, ["Layout"], "LayoutList", "").split(",") if l] or ["us"]
     names = {l["id"]: l["label"] for l in xkb_layouts()}
-    return {"pointers": kwin_pointers() if HAVE("busctl") else [], "repeat": kconfig_read(rc, ["Keyboard"], "KeyRepeat", "repeat") != "nothing",
+    return {"pointers": pointer_devices(), "repeat": kconfig_read(rc, ["Keyboard"], "KeyRepeat", "repeat") != "nothing",
             "delay": int(kconfig_read(rc, ["Keyboard"], "RepeatDelay", "600") or 600), "rate": float(kconfig_read(rc, ["Keyboard"], "RepeatRate", "25") or 25),
             "layouts": [{"id": l, "label": names.get(l, l)} for l in layouts],
             "caps": next((o for o in options if o.startswith("caps:")), ""), "compose": "compose:ralt" in options,
@@ -809,7 +787,7 @@ def load_input() -> dict:
 
 
 # ---------------------------------------------------------------------------------------------- accessibility
-OSK_FILES = ("/usr/share/applications/org.kde.plasma.keyboard.desktop", "/usr/share/applications/com.github.maliit.keyboard.desktop")
+OSK_FILES = ("/usr/share/applications/sm.puri.Squeekboard.desktop", "/usr/share/applications/com.github.maliit.keyboard.desktop")
 FILTERS = [("", "None"), ("0", "Red weak (protanopia)"), ("1", "Green weak (deuteranopia)"), ("2", "Blue weak (tritanopia)"), ("invert", "Inverted colours")]
 
 
@@ -818,8 +796,9 @@ def osk_desktop() -> str:
 
 
 def load_a11y() -> dict:
-    """What KDE's own accessibility settings say (kaccessrc, kwinrc, kcminputrc, kdeglobals): KWin and KAccess act
-    on these, so the screen reader, zoom, colour filters and keyboard helps work everywhere, not only in Huginn's apps."""
+    """What the accessibility settings say (kaccessrc, kwinrc, kcminputrc, kdeglobals: the names they had under KDE):
+    Huginn's compositor acts on these, so zoom, colour filters and keyboard helps work everywhere, not only in
+    Huginn's apps."""
     acc, kwin, inp, glob = CONFIG / "kaccessrc", CONFIG / "kwinrc", CONFIG / "kcminputrc", CONFIG / "kdeglobals"
 
     def yes(path, groups, key, default="false"):
@@ -846,12 +825,6 @@ def load_a11y() -> dict:
             "animations": num(glob, ["KDE"], "AnimationDurationFactor", 1.0) > 0.01}
 
 
-def kwin_effect(name: str, on: bool) -> None:
-    dbus_call("session", "org.kde.KWin", "/Effects", "org.kde.kwin.Effects." + ("loadEffect" if on else "unloadEffect"), f"string:{name}")
-
-
-def kwin_reconfigure_effect(name: str) -> None:
-    dbus_call("session", "org.kde.KWin", "/Effects", "org.kde.kwin.Effects.reconfigureEffect", f"string:{name}")
 
 
 # ---------------------------------------------------------------------------------------------- date, time, language
@@ -2127,8 +2100,7 @@ class SystemSettings(QObject):
         stored = value.replace(":", "") if key in ("from", "to") else value
 
         def work():
-            kconfig_write(CONFIG / "kwinrc", ["NightColor"], keys[key], stored)
-            dbus_call("session", "org.kde.KWin", "/KWin", "org.kde.KWin.reconfigure")
+            kconfig_write(CONFIG / "kwinrc", ["NightColor"], keys[key], stored)   # (the compositor follows the file)
             return ""
         self._act("displays", work, demo_change=lambda s: s["night"].update({key: value}))
 
@@ -2290,14 +2262,10 @@ class SystemSettings(QObject):
     # -------------------------------------------------------------- keyboard, mouse, touchpad
     @Slot(str, str, "QVariant")
     def setPointer(self, sysname: str, prop: str, value) -> None:
-        names = {"tap": ("tapToClick", "b"), "natural": ("naturalScroll", "b"), "left": ("leftHanded", "b"), "speed": ("pointerAcceleration", "d"), "dwt": ("disableWhileTyping", "b"),
-                 "flat": ("pointerAccelerationProfileFlat", "b"), "clickfinger": ("clickMethodClickfinger", "b"), "scroll": ("scrollFactor", "d")}
-        if prop not in names:
+        if prop not in ("tap", "natural", "left", "speed", "dwt", "flat", "clickfinger", "scroll"):
             return
-        dbus_name, kind = names[prop]
         if prop == "scroll":
             value = max(0.2, min(5.0, float(value)))
-        text = ("true" if value else "false") if kind == "b" else f"{float(value):.2f}" if prop == "scroll" else f"{max(-1.0, min(1.0, float(value))):.2f}"
 
         def work():
             own = own_compositor("SetPointer", (sysname, prop, json.dumps(value)), "(sss)")
@@ -2305,9 +2273,7 @@ class SystemSettings(QObject):
                 if own:
                     raise Failed(own)
                 return ""
-            if busctl("user", "set-property", "org.kde.KWin", f"/org/kde/KWin/InputDevice/{sysname}", "org.kde.KWin.InputDevice", dbus_name, kind, text) is None:
-                raise Failed("KWin didn't take the change: " + (busctl.last or "it isn't running"))
-            return ""
+            raise Failed("The compositor isn't running, so the change couldn't be made.")
         for p in self._state.get("input", {}).get("pointers", []):
             if p["sys"] == sysname:
                 p[prop] = value
@@ -2343,10 +2309,7 @@ class SystemSettings(QObject):
                     kconfig_write(xkb, ["Layout"], "Use", "true")
                 kconfig_write(xkb, ["Layout"], "Options", ",".join(options))
                 kconfig_write(xkb, ["Layout"], "ResetOldOptions", "true")
-                RUN(["dbus-send", "--session", "--type=signal", "/Layouts", "org.kde.keyboard.reloadConfig"], None, 5)
-            if own_compositor("ReloadInput") is not None:   # Huginn's own compositor reads the same files
-                return ""
-            dbus_call("session", "org.kde.KWin", "/KWin", "org.kde.KWin.reconfigure")
+            own_compositor("ReloadInput")                  # Huginn's compositor reads the same files
             return ""
 
         def demo(s):
@@ -2376,50 +2339,35 @@ class SystemSettings(QObject):
                     RUN(["pkill", "-x", "orca"], None, 5)
             elif key == "zoom":
                 kconfig_write(kwin, ["Plugins"], "zoomEnabled", bool(value))
-                kwin_effect("zoom", bool(value))
             elif key in ("zoomStep", "zoomFollow"):
                 kconfig_write(kwin, ["Effect-zoom"], {"zoomStep": "ZoomFactor", "zoomFollow": "MouseTracking"}[key], value)
-                kwin_reconfigure_effect("zoom")
             elif key == "filter":
                 was_inverted = kconfig_read(acc, ["Huginn"], "Invert", "false") == "true"
                 cb = value not in ("", "invert")
                 kconfig_write(kwin, ["Plugins"], "colorblindnesscorrectionEnabled", cb)
                 if cb:
                     kconfig_write(kwin, ["Effect-colorblindnesscorrection"], "Mode", value)
-                kwin_effect("colorblindnesscorrection", cb)
-                if cb:
-                    kwin_reconfigure_effect("colorblindnesscorrection")
-                if (value == "invert") != was_inverted:             # KWin's invert effect toggles from its shortcut
-                    kwin_effect("invert", True)
-                    dbus_call("session", "org.kde.kglobalaccel", "/component/kwin", "org.kde.kglobalaccel.Component.invokeShortcut", "string:Invert")
+                if (value == "invert") != was_inverted:
                     kconfig_write(acc, ["Huginn"], "Invert", value == "invert")
             elif key == "filterStrength":
                 kconfig_write(kwin, ["Effect-colorblindnesscorrection"], "Intensity", f"{float(value):.2f}")
-                kwin_reconfigure_effect("colorblindnesscorrection")
             elif key == "cursor":
                 size = int(value)
                 kconfig_write(CONFIG / "kcminputrc", ["Mouse"], "cursorSize", size)
-                if HAVE("plasma-apply-cursortheme"):
-                    theme = kconfig_read(CONFIG / "kcminputrc", ["Mouse"], "cursorTheme", "breeze_cursors") or "breeze_cursors"
-                    RUN(["plasma-apply-cursortheme", "--size", str(size), theme], None, 10)
                 if HAVE("gsettings"):                                   # GTK apps
                     RUN(["gsettings", "set", "org.gnome.desktop.interface", "cursor-size", str(size)], None, 5)
-                dbus_call("session", "org.kde.KWin", "/KWin", "org.kde.KWin.reconfigure")
                 note = "Some apps show the new pointer size over their windows after they're opened again."
             elif key in ("sticky", "stickyLock", "slow", "slowDelay", "bounce", "bounceDelay"):
                 names = {"sticky": "StickyKeys", "stickyLock": "StickyKeysLatch", "slow": "SlowKeys", "slowDelay": "SlowKeysDelay",
                          "bounce": "BounceKeys", "bounceDelay": "BounceKeysDelay"}
                 kconfig_write(acc, ["Keyboard"], names[key], int(value) if key.endswith("Delay") else bool(value))
-                dbus_call("session", "org.kde.KWin", "/KWin", "org.kde.KWin.reconfigure")
             elif key == "mouseKeys":
                 kconfig_write(acc, ["Mouse"], "MouseKeys", bool(value))
-                dbus_call("session", "org.kde.KWin", "/KWin", "org.kde.KWin.reconfigure")
             elif key == "flash":
                 kconfig_write(acc, ["Bell"], "VisibleBell", bool(value))
                 kconfig_write(acc, ["Bell"], "SystemBell", not value)
             elif key == "osk":
                 kconfig_write(kwin, ["Wayland"], "InputMethod", (osk_desktop() or "squeekboard") if value else "")
-                dbus_call("session", "org.kde.KWin", "/KWin", "org.kde.KWin.reconfigure")
                 if own_compositor("ReloadAccess") is not None and HAVE("squeekboard"):
                     # Huginn's own compositor: Squeekboard (input-method-v2), shown whenever text is typed into
                     RUN(["gsettings", "set", "org.gnome.desktop.a11y.applications", "screen-keyboard-enabled", "true" if value else "false"], None, 5)
@@ -2855,9 +2803,8 @@ class SystemSettings(QObject):
                 import huginn_clipboard
                 huginn_clipboard.clear()
             elif key == "remember":
-                # Huginn's apps and KDE's read kdeglobals' UseRecent; GTK apps GNOME's own; KDE's activity manager its own
+                # Huginn's apps (and App Store apps built on KDE's libraries) read kdeglobals' UseRecent; GTK apps GNOME's own
                 kconfig_write(CONFIG / "kdeglobals", ["RecentDocuments"], "UseRecent", bool(value))
-                kconfig_write(CONFIG / "kactivitymanagerd-pluginsrc", ["Plugin-org.kde.ActivityManager.Resources.Scoring"], "what-to-remember", 0 if value else 2)
                 if HAVE("gsettings"):
                     RUN(["gsettings", "set", "org.gnome.desktop.privacy", "remember-recent-files", "true" if value else "false"], None, 5)
                 if not value:

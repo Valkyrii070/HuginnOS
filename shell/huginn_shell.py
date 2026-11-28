@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Huginn Shell: the desktop shell of Huginn OS (top bar, dock, launcher, control centre, widgets).
 
-  huginn_shell.py                      run as the session shell (Wayland + KWin, needs org.kde.layershell)
+  huginn_shell.py                      run as the session shell (Wayland, on Huginn's compositor; its windows are
+                                       layer-shell surfaces through Huginn's own QML module, org.huginn.layershell)
   huginn_shell.py --compositor         Huginn's own compositor with the shell inside it (the preview session, in cage)
   huginn_shell.py --compositor --windowed [--no-services]   the same in an ordinary window, for testing
   huginn_shell.py --preview            everything in one ordinary window, on any OS, for design work
@@ -1660,6 +1661,8 @@ def main() -> int:
     from huginn_island import Live
     tabs, live = Tabs(apps, demo=args.preview), Live(demo=args.preview, scenario=args.live)
     engine = QQmlApplicationEngine()
+    import huginn_layerfallback
+    huginn_layerfallback.use(engine)               # (Huginn's layer-shell module, or a stand-in: see there)
     engine.addImageProvider("sysicon", SysIcon())
     ctx = engine.rootContext()
     ctx.setContextProperty("Theme", theme)

@@ -276,6 +276,8 @@ def main() -> int:
     app.setQuitOnLastWindowClosed(False)             # a screen unplugged mustn't end the sign-in screen
     host = Greeter(app)
     engine = QQmlApplicationEngine()
+    import huginn_layerfallback
+    huginn_layerfallback.use(engine)               # (Huginn's layer-shell module, or a stand-in: see there)
     engine.rootContext().setContextProperty("Host", host)
     engine.load(QUrl.fromLocalFile(str(HERE / "qml" / "Greeter.qml")))
     if not engine.rootObjects():

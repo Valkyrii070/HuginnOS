@@ -1826,6 +1826,35 @@ package of the same app runs on the system's Qt, so it can. The App Store now of
   itself with stand-ins for flatpak, pkgcli and apt-cache: defaults, install, open, remove, the queue, a failure.
   The page in two pictures (preview mode). **Not tried installing a real package** from the store.
 
+## Zero KDE: the shell's windows on Huginn's own module (2026-11-27)
+
+The last KDE code in the image was what the shell stood on: KDE's layer-shell-qt (how the bar, dock, launcher,
+widgets, sign-in and lock screen become layers of the desktop), two QML modules for NetworkManager and BlueZ, and
+KConfig's command-line tools. All four are gone; a fresh install brings no KDE program or library, only Breeze's
+icons (under Huginn's) and pointers, as artwork.
+
+- **`org.huginn.layershell`** (`qt/layershell/`, C++, built with the Qt look by `build_qt`): a QML module that makes
+  a Qt window a layer surface (wlr-layer-shell, version 5) through QtWaylandClient's own shell-integration hook. It
+  takes the same properties the shell already set (layer, anchors, exclusive zone, keyboard focus, scope, screen,
+  "on the active screen"), so `Shell.qml`, `Greeter.qml`, `Locker.qml` and `SessionLayer.qml` changed only their
+  import. Popups (menus, tooltips) hang from the layer as `get_popup` children. The protocol file is wlroots' (MIT),
+  with one argument renamed (`namespace` is a word C++ keeps for itself).
+- **A system updated from before** has the module once its update brings the Qt parts (Software Update's prebuilt
+  `huginn-qt-layershell*`), and until then `shell/huginn_layerfallback.py` points the shell, sign-in and lock screen
+  at a stand-in of the same name that loads KDE's module, which such a system still has (updates don't take packages
+  out). A fresh install has no stand-in to fall back on and doesn't need one: `build_qt` stops the build without the module.
+- **Networks and Bluetooth**: the shell already asked NetworkManager and BlueZ itself over D-Bus; the KDE modules for
+  them were installed and never imported.
+- **Settings** writes its INI files itself (`kconfig_write`; kwriteconfig6 is gone) and no longer calls KWin over
+  D-Bus: the compositor reads the same files (night light, zoom, colour filters, sticky and bounce keys, the pointer's
+  size) when told to `ReloadAccess` / `ReloadInput`, and mice and touchpads come from its `Pointers`. The unused
+  KWin rounded-corners build step is gone from `build.sh` too.
+- `config/not-wanted.list` names all of them, so a chroot built before loses them as well.
+- Tested: the nested session on the new module (the bar's exclusive zone, the dock, widgets, the tour, the
+  launcher taking the keyboard and finding Calculator, the lock screen) and the same with the stand-in;
+  `greeter_test.py` (46) and `locker_test.py` (14) both ways; `osupdate_test.py` (70, the five Qt parts);
+  `qt_look_test.py` (41); `ci-smoke.py` (56). A fresh install simulated from the package lists brings no KDE code.
+
 ## Phone's own link (2026-11-27)
 
 Phone no longer needs KDE Connect's desktop program: `apps/huginn_phoned.py` speaks its protocol (version 8) itself,
@@ -1901,6 +1930,9 @@ The goal is a desktop that is Huginn's from the first screen to the last. Where 
   as `Huginn<Realm><Mode>-gtk3.css`, and a copy in `~/.local/share/themes` lets App Store apps wear it too), and
   libadwaita apps its named colours. Breeze's Qt style and Breeze-GTK are gone (2026-11-27); Breeze's icons (under
   Huginn's) and pointers stay, as artwork. Inter is the font everywhere. Icons are Huginn's own theme (see "Icons and looks"); Papirus is gone.
+- **No KDE code is left** (2026-11-27): the shell's windows are layers through Huginn's own module
+  (`org.huginn.layershell`, see "Zero KDE" above), and Breeze's icons and pointers are the only KDE things in the
+  image, as artwork.
 - **The compositor**: being replaced with Huginn's own, in Rust on Smithay (see "Huginn's own compositor" below): it
   is now the session **"Huginn OS (own compositor, preview)"**. The earlier preview in Python
   (`shell/huginn_compositor.py`, `shell/qml/Compositor.qml`, inside cage) is what the notes below describe; it stays

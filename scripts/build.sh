@@ -206,34 +206,6 @@ purge_old_kernels() {
     fi
 }
 
-# Rounded corners for every window, as Huginn's own apps draw theirs: KDE-Rounded-Corners (a KWin effect, GPL-3.0,
-# vendor/rounded-corners), built here against this very KWin. Its build tools come and go again; the libraries the
-# effect itself uses stay.
-build_rounded_corners() {
-    local src="$ROOT/vendor/rounded-corners" pin="66d7ce9"
-    if [ ! -d "$src/src" ] && command -v git >/dev/null 2>&1; then      # fetched once, at the version tested with this KWin
-        git clone -q https://github.com/matinlotfali/KDE-Rounded-Corners "$src" && git -C "$src" checkout -q "$pin" || rm -rf "$src"
-    fi
-    [ -d "$src/src" ] || { warn "no vendor/rounded-corners: other apps' windows keep square corners"; return 0; }
-    rm -rf "$CHROOT/tmp/rc"; cp -r "$src" "$CHROOT/tmp/rc"
-    local deps="cmake g++ make extra-cmake-modules kwin-dev qt6-base-private-dev qt6-base-dev-tools libkf6kcmutils-dev libkf6configwidgets-dev libkf6i18n-dev libdrm-dev gettext"
-    in_chroot sh -c "dpkg-query -W -f='\${Package}\n' | sort > /tmp/rc-before.txt"
-    if in_chroot env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends $deps > "$WORK/rc-deps.log" 2>&1 \
-       && in_chroot sh -c "cd /tmp/rc && cmake -B build -DCMAKE_INSTALL_PREFIX=/usr -DCMAKE_BUILD_TYPE=Release && cmake --build build -j$(nproc) && cmake --install build" > "$WORK/rc-build.log" 2>&1; then
-        # keep what the effect links against; everything else the build brought in goes again
-        in_chroot sh -c 'for f in $(find /usr/lib/x86_64-linux-gnu/qt6/plugins -name "*roundcorners*" -o -name "*shapecorners*" | grep "\.so$"); do
-            ldd "$f" | awk "/=> \\//{print \$3}" | xargs -r dpkg -S 2>/dev/null | cut -d: -f1 | sort -u | xargs -r apt-mark manual >/dev/null; done'
-        install -D -m 644 "$src/LICENSE" "$CHROOT/usr/share/doc/huginn-rounded-corners/LICENSE"
-    else
-        warn "the rounded-corners effect didn't build (see $WORK/rc-build.log): other apps' windows keep square corners"
-        tail -15 "$WORK/rc-build.log" "$WORK/rc-deps.log" 2>/dev/null || true
-    fi
-    in_chroot sh -c "dpkg-query -W -f='\${Package}\n' | sort > /tmp/rc-after.txt; comm -13 /tmp/rc-before.txt /tmp/rc-after.txt > /tmp/rc-new.txt"
-    in_chroot sh -c 'grep -E -- "-dev\$|^(cmake|cmake-data|g\+\+|g\+\+-[0-9]+|make|extra-cmake-modules|gettext|qt6-base-dev-tools)\$" /tmp/rc-new.txt | xargs -r env DEBIAN_FRONTEND=noninteractive apt-get purge -y' > "$WORK/rc-purge.log" 2>&1 || true
-    in_chroot env DEBIAN_FRONTEND=noninteractive apt-get autoremove -y --purge >> "$WORK/rc-purge.log" 2>&1 || true
-    rm -rf "$CHROOT/tmp/rc" "$CHROOT"/tmp/rc-*.txt
-}
-
 # Dictation's speech engine (Super+H, apps/huginn_dictate.py): whisper.cpp's whisper-cli (MIT, vendor/whisper.cpp at a
 # tagged release), built here for any processor with AVX2, with its own ggml linked in: one 3 MB program that needs
 # only the C++ runtime. Its build tools come and go again. The speech models are downloaded when they're chosen.
@@ -263,30 +235,33 @@ build_whisper() {
 }
 
 build_qt() {
-    # Huginn's own Qt look (qt/): the platform theme (colours, fonts, icons, Open and Save through the portal, menu
-    # bars in the top bar) and the widget style that Qt apps other than Huginn's load. Built against the image's Qt;
-    # the compiler and Qt's headers are taken out again afterwards. Without it Qt apps work, in Qt's plain look.
-    local src="$ROOT/qt" plugins=/usr/lib/x86_64-linux-gnu/qt6/plugins
+    # Huginn's own Qt parts (qt/): the platform theme (colours, fonts, icons, Open and Save through the portal, menu
+    # bars in the top bar) and the widget style that Qt apps other than Huginn's load, and the layer-shell module the
+    # shell's windows are made with (org.huginn.layershell). Built against the image's Qt; the compiler and the
+    # headers are taken out again afterwards. The shell needs the layer-shell module: without it there's no image.
+    local src="$ROOT/qt" plugins=/usr/lib/x86_64-linux-gnu/qt6/plugins qml=/usr/lib/x86_64-linux-gnu/qt6/qml
     [ -f "$src/CMakeLists.txt" ] || return 0
     rm -rf "$CHROOT/tmp/hq"; mkdir -p "$CHROOT/tmp/hq/src"
     cp -r "$src/." "$CHROOT/tmp/hq/src/"
     in_chroot sh -c "dpkg-query -W -f='\${Package}\n' | sort > /tmp/hq-before.txt"
-    if in_chroot env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends cmake g++ make qt6-base-dev qt6-base-private-dev > "$WORK/qt-deps.log" 2>&1 \
+    if in_chroot env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends cmake g++ make pkg-config qt6-base-dev qt6-base-private-dev qt6-declarative-dev libwayland-dev wayland-protocols > "$WORK/qt-deps.log" 2>&1 \
        && in_chroot sh -c "cd /tmp/hq && cmake -S src -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build -j$(nproc)" > "$WORK/qt-build.log" 2>&1; then
         install -D -m 644 "$CHROOT/tmp/hq/build/libhuginntheme.so" "$CHROOT$plugins/platformthemes/libhuginntheme.so"
         install -D -m 644 "$CHROOT/tmp/hq/build/libhuginnstyle.so" "$CHROOT$plugins/styles/libhuginnstyle.so"
+        install -d "$CHROOT$qml/org/huginn/layershell"
+        install -m 644 "$CHROOT/tmp/hq/build/org/huginn/layershell/"{qmldir,libhuginnlayershell.so,huginnlayershell.qmltypes} "$CHROOT$qml/org/huginn/layershell/"
         # (kept for whoever makes the ready-built copy updates carry: apps/huginn_osupdate.py prebuilt-qt)
-        mkdir -p "$WORK/qt-built"
-        cp "$CHROOT/tmp/hq/build/"libhuginn*.so "$WORK/qt-built/"
+        rm -rf "$WORK/qt-built"; mkdir -p "$WORK/qt-built"
+        cp -r "$CHROOT/tmp/hq/build/"libhuginn*.so "$CHROOT/tmp/hq/build/org" "$WORK/qt-built/"
         in_chroot dpkg-query -W -f='${Version}' libqt6core6t64 2>/dev/null | sed 's/^[0-9]*://; s/[^0-9.].*//' > "$WORK/qt-built/qt-version"
     else
-        warn "Huginn's Qt look didn't build (see $WORK/qt-build.log): Qt apps other than Huginn's look plain"
         tail -15 "$WORK/qt-build.log" "$WORK/qt-deps.log" 2>/dev/null || true
     fi
     in_chroot sh -c "dpkg-query -W -f='\${Package}\n' | sort > /tmp/hq-after.txt; comm -13 /tmp/hq-before.txt /tmp/hq-after.txt > /tmp/hq-new.txt"
-    in_chroot sh -c 'grep -E -- "-dev\$|^(cmake|cmake-data|g\+\+|g\+\+-[0-9]+|make|cpp|cpp-[0-9]+|gcc|gcc-[0-9]+|qmake6|qmake6-bin|qt6-base-dev-tools)\$" /tmp/hq-new.txt | xargs -r env DEBIAN_FRONTEND=noninteractive apt-get purge -y' > "$WORK/qt-purge.log" 2>&1 || true
+    in_chroot sh -c 'grep -E -- "-dev\$|-dev-tools\$|^(cmake|cmake-data|g\+\+|g\+\+-[0-9]+|make|cpp|cpp-[0-9]+|gcc|gcc-[0-9]+|qmake6|qmake6-bin|pkg-config|pkgconf|pkgconf-bin|libwayland-bin|wayland-protocols|qt6-qmlls-plugins|qt6-qmllint-plugins)\$" /tmp/hq-new.txt | xargs -r env DEBIAN_FRONTEND=noninteractive apt-get purge -y' > "$WORK/qt-purge.log" 2>&1 || true
     in_chroot env DEBIAN_FRONTEND=noninteractive apt-get autoremove -y --purge >> "$WORK/qt-purge.log" 2>&1 || true
     rm -rf "$CHROOT/tmp/hq" "$CHROOT"/tmp/hq-*.txt
+    [ -f "$CHROOT$qml/org/huginn/layershell/qmldir" ] || die "Huginn's Qt parts didn't build (see $WORK/qt-build.log): the shell's windows need its layer-shell module"
 }
 
 build_compositor() {
@@ -392,6 +367,8 @@ stage_customise() {
     install -d "$CHROOT/usr/share/huginn-shell/qml"
     install -m 755 "$ROOT"/shell/*.py "$CHROOT/usr/share/huginn-shell/"
     install -m 644 "$ROOT"/shell/qml/*.qml "$ROOT"/shell/qml/*.js "$CHROOT/usr/share/huginn-shell/qml/"
+    install -D -m 644 "$ROOT/shell/layershell-fallback/org/huginn/layershell/qmldir" \
+        "$CHROOT/usr/share/huginn-shell/layershell-fallback/org/huginn/layershell/qmldir"   # (only for systems without the real one)
     install -m 644 "$ROOT/tokens/tokens.json" "$CHROOT/usr/share/huginn-os/tokens.json"
     install -d "$CHROOT/usr/share/huginn-apps/qml"
     install -m 755 "$ROOT"/apps/*.py "$CHROOT/usr/share/huginn-apps/"

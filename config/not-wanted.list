@@ -57,3 +57,15 @@ qt6-style-kvantum
 qt6-style-kvantum-l10n
 qt6-style-kvantum-themes
 qt-style-kvantum-themes
+# The last of KDE: layer-shell-qt (Huginn's own module makes the shell's windows: qt/layershell), the QML modules for
+# NetworkManager and BlueZ (the shell asks them itself), and KConfig's command-line tools (Settings writes its files
+# itself) (2026-11-27)
+layer-shell-qt
+liblayershellqtinterface6
+qml6-module-org-kde-layershell
+qml6-module-org-kde-networkmanager
+libkf6networkmanagerqt6
+qml6-module-org-kde-bluezqt
+libkf6bluezqt6
+libkf6bluezqt-data
+libkf6config-bin

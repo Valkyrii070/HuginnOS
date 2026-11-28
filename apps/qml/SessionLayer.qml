@@ -1,8 +1,8 @@
 import QtQuick
 import QtQuick.Window
-import org.kde.layershell 1.0 as LayerShell
+import org.huginn.layershell 1.0 as LayerShell
 
-// One of the session daemon's windows as a layer-shell surface (the KWin session): banners at the top right (below
+// One of the session daemon's windows as a layer-shell surface (Huginn's own module, org.huginn.layershell): banners at the top right (below
 // the bar, which reserves its space), the level at the bottom, a question in the middle with the keyboard.
 Window {
     id: w

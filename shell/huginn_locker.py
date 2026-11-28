@@ -215,6 +215,8 @@ def main() -> int:
     app.setQuitOnLastWindowClosed(False)             # a screen unplugged mustn't end the lock
     locker = Locker(app)
     engine = QQmlApplicationEngine()
+    import huginn_layerfallback
+    huginn_layerfallback.use(engine)               # (Huginn's layer-shell module, or a stand-in: see there)
     engine.rootContext().setContextProperty("Host", locker)
     engine.load(QUrl.fromLocalFile(str(HERE / "qml" / "Locker.qml")))
     if not engine.rootObjects():

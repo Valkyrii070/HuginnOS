@@ -1516,7 +1516,7 @@ def empty_trash_older(trash: Path, days: int, now: float = None) -> int:
 
 def has_layer_shell(engine) -> bool:
     for d in engine.importPathList():
-        if (Path(d) / "org" / "kde" / "layershell").is_dir():
+        if (Path(d) / "org" / "huginn" / "layershell").is_dir():          # Huginn's own (qt/layershell)
             return True
     return False
 
