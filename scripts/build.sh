@@ -189,8 +189,19 @@ purge_unwanted() {
     in_chroot apt-mark manual "${pkgs[@]}" >/dev/null
     # Zero KDE: anything of KDE's still in the image (a dependency that changed) is said loudly and listed in the
     # work folder, so it's seen at once rather than found later
-    local kde
-    kde="$(in_chroot dpkg-query -W -f='${Package}\n' 2>/dev/null | grep -E '^(kde|plasma|kwin|breeze|kf6|libkf6|libkf5|kio|kscreen|sddm|kded|kwallet|baloo|milou|kglobalacc|kactivit|libplasma|libkworkspace|libksysguard|qml6-module-org-kde|layer-shell-qt|liblayershellqt|qt6-style-kvantum|xdg-desktop-portal-kde|pinentry-qt)' || true)"
+    local kde kde_names='^(kde|plasma|kwin|breeze|kf6|libkf6|libkf5|kio|kscreen|sddm|kded|kwallet|baloo|milou|kglobalacc|kactivit|libplasma|libkworkspace|libksysguard|libnotificationmanager|libklipper|libkglobalacceld|libkdecorations|libkwaylandclient|knighttime|qml6-module-org-kde|layer-shell-qt|liblayershellqt|qt6-style-kvantum|xdg-desktop-portal-kde|pinentry-qt)'
+    # (kept on purpose: KDE's Qt image-format plugins, so Photos, Easel and the rest read HEIC, AVIF, JPEG XL and
+    # more; they're plugins for Qt's own image reading, and need KDE's small archive library)
+    local kde_kept='^(kimageformat-plugins|libkf5archive5|libkf5archive-data)$'
+    kde="$(in_chroot dpkg-query -W -f='${Package}\n' 2>/dev/null | grep -E "$kde_names" | grep -v -E "$kde_kept" || true)"
+    if [[ -n "$kde" ]]; then
+        # A chroot from before KDE left keeps its libraries marked as asked for; nothing listed needs them now, so
+        # they're marked as dependencies and apt takes away the ones nothing depends on (what a fresh build has)
+        # shellcheck disable=SC2086
+        in_chroot apt-mark auto $kde >/dev/null
+        in_chroot apt-get -y autoremove --purge > "$WORK/kde-autoremove.log" 2>&1 || warn "taking out KDE's leftovers failed (see $WORK/kde-autoremove.log)"
+        kde="$(in_chroot dpkg-query -W -f='${Package}\n' 2>/dev/null | grep -E "$kde_names" | grep -v -E "$kde_kept" || true)"
+    fi
     if [[ -n "$kde" ]]; then
         printf '%s\n' "$kde" > "$WORK/kde-left.txt"
         warn "KDE in the image ($(wc -l <<< "$kde") packages, listed in $WORK/kde-left.txt): add them to config/not-wanted.list or find what brings them"
@@ -480,6 +491,10 @@ stage_customise() {
         --exclude='.git*' --exclude=huginn-icon.png --exclude=/os --exclude=/docs --exclude='*.bat' --exclude='*.ps1' \
         --exclude='*.command' --exclude='*_test.py' --exclude=/python --exclude=__pycache__ --exclude=test_out \
         "$browser/" "$CHROOT/usr/share/huginn/"
+    # (the overlay keeps a few things of the system's own in that folder, the sign-in widgets among them: put back)
+    if [ -d "$ROOT/config/overlay/usr/share/huginn" ]; then
+        rsync -a --chown=root:root "$ROOT/config/overlay/usr/share/huginn/" "$CHROOT/usr/share/huginn/"
+    fi
     in_chroot python3 -m compileall -q /usr/share/huginn/safari_browser.py
     # Icons: Huginn draws its own at every size; if that fails here, the 256 px picture is used.
     if in_chroot env QT_QPA_PLATFORM=offscreen HOME=/tmp python3 /usr/share/huginn/safari_browser.py --export-icon /tmp/huginn-icons \
@@ -552,7 +567,7 @@ CASPER
     # (casper needs it), so these ride on the ISO too, in pool/tpm, with what they need that the image hasn't.
     install -d "$CHROOT/var/cache/huginn-pool/tpm/partial"
     if ! in_chroot apt-get install -y --download-only -o Dir::Cache::Archives=/var/cache/huginn-pool/tpm \
-            dracut systemd-cryptsetup > "$WORK/tpm-pool.log" 2>&1; then
+            dracut systemd-cryptsetup tpm2-tools > "$WORK/tpm-pool.log" 2>&1; then
         log "(the TPM unlock's packages couldn't be fetched, see $WORK/tpm-pool.log: the installer won't offer it)"
     fi
     rm -rf "$CHROOT/var/cache/huginn-pool/tpm/partial" "$CHROOT/var/cache/huginn-pool/tpm/lock"

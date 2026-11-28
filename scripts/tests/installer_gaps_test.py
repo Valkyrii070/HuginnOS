@@ -150,21 +150,26 @@ real = eng.tpm2_here
 eng.tpm2_here = lambda sysfs=None: True
 check("no packages on the medium: the password alone", inst.tpm_unlock() is False and not ran)
 (inst.medium / "pool/tpm").mkdir(parents=True)
-for n in ("dracut_110-1_amd64.deb", "systemd-cryptsetup_259_amd64.deb"):
+for n in ("dracut_110-1_amd64.deb", "dracut-core_110-1_amd64.deb", "systemd-cryptsetup_259_amd64.deb", "tpm2-tools_5.7_amd64.deb"):
     (inst.medium / "pool/tpm" / n).write_text("deb")
 eng.tpm2_here = lambda sysfs=None: False
 check("no chip: the password alone", inst.tpm_unlock() is False and not ran)
 eng.tpm2_here = lambda sysfs=None: True
 done = inst.tpm_unlock()
 cmds = [r[0] for r in ran]
-check("with both: dracut and systemd-cryptsetup put in from the medium, offline", cmds[0][:4] == ["apt-get", "install", "-y", "--no-download"]
-      and "/tmp/huginn-tpm/dracut_110-1_amd64.deb" in cmds[0] and not (inst.t / "tmp/huginn-tpm").exists(), cmds)
+check("with both: systemd-cryptenroll and the TPM's tools first, from the medium, offline", cmds[0][:4] == ["apt-get", "install", "-y", "--no-download"]
+      and "/tmp/huginn-tpm/systemd-cryptsetup_259_amd64.deb" in cmds[0] and "/tmp/huginn-tpm/tpm2-tools_5.7_amd64.deb" in cmds[0]
+      and not any("dracut" in c for c in cmds[0]), cmds)
+check("…dracut only once the chip took the PIN", cmds[1][0] == "systemd-cryptenroll" and cmds[2][:4] == ["apt-get", "install", "-y", "--no-download"]
+      and "/tmp/huginn-tpm/dracut_110-1_amd64.deb" in cmds[2] and "/tmp/huginn-tpm/dracut-core_110-1_amd64.deb" in cmds[2]
+      and not (inst.t / "tmp/huginn-tpm").exists(), cmds)
 enroll = ran[1]
 check("…the PIN sealed to the chip with Secure Boot's state, the password to allow it", enroll[0] == ["systemd-cryptenroll", "--tpm2-device=auto", "--tpm2-pcrs=7", "--tpm2-with-pin=yes", "/dev/sdb3"]
       and enroll[1] == {"PASSWORD": "huginn-test-only", "NEWPIN": "2468"}, enroll)
 check("…never in the log", not any("2468" in str(x) or "huginn-test-only" in str(x) for x in logs))
 check("…crypttab and dracut told, and it says so", done is True and "tpm2-device=auto" in (inst.t / "etc/crypttab").read_text()
-      and "tpm2-tss" in (inst.t / "etc/dracut.conf.d/90-huginn.conf").read_text())
+      and 'hostonly="yes"' in (inst.t / "etc/dracut.conf.d/90-huginn.conf").read_text()
+      and "add_dracutmodules" not in (inst.t / "etc/dracut.conf.d/90-huginn.conf").read_text())
 ran.clear()
 
 
@@ -177,7 +182,8 @@ def refuse(cmd, stdin=None, chroot=False, check=True, timeout=0, secrets=None):
 
 inst.run = refuse
 (inst.t / "etc/crypttab").write_text(eng.crypttab("LUKS-UUID"))
-check("the chip refusing: the password alone, crypttab left as it was", inst.tpm_unlock() is False and "tpm2" not in (inst.t / "etc/crypttab").read_text())
+check("the chip refusing: the password alone, crypttab left as it was, dracut never put in", inst.tpm_unlock() is False and "tpm2" not in (inst.t / "etc/crypttab").read_text()
+      and not any("dracut_110-1_amd64.deb" in " ".join(c) for c in ran if c[0] == "apt-get"), ran)
 eng.tpm2_here = real
 
 print(f"\n{ok} passed, {bad} failed")

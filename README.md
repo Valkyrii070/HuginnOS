@@ -1808,11 +1808,13 @@ trying Huginn OS, and it waits in the launcher.
     Saved passwords and Wi‑Fi keys stay in Windows.
   - **The chip and a PIN** (Safety, with encryption, on computers with a TPM 2.0): the disk opens with a short PIN
     on the boot screen instead of the password. initramfs-tools can't ask a TPM, so the installed system switches to
-    dracut: `dracut` and `systemd-cryptsetup` ride on the ISO in `pool/tpm` (fetched by the build, installed offline),
+    dracut: `dracut`, `systemd-cryptsetup` and `tpm2-tools` (dracut's TPM part needs it) ride on the ISO in
+    `pool/tpm` (fetched by the build, installed offline). In two steps, so nothing is swapped until the chip has
+    taken the PIN: systemd-cryptsetup and the TPM's tools first, beside initramfs-tools; then
     `systemd-cryptenroll --tpm2-device=auto --tpm2-pcrs=7 --tpm2-with-pin=yes` seals the PIN to the chip with Secure
-    Boot's state (the password and PIN go in its environment, never on a command line or in the log), crypttab gets
-    `tpm2-device=auto`. The password and recovery key keep working; with no chip, no packages, or the chip refusing,
-    it's the password alone and initramfs-tools stays. Tested (`scripts/tests/installer_gaps_test.py`, 28 checks)
+    Boot's state (the password and PIN go in its environment, never on a command line or in the log); only then
+    dracut, crypttab's `tpm2-device=auto`, and a host-only dracut configuration. The password and recovery key keep working; with no chip, no packages, or the chip refusing,
+    it's the password alone and initramfs-tools stays. Tested (`scripts/tests/installer_gaps_test.py`, 29 checks)
     against made-up browsers and a fake chip; not yet on a real TPM.
 - **Steps** (before the dock path), in a rail at the left that can be gone back along: Welcome (language, then Try or Install), Keyboard
   (search, and a place to try it; picked from the language, applied to the live session at once), Network (Wi‑Fi
@@ -1981,8 +1983,11 @@ speaks gpg-agent's Assuan protocol (descriptions, prompts, errors, a new passphr
 cancel as GnuPG's own error), shows `apps/qml/Pinentry.qml` (the administrator prompt's glass card, with a key), and
 hands over to pinentry-curses on a text console. Before, a passphrase asked for in the graphical session (Git signing
 from Code, Passwords' exports) had only the text pinentry, with no terminal to show it. pinentry-qt joined
-`not-wanted.list`, and the build now lists any KDE package that ends up in the image (`kde-left.txt` in the work
-folder) and says so loudly. `pinentry_test.py`: 16 checks, among them a real gpg-agent encrypting and decrypting
+`not-wanted.list`. The build now also clears KDE libraries an older chroot kept marked as asked for (built with
+`--from customise` on a chroot from before KDE left, 80 such packages were still there: marked as dependencies, apt
+takes the ones nothing needs), then lists any KDE package still in the image (`kde-left.txt` in the work folder)
+and says so loudly. Kept on purpose: `kimageformat-plugins` (KDE's plugins for Qt's own image reading, so Photos
+and Easel open HEIC, AVIF, JPEG XL and more) and the small archive library they need. `pinentry_test.py`: 16 checks, among them a real gpg-agent encrypting and decrypting
 with a passphrase through the pinentry's own conversation.
 
 ## Zero KDE: the shell's windows on Huginn's own module (2026-11-27)

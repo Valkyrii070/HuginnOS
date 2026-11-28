@@ -356,8 +356,9 @@ def tpm2_here(sysfs: Path = Path("/sys")) -> bool:
         return False
 
 
-DRACUT_CONF = ("# Huginn OS (the installer): the start-up opens the disk with the TPM and a PIN, asked on the boot screen\n"
-               'hostonly="yes"\nhostonly_cmdline="no"\nadd_dracutmodules+=" crypt systemd tpm2-tss "\n')
+DRACUT_CONF = ("# Huginn OS (the installer): the start-up opens the disk with the TPM and a PIN, asked on the boot screen.\n"
+               "# For this computer only; crypttab's tpm2-device brings systemd-cryptsetup's TPM part (tpm2-tss) with it.\n"
+               'hostonly="yes"\nhostonly_cmdline="no"\n')
 
 
 def good_hostname(name: str) -> str:
@@ -687,23 +688,32 @@ class Engine:
         if not debs or not tpm2_here():
             self.log("(no TPM 2.0 here, or the medium hasn't its packages: the disk opens with the password)")
             return False
+        # In two steps, so nothing is swapped until the chip has taken the PIN: first systemd-cryptenroll and the TPM's
+        # libraries and tools (beside initramfs-tools), then, only once the PIN is sealed, dracut in its place.
+        tools = [d for d in debs if not d.name.startswith("dracut")]
+        dracut = [d for d in debs if d.name.startswith("dracut")]
+        if not dracut:
+            self.log("(the medium's pool/tpm hasn't dracut: the disk opens with the password)")
+            return False
         stage = t / "tmp/huginn-tpm"
         stage.mkdir(exist_ok=True)
         try:
             for d in debs:
                 shutil.copy2(d, stage / d.name)
-            self.run(["apt-get", "install", "-y", "--no-download"] + [f"/tmp/huginn-tpm/{d.name}" for d in debs], chroot=True, timeout=1200)
+            if tools:
+                self.run(["apt-get", "install", "-y", "--no-download"] + [f"/tmp/huginn-tpm/{d.name}" for d in tools], chroot=True, timeout=1200)
+            try:
+                self.run(["systemd-cryptenroll", "--tpm2-device=auto", "--tpm2-pcrs=7", "--tpm2-with-pin=yes", self.dev["root"]],
+                         chroot=True, timeout=300, secrets={"PASSWORD": p["passphrase"], "NEWPIN": str(p["tpmPin"])})
+            except Failed as err:
+                self.log(f"(the chip didn't take the PIN: {err}; the disk opens with the password)")
+                return False
+            self.run(["apt-get", "install", "-y", "--no-download"] + [f"/tmp/huginn-tpm/{d.name}" for d in dracut], chroot=True, timeout=1200)
         except Failed as err:
             self.log(f"(the TPM unlock couldn't be set up: {err})")
             return False
         finally:
             shutil.rmtree(stage, ignore_errors=True)
-        try:
-            self.run(["systemd-cryptenroll", "--tpm2-device=auto", "--tpm2-pcrs=7", "--tpm2-with-pin=yes", self.dev["root"]],
-                     chroot=True, timeout=300, secrets={"PASSWORD": p["passphrase"], "NEWPIN": str(p["tpmPin"])})
-        except Failed as err:
-            self.log(f"(the chip didn't take the PIN: {err}; the disk opens with the password)")
-            return False
         (t / "etc/dracut.conf.d").mkdir(parents=True, exist_ok=True)
         (t / "etc/dracut.conf.d/90-huginn.conf").write_text(DRACUT_CONF)
         (t / "etc/crypttab").write_text(crypttab(self.uuid(self.dev["root"]), tpm=True))
