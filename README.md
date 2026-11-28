@@ -1888,6 +1888,38 @@ module (`libhuginn-menus.so`).
   Settings), File › New from there and Ctrl+N in the window both opening a document. An app that gives itself no name
   goes by GDK's ("geany" → "Geany"). `osupdate_test.py` (81). Not yet tried: wxWidgets apps (Audacity, FileZilla).
 
+## Huginn's icon theme on its own: no Breeze underneath (2026-11-28)
+
+Huginn's icon theme used to inherit Breeze's for anything it didn't draw itself. It now answers every name apps ask
+for, and Breeze's icons leave the image: with the pointers above, nothing of KDE's is left, artwork included.
+
+- **What "every name" means** (`scripts/icon_names.py`): freedesktop's Icon Naming Specification in every context
+  (actions, apps, categories, devices, emblems, faces, file kinds, places, statuses) and what GTK and Qt ask for
+  themselves (menus, entries, sidebars, Wi‑Fi and battery levels, power profiles, alignment, call states…): 432
+  names. 191 were missing.
+- **New line glyphs** (`scripts/icon_glyphs_more.js`, 77 of them, in `Glyph.qml`'s own drawing language and read
+  only when the theme is drawn, so the shell's glyphs don't grow): 21 faces, signal and battery levels, view layouts,
+  check and radio marks, alignment, text direction and indents, an aeroplane, a gauge for power profiles, a dial
+  pad, a touchpad, a floppy, a tape, an hourglass, a spinner and more.
+- **Composed from glyphs already drawn** (`COMPOSED` in `scripts/icon_symbols.py`, 98 names): a glyph with a small
+  one at its foot in a gap of its own (contact-new is a person with a plus; printer-error a printer with "!"), one
+  crossed out (notifications-disabled, bluetooth-disabled), mirrored or turned (sidebar end, rotate left, the
+  vertical alignments), and emblems (the glyph in a ring). The small glyphs are drawn heavier so they keep the
+  stroke's weight.
+- **Standard app and category names** (accessories-calculator, applications-games, preferences-desktop…) show
+  Huginn's own app tiles (`APP_TILES` in `scripts/make-icons.py`).
+- `index.theme` inherits only `hicolor` (the apps' own icons); `breeze-icon-theme` and `kf6-breeze-icon-theme` are in
+  `not-wanted.list`, and a fresh install simulated from the package lists brings no KDE package at all. The icon
+  wrapper no longer looks in Breeze for apps' own icons.
+- Fixed on the way: the settings portal still told apps their GTK theme was "Breeze" (gone since Huginn's own GTK
+  theme came in); it says "Huginn" now. Drawing the theme again also brought 40 device and status pictures up to
+  date with their current sources (they had been drawn with an older fitting).
+- Tested: `icon_coverage_test.py` (16): all 432 names found by Qt's own lookup (`QIcon.hasThemeIcon`) and GTK's
+  (`Gtk.IconTheme`), a -symbolic one as an icon GTK recolours, every one of the theme's pictures valid SVG, the line
+  icons in the text colour, the tree's icons exactly what the sources make, and what the compositions draw (a badge
+  in the corner, a line across, a true mirror, a ring). `ci-smoke.py` (56), `portal_more_test.py` (23),
+  `osupdate_test.py` (82).
+
 ## Huginn's own pointers (2026-11-28)
 
 Breeze's pointers (KDE's artwork) are replaced by Huginn's own: `pointers/make_pointers.py` draws every pointer an
@@ -2025,9 +2057,9 @@ The goal is a desktop that is Huginn's from the first screen to the last. Where 
   as `Huginn<Realm><Mode>-gtk3.css`, and a copy in `~/.local/share/themes` lets App Store apps wear it too), and
   libadwaita apps its named colours. Breeze's Qt style and Breeze-GTK are gone (2026-11-27); Breeze's icons (under
   Huginn's) and pointers stay, as artwork. Inter is the font everywhere. Icons are Huginn's own theme (see "Icons and looks"); Papirus is gone.
-- **No KDE code is left** (2026-11-27): the shell's windows are layers through Huginn's own module
-  (`org.huginn.layershell`, see "Zero KDE" above), and Breeze's icons and pointers are the only KDE things in the
-  image, as artwork.
+- **Nothing of KDE's is left** (2026-11-28): the shell's windows are layers through Huginn's own module
+  (`org.huginn.layershell`, see "Zero KDE" above), the pointers are Huginn's own, and the icon theme answers every
+  name itself, so Breeze's artwork is gone too.
 - **The compositor**: being replaced with Huginn's own, in Rust on Smithay (see "Huginn's own compositor" below): it
   is now the session **"Huginn OS (own compositor, preview)"**. The earlier preview in Python
   (`shell/huginn_compositor.py`, `shell/qml/Compositor.qml`, inside cage) is what the notes below describe; it stays

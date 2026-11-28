@@ -302,7 +302,7 @@ def list_icon_themes() -> list:
                 continue
             out.append({"id": ident, "name": info.get("Name", ident), "about": info.get("Comment", ""), "user": is_user_theme(ident),
                         "samples": [Path(s).as_uri() for s in found[:7]]})
-    first = {"Huginn": 0, "breeze": 1, "breeze-dark": 2}
+    first = {"Huginn": 0}
     return sorted(out, key=lambda t: (first.get(t["id"], 3), t["name"].lower()))
 
 

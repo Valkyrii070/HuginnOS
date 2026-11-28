@@ -20,9 +20,8 @@ bluez
 upower
 # Theming: GTK 3 apps in Huginn's own theme (/usr/share/themes/Huginn: Adwaita's shapes, which GTK carries, in the
 # realm's colours); Qt apps in Huginn's own (above). KDE's Breeze style and Breeze-GTK are gone.
-# Icons: Huginn's own theme (scripts/make-icons.py, in the overlay), with Breeze's underneath for anything it doesn't
-# draw. Pointers are Huginn's own too (pointers/make_pointers.py, drawn into the icon theme by build.sh).
-breeze-icon-theme
+# Icons: Huginn's own theme (scripts/make-icons.py, in the overlay), answering every standard name itself
+# (scripts/icon_names.py); pointers too (pointers/make_pointers.py, drawn into the icon theme by build.sh).
 fonts-inter-variable
 fonts-jetbrains-mono
 fonts-noto-core

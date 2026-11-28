@@ -4,7 +4,7 @@
     python3 huginn_iconwrap.py --system    the same, for everyone (the image's build, as root)
     python3 huginn_iconwrap.py --sheet F   also write a picture F of every wrapped icon (to look at)
 
-An app's own icon is found where it put it (hicolor in every data folder, Flatpak's exports, Breeze, pixmaps) and
+An app's own icon is found where it put it (hicolor in every data folder, Flatpak's exports, pixmaps) and
 put on Huginn's tile (scripts/make-icons.py draws the same tile for Huginn's apps): an icon that is already a
 square tile of its own (it fills its square, corners and all) is cut to Huginn's squircle and takes its glass edges;
 any other shape (a circle, a logo) sits on the smoked glass, brought to the same size as Huginn's pictures, with a
@@ -67,10 +67,10 @@ def find_wrapped(icon: str, desktop_id: str) -> str:
 
 
 def find_icon(name: str) -> str:
-    """The app's own icon file: a path as given, else the biggest in hicolor (scalable first), Breeze, or pixmaps."""
+    """The app's own icon file: a path as given, else the biggest in hicolor (scalable first), or pixmaps."""
     if os.path.isabs(name):
         return name if os.path.isfile(name) else ""
-    for theme in ("hicolor", "breeze"):
+    for theme in ("hicolor",):
         for b in bases():
             root = b / "icons" / theme
             if not root.is_dir():

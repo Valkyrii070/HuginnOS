@@ -72,3 +72,7 @@ libkf6config-bin
 # KDE's pointers: Huginn draws its own (pointers/make_pointers.py); Adwaita's and DMZ's stay to choose from (2026-11-28)
 breeze-cursor-theme
 oxygen-cursor-theme
+# Breeze's icons: Huginn's icon theme answers every standard name itself now (scripts/icon_names.py), so nothing of
+# KDE's is left, artwork included (2026-11-28)
+breeze-icon-theme
+kf6-breeze-icon-theme

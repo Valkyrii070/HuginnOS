@@ -579,10 +579,31 @@ def trash_small(full: bool) -> str:
             + "".join(f'<rect x="{x - 6}" y="120" width="12" height="80" rx="6" fill="#fff" opacity=".85"/>' for x in (106, 128, 150)) + '</svg>\n')
 
 
+# standard names for apps, kinds of app and settings: Huginn's own app's tile stands for them
+APP_TILES = {
+    "accessories-calculator": "calculator", "accessories-character-map": "characters", "accessories-dictionary": "books",
+    "accessories-text-editor": "notes", "multimedia-volume-control": "music", "system-file-manager": "files",
+    "system-software-update": "store", "utilities-system-monitor": "monitor", "preferences-desktop-accessibility": "settings",
+    "preferences-desktop-font": "fonts", "preferences-desktop-keyboard": "shortcuts", "preferences-desktop-locale": "translate",
+    "preferences-desktop-multimedia": "music", "preferences-desktop-screensaver": "settings", "preferences-desktop-theme": "settings",
+    "preferences-desktop-wallpaper": "photos", "preferences-desktop": "settings", "preferences-desktop-peripherals": "settings",
+    "preferences-desktop-personal": "settings", "preferences-system": "settings", "preferences-system-network": "settings",
+    "preferences-other": "settings", "applications-accessories": "notes", "applications-development": "code",
+    "applications-engineering": "monitor", "applications-games": "games", "applications-graphics": "easel",
+    "applications-internet": "browser", "applications-multimedia": "video", "applications-office": "documents",
+    "applications-other": "store", "applications-science": "calculator", "applications-system": "settings",
+    "applications-utilities": "archives", "system-help": "help", "help-browser": "help", "utilities-terminal": "terminal",
+    "system-software-install": "store", "web-browser": "browser", "internet-mail": "mail", "office-calendar": "calendar",
+    "x-office-calendar": "calendar", "multimedia-video-player": "video", "multimedia-audio-player": "music",
+    "camera-photo-app": "camera", "image-viewer": "photos",
+}
+
+
 def theme(colours: dict) -> int:
     """Writes the Huginn icon theme: folders, the Bin and Huginn's mark (places), kinds of file (mimetypes), devices,
     the dialogs' and security pictures (status), each big (scalable) and small (16, 22, 24); and the line glyphs
-    as every action and -symbolic icon (icon_symbols.py). Breeze is underneath, for anything not drawn here."""
+    as every action and -symbolic icon (icon_symbols.py); Huginn's app tiles for the standard names of apps and kinds
+    of app. Nothing is underneath but the apps' own icons (hicolor): scripts/icon_names.py lists what must be here."""
     import icon_symbols
     folder_draw = {n: (lambda n=n: folder_svg(FOLDERS[n]), lambda n=n: folder_small(FOLDERS[n])) for n in FOLDERS}
     folder_draw["user-trash"] = (lambda: trash_svg(False), lambda: trash_small(False))
@@ -608,8 +629,19 @@ def theme(colours: dict) -> int:
             dirs.append((f"{folder}/{ctx}", ctx.title() if ctx != "mimetypes" else "MimeTypes", size))
         count += len(items)
     sym_dirs, sym_count = icon_symbols.write(THEME)
+    apps = THEME / "scalable" / "apps"
+    apps.mkdir(parents=True, exist_ok=True)
+    for old in apps.glob("*.svg"):
+        old.unlink()
+    for name, app in APP_TILES.items():
+        tile = OUT / "scalable" / "apps" / f"huginn-{app}.svg"
+        if tile.is_file():
+            (apps / f"{name}.svg").write_text(tile.read_text(encoding="utf-8"), encoding="utf-8")
+            count += 1
+    dirs.append(("scalable/apps", "Applications", None))
+    # nothing of KDE's underneath any more: what Huginn doesn't draw is the apps' own (hicolor)
     lines = ["[Icon Theme]", "Name=Huginn", "Comment=Huginn OS: folders, files and devices in smoked glass, and Huginn's own line icons",
-             "Inherits=breeze,hicolor", "Example=folder", "Directories=" + ",".join([d for d, _, _ in dirs] + [d for d, _ in sym_dirs] + ["wrapped/apps"]), ""]
+             "Inherits=hicolor", "Example=folder", "Directories=" + ",".join([d for d, _, _ in dirs] + [d for d, _ in sym_dirs] + ["wrapped/apps"]), ""]
     for d, context, size in dirs:
         if size is None:
             lines += [f"[{d}]", "Size=256", "MinSize=32", "MaxSize=512", f"Context={context}", "Type=Scalable", ""]

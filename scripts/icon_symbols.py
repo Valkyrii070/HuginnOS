@@ -17,6 +17,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 GLYPHS = [ROOT / "shell" / "qml" / "Glyph.qml", ROOT / "apps" / "qml" / "Glyph.qml"]
+MORE_GLYPHS = ROOT / "scripts" / "icon_glyphs_more.js"     # glyphs only the icon theme draws
 FALLBACK_INK = "#8A919C"   # mid grey: readable on light and dark when nothing recolours it
 
 # glyph -> names that are actions (written as the name and as name-symbolic)
@@ -160,6 +161,74 @@ SYMBOLIC = {
 }
 
 
+# the new glyphs (icon_glyphs_more.js) -> names, each as the name and as name-symbolic
+MORE = {
+    "facesmile": ["face-smile", "emoji-people", "face-smile-big-symbolic"], "facesmilebig": ["face-smile-big", "face-laugh-big"],
+    "facesad": ["face-sad"], "facelaugh": ["face-laugh"], "facewink": ["face-wink"], "facesurprise": ["face-surprise"],
+    "faceangry": ["face-angry"], "facecool": ["face-cool"], "facecrying": ["face-crying"], "facekiss": ["face-kiss"],
+    "faceplain": ["face-plain"], "facesick": ["face-sick"], "facetired": ["face-tired"], "faceuncertain": ["face-uncertain"],
+    "faceworried": ["face-worried"], "faceangel": ["face-angel"], "facedevilish": ["face-devilish"],
+    "faceembarrassed": ["face-embarrassed"], "facemonkey": ["face-monkey"], "faceraspberry": ["face-raspberry"],
+    "facesmirk": ["face-smirk"],
+    "indentmore": ["format-indent-more"], "indentless": ["format-indent-less"], "textltr": ["format-text-direction-ltr"],
+    "textrtl": ["format-text-direction-rtl"], "jump": ["go-jump"], "mailopen": ["mail-read", "mail-mark-read"],
+    "updown": ["mail-send-receive", "network-transmit-receive", "network-idle"], "arrowdown": ["network-receive"],
+    "arrowup": ["network-transmit"], "spinner": ["process-working", "content-loading"], "hourglass": ["image-loading"],
+    "tornado": ["weather-tornado"], "viewcontinuous": ["view-continuous"], "viewpaged": ["view-paged"], "viewdual": ["view-dual"],
+    "viewwrapped": ["view-wrapped", "format-text-wrap"], "checkbox": ["checkbox-checked", "check-active", "selection-mode", "dialog-apply"],
+    "radio": ["radio-checked", "radio-active"], "draghandle": ["list-drag-handle"],
+    "wifigood": ["network-wireless-signal-good"], "wifiok": ["network-wireless-signal-ok"],
+    "wifiweak": ["network-wireless-signal-weak"], "wifinone": ["network-wireless-signal-none", "network-wireless-acquiring"],
+    "cellular": ["network-cellular", "network-cellular-signal-excellent"], "airplane": ["airplane-mode"],
+    "gauge": ["power-profile-balanced"], "gaugehigh": ["power-profile-performance"],
+    "battempty": ["battery-empty"], "battlow": ["battery-low"], "battgood": ["battery-good"], "battfull": ["battery-full"],
+    "textcolor": ["format-text-color"], "rule": ["insert-horizontal-rule"], "halignleft": ["align-horizontal-left"],
+    "haligncenter": ["align-horizontal-center"], "halignright": ["align-horizontal-right"],
+    "playlistnext": ["media-playlist-consecutive"], "displays": ["video-joined-displays"], "users": ["system-switch-user", "system-users"],
+    "touchpad": ["input-touchpad"], "dialpad": ["input-dialpad"], "player": ["multimedia-player"], "floppy": ["media-floppy"],
+    "tape": ["media-tape"], "tablet": ["input-tablet"],
+}
+# names made from glyphs already drawn: ("same", glyph) | ("badge", glyph, small glyph at its foot) | ("slash", glyph)
+# | ("mirror", glyph) | ("turn", glyph, degrees) | ("ring", glyph inside a ring: an emblem)
+COMPOSED = {
+    "address-book-new": ("badge", "book", "plus"), "contact-new": ("badge", "user", "plus"), "call-stop": ("turn", "phone", 135),
+    "document-page-setup": ("badge", "doc", "gear"), "edit-find-replace": ("badge", "search", "refresh"),
+    "insert-object": ("same", "shapes"), "mail-mark-important": ("badge", "mail", "bang"), "mail-mark-junk": ("badge", "mail", "x"),
+    "mail-mark-notjunk": ("badge", "mail", "check"), "mail-mark-unread": ("badge", "mail", "dotbig"),
+    "object-flip-vertical": ("turn", "flip", 90), "object-rotate-left": ("mirror", "rotate"), "system-run": ("badge", "gear", "play"),
+    "system-reboot": ("same", "refresh"), "tools-check-spelling": ("badge", "type", "check"),
+    "emblem-documents": ("ring", "doc"), "emblem-downloads": ("ring", "download"), "emblem-important": ("ring", "bang"),
+    "emblem-mail": ("ring", "mail"), "emblem-photos": ("ring", "image"), "emblem-readonly": ("ring", "lock"),
+    "emblem-symbolic-link": ("ring", "link"), "emblem-synchronized": ("ring", "refresh"), "emblem-unreadable": ("ring", "x"),
+    "appointment-missed": ("badge", "calendar", "x"), "battery-caution": ("badge", "battempty", "bang"),
+    "battery-full-charging": ("badge", "battfull", "bolt"), "battery-good-charging": ("badge", "battgood", "bolt"),
+    "battery-low-charging": ("badge", "battlow", "bolt"), "folder-drag-accept": ("same", "folderopen"),
+    "folder-visiting": ("same", "folderopen"), "image-missing": ("badge", "image", "x"), "mail-replied": ("badge", "mail", "reply"),
+    "mail-signed": ("badge", "mail", "check"), "mail-signed-verified": ("badge", "mail", "shield"),
+    "network-error": ("badge", "globe", "x"), "network-offline": ("slash", "globe"), "printer-error": ("badge", "printer", "bang"),
+    "printer-printing": ("badge", "printer", "play"), "software-update-available": ("badge", "box", "arrowdown"),
+    "software-update-urgent": ("badge", "box", "bang"), "sync-error": ("badge", "refresh", "x"), "sync-synchronizing": ("same", "refresh"),
+    "task-due": ("badge", "calendar", "clock"), "task-past-due": ("badge", "calendar", "bang"), "user-away": ("badge", "user", "clock"),
+    "user-idle": ("badge", "user", "moon"), "user-offline": ("badge", "user", "minus"), "user-status-pending": ("badge", "user", "dots"),
+    "weather-severe-alert": ("same", "warning"), "weather-showers-scattered": ("same", "rain"), "weather-windy": ("same", "wind"),
+    "weather-hail": ("same", "snow"), "view-sidebar-start": ("same", "sidebar"), "view-sidebar-end": ("mirror", "sidebar"),
+    "view-pin": ("same", "pin"), "non-starred": ("same", "star"), "folder-saved-search": ("badge", "folder", "search"),
+    "network-vpn": ("badge", "globe", "lock"), "bluetooth-disabled": ("slash", "bluetooth"), "night-light": ("same", "moon"),
+    "power-profile-power-saver": ("same", "leaf"), "notifications-disabled": ("slash", "bell"), "inode-symlink": ("same", "link"),
+    "dialog-yes": ("same", "check"), "dialog-no": ("same", "x"), "document-close": ("badge", "doc", "x"),
+    "document-print-direct": ("same", "printer"), "edit-select": ("same", "select"), "edit-select-none": ("badge", "selectall", "x"),
+    "edit-copy-path": ("badge", "copy", "link"), "format-fill-color": ("same", "bucket"), "insert-table": ("same", "table"),
+    "align-vertical-top": ("turn", "halignleft", 90), "align-vertical-center": ("turn", "haligncenter", 90),
+    "align-vertical-bottom": ("turn", "halignright", 90), "media-playlist-repeat-song": ("badge", "repeat", "one"),
+    "media-view-subtitles": ("same", "captions"), "media-optical-audio": ("badge", "disc", "music"),
+    "call-incoming": ("badge", "phone", "arrowin"), "call-outgoing": ("badge", "phone", "arrowout"), "call-missed": ("badge", "phone", "x"),
+    "camera-switch": ("badge", "camera", "refresh"), "video-single-display": ("same", "display"), "system-hibernate": ("same", "snow"),
+    "system-suspend": ("same", "moon"), "input-microphone": ("same", "mic"), "color-select": ("same", "palette"),
+    "rotation-allowed": ("same", "rotate"), "rotation-locked": ("badge", "rotate", "lock"), "keyboard-brightness": ("badge", "keyboard", "sun"),
+    "touchpad-disabled": ("slash", "touchpad"), "help-faq": ("same", "help"),
+}
+
+
 def _engine_draw(names: list) -> dict:
     """Runs Glyph.qml's drawing code once for each name with a recording context; returns {name: [ops]}."""
     from PySide6.QtQml import QJSEngine
@@ -173,6 +242,9 @@ def _engine_draw(names: list) -> dict:
         have = set(re.findall(r'case "([a-z0-9]+)"', body))
         extra = "".join(m.group(0) + "\n" for m in re.finditer(r'^\s*case "([a-z0-9]+)":.*$', other, re.M) if m.group(1) not in have)
         body = body.replace("        default:", extra + "        default:", 1)
+    if MORE_GLYPHS.is_file():
+        more = "".join(line + "\n" for line in MORE_GLYPHS.read_text(encoding="utf-8").splitlines() if line.strip().startswith("case "))
+        body = body.replace("        default:", more + "        default:", 1)
     recorder = r"""
     function Rec() { this.ops = []; this.cur = []; this.lineWidth = 1.7; this.dash = []; }
     Rec.prototype.reset = function () {}; Rec.prototype.scale = function () {};
@@ -278,6 +350,57 @@ def _svg_d(path) -> str:
     return "".join(out) + "Z"
 
 
+def _thick(ops: list, by: float) -> list:
+    """The same ops with strokes and dots made heavier, for a glyph drawn small (a badge, an emblem's inside)."""
+    out = []
+    for op in ops:
+        op = dict(op)
+        if op["kind"] == "stroke":
+            op["width"] = op["width"] * by
+        out.append(op)
+    return out
+
+
+def _compose(recipe, ops_of):
+    """One composed icon as a QPainterPath (see COMPOSED)."""
+    from PySide6.QtCore import QPointF, QRectF, Qt
+    from PySide6.QtGui import QPainterPath, QPainterPathStroker, QTransform
+    kind, glyph = recipe[0], recipe[1]
+    base = _path(ops_of[glyph])
+    if kind == "same":
+        return base
+    if kind == "mirror":
+        return QTransform(-1, 0, 0, 1, 24, 0).map(base)
+    if kind == "turn":
+        return QTransform().translate(12, 12).rotate(recipe[2]).translate(-12, -12).map(base)
+    if kind == "slash":
+        line = QPainterPath(QPointF(4, 4))
+        line.lineTo(20, 20)
+        s = QPainterPathStroker()
+        s.setCapStyle(Qt.RoundCap)
+        s.setWidth(4.8)
+        gap = s.createStroke(line)
+        s.setWidth(1.7)
+        return base.subtracted(gap).united(s.createStroke(line)).simplified()
+    if kind == "badge":
+        scale = 0.5
+        small = _path(_thick(ops_of[recipe[2]], 1.0 / scale * 0.86))
+        small = QTransform().translate(18.4, 18.4).scale(scale, scale).translate(-12, -12).map(small)
+        hole = QPainterPath()
+        hole.addEllipse(QRectF(18.4 - 7.2, 18.4 - 7.2, 14.4, 14.4))
+        return base.subtracted(hole).united(small).simplified()
+    if kind == "ring":
+        scale = 0.58
+        inner = _path(_thick(ops_of[glyph], 1.0 / scale * 0.9))
+        inner = QTransform().translate(12, 12).scale(scale, scale).translate(-12, -12).map(inner)
+        circle = QPainterPath()
+        circle.addEllipse(QRectF(2.5, 2.5, 19, 19))
+        s = QPainterPathStroker()
+        s.setWidth(1.7)
+        return s.createStroke(circle).united(inner).simplified()
+    raise ValueError(f"no way to compose {kind}")
+
+
 def svg(d: str, rule: str) -> str:
     return ('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24">'
             f'<style id="current-color-scheme" type="text/css">.ColorScheme-Text {{ color:{FALLBACK_INK}; }}</style>'
@@ -287,7 +410,8 @@ def svg(d: str, rule: str) -> str:
 def write(theme: Path) -> tuple:
     """Writes the glyph icons into theme/symbolic/{actions,status}; returns (dirs for index.theme, count)."""
     from PySide6.QtCore import Qt
-    wanted = sorted(set(ACTIONS) | set(k for k, v in SYMBOLIC.items() if v))
+    parts = {g for r in COMPOSED.values() for g in r[1:] if isinstance(g, str)}
+    wanted = sorted(set(ACTIONS) | set(k for k, v in SYMBOLIC.items() if v) | set(MORE) | parts)
     ops = _engine_draw(wanted)
     files = {}
     for glyph in wanted:
@@ -295,16 +419,29 @@ def write(theme: Path) -> tuple:
             raise RuntimeError(f"Glyph.qml has no drawing for {glyph}")
         path = _path(ops[glyph])
         files[glyph] = svg(_svg_d(path), "evenodd" if path.fillRule() == Qt.OddEvenFill else "nonzero")
+    composed = {}
+    for name, recipe in COMPOSED.items():
+        path = _compose(recipe, ops)
+        composed[name] = svg(_svg_d(path), "evenodd" if path.fillRule() == Qt.OddEvenFill else "nonzero")
     count = 0
-    for ctx, table, plain in (("actions", ACTIONS, True), ("status", SYMBOLIC, False)):
+    for ctx, table, plain in (("actions", ACTIONS, True), ("status", SYMBOLIC, False), ("actions", MORE, True)):
         where = theme / "symbolic" / ctx
         where.mkdir(parents=True, exist_ok=True)
-        for old in where.glob("*.svg"):
-            old.unlink()
+        if table is not MORE:
+            for old in where.glob("*.svg"):
+                old.unlink()
         for glyph, names in table.items():
             for name in names:
                 base = name[:-9] if name.endswith("-symbolic") else name
                 for out in ([base, base + "-symbolic"] if plain else [base + "-symbolic"]):
+                    if table is MORE and (where / f"{out}.svg").exists():
+                        continue                                # (a name the shell's glyphs already answer keeps theirs)
                     (where / f"{out}.svg").write_text(files[glyph], encoding="utf-8")
                     count += 1
+    where = theme / "symbolic" / "actions"
+    for name, text in composed.items():
+        for out in (name, name + "-symbolic"):
+            if not (where / f"{out}.svg").exists():
+                (where / f"{out}.svg").write_text(text, encoding="utf-8")
+                count += 1
     return [("symbolic/actions", "Actions"), ("symbolic/status", "Status")], count

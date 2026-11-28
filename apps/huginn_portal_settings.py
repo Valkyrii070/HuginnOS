@@ -80,7 +80,7 @@ def answers(values: dict, realms: dict) -> dict:
         scale = float(values["uiScale"])
     except ValueError:
         scale = 1.0
-    gtk = "Breeze" if not contrast else ("HighContrastInverse" if dark else "HighContrast")   # in Huginn's colours (huginn_look.py)
+    gtk = "Huginn" if not contrast else ("HighContrastInverse" if dark else "HighContrast")   # in the realm's colours (huginn_look.py)
     return {
         "org.freedesktop.appearance": {
             "color-scheme": GLib.Variant("u", 1 if dark else 2),           # 1: prefer dark, 2: prefer light
