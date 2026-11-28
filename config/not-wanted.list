@@ -69,3 +69,6 @@ qml6-module-org-kde-bluezqt
 libkf6bluezqt6
 libkf6bluezqt-data
 libkf6config-bin
+# KDE's pointers: Huginn draws its own (pointers/make_pointers.py); Adwaita's and DMZ's stay to choose from (2026-11-28)
+breeze-cursor-theme
+oxygen-cursor-theme

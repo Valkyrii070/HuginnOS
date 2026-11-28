@@ -4,7 +4,7 @@
 # password was right, and its wake has played) everything here ends, and the person's session takes the screen.
 export XDG_CURRENT_DESKTOP=Huginn XDG_SESSION_DESKTOP=huginn
 export QT_QPA_PLATFORM=wayland
-export XCURSOR_THEME=breeze_cursors XCURSOR_SIZE=24
+export XCURSOR_THEME=Huginn XCURSOR_SIZE=24
 [ -n "$XDG_RUNTIME_DIR" ] && [ -d "$XDG_RUNTIME_DIR" ] || { echo "huginn-greeter-session: no XDG_RUNTIME_DIR (is logind running?)" >&2; exit 1; }
 if [ -z "$DBUS_SESSION_BUS_ADDRESS" ] && [ -z "$HUGINN_GREETER_INNER" ]; then
     HUGINN_GREETER_INNER=1 exec dbus-run-session -- "$0" "$@"

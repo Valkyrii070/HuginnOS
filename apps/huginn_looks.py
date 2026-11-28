@@ -358,7 +358,7 @@ def list_pointer_themes() -> list:
             seen.add(ident)
             info = _index(folder).get("Icon Theme", {})
             out.append({"id": ident, "name": info.get("Name", ident).replace("_", " "), "user": is_user_theme(ident), "folder": str(folder)})
-    first = {"breeze_cursors": 0, "Breeze_Light": 1, "Adwaita": 2}
+    first = {"Huginn": 0, "Adwaita": 1}
     return sorted(out, key=lambda t: (first.get(t["id"], 3), t["name"].lower()))
 
 

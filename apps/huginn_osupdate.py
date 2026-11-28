@@ -347,9 +347,16 @@ def wanted_files(kit: Path, theme: Path = None) -> dict:
             text = qt.read_text(encoding="utf-8")
             (made / "qt.conf").write_text(QT_DEFAULT + text[text.index("[Colours]"):], encoding="utf-8")
             out["etc/xdg/huginn/qt.conf"] = (made / "qt.conf", 0o644)
-        (made / "settings.ini").write_text("[Settings]\ngtk-theme-name=Huginn\ngtk-icon-theme-name=Huginn\ngtk-application-prefer-dark-theme=true\ngtk-font-name=Inter Variable 10\n", encoding="utf-8")
+        (made / "settings.ini").write_text("[Settings]\ngtk-theme-name=Huginn\ngtk-icon-theme-name=Huginn\ngtk-cursor-theme-name=Huginn\n"
+                                           "gtk-application-prefer-dark-theme=true\ngtk-font-name=Inter Variable 10\n", encoding="utf-8")
         for v in ("3.0", "4.0"):
             out[f"etc/gtk-{v}/settings.ini"] = (made / "settings.ini", 0o644)
+        pointers = theme / "pointers"                              # Huginn's pointers, when make_pointers drew them
+        for f in (pointers / "cursors").glob("*") if (pointers / "cursors/default").is_file() else []:
+            if f.is_file() and not f.is_symlink():
+                out[f"{POINTERS}/cursors/{f.name}"] = (f, 0o644)
+        if (pointers / "cursor.theme").is_file():
+            out[f"{POINTERS}/cursor.theme"] = (pointers / "cursor.theme", 0o644)
     return out
 
 
@@ -469,6 +476,18 @@ def gtk_ready(kit: Path, root) -> tuple:
         else:
             out[GTK_MODULE] = data
     return out, why
+
+
+POINTERS = "usr/share/icons/Huginn"
+
+
+def make_pointers(kit: Path, out: Path, runner=run) -> bool:
+    """Huginn's pointers from the tree (pointers/make_pointers.py), into `out` (cursors/ and cursor.theme; every name a
+    file of its own, since what an update puts in place is files). False when they couldn't be made."""
+    if not (Path(kit) / "pointers/make_pointers.py").is_file():
+        return False
+    code, _text = runner([sys.executable, str(Path(kit) / "pointers/make_pointers.py"), str(out)], 300)
+    return code == 0 and (Path(out) / "cursors/default").is_file()
 
 
 def plan(kit: Path, root, theme: Path = None) -> dict:
@@ -701,6 +720,8 @@ def apply(root, runner=run, log=print) -> dict:
         if not make_theme(kit, root, theme, runner):
             theme = None
             log("The look's files couldn't be made from this version's tokens: the look stays as it is.")
+        elif not make_pointers(kit, theme / "pointers", runner):
+            log("Huginn's pointers couldn't be drawn from this version: the pointers stay as they are.")
         p = plan(kit, root, theme)
         done = apply_plan(p, root, state_dir(root) / "previous")
     nxt = channel(kit)

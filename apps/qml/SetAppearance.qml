@@ -165,7 +165,7 @@ Column {
         Flow { x: 12; width: parent.width - 24; spacing: 10; topPadding: 12; bottomPadding: 6
             Repeater { model: pg.look.pointerThemes || []
                 Pressable { required property var modelData; objectName: "pointer-" + modelData.id; width: 220; height: 84; radius: 12
-                    readonly property bool chosen: (pg.look.pointerTheme || "breeze_cursors") === modelData.id
+                    readonly property bool chosen: (pg.look.pointerTheme || "Huginn") === modelData.id
                     color: chosen ? Qt.alpha(Theme.t.accent, 0.18) : hovered ? Theme.t.hover : (Theme.t.dark ? "#10FFFFFF" : "#0A141E28")
                     border.width: chosen ? 2 : 1; border.color: chosen ? Theme.t.accent : Theme.t.separator
                     onClicked: Backend.setPointerTheme(modelData.id)

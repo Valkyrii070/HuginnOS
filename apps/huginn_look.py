@@ -81,17 +81,17 @@ def _ours(path: Path) -> bool:
         return False
 
 
-def _ini(path: Path, values: dict) -> None:
+def _ini(path: Path, values: dict, section: str = "Settings") -> None:
     ini = configparser.ConfigParser(interpolation=None)
     ini.optionxform = str
     try:
         ini.read(path, encoding="utf-8")
     except configparser.Error:
         return
-    if not ini.has_section("Settings"):
-        ini.add_section("Settings")
+    if not ini.has_section(section):
+        ini.add_section(section)
     for k, v in values.items():
-        ini.set("Settings", k, v)
+        ini.set(section, k, v)
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "w", encoding="utf-8") as f:
         ini.write(f, space_around_delimiters=False)
@@ -201,10 +201,42 @@ def _run(cmd: list) -> None:
             pass
 
 
+OLD_POINTERS = ("", "breeze_cursors", "Breeze_Light", "Oxygen_Black", "Oxygen_White", "Oxygen_Blue", "Oxygen_Yellow", "Oxygen_Zion")
+
+
+def _huginn_pointers() -> None:
+    """Huginn's own pointers, once, for anyone still on KDE's (Breeze's were the default, so they count as never
+    chosen; Oxygen's only once they're gone): the compositor and Qt read kcminputrc, GTK its settings, X11 apps
+    ~/.icons/default. Any other theme chosen in Settings stays."""
+    kin = CONFIG / "kcminputrc"
+    ini = configparser.ConfigParser(interpolation=None, strict=False)
+    ini.optionxform = str
+    try:
+        ini.read(kin, encoding="utf-8")
+    except configparser.Error:
+        return
+    now = ini.get("Mouse", "cursorTheme", fallback="")
+    if now not in OLD_POINTERS or not (SHARE / "icons" / "Huginn" / "cursors" / "default").exists():
+        return
+    if now.startswith("Oxygen") and (SHARE / "icons" / now / "cursors").is_dir():
+        return                                                  # (still there and never the default: a choice)
+    _ini(kin, {"cursorTheme": "Huginn"}, "Mouse")
+    for version in ("gtk-3.0", "gtk-4.0"):
+        if (CONFIG / version / "settings.ini").exists():
+            _ini(CONFIG / version / "settings.ini", {"gtk-cursor-theme-name": "Huginn"})
+    _run(["gsettings", "set", "org.gnome.desktop.interface", "cursor-theme", "Huginn"])
+    default = Path.home() / ".icons" / "default" / "index.theme"
+    try:
+        if default.exists() and any(f"Inherits={old}" in default.read_text(encoding="utf-8") for old in OLD_POINTERS if old):
+            default.write_text("[Icon Theme]\nInherits=Huginn\n", encoding="utf-8")
+    except OSError:
+        pass
+
+
 def apply(realm: str, dark: bool, contrast: bool = False, force: bool = False) -> bool:
     """Put the realm's look in place for this user. Returns False when it was already in place."""
     name = name_for(realm, dark)
-    stamp = f"{name} contrast={contrast} gtk=huginn qt=huginn kstyle=huginn"  # (a new part of the look: in place once more)
+    stamp = f"{name} contrast={contrast} gtk=huginn qt=huginn kstyle=huginn pointers=huginn"  # (a new part of the look: in place once more)
     changed = write_qt(realm, dark)                             # (each time: cheap, and only written when it changed)
     if not force:
         try:
@@ -233,6 +265,7 @@ def apply(realm: str, dark: bool, contrast: bool = False, force: bool = False) -
             _write(folder / "gtk.css", f"{MARK}\n@import 'colors.css';\n")
         _ini(folder / "settings.ini", {"gtk-theme-name": named, "gtk-application-prefer-dark-theme": "true" if dark else "false",
                                        "gtk-font-name": "Inter Variable 10"})
+    _huginn_pointers()
     # GTK on Wayland reads GNOME's interface settings (dconf) rather than settings.ini
     iface = "org.gnome.desktop.interface"
     _run(["gsettings", "set", iface, "gtk-theme", theme])

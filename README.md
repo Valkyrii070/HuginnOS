@@ -1888,6 +1888,33 @@ module (`libhuginn-menus.so`).
   Settings), File › New from there and Ctrl+N in the window both opening a document. An app that gives itself no name
   goes by GDK's ("geany" → "Geany"). `osupdate_test.py` (81). Not yet tried: wxWidgets apps (Audacity, FileZilla).
 
+## Huginn's own pointers (2026-11-28)
+
+Breeze's pointers (KDE's artwork) are replaced by Huginn's own: `pointers/make_pointers.py` draws every pointer an
+app can ask for and packs them as an X cursor theme.
+
+- **The look**: three were drawn (Slate: a dark shape with a white rim; Aurora: the rim in the aurora's colours;
+  Frost: white with a dark rim); Slate is the one made (`STYLE`), the others a flag away. Each has a soft shadow.
+  The busy pointer is Huginn's orb with a light running round it (16 frames, 55 ms each); "working in the
+  background" is the arrow with a small orb. Copy, link, menu, ask, no-drop and move are the arrow with a round badge.
+- **Every name**: 30 drawn (CSS's names: default, pointer, text, wait, progress, help, grab, the eight resizes and
+  the rest), 120 names in all with X's old ones, GTK's, and Qt's hashed ones. Sizes 24, 32, 48 and 64.
+- **Made with Qt alone** (QtSvg, offscreen), so the image build and updates draw them on the machine itself and no
+  pictures are kept in the tree. `--sheet` makes a picture of the looks.
+- **Where**: inside Huginn's icon theme (`/usr/share/icons/Huginn/cursors`, as Adwaita keeps its pointers in its
+  icons), so Settings › Appearance lists them as "Huginn", first. The image makes the other names links (1.9 MB) and
+  sets X11's default (`x-cursor-theme`, `cursor.theme`); updates draw them too and put files in place (7 MB), leaving
+  links that are already there. The sign-in screen, the session, GTK (`gtk-cursor-theme-name`), the compositor and
+  Settings now default to them. Anyone still on Breeze's (the old default) moves to Huginn's once, at sign-in
+  (`huginn_look._huginn_pointers`, with X11 apps' `~/.icons/default`); another theme chosen in Settings stays.
+- `breeze-cursor-theme` and `oxygen-cursor-theme` leave the image (`not-wanted.list`); Adwaita's and DMZ's stay to
+  choose from.
+- Tested: `pointers_test.py` (30): every name there, as links and as copies; X's own library (libXcursor) reads every
+  one at every size, premultiplied, with the arrow's hotspot at its tip and the hand's at its fingertip; the busy
+  orb's frames and delay; the update drawing and placing them, leaving links alone; the move from Breeze's (and not
+  from Adwaita or an Oxygen theme still there). The compositor loaded them in the nested session without falling
+  back (its pointer isn't in a screen grab there, being the host window's).
+
 ## App Store Qt apps: Huginn's look and the top bar's menus (2026-11-27)
 
 A Qt app from Flathub runs on KDE's Flatpak runtime with its own Qt, so Huginn's Qt look (`qt/`) can't load into it.

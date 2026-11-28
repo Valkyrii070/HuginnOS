@@ -28,7 +28,6 @@ espeak-ng
 maliit-keyboard
 # Displays: the brightness of screens plugged in by a cable (DDC/CI: most monitors), as laptops' own screens have
 ddcutil
-# Appearance › Icons and Pointer: a few more to choose from (besides Huginn's own, Breeze and Adwaita)
+# Appearance › Icons and Pointer: a few more to choose from (besides Huginn's own and Adwaita)
 elementary-icon-theme
 dmz-cursor-theme
-oxygen-cursor-theme

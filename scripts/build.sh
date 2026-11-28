@@ -396,8 +396,18 @@ stage_customise() {
     { python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import huginn_osupdate as u; print(u.QT_DEFAULT, end="")' "$ROOT/apps"
       sed -n '/^\[Colours\]/,$p' "$theme/qt/HuginnAuroraDark.conf"; } > "$CHROOT/etc/xdg/huginn/qt.conf"
     for v in 3.0 4.0; do
-        printf '[Settings]\ngtk-theme-name=Huginn\ngtk-icon-theme-name=Huginn\ngtk-application-prefer-dark-theme=true\ngtk-font-name=Inter Variable 10\n' > "$CHROOT/etc/gtk-$v/settings.ini"
+        printf '[Settings]\ngtk-theme-name=Huginn\ngtk-icon-theme-name=Huginn\ngtk-cursor-theme-name=Huginn\ngtk-application-prefer-dark-theme=true\ngtk-font-name=Inter Variable 10\n' > "$CHROOT/etc/gtk-$v/settings.ini"
     done
+    # Huginn's own pointers (pointers/make_pointers.py), drawn into Huginn's icon theme as Adwaita keeps its own, the
+    # other names as links; and X11's default pointer theme (/usr/share/icons/default) made Huginn's
+    cp "$ROOT/pointers/make_pointers.py" "$CHROOT/tmp/make_pointers.py"
+    if in_chroot env QT_QPA_PLATFORM=offscreen python3 /tmp/make_pointers.py /usr/share/icons/Huginn --links > "$WORK/pointers.log" 2>&1; then
+        in_chroot update-alternatives --install /usr/share/icons/default/index.theme x-cursor-theme /usr/share/icons/Huginn/cursor.theme 100 >> "$WORK/pointers.log" 2>&1 || true
+        in_chroot update-alternatives --set x-cursor-theme /usr/share/icons/Huginn/cursor.theme >> "$WORK/pointers.log" 2>&1 || true
+    else
+        die "Huginn's pointers couldn't be drawn (see $WORK/pointers.log)"
+    fi
+    rm -f "$CHROOT/tmp/make_pointers.py"
 
     # Huginn Shell and the tokens it reads.
     install -d "$CHROOT/usr/share/huginn-shell/qml"

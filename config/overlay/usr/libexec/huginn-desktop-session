@@ -33,7 +33,7 @@ cfg="${XDG_CONFIG_HOME:-$HOME/.config}"
 kread() { [ -r "$cfg/$1" ] && sed -n "/^\[$2\]/,/^\[/{s/^$3=//p}" "$cfg/$1" | head -n 1; }
 # The pointer: Breeze's at Settings › Accessibility's size (the compositor draws it, and so does X11 apps' server).
 size=$(kread kcminputrc Mouse cursorSize); case "$size" in ''|*[!0-9]*) size=24 ;; esac
-theme=$(kread kcminputrc Mouse cursorTheme); [ -n "$theme" ] || theme=breeze_cursors
+theme=$(kread kcminputrc Mouse cursorTheme); [ -n "$theme" ] || theme=Huginn
 export XCURSOR_THEME="$theme" XCURSOR_SIZE="$size"
 # Settings › Language & Region (plasma-localerc, as KDE keeps it): the language, and how dates, numbers and money
 # look, when the system has that language (Settings makes it when it's chosen).

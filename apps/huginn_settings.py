@@ -1598,7 +1598,7 @@ def load_look() -> dict:
         size = 24
     return {"loginRealm": realm, "canChange": os.access(LOGIN_LOOK, os.X_OK) and bool(HAVE("pkexec")),
             "iconThemes": hl.list_icon_themes(), "iconTheme": current_icon_theme(),
-            "pointerThemes": pointers, "pointerTheme": kconfig_read(CONFIG / "kcminputrc", ["Mouse"], "cursorTheme", "") or "breeze_cursors",
+            "pointerThemes": pointers, "pointerTheme": kconfig_read(CONFIG / "kcminputrc", ["Mouse"], "cursorTheme", "") or "Huginn",
             "pointerSize": size, "live": hl.list_live(), "appIcons": sorted(changed, key=lambda a: a["name"].lower())}
 
 
@@ -3085,7 +3085,7 @@ class SystemSettings(QObject):
         if look.get("iconTheme") == ident:
             self.setIconTheme("Huginn")
         if look.get("pointerTheme") == ident:
-            self.setPointerTheme("breeze_cursors")
+            self.setPointerTheme("Huginn")
         self._act("look", lambda: hl.remove_theme(ident) or f"{ident} is gone.")
 
     @Slot(str)
