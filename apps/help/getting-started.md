@@ -67,7 +67,7 @@ Other apps' menus are here too: a Qt app's menu bar, and a GTK app's built for i
 Click the date in the top bar, or press Super+T: the month, the weather, what's coming and a few clocks, as islands. Type straight away to add something: "lunch with Astrid friday 12" becomes an event and "remind me to call Sam at 6pm" a reminder; a preview shows what it understood before you press Enter.
 
 ## Get more apps
-App Store installs apps from Flathub. Web apps you install from the Huginn browser appear alongside the others.
+App Store installs apps from Flathub, or Ubuntu's own package where Ubuntu has the app too (it fits in fully: Huginn's look and the menus in the top bar, for apps built with Qt). Web apps you install from the Huginn browser appear alongside the others.
 
 ## Switch windows and keys to know
 Hold Alt and press Tab to see your open windows; let go of Alt to go to the one picked (Shift+Tab goes back, Escape stays put). Super on its own opens the start menu, Super+Tab the Overview, Super+T Today, Alt on its own the app's menu, Super+Space searches everything, Super+L locks, Super+Ctrl+Space switches keyboard layout (when you have more than one), Super+Alt+S turns the screen reader on or off, Print saves a screenshot of the whole screen to Pictures › Screenshots, and Shift+Print (or Super+Shift+S) opens Screenshot to choose what to take. Clicking an open app in the dock brings its window forward instead of opening another.

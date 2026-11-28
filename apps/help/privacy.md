@@ -8,7 +8,7 @@ Huginn keeps your things on this computer. These are the only times an app talks
 - **Maps** asks OpenStreetMap for map pictures, the places you search for and routes.
 - **Podcasts** fetches each show's own feed. Finding a show by name sends the words you typed to Apple's public podcast directory.
 - **Feeds** fetches each site's feed directly, with no service in between.
-- **App Store** talks to Flathub.
+- **App Store** talks to Flathub, and to Ubuntu's archive when it fetches Ubuntu's list of apps or installs one from there.
 - **Translate** goes online only to fetch a language pack. What you translate never leaves the computer.
 
 ## Apps that never go online

@@ -14,6 +14,9 @@ pciutils
 # Software Update: PackageKit for system updates (and offline updates at restart), fwupd for firmware.
 packagekit
 # (pkcon came in packagekit-tools; PackageKit 1.3 puts pkgcli in packagekit itself)
+# The App Store's other source: Ubuntu's own packages of the apps it lists from Flathub, found in Ubuntu's AppStream
+# catalogue, which apt fetches with the package lists once this is installed (apps/huginn_debapps.py).
+appstream
 fwupd
 # Photos editing and Easel: numpy and Pillow do the picture work; Qt SVG writes SVG.
 python3-numpy

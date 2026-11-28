@@ -1783,7 +1783,8 @@ built into the image from `qt/` (C++, against the image's Qt):
   Huginn's basic app menu. GTK 3 apps whose menu bar is a plain GtkMenuBar keep it in the window: the module that
   would hand those over (appmenu-gtk-module) fails on Wayland (it asks before the window exists). App Store
   (Flatpak) Qt apps run their own Qt, which can't load Huginn's plugins: they take the realm's colours (kdeglobals)
-  in their runtime's own style and keep their menu bars. X11 apps keep theirs.
+  in their runtime's own style and keep their menu bars; the App Store offers Ubuntu's own package of such an app
+  where Ubuntu has it (see the next section). X11 apps keep theirs.
 - **Updates** carry the two plugins ready-built (`prebuilt/huginn-qt-*`, made with `huginn_osupdate.py prebuilt-qt`),
   for exactly `qt/`'s sources and the Qt they were built with: a system with another Qt minor version keeps what it
   has and says so, and the session uses qt6ct where Huginn's theme isn't there. An update doesn't remove qt6ct or
@@ -1800,6 +1801,30 @@ built into the image from `qt/` (C++, against the image's Qt):
   (the wrong Qt, other sources, other bytes). **Not tried with real apps people use (KeePassXC, Kate, VLC, GIMP…)
   or on real hardware**; Qt apps with unusual menus (made at the last moment, or on the window's own bar code) may
   need a look.
+
+## The App Store's other source: Ubuntu's own packages (2026-11-27)
+
+A Qt app from Flathub brings its own Qt and can't load Huginn's look or hand its menus to the top bar. Ubuntu's own
+package of the same app runs on the system's Qt, so it can. The App Store now offers both, wherever Ubuntu has the app:
+
+- **Which apps**: Ubuntu's AppStream catalogue (DEP-11, which apt fetches with the package lists once `appstream`
+  is installed: now in the image), matched to Flathub's by AppStream id (ignoring case and `.desktop`), the ids an
+  app says it provides, and its launcher's name (`apps/huginn_debapps.py`). Ubuntu's packages that only install a
+  Snap (Firefox, Thunderbird, Chromium) are left out. A fresh system has no package lists: the store fetches them
+  (PackageKit's refresh, no password) when they're missing or more than two days old, then says which apps Ubuntu has.
+- **An app's page** says "Get it from" with both, side by side: **Ubuntu** (the system's own package, its version
+  and size from apt; fits in fully; updates with Software Update; installing asks for the password) and **Flathub**
+  (usually newer, sandboxed, updates in the App Store; for a Qt app, that its look and menus stay in its window).
+  Apps on KDE's runtime (Qt apps) start on Ubuntu's, the rest on Flathub's; Get on a shelf takes that default. Once an
+  app is in, the page says which it came from, the facts strip and Information show that one's, and Open starts it
+  from its launcher (`gio launch`). Remove takes away the one that's in, and the store keeps the one left if both were.
+- **Installing and removing** Ubuntu's go through PackageKit (`pkgcli`, which asks for the administrator's password
+  itself; the lists fetched first when old), else apt under the password prompt, in the same queue and with the
+  same progress as Flathub's. Only package names from the catalogue, checked, are ever handed on.
+- Tested: `store_sources_test.py` (32): the catalogue reader and matching against made-up and Ubuntu's real
+  catalogues (VLC, KeePassXC, Kate, Krita and OBS found; Firefox and Thunderbird left to Flathub), and the store
+  itself with stand-ins for flatpak, pkgcli and apt-cache: defaults, install, open, remove, the queue, a failure.
+  The page in two pictures (preview mode). **Not tried installing a real package** from the store.
 
 ## Phone's own link (2026-11-27)
 

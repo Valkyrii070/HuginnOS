@@ -5115,12 +5115,23 @@ SAMPLE_APPS = [
 ]
 
 
+SAMPLE_DEBS = {"org.kde.krita": "krita", "org.videolan.VLC": "vlc", "org.inkscape.Inkscape": "inkscape", "org.kde.kdenlive": "kdenlive",
+               "org.gimp.GIMP": "gimp", "org.audacityteam.Audacity": "audacity"}
+SAMPLE_QT = {"org.kde.krita", "org.kde.kdenlive", "org.videolan.VLC"}
+
+
 class Store(QObject):
     """App Store: finds, installs, opens and removes apps. Apps come from Flathub through the `flatpak` tool;
-    the catalogue is read from Flatpak's own app list on this computer, so browsing needs no network."""
+    the catalogue is read from Flatpak's own app list on this computer, so browsing needs no network.
+
+    Where Ubuntu has the same app (its AppStream catalogue: huginn_debapps.py), it can come from there instead: then
+    it runs on the system's own libraries, so a Qt app wears Huginn's look and puts its menus in the top bar (a
+    Flathub app has its own Qt, in its sandbox). Each app says which it would take ("prefer": Ubuntu's for apps on
+    KDE's runtime, Qt apps, else Flathub's) and the app's page lets the person choose."""
     changed = Signal()
     failed = Signal(str)
     _loaded = Signal(dict)
+    _debInfo = Signal(str, dict)
 
     def __init__(self, demo: bool):
         super().__init__()
@@ -5130,12 +5141,15 @@ class Store(QObject):
         self._busy, self._progress, self._ready = "", "", False
         self._process, self._live, self._verb = None, None, ""
         self._loaded.connect(self._adopt)
+        self._debInfo.connect(self._deb_info)
         self._web = self._sample_web() if demo else self._scan_web()
         if demo:
             self._adopt({i: {"id": i, "name": n, "summary": s, "category": c, "developer": d, "verified": v, "installed": inst,
                              "size": size, "version": "", "license": "", "icon": "", "web": False, "open": True, "released": "",
                              "shots": [{"url": "", "caption": c} for c in ("Main window", "Working on a project", "Preferences")],
-                             "description": s + ". This is sample text shown while previewing the store without a catalogue."}
+                             "description": s + ". This is sample text shown while previewing the store without a catalogue.",
+                             **self._sources(i, SAMPLE_DEBS.get(i, ""), f"{i}.desktop", i in SAMPLE_QT, inst, False),
+                             "debVersion": "sample" if i in SAMPLE_DEBS else ""}
                          for i, n, s, c, d, v, inst, size in SAMPLE_APPS})
         elif self._flatpak:
             import threading
@@ -5179,6 +5193,25 @@ class Store(QObject):
 
     def _everything(self) -> dict:
         return {**self._apps, **self._web}
+
+    # -- where an app comes from: Flathub, or Ubuntu's own package -----------------------------------
+    @staticmethod
+    def _sources(app_id: str, deb: str, desktop: str, qt: bool, flat_installed: bool, deb_installed: bool) -> dict:
+        """The fields that say where an app can come from and where it came from."""
+        return {"deb": deb, "debDesktop": desktop if deb else "", "qt": qt, "prefer": "deb" if deb and qt else "flathub",
+                "flatInstalled": flat_installed, "debInstalled": bool(deb) and deb_installed,
+                "installed": flat_installed or (bool(deb) and deb_installed),
+                "from": "deb" if deb and deb_installed else ("flathub" if flat_installed else "")}
+
+    def _with_debs(self, apps: dict, flat_installed: set, other_ids: dict) -> dict:
+        """Each app, told whether Ubuntu has it too (and whether that's installed)."""
+        import huginn_debapps
+        cat, have = huginn_debapps.catalogue(), huginn_debapps.installed()
+        for app_id, a in apps.items():
+            found = huginn_debapps.match(cat, [app_id] + other_ids.get(app_id, []))
+            a.update(self._sources(app_id, found["package"] if found else "", found["desktop"] if found else "", a.get("qt", False),
+                                   app_id in flat_installed, bool(found) and found["package"] in have))
+        return apps
 
     # -- catalogue ---------------------------------------------------------------------------------
     def _installed_ids(self) -> set:
@@ -5262,7 +5295,11 @@ class Store(QObject):
                                 if release is not None and (release.get("timestamp") or "").isdigit():
                                     released = dt.datetime.fromtimestamp(int(release.get("timestamp"))).strftime("%b %Y")
                                 licence = node.findtext("project_license") or ""
+                                runtime = next((b.get("runtime") or "" for b in node.findall("bundle")), "")
+                                also = [i.text for i in node.findall("provides/id") if i.text] + \
+                                       [lch.text for lch in node.findall("launchable") if lch.get("type") == "desktop-id" and lch.text]
                                 apps[app_id] = {
+                                    "qt": runtime.startswith("org.kde.Platform"), "_ids": also,
                                     "id": app_id, "name": name,
                                     "summary": next((n.text or "" for n in node.findall("summary") if len(n.attrib) == 0), ""),
                                     "description": " ".join("".join(p.itertext()).strip() for p in desc.iter("p"))[:1200] if desc is not None else "",
@@ -5286,7 +5323,20 @@ class Store(QObject):
                     apps[app_id]["size"] = size.strip().replace("\u00a0", " ")
         except (OSError, subprocess.SubprocessError):
             pass
+        other_ids = {k: a.pop("_ids", []) for k, a in apps.items()}
+        try:
+            apps = self._with_debs(apps, installed, other_ids)
+        except Exception as err:                                 # noqa: BLE001  (Ubuntu's side is a bonus; Flathub's list stands)
+            print(f"Could not read Ubuntu's app catalogue: {err}", file=sys.stderr)
         self._loaded.emit(apps)
+        # Ubuntu's catalogue comes with its package lists: fetch them when they're missing or old (PackageKit lets the
+        # person at the computer do that without a password), then say again which apps Ubuntu has
+        import huginn_debapps
+        if huginn_debapps.lists_age() > 2 * 86400 and huginn_debapps.refresh():
+            try:
+                self._loaded.emit(self._with_debs({k: dict(v) for k, v in apps.items()}, installed, other_ids))
+            except Exception as err:                             # noqa: BLE001
+                print(f"Could not read Ubuntu's app catalogue: {err}", file=sys.stderr)
 
     def _adopt(self, apps: dict) -> None:
         self._apps, self._ready = apps, True
@@ -5375,19 +5425,35 @@ class Store(QObject):
     def show(self, app_id: str) -> None:
         self._current = app_id
         self.changed.emit()
+        a = self._apps.get(app_id) or {}
+        if a.get("deb") and "debVersion" not in a and not self._demo:
+            import threading
+
+            def work(pkg=a["deb"]):                             # (apt-cache takes a moment: off the window's thread)
+                import huginn_debapps
+                self._debInfo.emit(app_id, huginn_debapps.details(pkg))
+            threading.Thread(target=work, daemon=True).start()
+
+    def _deb_info(self, app_id: str, info: dict) -> None:
+        if app_id in self._apps:
+            self._apps[app_id]["debVersion"] = info.get("version", "")
+            self._apps[app_id]["debSize"] = info.get("size", "")
+            self.changed.emit()
 
     # -- actions -----------------------------------------------------------------------------------
-    def _run(self, app_id: str, verb: str, args: list) -> None:
-        if app_id not in self._apps:                        # not in the catalogue (an old page after the list was read again):
-            return                                          # nothing is handed to flatpak that the store didn't list itself
+    def _run(self, app_id: str, verb: str, argv: list, source: str = "flathub") -> None:
+        """Install or remove one app, from Flathub (flatpak) or as Ubuntu's package (PackageKit or apt): one at a
+        time, the rest waiting their turn. `argv` is the whole command."""
+        if app_id not in self._apps or not argv:            # not in the catalogue (an old page after the list was read again):
+            return                                          # nothing is handed to flatpak or apt that the store didn't list itself
         if self._busy:                                      # one at a time: the rest wait their turn, in order
             if app_id != self._busy and all(q[0] != app_id for q in self._queue):
-                self._queue.append((app_id, verb, args))
+                self._queue.append((app_id, verb, argv, source))
                 self.changed.emit()
                 self._live_say()
             return
-        if self._demo or not self._flatpak:
-            self._apps[app_id]["installed"] = verb == "install"
+        if self._demo or (source == "flathub" and not self._flatpak):
+            self._settle(app_id, verb, source)
             self.changed.emit()
             return
         from PySide6.QtCore import QProcess
@@ -5407,10 +5473,12 @@ class Store(QObject):
         def done(code, _status):
             ok = code == 0
             if ok:
-                self._apps[app_id]["installed"] = verb == "install"
-                if verb == "install":
+                self._settle(app_id, verb, source)
+                if verb == "install" and source == "flathub":
                     self._dress(app_id)
                     self._warm(app_id)
+            elif source == "deb" and code in (126, 127) and not shutil.which("pkgcli"):
+                self.failed.emit(f"The password prompt was closed, so {self._apps[app_id]['name']} wasn't {'installed' if verb == 'install' else 'removed'}.")
             else:
                 self.failed.emit(f"Couldn't {'install' if verb == 'install' else 'remove'} {self._apps[app_id]['name']}. {self._progress}")
             self._busy, self._progress, self._process = "", "", None
@@ -5423,7 +5491,20 @@ class Store(QObject):
         proc.readyRead.connect(output)
         proc.finished.connect(done)
         self._process = proc
-        proc.start(self._flatpak, args)
+        if source == "deb":                                     # (plain English from apt and PackageKit, whatever the language)
+            from PySide6.QtCore import QProcessEnvironment
+            env = QProcessEnvironment.systemEnvironment()
+            env.insert("LC_ALL", "C.UTF-8")
+            proc.setProcessEnvironment(env)
+        proc.start(argv[0], argv[1:])
+
+    def _settle(self, app_id: str, verb: str, source: str) -> None:
+        """After an install or removal: where the app now is."""
+        a = self._apps[app_id]
+        key = "debInstalled" if source == "deb" else "flatInstalled"
+        a[key] = verb == "install"
+        a["installed"] = bool(a.get("debInstalled")) or bool(a.get("flatInstalled"))
+        a["from"] = "deb" if a.get("debInstalled") else ("flathub" if a.get("flatInstalled") else "")
 
     def _warm(self, app_id: str) -> None:
         """An app's first start does work once: Flatpak sets up its sandbox's library list, and fontconfig reads every
@@ -5457,7 +5538,20 @@ class Store(QObject):
 
     @Slot(str)
     def install(self, app_id: str) -> None:
-        self._run(app_id, "install", ["install", "-y", "--noninteractive", "flathub", app_id])
+        """From where the app would come by itself (its "prefer")."""
+        self.installFrom(app_id, (self._apps.get(app_id) or {}).get("prefer", "flathub"))
+
+    @Slot(str, str)
+    def installFrom(self, app_id: str, source: str) -> None:
+        """From Flathub ("flathub") or as Ubuntu's package ("deb", where Ubuntu has it)."""
+        a = self._apps.get(app_id)
+        if not a:
+            return
+        if source == "deb" and a.get("deb"):
+            import huginn_debapps
+            self._run(app_id, "install", huginn_debapps.command("install", a["deb"], refresh=huginn_debapps.lists_age() > 2 * 86400), "deb")
+        else:
+            self._run(app_id, "install", [self._flatpak or "flatpak", "install", "-y", "--noninteractive", "flathub", app_id])
 
     @Slot(str)
     def remove(self, app_id: str) -> None:
@@ -5474,7 +5568,19 @@ class Store(QObject):
             self._current = ""
             self.changed.emit()
             return
-        self._run(app_id, "remove", ["uninstall", "-y", "--noninteractive", app_id])
+        a = self._apps.get(app_id) or {}
+        self.removeFrom(app_id, "deb" if a.get("debInstalled") else "flathub")
+
+    @Slot(str, str)
+    def removeFrom(self, app_id: str, source: str) -> None:
+        a = self._apps.get(app_id)
+        if not a:
+            return
+        if source == "deb" and a.get("deb"):
+            import huginn_debapps
+            self._run(app_id, "remove", huginn_debapps.command("remove", a["deb"]), "deb")
+        else:
+            self._run(app_id, "remove", [self._flatpak or "flatpak", "uninstall", "-y", "--noninteractive", app_id])
 
     @Slot(str)
     def launch(self, app_id: str) -> None:
@@ -5485,6 +5591,13 @@ class Store(QObject):
             parts = [p for p in shlex.split(self._web[app_id]["exec"]) if not p.startswith("%")]
             if parts:
                 subprocess.Popen(parts, start_new_session=True)
+        elif (self._apps.get(app_id) or {}).get("debInstalled"):           # Ubuntu's: its launcher, as the start menu would
+            import huginn_debapps
+            path = huginn_debapps.launcher(self._apps[app_id].get("debDesktop", ""))
+            if path and shutil.which("gio"):
+                subprocess.Popen(["gio", "launch", path], start_new_session=True)
+            elif not path:
+                self.failed.emit(f"{self._apps[app_id]['name']} is installed, but its launcher isn't where Ubuntu's catalogue says. Look for it in the start menu.")
         elif self._flatpak and re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_-]*(\.[A-Za-z0-9_-]+)+", app_id or ""):   # an app's id, never an option
             subprocess.Popen([self._flatpak, "run", app_id], start_new_session=True)
 
@@ -5936,6 +6049,8 @@ def main() -> int:
         backend = Monitor(args.demo)
     elif args.app == "store":
         backend = Store(args.demo)
+        if args.demo and args.page:                         # previews: an app's page (its id)
+            backend.show(args.page)
     elif args.app == "music":
         backend = Library(AUDIO, Path(sp.writableLocation(sp.MusicLocation) or Path.home() / "Music"), args.demo, str(target or ""))
     elif args.app == "video":

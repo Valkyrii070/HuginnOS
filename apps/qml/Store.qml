@@ -14,7 +14,9 @@ GlassWindow {
     readonly property var runtimeUpdates: typeof Updates !== "undefined" ? Updates.items.filter(function (i) { return i.kind === "app" && i.runtime }) : []
     readonly property var app: Backend.current
     readonly property bool detail: !!app.id
-    onAppChanged: more = false
+    property string source: "flathub"              // where the app on its page would come from (see "Get it from")
+    property string shownId: ""
+    onAppChanged: { more = false; if (app.id !== shownId) { shownId = app.id || ""; source = app.prefer || "flathub" } }
     Connections { target: Backend; function onFailed(msg) { win.notice = msg; hide.restart() } }
     Timer { id: hide; interval: 7000; onTriggered: win.notice = "" }
     readonly property var tones: ["#563AD1", "#AE4518", "#0A8071", "#2361AE", "#3A4047", "#C46A00", "#7B61FF", "#D93A3F"]
@@ -25,12 +27,12 @@ GlassWindow {
         Image { visible: !!(parent.item && parent.item.icon); anchors.fill: parent; source: parent.item && parent.item.icon ? parent.item.icon : ""; sourceSize.width: 256; sourceSize.height: 256; fillMode: Image.PreserveAspectFit; asynchronous: true }
         Label { visible: !(parent.item && parent.item.icon); anchors.centerIn: parent; text: parent.item && parent.item.name ? parent.item.name.charAt(0) : ""; color: "#FFFFFF"; font.weight: Font.Bold; font.pixelSize: parent.size * 0.42 } }
     // The one button: Get, Open, or what is happening right now.
-    component Get: Btn { property var item; property bool strong: false
+    component Get: Btn { property var item; property bool strong: false; property string from: ""
         readonly property bool working: !!item && Backend.busy === item.id
         readonly property bool waiting: !!item && Backend.queued.indexOf(item.id) >= 0     // queued behind another install
         pill: !strong; primary: strong; height: strong ? 34 : 30; radius: height / 2
         text: working ? "Working…" : waiting ? "Waiting" : (item && item.installed ? "Open" : "Get"); opacity: working || waiting ? 0.6 : 1
-        onClicked: if (waiting) Backend.unqueue(item.id); else if (!working && item) item.installed ? Backend.launch(item.id) : Backend.install(item.id) }
+        onClicked: if (waiting) Backend.unqueue(item.id); else if (!working && item) item.installed ? Backend.launch(item.id) : Backend.installFrom(item.id, from || item.prefer || "flathub") }
     component Badge: Row { property var item; spacing: 4; visible: !!item && (!!item.verified || !!item.web)
         Glyph { name: parent.item && parent.item.web ? "wifi" : "star"; size: 12; ink: parent.item && parent.item.web ? Theme.t.text_secondary : Theme.t.accent; anchors.verticalCenter: parent.verticalCenter }
         Label { text: parent.item && parent.item.web ? "Web app" : "Verified developer"; color: parent.item && parent.item.web ? Theme.t.text_secondary : Theme.t.accent; font.pixelSize: 11 } }
@@ -131,7 +133,7 @@ GlassWindow {
             Label { visible: Backend.apps.length === 0; text: Backend.category === "Installed" ? "Apps you get from the store, and web apps you install from Huginn, appear here." : "Nothing found."; secondary: true }
             Shelf { visible: page.home && Backend.fresh.length > 0; title: "From Verified Developers"; items: Backend.fresh }
             Label { visible: page.home; width: parent.width; wrapMode: Text.WordWrap; secondary: true; font.pixelSize: 12; lineHeight: 1.3
-                text: "Apps come from Flathub and each runs in its own sandbox. “Verified developer” means the app is published by the people who make it." }
+                text: "Apps come from Flathub and each runs in its own sandbox; where Ubuntu has an app too, its page lets you take Ubuntu's own package instead, which fits in fully. “Verified developer” means the app is published by the people who make it." }
         } }
     // ---------------- One app
     Flickable { visible: win.detail; anchors.fill: parent; contentHeight: one.height + 120; clip: true
@@ -143,15 +145,51 @@ GlassWindow {
                 Label { x: 150; y: 6; width: parent.width - 150; text: win.app.name || ""; font.pixelSize: 28; font.weight: Font.DemiBold; elide: Text.ElideRight }
                 Label { x: 150; y: 44; width: parent.width - 150; text: win.app.summary || ""; secondary: true; font.pixelSize: 15; elide: Text.ElideRight }
                 Row { x: 150; y: 88; spacing: 10
-                    Get { item: win.app; strong: true; width: 96 }
+                    Get { item: win.app; strong: true; width: 96; from: win.source }
                     Btn { visible: !!win.app.installed && Backend.busy !== win.app.id; pill: true; height: 34; radius: 17; text: "Remove"; onClicked: win.asking = win.app }
                     Badge { item: win.app; anchors.verticalCenter: parent.verticalCenter } } }
             Card { visible: Backend.busy === win.app.id; width: parent.width; height: 44
                 Label { x: 14; anchors.verticalCenter: parent.verticalCenter; width: parent.width - 28; elide: Text.ElideRight; text: Backend.progress; font.family: Theme.t.fontMono; font.pixelSize: 12 } }
+            // Where it comes from, where Ubuntu has it too: Ubuntu's own package runs on the system's libraries, so it
+            // fits in fully (a Qt app wears Huginn's look and puts its menus in the top bar); Flathub's is usually newer,
+            // and sandboxed, but brings its own Qt. Qt apps start on Ubuntu's, the rest on Flathub's.
+            Column { visible: !!win.app.deb && !win.app.web; width: parent.width; spacing: 10
+                Label { text: win.app.installed ? "Where it came from" : "Get it from"; font.pixelSize: 19; font.weight: Font.Bold }
+                Row { id: froms; width: parent.width; spacing: 12
+                    Repeater {
+                        model: [{ key: "deb", title: "Ubuntu", here: !!win.app.debInstalled,
+                                  sub: "The system's own package" + (win.app.debVersion ? "  ·  " + win.app.debVersion : "") + (win.app.debSize ? "  ·  " + win.app.debSize : ""),
+                                  text: win.app.qt ? "Fits in fully: Huginn's look, and its menus in the top bar. Updates come with Software Update; installing asks for your password."
+                                                   : "Runs on the system's own libraries. Updates come with Software Update; installing asks for your password." },
+                                { key: "flathub", title: "Flathub", here: !!win.app.flatInstalled,
+                                  sub: "From the developer" + (win.app.version ? "  ·  " + win.app.version : "") + (win.app.size ? "  ·  " + win.app.size : ""),
+                                  text: win.app.qt ? "Usually newer, in its own sandbox. It brings its own Qt, so its look and menus stay inside its window. Updates come in the App Store."
+                                                   : "Usually newer, in its own sandbox. Updates come in the App Store." }]
+                        Rectangle {
+                            id: from
+                            required property var modelData
+                            readonly property bool chosen: win.app.installed ? modelData.here : win.source === modelData.key
+                            width: (froms.width - 12) / 2; height: Math.max(108, fromCol.implicitHeight + 28); radius: 12
+                            color: chosen ? Qt.alpha(Theme.t.accent, 0.10) : fromHit.containsMouse && !win.app.installed ? Theme.t.hover : Theme.t.group
+                            border.width: chosen ? 2 : 1; border.color: chosen ? Theme.t.accent : Theme.t.separator
+                            Column { id: fromCol; x: 14; y: 14; width: parent.width - 28; spacing: 4
+                                Row { spacing: 8
+                                    Rectangle { visible: !win.app.installed; width: 16; height: 16; radius: 8; anchors.verticalCenter: parent.verticalCenter
+                                        color: from.chosen ? Theme.t.accent : "transparent"; border.width: from.chosen ? 0 : 1.5; border.color: Theme.t.text_secondary
+                                        Rectangle { visible: from.chosen; anchors.centerIn: parent; width: 6; height: 6; radius: 3; color: "white" } }
+                                    Label { text: from.modelData.title; font.pixelSize: 15; font.weight: Font.DemiBold; anchors.verticalCenter: parent.verticalCenter }
+                                    Label { visible: from.modelData.here; text: "Installed"; color: Theme.t.accent; font.pixelSize: 12; anchors.verticalCenter: parent.verticalCenter } }
+                                Label { width: parent.width; text: from.modelData.sub; secondary: true; font.pixelSize: 12; elide: Text.ElideRight }
+                                Label { width: parent.width; text: from.modelData.text; wrapMode: Text.WordWrap; font.pixelSize: 12; lineHeight: 1.3 } }
+                            MouseArea { id: fromHit; anchors.fill: parent; hoverEnabled: true; enabled: !win.app.installed; cursorShape: Qt.PointingHandCursor
+                                onClicked: win.source = from.modelData.key }
+                        } } } }
             // Facts at a glance.
             Item { id: strip; width: parent.width; height: 78
-                readonly property var cells: [["CATEGORY", win.app.category || "", ""], ["DEVELOPER", win.app.developer || "", win.app.verified ? "Verified" : ""], ["SIZE", win.app.size || "", "to download"],
-                                              ["VERSION", win.app.version || "", win.app.released || ""], ["CODE", win.app.web ? "" : (win.app.open ? "Open" : "Closed"), win.app.open ? "source" : "source"]].filter(function (c) { return c[1] !== "" })
+                readonly property bool fromUbuntu: win.app.installed ? win.app.from === "deb" : (!!win.app.deb && win.source === "deb")   // (the facts of the one chosen)
+                readonly property var cells: [["CATEGORY", win.app.category || "", ""], ["DEVELOPER", win.app.developer || "", win.app.verified && !fromUbuntu ? "Verified" : ""],
+                                              ["SIZE", fromUbuntu ? (win.app.debSize || "") : (win.app.size || ""), "to download"],
+                                              ["VERSION", fromUbuntu ? (win.app.debVersion || "") : (win.app.version || ""), fromUbuntu ? "Ubuntu's" : (win.app.released || "")], ["CODE", win.app.web ? "" : (win.app.open ? "Open" : "Closed"), win.app.open ? "source" : "source"]].filter(function (c) { return c[1] !== "" })
                 Rectangle { width: parent.width; height: 1; color: Theme.t.separator } Rectangle { y: parent.height - 1; width: parent.width; height: 1; color: Theme.t.separator }
                 Row { anchors.fill: parent
                     Repeater { model: strip.cells
@@ -172,8 +210,10 @@ GlassWindow {
             Column { width: parent.width; spacing: 6
                 Label { text: "Information"; font.pixelSize: 19; font.weight: Font.Bold; bottomPadding: 4 }
                 Grid { columns: one.width > 700 ? 2 : 1; columnSpacing: 36; width: parent.width
-                    Repeater { model: [["Source", win.app.web ? "Huginn web app" : "Flathub"], ["Developer", win.app.developer || ""], ["Category", win.app.category || ""], ["Version", win.app.version || ""], ["Updated", win.app.released || ""],
-                                       ["Download size", win.app.size || ""], ["Licence", win.app.license || ""], ["Runs in", win.app.web ? "Huginn" : "Its own sandbox"], ["Identifier", win.app.web ? "" : (win.app.id || "")]].filter(function (r) { return r[1] !== "" })
+                    Repeater { model: [["Source", win.app.web ? "Huginn web app" : win.app.from === "deb" ? "Ubuntu (" + win.app.deb + ")" : win.app.from === "flathub" ? "Flathub" : (win.app.deb ? "Flathub or Ubuntu" : "Flathub")],
+                                       ["Developer", win.app.developer || ""], ["Category", win.app.category || ""], ["Version", win.app.version || ""], ["Updated", win.app.released || ""],
+                                       ["Download size", win.app.size || ""], ["Licence", win.app.license || ""],
+                                       ["Runs in", win.app.web ? "Huginn" : win.app.from === "deb" ? "The system" : "Its own sandbox"], ["Identifier", win.app.web ? "" : (win.app.id || "")]].filter(function (r) { return r[1] !== "" })
                         Item { required property var modelData; width: (one.width - (parent.columns > 1 ? 36 : 0)) / parent.columns; height: 40
                             Rectangle { anchors.bottom: parent.bottom; width: parent.width; height: 1; color: Theme.t.separator }
                             Label { anchors.verticalCenter: parent.verticalCenter; text: modelData[0]; secondary: true }
@@ -184,6 +224,7 @@ GlassWindow {
         Label { x: 22; y: 20; text: "Remove “" + (win.asking ? win.asking.name : "") + "”?"; font.pixelSize: 16; font.weight: Font.DemiBold }
         Label { x: 22; y: 50; width: parent.width - 44; wrapMode: Text.WordWrap; secondary: true; lineHeight: 1.3
             text: win.asking && win.asking.web ? "It leaves the launcher and dock. The website and your account there stay as they are, and you can install it again from Huginn."
+                  : win.asking && win.asking.debInstalled ? "Ubuntu's package is uninstalled (removing it asks for your password). You can get it again from the store at any time."
                                                : "The app is uninstalled. You can get it again from the store at any time." }
         Row { anchors { right: parent.right; rightMargin: 22; bottom: parent.bottom; bottomMargin: 20 } spacing: 8
             Btn { text: "Cancel"; onClicked: win.asking = null } Btn { text: "Remove"; danger: true; onClicked: { Backend.remove(win.asking.id); win.asking = null } } } }
