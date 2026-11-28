@@ -1753,7 +1753,7 @@ class Builder:
         p, fps = self.p, self.fps
         W, H = self.W, self.H
         g = math.gcd(W, H)
-        head = (f'<?xml version="1.0" encoding="utf-8"?>\n<mlt LC_NUMERIC="C" version="7.0.0" title="{escape(p.get("name", ""))}" producer="main">'
+        head = (f'<?xml version="1.0" encoding="utf-8"?>\n<mlt LC_NUMERIC="C" version="7.0.0" title={quoteattr(p.get("name", ""))} producer="main">'
                 f'<profile description="clips" width="{W}" height="{H}" progressive="1" sample_aspect_num="1" sample_aspect_den="1" '
                 f'display_aspect_num="{W // g}" display_aspect_den="{H // g}" frame_rate_num="{fps}" frame_rate_den="1" colorspace="709"/>')
         extra = self.filt("avfilter.loudnorm", {"av.I": -16, "av.TP": -1.5, "av.LRA": 11}) if loudness else ""
@@ -1993,6 +1993,9 @@ class Engine:
         self.xml, self.size, self.prod, self.profile = "", (960, 540), None, None
         self.playing, self.pos, self.length, self.fps = False, 0, 1, 30
         self._thread, self._audio, self._audio_prod, self._lock = None, None, None, threading.Lock()
+        # The sound's consumer reads the profile it was made with on a thread of its own: it keeps that profile alive
+        # (an edit while playing makes a new one; freeing the old one under it crashed MLT, dividing by a size of 0)
+        self._audio_profile, self._audio_lock = None, threading.Lock()
         if mlt is not None:
             mlt.Factory().init()
 
@@ -2003,6 +2006,9 @@ class Engine:
     def load(self, xml: str, size: tuple, fps: int) -> None:
         if mlt is None:
             return
+        sounding = self._audio is not None
+        if sounding:
+            self._stop_audio()                     # it plays the project as it was: it starts again on the new one below
         with self._lock:
             self.xml, self.size, self.fps = xml, size, fps
             self.profile = mlt.Profile()
@@ -2014,7 +2020,11 @@ class Engine:
             self.profile.set_display_aspect(size[0] // g, size[1] // g)
             self.profile.set_progressive(1)
             self.prod = mlt.Producer(self.profile, "xml-string", xml)
-            self.length = max(1, self.prod.get_length() if self.prod and self.prod.is_valid() else 1)
+            if not self.prod.is_valid():          # (XML MLT can't read: nothing to show, rather than a crash on the first seek)
+                self.prod = None
+            self.length = max(1, self.prod.get_length() if self.prod else 1)
+        if sounding and self.playing and abs(self.rate - 1.0) < 1e-6:
+            self._start_audio(min(self.pos, self.length - 1))
 
     def image(self, n: int):
         """The frame at `n` as a QImage (or None)."""
@@ -2042,6 +2052,8 @@ class Engine:
     def _start_audio(self, start: int) -> None:
         try:
             prod = mlt.Producer(self.profile, "xml-string", self.xml)
+            if not prod.is_valid():
+                return
             prod.seek(start)
             cons = mlt.Consumer(self.profile, "sdl2_audio")
             if not cons.is_valid():
@@ -2050,7 +2062,8 @@ class Engine:
             cons.set("audio_buffer", 1024)
             cons.connect(prod)
             if cons.start() == 0:
-                self._audio, self._audio_prod = cons, prod
+                with self._audio_lock:
+                    self._audio, self._audio_prod, self._audio_profile = cons, prod, self.profile
         except Exception:
             self._audio = None
 
@@ -2073,12 +2086,15 @@ class Engine:
         self._stop_audio()
 
     def _stop_audio(self) -> None:
-        if self._audio is not None:
-            try:
-                self._audio.stop()
-            except Exception:
-                pass
-        self._audio, self._audio_prod = None, None
+        with self._audio_lock:                     # (the playing thread and the window can both get here)
+            cons, prod, profile = self._audio, self._audio_prod, self._audio_profile
+            self._audio = self._audio_prod = self._audio_profile = None
+            if cons is not None:
+                try:
+                    cons.stop()
+                except Exception:
+                    pass
+            del cons, prod, profile                # the consumer first, then what it was reading
 
     def stop(self) -> int:
         self.playing = False
@@ -3135,6 +3151,8 @@ class Clips(QObject):
 
     @Slot(str)
     def addTrack(self, kind: str) -> None:
+        if kind not in ("video", "audio"):            # (its first letter goes into the track's id, which the film's XML carries)
+            return
         self._before()
         n = sum(1 for t in self._p["tracks"] if t["kind"] == kind) + 1
         tid = f"{kind[0]}{n}x{self._p['next']}"

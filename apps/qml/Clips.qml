@@ -2,10 +2,12 @@ import QtQuick
 
 // Clips, "the cutting room": the library of footage on the left, the picture in the middle, the inspector on the
 // right, and the timeline across the bottom: video tracks stacked above the main one (V1), sound tracks below it.
-// What the viewer shows is drawn by the same engine that makes the finished video.
+// What the viewer shows is drawn by the same engine that makes the finished video. The panels are Clips' own glass
+// (as in Code), the timeline's tools float as islands over it, and the timeline itself sits on a deeper pane, as
+// dense as ever. The picture stays on black, so colour is judged against nothing.
 GlassWindow {
     id: win
-    title: "Clips"; heading: Backend.name; width: 1400; height: 880; minimumWidth: 1100; minimumHeight: 700; glow: "bottom"
+    title: "Clips"; heading: Backend.name; width: 1400; height: 880; minimumWidth: 1100; minimumHeight: 700; glow: "bottom"; islandColor: glass; islandLineColor: glassLine
     property string tool: "select"                 // select | blade | slip
     property bool ripple: false
     property string tab: "video"
@@ -25,7 +27,10 @@ GlassWindow {
     function speedLabel(v) { return v === 0 ? "held" : v < 1 ? Math.round(v * 100) + "%" : (Math.round(v * 100) / 100) + "×" }
     readonly property real z: Backend.zoom
     readonly property int headW: 132
-    readonly property color cutBg: Theme.t.dark ? "#101216" : "#F4F5F8"
+    readonly property color cutBg: clearGlass ? deepGlass : Theme.t.dark ? "#101216" : "#F4F5F8"
+    readonly property color laneA: clearGlass ? (Theme.t.dark ? Qt.rgba(1, 1, 1, 0.03) : Qt.rgba(0, 0, 0, 0.035)) : Theme.t.dark ? "#13161B" : "#F0F1F4"
+    readonly property color laneB: clearGlass ? (Theme.t.dark ? Qt.rgba(1, 1, 1, 0.045) : Qt.rgba(0, 0, 0, 0.05)) : Theme.t.dark ? "#15181E" : "#ECEEF2"
+    readonly property int toolsY: 64 + topH + 12      // the timeline's tools, as islands; the timeline under them
     function rowH(t) { return t.role === "captions" ? 40 : t.kind === "video" ? 66 : 52 }
     function ask(kind, extra) { var s = extra || {}; s.kind = kind; sheet = s }
     property string libPick: ""          // the library item picked for Insert ( , ) and Overwrite ( . )
@@ -225,7 +230,7 @@ GlassWindow {
     }
 
     islands: [
-        Island { anchors { right: parent.right; rightMargin: win.liftRight } y: win.topY
+        Island { objectName: "mainIsland"; anchors { right: parent.right; rightMargin: win.liftRight } y: win.topY; color: win.topGlass; border.color: win.topGlassLine
             Seg { icon: "back"; tip: "Undo (Ctrl+Z)"; enabled: Backend.canUndo; opacity: Backend.canUndo ? 1 : 0.4; onClicked: Backend.undo() }
             Seg { icon: "forward"; tip: "Redo"; enabled: Backend.canRedo; opacity: Backend.canRedo ? 1 : 0.4; onClicked: Backend.redo() }
             IslandGap {}
@@ -326,7 +331,7 @@ GlassWindow {
 
     // ================================================================ the library
     // ================================================================ the mixer
-    Rectangle { id: mix; objectName: "mixer"; visible: win.mixer; x: 12; y: 64; width: 300; height: win.topH; radius: 18; color: Theme.t.island; border.width: 1; border.color: Theme.t.islandLine; clip: true
+    Rectangle { id: mix; objectName: "mixer"; visible: win.mixer; x: 12; y: 64; width: 300; height: win.topH; radius: 16; color: win.glass; border.width: 1; border.color: win.glassLine; clip: true
         Label { x: 16; y: 14; text: "Mixer"; font.pixelSize: 15; font.weight: Font.DemiBold }
         Label { x: 16; y: 34; text: Backend.anySolo ? "Soloed tracks only" : "Every track's level"; font.pixelSize: 11; secondary: true }
         Pressable { anchors { right: parent.right; rightMargin: 10 } y: 12; width: 30; height: 30; radius: 9; onClicked: win.mixer = false
@@ -336,7 +341,7 @@ GlassWindow {
             readonly property var list: Backend.tracks.filter(function (t) { return t.role !== "captions" })
             model: list.length
             delegate: Strip { required property int index; track: strips.list[index] || ({}); height: strips.height } } }
-    Rectangle { id: lib; objectName: "library"; visible: !win.mixer; x: 12; y: 64; width: 300; height: win.topH; radius: 18; color: Theme.t.island; border.width: 1; border.color: Theme.t.islandLine; clip: true
+    Rectangle { id: lib; objectName: "library"; visible: !win.mixer; x: 12; y: 64; width: 300; height: win.topH; radius: 16; color: win.glass; border.width: 1; border.color: win.glassLine; clip: true
         Flow { id: binRow; x: 10; y: 10; width: parent.width - 20; spacing: 4
             Seg { anchors.verticalCenter: undefined; text: "All"; on: win.bin === ""; onClicked: win.bin = "" }
             Repeater { model: Backend.bins; Seg { required property string modelData; anchors.verticalCenter: undefined; text: modelData; on: win.bin === modelData; onClicked: win.bin = modelData } } }
@@ -466,7 +471,7 @@ GlassWindow {
             Seg { objectName: "frameBtn"; anchors { right: lenT.left; rightMargin: 10 } icon: "camera"; tip: "Save this frame as a picture, in Pictures/Clips (Ctrl+Shift+S)"; onClicked: Backend.saveFrame() } } }
 
     // ================================================================ the inspector
-    Rectangle { id: insp; objectName: "inspector"; x: parent.width - width - 12; y: 64; width: 330; height: win.topH; radius: 18; color: Theme.t.island; border.width: 1; border.color: Theme.t.islandLine; clip: true
+    Rectangle { id: insp; objectName: "inspector"; x: parent.width - width - 12; y: 64; width: 330; height: win.topH; radius: 16; color: win.glass; border.width: 1; border.color: win.glassLine; clip: true
         readonly property var tabs: !win.hasClip ? [] : win.clip.kind === "title" ? [["title", "Title"], ["video", "Place"], ["colour", "Colour"]]
                                    : win.clip.kind === "adjust" ? [["colour", "Colour"], ["effects", "Effects"]]
                                    : win.clip.kind === "compound" ? [["video", "Place"], ["colour", "Colour"], ["mask", "Mask"], ["audio", "Sound"]]
@@ -862,37 +867,39 @@ GlassWindow {
                     Knob { visible: !!win.clip.transition; label: "Transition length"; value: win.clip.transition ? win.clip.transition.length : 1; from: 0.2; to: 4; zero: 1; unit: " s"; decimals: 1
                         onMoved: function (v) { Backend.setTransition(win.clip.id, win.clip.transition.kind, Math.round(v * 10) / 10) } } } } } }
 
-    // ================================================================ the timeline
-    Rectangle { id: tl; objectName: "timeline"; x: 12; y: 64 + win.topH + 12; width: parent.width - 24; height: parent.height - y - 12; radius: 18; color: win.cutBg; border.width: 1; border.color: Theme.t.islandLine; clip: true
-        // tools
-        Row { id: tools; x: 12; y: 8; spacing: 4; height: 32
+    // ================================================================ the timeline's tools: islands over it
+    Row { id: tools; objectName: "timelineTools"; x: 12; y: win.toolsY; height: 40; spacing: 8
+        Island { objectName: "toolIsland"; color: win.glass; border.color: win.glassLine
             Seg { text: "Select"; tip: "A"; on: win.tool === "select"; onClicked: win.tool = "select" }
             Seg { text: "Blade"; tip: "B: click a clip to cut it there"; on: win.tool === "blade"; onClicked: win.tool = "blade" }
-            Seg { objectName: "slipBtn"; text: "Slip"; tip: "Y (or Alt-drag): slide the footage inside a clip, which stays put"; on: win.tool === "slip"; onClicked: win.tool = "slip" }
-            IslandGap {}
+            Seg { objectName: "slipBtn"; text: "Slip"; tip: "Y (or Alt-drag): slide the footage inside a clip, which stays put"; on: win.tool === "slip"; onClicked: win.tool = "slip" } }
+        Island { objectName: "editIsland"; color: win.glass; border.color: win.glassLine
             Seg { text: "Ripple"; tip: "Deleting and trimming close the gaps"; on: win.ripple; onClicked: win.ripple = !win.ripple }
             Seg { text: "Cut Here"; tip: "S: cut at the playhead"; onClicked: { if (!Backend.cut()) toast.say("Nothing under the playhead to cut", true) } }
             Seg { text: "Marker"; tip: "M"; onClicked: Backend.addMarker("") }
             Seg { objectName: "shotsBtn"; visible: win.hasClip && win.clip.kind === "media" && win.clip.mediaKind === "video"; text: "Find Shots"
                 tip: "Cut the picked clip wherever its footage cuts to another shot"; onClicked: Backend.cutAtShots(win.clip.id) }
             Seg { objectName: "pausesBtn"; visible: win.hasClip && win.clip.kind === "media" && !!win.clip.hasAudio; text: "Cut Pauses"
-                tip: "Take the pauses out of the picked clip's speech, closing up its track"; onClicked: Backend.removePauses(win.clip.id) }
-            IslandGap {}
+                tip: "Take the pauses out of the picked clip's speech, closing up its track"; onClicked: Backend.removePauses(win.clip.id) } }
+        Island { objectName: "trackIsland"; color: win.glass; border.color: win.glassLine
             Seg { text: "+ Video Track"; onClicked: Backend.addTrack("video") }
-            Seg { text: "+ Audio Track"; onClicked: Backend.addTrack("audio") }
-            IslandGap {}
+            Seg { text: "+ Audio Track"; onClicked: Backend.addTrack("audio") } }
+        Island { objectName: "panelIsland"; color: win.glass; border.color: win.glassLine
             Seg { objectName: "mixerBtn"; text: "Mixer"; on: win.mixer; onClicked: win.mixer = !win.mixer }
-            Seg { objectName: "captionsBtn"; text: Backend.words.busy ? "Listening…" : "Captions"; on: Backend.words.busy; onClicked: win.ask("captions", { files: Backend.captionFiles(), tool: Backend.speechTool() }) } }
-        Row { anchors { right: parent.right; rightMargin: 14 } y: 8; height: 32; spacing: 8
-            Glyph { name: "search"; size: 13; anchors.verticalCenter: parent.verticalCenter }
-            Meter { width: 160; anchors.verticalCenter: parent.verticalCenter; interactive: true; value: Math.log(win.z / 4) / Math.log(100); onMoved: function (v) { Backend.setZoom(4 * Math.pow(100, v)) } }
-            Label { anchors.verticalCenter: parent.verticalCenter; text: Backend.lengthText; font.family: Theme.t.fontMono; font.pixelSize: 11; secondary: true } }
-
+            Seg { objectName: "captionsBtn"; text: Backend.words.busy ? "Listening…" : "Captions"; on: Backend.words.busy; onClicked: win.ask("captions", { files: Backend.captionFiles(), tool: Backend.speechTool() }) } } }
+    Island { id: zoomIsland; objectName: "zoomIsland"; x: parent.width - width - 12; y: win.toolsY; color: win.glass; border.color: win.glassLine
+        Item { width: 4; height: 1 }
+        Glyph { name: "search"; size: 13; anchors.verticalCenter: parent.verticalCenter }
+        Meter { objectName: "zoomMeter"; width: Math.max(56, Math.min(160, win.width - (tools.x + tools.width + 12) - 12 - 46)); anchors.verticalCenter: parent.verticalCenter; interactive: true
+            value: Math.log(win.z / 4) / Math.log(100); onMoved: function (v) { Backend.setZoom(4 * Math.pow(100, v)) } }
+        Item { width: 6; height: 1 } }                 // (the length is under the picture, beside the playhead's time)
+    // ================================================================ the timeline
+    Rectangle { id: tl; objectName: "timeline"; x: 12; y: win.toolsY + 52; width: parent.width - 24; height: parent.height - y - 12; radius: 16; color: win.cutBg; border.width: 1; border.color: win.glassLine; clip: true
         // track names down the left
-        Flickable { id: heads; x: 0; y: 74; width: win.headW; height: parent.height - y - 8; contentHeight: lanesCol.height; contentY: lanes.contentY; interactive: false; clip: true
+        Flickable { id: heads; x: 0; y: 38; width: win.headW; height: parent.height - y - 8; contentHeight: lanesCol.height; contentY: lanes.contentY; interactive: false; clip: true
             Column { width: parent.width; spacing: 4
                 Repeater { model: Backend.tracks
-                    Rectangle { required property var modelData; width: win.headW - 10; x: 8; height: win.rowH(modelData); radius: 10; color: Theme.t.island; border.width: 1; border.color: Theme.t.islandLine
+                    Rectangle { required property var modelData; width: win.headW - 10; x: 8; height: win.rowH(modelData); radius: 10; color: win.glass; border.width: 1; border.color: win.glassLine
                         Label { x: 10; y: 8; text: modelData.name; font.pixelSize: 12; font.weight: Font.DemiBold }
                         Label { x: 10; y: 26; visible: !blendBtn.visible; text: modelData.role === "captions" ? "captions" : modelData.kind === "video" ? (modelData.id === "v1" ? "main" : "layer") : (modelData.role || "sound"); font.pixelSize: 9; secondary: true }
                         // a layer's way of meeting what's under it: click to go through them
@@ -909,13 +916,13 @@ GlassWindow {
                                 Glyph { anchors.centerIn: parent; size: 13; name: "lock"; ink: modelData.locked ? Theme.t.accent : Theme.t.icon; opacity: modelData.locked ? 1 : 0.35 } } } } } } }
 
         // inside a compound clip: the way back out, where the track names start
-        Pressable { objectName: "breadcrumb"; visible: Backend.inside; x: 8; y: 44; width: win.headW - 10; height: 24; radius: 8; color: hovered ? "#55EC4899" : "#33EC4899"
+        Pressable { objectName: "breadcrumb"; visible: Backend.inside; x: 8; y: 8; width: win.headW - 10; height: 24; radius: 8; color: hovered ? "#55EC4899" : "#33EC4899"
             border.width: 1; border.color: "#EC4899"; onClicked: Backend.closeCompound()
             readonly property var above: Backend.path.length > 1 ? Backend.path[Backend.path.length - 2] : ({ name: "" })
             Label { x: 8; width: parent.width - 14; anchors.verticalCenter: parent.verticalCenter; elide: Text.ElideRight; font.pixelSize: 11; font.weight: Font.DemiBold
                 text: "‹  " + parent.above.name } }
         // the ruler
-        Item { id: ruler; x: win.headW; y: 44; width: parent.width - win.headW - 8; height: 26; clip: true
+        Item { id: ruler; x: win.headW; y: 8; width: parent.width - win.headW - 8; height: 26; clip: true
             readonly property real stepS: win.z > 120 ? 1 : win.z > 40 ? 2 : win.z > 15 ? 5 : win.z > 6 ? 10 : 30
             Repeater { model: Math.ceil((ruler.width + lanes.contentX) / (win.z * ruler.stepS)) + 1
                 Item { required property int index; readonly property real s: index * ruler.stepS; x: s * win.z - lanes.contentX; width: 1; height: ruler.height
@@ -932,14 +939,14 @@ GlassWindow {
             MouseArea { anchors.fill: parent; z: -1; onPressed: function (m) { Backend.seek((m.x + lanes.contentX) / win.z) } onPositionChanged: function (m) { Backend.seek((m.x + lanes.contentX) / win.z) } } }
 
         // the lanes
-        Flickable { id: lanes; objectName: "lanes"; x: win.headW; y: 74; width: parent.width - win.headW - 8; height: parent.height - y - 8; clip: true
+        Flickable { id: lanes; objectName: "lanes"; x: win.headW; y: 38; width: parent.width - win.headW - 8; height: parent.height - y - 8; clip: true
             contentWidth: Math.max(width, (Backend.length + 30) * win.z); contentHeight: lanesCol.height + 20; boundsBehavior: Flickable.StopAtBounds
             WheelHandler { acceptedModifiers: Qt.ControlModifier; onWheel: function (e) { Backend.setZoom(win.z * (e.angleDelta.y > 0 ? 1.15 : 1 / 1.15)) } }
             MouseArea { width: lanes.contentWidth; height: Math.max(lanes.height, lanesCol.height); onClicked: function (m) { Backend.pick("", false); Backend.seek(m.x / win.z) } }
             Column { id: lanesCol; width: lanes.contentWidth; spacing: 4
                 Repeater { model: Backend.tracks
                     Rectangle { id: lane; required property var modelData; required property int index; width: lanes.contentWidth; height: win.rowH(modelData); radius: 8
-                        color: index % 2 ? (Theme.t.dark ? "#15181E" : "#ECEEF2") : (Theme.t.dark ? "#13161B" : "#F0F1F4"); opacity: modelData.hidden || modelData.muted ? 0.55 : 1
+                        color: index % 2 ? win.laneB : win.laneA; opacity: modelData.hidden || modelData.muted ? 0.55 : 1
                         Repeater { model: lane.modelData.clips
                             Rectangle { id: cl; required property var modelData
                                 property real dx: 0
@@ -1027,6 +1034,6 @@ GlassWindow {
                                 MouseArea { anchors.fill: parent; onClicked: { Backend.pick(modelData.id, false); win.tab = "video" } } } } } } }
             // the playhead
             Rectangle { objectName: "playhead"; x: Backend.head * win.z - 1; y: 0; width: 2; height: Math.max(lanes.height, lanesCol.height); color: "#FF3B30"; z: 20 } }
-        Rectangle { x: win.headW + Backend.head * win.z - lanes.contentX - 6; y: 62; width: 12; height: 12; radius: 3; rotation: 45; color: "#FF3B30"; visible: x > win.headW - 8 && x < tl.width }
+        Rectangle { x: win.headW + Backend.head * win.z - lanes.contentX - 6; y: 26; width: 12; height: 12; radius: 3; rotation: 45; color: "#FF3B30"; visible: x > win.headW - 8 && x < tl.width }
     }
 }

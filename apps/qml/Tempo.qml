@@ -3,10 +3,11 @@ import QtQuick
 // Tempo, "the stage": a glowing transport display sits at the top like the front of a mixing desk, the tracks run
 // across the middle as coloured lanes under a ruler of bars, and the bench below changes with what you're working
 // on: a piano roll, a drum grid, the drummer's pad, Smart Controls, the mixer or a keyboard. Loops and instruments
-// slide in from the right. Warm, like a studio's red "on air" light.
+// slide in from the right. Warm, like a studio's red "on air" light. The panels are Tempo's own glass (as in Code and
+// Clips), the arrangement's tools float as islands over it, and the lanes sit on a deeper pane, as dense as ever.
 GlassWindow {
     id: win
-    title: "Tempo"; heading: Backend.hasSong ? Backend.song.name : ""; glow: "bottom"; width: 1400; height: 880; minimumWidth: 1080; minimumHeight: 680
+    title: "Tempo"; heading: Backend.hasSong ? Backend.song.name : ""; glow: "bottom"; islandColor: glass; islandLineColor: glassLine; width: 1400; height: 880; minimumWidth: 1080; minimumHeight: 680
     property string bench: "auto"                 // auto | roll | drums | drummer | smart | mixer | keys
     property bool benchOpen: true
     property string drawer: ""                    // loops | library | ""
@@ -29,7 +30,7 @@ GlassWindow {
         return steps.indexOf(((pitch - (Backend.song.key || 0)) % 12 + 12) % 12) >= 0 }
     property string masterChar: "clean"           // the mastering assistant's choices before it has listened
     property string masterTarget: "streaming"
-    readonly property int tracksTop: 98 + (tempoOn ? 54 : 0)
+    readonly property int tracksTop: 62 + (tempoOn ? 54 : 0)
     property string pluginBrowser: ""             // "effect" while the plugin browser is open
     property string pluginCat: "All"
     property var pluginPanel: null                // a plugin's every control and its presets: { tid, index (-1: the instrument), uri, name }
@@ -130,8 +131,8 @@ GlassWindow {
     ]
 
     // ================================================================ the transport display
-    Rectangle { id: transport; objectName: "transport"; z: 6; visible: Backend.hasSong; x: Math.max(250, (parent.width - width) / 2 - 90); y: 10; height: 50; width: tRow.width + 16; radius: 18
-        color: Theme.t.island; border.width: 1; border.color: Theme.t.islandLine
+    Rectangle { id: transport; objectName: "transport"; z: 6; visible: Backend.hasSong; x: Math.max(win.titleEnd + 12, Math.min((parent.width - width) / 2 - 90, win.toolStart - width - 12)); y: 10; height: 50; width: tRow.width + 16; radius: 18
+        color: win.topGlass; border.width: 1; border.color: win.topGlassLine
         Row { id: tRow; x: 8; anchors.verticalCenter: parent.verticalCenter; spacing: 3
             Seg { icon: "prev"; tip: "To the start (Return)"; onClicked: Backend.toStart() }
             Pressable { objectName: "playBtn"; width: 40; height: 34; radius: 12; color: Backend.playing ? win.hot : (hovered ? Theme.t.hover : "transparent"); onClicked: Backend.toggle()
@@ -173,48 +174,51 @@ GlassWindow {
             Seg { text: "1234"; tip: "Count in a bar before recording"; on: (win.song.countIn || 0) > 0; onClicked: Backend.setSong("countIn", win.song.countIn > 0 ? 0 : 1) }
             Seg { icon: "keyboard"; tip: "Musical typing (Ctrl+K): A–K play notes, Z and X change octave"; on: win.typing; onClicked: { win.typing = !win.typing; if (win.typing) keyCatcher.forceActiveFocus() } } } }
 
-    // ================================================================ tracks and their lanes
-    readonly property int headW: 218
-    readonly property int rowH: 64
-    Rectangle { id: arrange; objectName: "arrange"; visible: Backend.hasSong; x: 12; y: 70; width: parent.width - 24 - (win.drawer !== "" ? 312 : 0)
-        height: parent.height - y - 12 - (win.benchOpen ? benchBox.height + 12 : 0); radius: 18; color: Theme.t.island; border.width: 1; border.color: Theme.t.islandLine; clip: true
-        Behavior on width { NumberAnimation { duration: Theme.t.still ? 0 : 160; easing.type: Easing.OutCubic } }
-        // add a track
-        Row { x: 12; y: 8; spacing: 3; height: 30
+    // ================================================================ the arrangement's tools: islands over it
+    Row { id: arrTools; objectName: "arrangeTools"; visible: Backend.hasSong; x: arrange.x; y: 70; height: 40; spacing: 8
+        Island { objectName: "addIsland"; color: win.glass; border.color: win.glassLine
             Seg { icon: "plus"; text: "Instrument"; onClicked: Backend.addTrack("instrument", "grand") }
             Seg { text: "Drummer"; onClicked: Backend.addTrack("drummer", "drums") }
             Seg { icon: "mic"; text: "Voice or Guitar"; onClicked: Backend.addTrack("audio", "") }
             Seg { objectName: "autoBtn"; text: "A"; tip: "Automation: draw any knob over time"; on: win.autoOn; onClicked: win.autoOn = !win.autoOn }
             Seg { objectName: "tempoBtn"; text: "Tempo"; tip: "Tempo and time signature: changes along the song"; on: win.tempoOn; onClicked: win.tempoOn = !win.tempoOn }
             Seg { objectName: "stackBtn"; visible: win.picked.length >= 2; icon: "layers"; text: "Stack " + win.picked.length; tip: "These tracks play into one stack with its own effects and fader"
-                onClicked: { Backend.makeStack(win.picked); win.picked = [] } }
-            IslandGap {}
+                onClicked: { Backend.makeStack(win.picked); win.picked = [] } } }
+        Island { objectName: "undoIsland"; color: win.glass; border.color: win.glassLine
             Seg { icon: "undo"; enabled: Backend.canUndo; opacity: enabled ? 1 : 0.4; tip: "Undo (Ctrl+Z)"; onClicked: Backend.undo() }
-            Seg { icon: "redo"; enabled: Backend.canRedo; opacity: enabled ? 1 : 0.4; tip: "Redo"; onClicked: Backend.redo() } }
+            Seg { icon: "redo"; enabled: Backend.canRedo; opacity: enabled ? 1 : 0.4; tip: "Redo"; onClicked: Backend.redo() } } }
+    Row { objectName: "arrangeActions"; visible: Backend.hasSong; x: arrange.x + arrange.width - width; y: 70; height: 40; spacing: 8; layoutDirection: Qt.RightToLeft
+        Island { objectName: "zoomIsland"; color: win.glass; border.color: win.glassLine
+            Item { width: 4; height: 1 }
+            Glyph { name: "zoom"; size: 13; anchors.verticalCenter: parent.verticalCenter }
+            Meter { width: 120; anchors.verticalCenter: parent.verticalCenter; interactive: true; value: (win.ppb - 8) / 92; onMoved: function (v) { win.ppb = 8 + v * 92 } }
+            Item { width: 6; height: 1 } }
         // what to do with the selected region
-        Row { visible: Backend.selectedRegion !== "" && win.selSection === ""; anchors { right: zoomRow.left; rightMargin: 14 } y: 8; spacing: 3; height: 30
+        Island { objectName: "regionIsland"; visible: Backend.selectedRegion !== "" && win.selSection === ""; color: win.glass; border.color: win.glassLine
             Seg { text: "Split at Playhead"; tip: "Ctrl+T"; onClicked: Backend.splitRegion(Backend.selectedRegion, Backend.position) }
             Seg { text: "Duplicate"; tip: "Ctrl+D"; onClicked: Backend.duplicateRegion(Backend.selectedRegion) }
             Seg { text: "Loop ×" + (win.reg.loops || 1); tip: "Repeat it"; onClicked: Backend.setLoops(Backend.selectedRegion, ((win.reg.loops || 1) % 8) + 1) }
             Seg { icon: "trash"; danger: true; tip: "Delete"; onClicked: Backend.removeRegion(Backend.selectedRegion) } }
         // what to do with the selected section
-        Row { objectName: "sectionActions"; visible: win.selSection !== ""; anchors { right: zoomRow.left; rightMargin: 14 } y: 8; spacing: 3; height: 30
+        Island { id: secIsland; objectName: "sectionActions"; visible: win.selSection !== ""; color: win.glass; border.color: win.glassLine
             readonly property int at: { var s = Backend.sections; for (var i = 0; i < s.length; i++) if (s[i].id === win.selSection) return i; return -1 }
-            Seg { icon: "back"; tip: "Earlier in the song"; enabled: parent.at > 0; opacity: enabled ? 1 : 0.4; onClicked: Backend.moveSection(win.selSection, parent.at - 1) }
-            Seg { icon: "forward"; tip: "Later in the song"; enabled: parent.at >= 0 && parent.at < Backend.sections.length - 1; opacity: enabled ? 1 : 0.4; onClicked: Backend.moveSection(win.selSection, parent.at + 1) }
+            Seg { icon: "back"; tip: "Earlier in the song"; enabled: secIsland.at > 0; opacity: enabled ? 1 : 0.4; onClicked: Backend.moveSection(win.selSection, secIsland.at - 1) }
+            Seg { icon: "forward"; tip: "Later in the song"; enabled: secIsland.at >= 0 && secIsland.at < Backend.sections.length - 1; opacity: enabled ? 1 : 0.4; onClicked: Backend.moveSection(win.selSection, secIsland.at + 1) }
             Seg { objectName: "copySection"; text: "Copy After"; tip: "Play it again straight after; the rest moves along"; onClicked: win.selSection = Backend.duplicateSection(win.selSection) }
             Seg { text: "Remove Marker"; tip: "The music stays"; onClicked: { Backend.removeSection(win.selSection); win.selSection = "" } }
-            Seg { icon: "trash"; danger: true; text: "Delete with Music"; tip: "The section and its music go; the song closes up"; onClicked: { Backend.deleteSection(win.selSection); win.selSection = "" } } }
-        Row { id: zoomRow; anchors { right: parent.right; rightMargin: 14 } y: 8; spacing: 6; height: 30
-            Glyph { name: "zoom"; size: 13; anchors.verticalCenter: parent.verticalCenter }
-            Meter { width: 120; anchors.verticalCenter: parent.verticalCenter; interactive: true; value: (win.ppb - 8) / 92; onMoved: function (v) { win.ppb = 8 + v * 92 } } }
-
+            Seg { icon: "trash"; danger: true; text: "Delete with Music"; tip: "The section and its music go; the song closes up"; onClicked: { Backend.deleteSection(win.selSection); win.selSection = "" } } } }
+    // ================================================================ tracks and their lanes
+    readonly property int headW: 218
+    readonly property int rowH: 64
+    Rectangle { id: arrange; objectName: "arrange"; visible: Backend.hasSong; x: 12; y: 122; width: parent.width - 24 - (win.drawer !== "" ? 312 : 0)
+        height: parent.height - y - 12 - (win.benchOpen ? benchBox.height + 12 : 0); radius: 16; color: win.deepGlass; border.width: 1; border.color: win.glassLine; clip: true
+        Behavior on width { NumberAnimation { duration: Theme.t.still ? 0 : 160; easing.type: Easing.OutCubic } }
         // the arrangement: Intro, Verse, Chorus… over the bars
-        Row { x: 20; y: 44; height: 20; spacing: 6
+        Row { x: 20; y: 8; height: 20; spacing: 6
             Label { anchors.verticalCenter: parent.verticalCenter; text: "SECTIONS"; font.pixelSize: 9; font.weight: Font.Bold; font.letterSpacing: 1.2; secondary: true }
             Pressable { objectName: "addSection"; width: 20; height: 18; radius: 5; anchors.verticalCenter: parent.verticalCenter; onClicked: win.selSection = Backend.addSection("", Backend.position, win.bpb * 8)
                 Glyph { anchors.centerIn: parent; name: "plus"; size: 11 } } }
-        Item { id: secStrip; objectName: "sections"; x: win.headW; y: 44; width: parent.width - win.headW - 8; height: 20; clip: true
+        Item { id: secStrip; objectName: "sections"; x: win.headW; y: 8; width: parent.width - win.headW - 8; height: 20; clip: true
             Repeater { model: Backend.sections
                 Rectangle { id: sec; required property var modelData; required property int index; objectName: "section" + index
                     readonly property color ink: ["#FF8A5B", "#4FA3FF", "#3DDC84", "#B57BFF", "#F5C542", "#FF5FA2"][index % 6]
@@ -235,7 +239,7 @@ GlassWindow {
             Label { visible: Backend.sections.length === 0; x: 6; anchors.verticalCenter: parent.verticalCenter; text: "Mark the parts of your song (+) to copy, move or delete a whole verse at once."; font.pixelSize: 10; secondary: true } }
 
         // the ruler: bars, the cycle and the playhead's handle
-        Item { id: ruler; objectName: "ruler"; x: win.headW; y: 66; width: parent.width - win.headW - 8; height: 30; clip: true
+        Item { id: ruler; objectName: "ruler"; x: win.headW; y: 30; width: parent.width - win.headW - 8; height: 30; clip: true
             Rectangle { visible: !!(win.song.cycle && win.song.cycle.on); y: 2; height: 10; radius: 4; color: "#F5C542"; opacity: 0.85
                 x: (win.song.cycle ? win.song.cycle.start : 0) * win.ppb - lanes.contentX; width: ((win.song.cycle ? win.song.cycle.end - win.song.cycle.start : 0)) * win.ppb
                 MouseArea { anchors.fill: parent; property real x0: 0; property var c0: null; cursorShape: Qt.SizeHorCursor
@@ -254,7 +258,7 @@ GlassWindow {
 
         // the track headers
         // ---- the Tempo lane: the tempo along the song (a jump, or a glide into a change) and where the signature changes
-        Item { id: tempoLane; objectName: "tempoLane"; visible: win.tempoOn; x: 0; y: 98; width: parent.width - 8; height: 50
+        Item { id: tempoLane; objectName: "tempoLane"; visible: win.tempoOn; x: 0; y: 62; width: parent.width - 8; height: 50
             Rectangle { x: 8; width: win.headW - 14; height: parent.height; radius: 12; color: Theme.t.dark ? "#10FFFFFF" : "#08000000"
                 Label { x: 12; y: 8; text: "Tempo"; font.pixelSize: 12; font.weight: Font.DemiBold }
                 Label { x: 12; y: 26; width: parent.width - 20; elide: Text.ElideRight; font.pixelSize: 10; secondary: true
@@ -437,12 +441,12 @@ GlassWindow {
                                         onDoubleClicked: { var p = autoLane.pts.slice(); p.splice(index, 1); Backend.setAutomation(lane.modelData.id, autoLane.param, p) } } } } } } } }
             // the playhead
             Rectangle { objectName: "playhead"; x: Backend.position * win.ppb - 1; width: 2; height: Math.max(lanes.height, lanesCol.height); color: Backend.recording ? "#E5484D" : "#FFFFFF"; z: 20; opacity: 0.9 } }
-        Rectangle { visible: Backend.hasSong; x: win.headW + Backend.position * win.ppb - lanes.contentX - 6; y: 84; width: 12; height: 12; radius: 3; rotation: 45; color: Backend.recording ? "#E5484D" : "#FFFFFF" }
+        Rectangle { visible: Backend.hasSong; x: win.headW + Backend.position * win.ppb - lanes.contentX - 6; y: 48; width: 12; height: 12; radius: 3; rotation: 45; color: Backend.recording ? "#E5484D" : "#FFFFFF" }
         Label { visible: Backend.tracks.length === 0; anchors.centerIn: parent; secondary: true; text: "Add an instrument, a drummer or a microphone above, or drag in a loop." } }
 
     // ================================================================ the bench
-    Rectangle { id: benchBox; objectName: "bench"; visible: Backend.hasSong && win.benchOpen; x: 12; width: arrange.width; height: Math.min(330, win.height * 0.38); y: parent.height - height - 12; radius: 18
-        color: Theme.t.island; border.width: 1; border.color: Theme.t.islandLine; clip: true
+    Rectangle { id: benchBox; objectName: "bench"; visible: Backend.hasSong && win.benchOpen; x: 12; width: arrange.width; height: Math.min(330, win.height * 0.38); y: parent.height - height - 12; radius: 16
+        color: win.glass; border.width: 1; border.color: win.glassLine; clip: true
         Row { id: benchTabs; x: 12; y: 8; spacing: 2; height: 30
             Repeater { model: [["roll", "Piano Roll"], ["drums", "Drum Grid"], ["drummer", "Drummer"], ["region", "Region"], ["smart", "Smart Controls"], ["mixer", "Mixer"], ["keys", "Keyboard"]]
                 Seg { required property var modelData; text: modelData[1]; on: win.benchKind === modelData[0]; onClicked: win.bench = modelData[0] } }
@@ -1006,12 +1010,12 @@ GlassWindow {
                         x: (index + 1) * piano.ww - piano.ww * 0.3; width: piano.ww * 0.6; height: piano.height * 0.6; radius: 4; z: 2; color: mb.pressed ? win.hot : "#1C1C22"
                         MouseArea { id: mb; anchors.fill: parent; onPressed: Backend.noteOn(parent.pitch, 100); onReleased: Backend.noteOff(parent.pitch) } } } } } }
     Pressable { visible: Backend.hasSong && !win.benchOpen; z: 5; anchors { horizontalCenter: arrange.horizontalCenter; bottom: parent.bottom; bottomMargin: 18 } width: 140; height: 30; radius: 15
-        color: Theme.t.island; border.width: 1; border.color: Theme.t.islandLine; onClicked: win.benchOpen = true
+        color: hovered ? win.glassHover : win.glass; border.width: 1; border.color: win.glassLine; onClicked: win.benchOpen = true
         Label { anchors.centerIn: parent; text: "Show the Bench"; font.pixelSize: 11 } }
 
     // ================================================================ loops and instruments, from the right
-    Rectangle { id: drawerBox; objectName: "drawer"; visible: Backend.hasSong && win.drawer !== ""; x: parent.width - width - 12; y: 70; width: 300; height: parent.height - 82; radius: 18
-        color: Theme.t.island; border.width: 1; border.color: Theme.t.islandLine; clip: true
+    Rectangle { id: drawerBox; objectName: "drawer"; visible: Backend.hasSong && win.drawer !== ""; x: parent.width - width - 12; y: 70; width: 300; height: parent.height - 82; radius: 16
+        color: win.glass; border.width: 1; border.color: win.glassLine; clip: true
         Label { x: 16; y: 14; text: win.drawer === "loops" ? "Loops" : "Instruments"; font.pixelSize: 16; font.weight: Font.DemiBold }
         Label { x: 16; y: 36; width: parent.width - 32; wrapMode: Text.WordWrap; secondary: true; font.pixelSize: 11
             text: win.drawer === "loops" ? "Click ▶ to hear one, drag it onto a lane (or press +). They play in your song's key and tempo." : "For " + (win.selTrack ? win.selTrack.name : "the selected track") + "." }

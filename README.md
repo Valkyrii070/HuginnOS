@@ -1229,6 +1229,32 @@ Also fixed, found by the fuzz: completion asked for a line below zero raised an 
 - **Run** is the island's one filled button (`Seg.primary`), so it's found at a glance.
 - Under Huginn's own top bar, maximised, the top islands keep the bar's colour, beside the shell's.
 
+**Clips and Tempo in glass panels** (`apps/qml/Clips.qml`, `apps/qml/Tempo.qml`; the glass itself is now
+`GlassWindow`'s, shared by Code, Clips and Tempo: `glass`, `glassLine`, `deepGlass`, `topGlass`;
+`scripts/tests/glass_islands_ui.py`, 31 checks). A lighter pass than Code's, keeping the dense parts dense:
+- **Glass panels.** Clips' library, mixer and inspector, and Tempo's bench, loops drawer and transport, are each app's
+  own tinted glass; the name island and the top toolbar match. Clips' timeline and Tempo's arrangement sit on the
+  deeper pane, with their lanes as they were. Clips' picture stays on black, so colour is still judged against nothing.
+- **Tools as islands.** The row of tools that sat inside Clips' timeline is now four islands over it (Select, Blade,
+  Slip · Ripple, Cut Here, Marker… · the tracks · Mixer and Captions), with the zoom in its own island at the right
+  (it narrows rather than run into the tools in a small window; the length it repeated is already under the picture).
+  Tempo's arrangement tools do the same: adding tracks and undo at the left; what to do with a picked region or
+  section, and the zoom, at the right, following the arrangement's edge when the loops drawer opens. What was under
+  the tools moved up into the room they left.
+- Tempo's transport display no longer runs into the toolbar.
+
+**Clips: three crashes, found by the app fuzz while checking the above** (`apps/huginn_clips.py`;
+`scripts/tests/clips_reload_test.py`, 9 checks, which crashes on the old code). None came from the new look.
+- *An edit while the film plays could crash Clips* (about one time in three: "Floating point exception"). Each edit
+  builds the project again with a new MLT profile, and the sound, on a thread of its own, was still reading the old
+  one after it was freed. The sound now stops before the swap and starts again on the new project, and keeps its own
+  profile alive meanwhile.
+- *A track asked for with a kind that isn't one* put a "<" into the XML's ids; MLT couldn't read it, and the next seek
+  crashed. Only video and audio tracks are made now, and XML MLT can't read shows nothing instead of crashing.
+- *A film named with a double quote* broke the XML the same way (the name is now quoted properly).
+- The fuzz can now replay what a run printed: `FUZZ_SAY=1` prints each call, `FUZZ_REPLAY=<file>` calls them again
+  in a fresh home, which is how these were pinned down.
+
 **The "grub>" prompt after installing** (seen on real hardware; `search --file` and `configfile` by hand started the
 system, so the menu was fine and the pointer to it was not). GRUB finds its menu through a small pointer file that
 names the system's disk by its id. A pointer naming an id that isn't there gives exactly that bare prompt: checked in

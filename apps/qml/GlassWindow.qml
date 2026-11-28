@@ -40,6 +40,15 @@ Window {
     // (filled, under Huginn's own compositor) it stays the bar's, beside the shell's islands
     property color islandColor: Theme.t.island
     property color islandLineColor: Theme.t.islandLine
+    // ---- the app's own glass, for its panels (Code, Clips, Tempo): the window's tint and light come through it, and
+    // `deepGlass` is a darker pane of it under dense work (code, a timeline). Reduce Transparency makes them solid.
+    readonly property bool clearGlass: !Theme.t.solid
+    readonly property color glass: !clearGlass ? Theme.t.island : Theme.t.dark ? Qt.rgba(1, 1, 1, 0.065) : Qt.rgba(1, 1, 1, 0.55)
+    readonly property color glassLine: Theme.t.contrast || !clearGlass ? Theme.t.islandLine : Theme.t.dark ? Qt.rgba(1, 1, 1, 0.1) : Qt.rgba(0.08, 0.12, 0.16, 0.13)
+    readonly property color glassHover: Qt.tint(glass, Theme.t.hover)
+    property color deepGlass: !clearGlass ? (Theme.t.dark ? "#111318" : "#FCFCFE") : Theme.t.dark ? Qt.rgba(0.03, 0.035, 0.05, 0.74) : Qt.rgba(1, 1, 1, 0.84)
+    readonly property color topGlass: lifted ? Theme.t.island : glass       // top islands: in the top bar's row, the bar's own
+    readonly property color topGlassLine: lifted ? Theme.t.islandLine : glassLine
     // Where something `w` wide sits to be in the middle (a start screen's picture and button), in the window's own
     // coordinates: the middle of the whole window, unless that would run into the island down the left (`rail`, or the
     // sidebar); then the middle of the room beside it. `top` and `h`: where it is up and down, for whether they meet.
@@ -89,7 +98,8 @@ Window {
     Item { id: over; objectName: "glassOver"; anchors.fill: parent; z: 5; visible: !win.bare }
     Rail { id: sideRail; visible: win.sidebarWidth > 0 && !win.bare; x: 12; y: 64; z: 6; width: Math.max(win.sidebarWidth, 60); maxHeight: win.height - 64 - 14 }
     // (shown by opacity: hiding an island whose width comes from what's showing in it would hide what's in it for good)
-    Island { id: toolIsland; bar: true; visible: !win.bare; opacity: width > 12 ? 1 : 0; enabled: width > 12; z: 7; rtl: true; anchors { right: parent.right; rightMargin: win.liftRight } y: win.topY }
+    Island { id: toolIsland; bar: true; visible: !win.bare; opacity: width > 12 ? 1 : 0; enabled: width > 12; z: 7; rtl: true; anchors { right: parent.right; rightMargin: win.liftRight } y: win.topY
+        color: win.lifted ? Theme.t.island : win.islandColor; border.color: win.lifted ? Theme.t.islandLine : win.islandLineColor }
     readonly property real titleEnd: titleIsland.x + titleIsland.width      // where the top left island ends, for islands beside it
     readonly property real toolStart: toolIsland.opacity > 0 ? toolIsland.x : width - 12     // and where the toolbar begins
     Island {   // close, minimise, maximise and the app's name: always top left

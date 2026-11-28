@@ -63,12 +63,8 @@ GlassWindow {
     readonly property int foot: zen ? 12 : 52              // room under the panels: the status islands
     // ---- the glass: the panels are Code's own tinted glass and the code sits on a deeper pane of it, with the window's
     // light coming through. Reduce Transparency makes them solid; a VS Code theme you imported keeps its own paper.
-    readonly property bool clear: !Theme.t.solid
-    readonly property color glass: !clear ? Theme.t.island : Theme.t.dark ? Qt.rgba(1, 1, 1, 0.065) : Qt.rgba(1, 1, 1, 0.55)
-    readonly property color glassLine: Theme.t.contrast || !clear ? Theme.t.islandLine : Theme.t.dark ? Qt.rgba(1, 1, 1, 0.1) : Qt.rgba(0.08, 0.12, 0.16, 0.13)
-    readonly property color glassHover: Qt.tint(glass, Theme.t.hover)
-    readonly property color topIsle: lifted ? Theme.t.island : glass                  // (in the top bar's row: the bar's own)
-    readonly property color topLine: lifted ? Theme.t.islandLine : glassLine
+    // (glass, glassLine, glassHover and topGlass are GlassWindow's: the same in Clips and Tempo)
+    readonly property bool clear: clearGlass
     readonly property string mono: Qt.fontFamilies().indexOf(Theme.t.fontMono) >= 0 ? Theme.t.fontMono : Qt.fontFamilies().indexOf("DejaVu Sans Mono") >= 0 ? "DejaVu Sans Mono" : "monospace"
     readonly property var tab: Backend.current >= 0 && Backend.current < Backend.tabs.length ? Backend.tabs[Backend.current] : null
     // A VS Code colour theme you imported (Backend.theme) takes the editor's colours; without one, the system's light and dark.
@@ -518,7 +514,7 @@ GlassWindow {
                 onCurrentIndexChanged: positionViewAtIndex(currentIndex, ListView.Contain)
                 delegate: Pressable { id: tabPill; required property var modelData; required property int index; readonly property bool on: index === Backend.current
                     width: Math.min(230, tabRow.width + 26); height: 36; y: 2; radius: 18
-                    color: on ? Qt.alpha(Theme.t.accent, Theme.t.dark ? 0.26 : 0.18) : hovered ? win.glassHover : win.topIsle; border.width: 1; border.color: on ? Qt.alpha(Theme.t.accent, 0.62) : win.topLine
+                    color: on ? Qt.alpha(Theme.t.accent, Theme.t.dark ? 0.26 : 0.18) : hovered ? win.glassHover : win.topGlass; border.width: 1; border.color: on ? Qt.alpha(Theme.t.accent, 0.62) : win.topGlassLine
                     onClicked: Backend.select(index)
                     Row { id: tabRow; x: 12; anchors.verticalCenter: parent.verticalCenter; spacing: 7
                         Rectangle { width: 8; height: 8; radius: 4; anchors.verticalCenter: parent.verticalCenter; color: win.langInk(tabPill.modelData.lang) }
@@ -532,13 +528,13 @@ GlassWindow {
         // The tools on the left, Run and Debug on their own at the right edge: a quick second click on the terminal
         // (or anything else) never lands on Run
         Item { id: toolBox; visible: !win.zen; anchors { right: parent.right; rightMargin: win.liftRight } y: win.topY; height: runBox.height; width: toolsIsland.width + 12 + runBox.width
-            Island { id: toolsIsland; objectName: "toolsIsland"; color: win.topIsle; border.color: win.topLine
+            Island { id: toolsIsland; objectName: "toolsIsland"; color: win.topGlass; border.color: win.topGlassLine
                 Seg { objectName: "newFileButton"; icon: "newfile"; tip: "New file (Ctrl+N)"; onClicked: win.newFile() }
                 Seg { icon: "search"; tip: "Go to a file or command (Ctrl+P)"; onClicked: win.openPalette("") }
                 Seg { objectName: "termButton"; icon: "terminal"; tip: "Terminal (Ctrl+`)"; on: win.term; onClicked: win.toggleTerm() }
                 Seg { icon: "split"; tip: "Two editors side by side (Ctrl+\\)"; on: win.split; onClicked: win.toggleSplit() }
                 Seg { objectName: "settingsButton"; icon: "gear"; tip: "Settings (Ctrl+,)"; onClicked: win.ask("settings") } }
-            Island { id: runBox; objectName: "runIsland"; x: toolsIsland.width + 12; color: win.topIsle; border.color: win.topLine
+            Island { id: runBox; objectName: "runIsland"; x: toolsIsland.width + 12; color: win.topGlass; border.color: win.topGlassLine
                 Seg { icon: "bug"; text: win.dbg.active ? "Debugging" : "Debug"; on: win.dbg.active; tip: "Debug (F5)"; onClicked: win.debugIt() }
                 Seg { objectName: "buildButton"; visible: win.bld.tasks.length > 0; icon: win.bld.running ? "stop" : "check"; text: win.bld.running ? "Stop" : "Build"; on: win.bld.running
                     tip: win.bld.running ? "Stop “" + win.bld.taskName + "”" : "Build (Ctrl+Shift+B)"; onClicked: win.bld.running ? win.bld.stop() : win.buildIt() }

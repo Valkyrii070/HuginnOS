@@ -211,6 +211,28 @@ def fuzz(app):
                 slots.append((name, [bytes(t).decode() for t in m.parameterTypes()]))
     slots = sorted(set((n, tuple(t)) for n, t in slots))
     print(f"{APP}: {len(slots)} commands, {STEPS} steps, seed {SEED}", flush=True)
+    if os.environ.get("FUZZ_REPLAY"):                               # replay calls a run printed (FUZZ_SAY=1), one per line
+        for line in Path(os.environ["FUZZ_REPLAY"]).read_text(encoding="utf-8").splitlines():
+            line = re.sub(r"/tmp/appfuzz-[A-Za-z]+-[A-Za-z0-9_]+", str(home), line.strip())
+            if not line or line.startswith("#"):
+                continue
+            try:
+                call = compile("backend." + line, "<replay>", "eval")
+            except SyntaxError:
+                print("   (skipped, cut short in the log)", line[:100], flush=True)
+                continue
+            print("   ", line[:200], flush=True)
+            try:
+                eval(call, {"backend": backend})
+                for _ in range(3):
+                    app.processEvents()
+            except Exception:
+                note(line, traceback.format_exc())
+        time.sleep(float(os.environ.get("FUZZ_REPLAY_WAIT", "2")))
+        for _ in range(20):
+            app.processEvents()
+            time.sleep(0.05)
+        return
     signal.signal(signal.SIGALRM, alarm)
     pool_s, pool_n, pool_any = set(), set(), []
     t_end = time.time() + 480
