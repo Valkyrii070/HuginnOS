@@ -73,7 +73,8 @@ LIMITS = {"transform.scale": (0.02, 8.0), "transform.x": (-4.0, 4.0), "transform
           "colour.saturation": (0.0, 4.0), "colour.temperature": (1000.0, 20000.0), "colour.tint": (-2.0, 2.0), "shape.soft": (0.0, 1.0),
           "effects.blur": (0.0, 1.0), "effects.sharpen": (0.0, 1.0), "effects.vignette": (0.0, 1.0), "effects.stabilise": (0.0, 1.0),
           "volume": (-60.0, 24.0), "style.size": (6.0, 400.0), "style.boxOpacity": (0.0, 1.0), "style.outline": (0.0, 40.0), "key.amount": (0.0, 1.0),
-          "key.soft": (0.0, 1.0), "key.spill": (0.0, 1.0)}
+          "key.soft": (0.0, 1.0), "key.spill": (0.0, 1.0), "colour.range.hue": (0.0, 360.0), "colour.range.width": (5.0, 180.0),
+          "colour.range.shift": (-180.0, 180.0), "colour.range.sat": (0.0, 3.0), "colour.range.light": (-1.0, 1.0)}
 SHUTTLE = [1.0, 2.0, 4.0, 8.0]          # J and L: each press goes one faster
 SHORTEST = 0.08          # no clip is left shorter than this on the timeline (two frames at 25 a second): it couldn't be seen or picked
 
@@ -323,6 +324,8 @@ def accepts(track: dict, clip: dict, media: dict) -> bool:
         return track.get("kind") == compound_content(clip) and track.get("role") != "captions"
     if track.get("kind") == "audio":
         return clip["kind"] == "media" and media.get("kind") in ("audio", "video") and (media.get("kind") == "audio" or media.get("audio"))
+    if clip.get("kind") == "adjust":                         # an adjustment layer: on a picture track, never the main one or the captions
+        return track.get("role") != "captions" and track.get("id") != "v1"
     return clip["kind"] == "title" or media.get("kind") in ("video", "image")
 
 
@@ -765,7 +768,7 @@ def whisper_command(tool: dict, wav: str, base: str, language: str = "") -> list
             "f = lambda t: '%02d:%02d:%02d,%03d' % (t // 3600, t // 60 % 60, t % 60, round(t % 1 * 1000) % 1000); "
             "open(sys.argv[2] + '.srt', 'w').write('\\n'.join('%d\\n%s --> %s\\n%s\\n' % (n, f(s.start), f(s.end), s.text.strip()) for n, s in enumerate(segs, 1)))")
     import sys as _sys
-    return [_sys.executable, "-c", code, wav, base, language]
+    return [_sys.executable, "-c", code, wav, base, language, FILLER_PROMPT]
 
 
 # ------------------------------------------------------------------ round four: speed ramps and holds
@@ -1168,6 +1171,234 @@ def match_cube(src: tuple, ref: tuple, path: str, size: int = 33, amount: float 
 
 
 # ============================================================================================ to MLT
+# ------------------------------------------------------------------ round six: editing by what's said, adjustment
+# layers, a colour range, smooth slow motion, chapters
+FILLERS = {"um", "umm", "uh", "uhh", "uhm", "erm", "er", "ah", "hmm", "hm", "mm", "mhm", "eh"}
+RANGES = CACHE / "ranges"
+SMOOTH = CACHE / "smooth"
+RANGE_DEFAULT = {"on": False, "hue": 30.0, "width": 40.0, "shift": 0.0, "sat": 1.0, "light": 0.0}
+
+
+def whisper_words_command(tool: dict, wav: str, base: str, language: str = "") -> list:
+    """The command that writes `base`.srt with one word to an entry, each with its own time (for editing by what's
+    said)."""
+    if tool.get("kind") == "cli":
+        return [tool["bin"], "-m", tool["model"], "-f", wav, "-osrt", "-of", base, "-l", language or "auto", "-ml", "1", "-sow", "--prompt", FILLER_PROMPT]
+    code = ("import sys; from faster_whisper import WhisperModel as W; m = W('base', compute_type='int8'); "
+            "segs, _ = m.transcribe(sys.argv[1], language=sys.argv[3] or None, word_timestamps=True, initial_prompt=sys.argv[4]); "
+            "f = lambda t: '%02d:%02d:%02d,%03d' % (t // 3600, t // 60 % 60, t % 60, round(t % 1 * 1000) % 1000); "
+            "ws = [w for s in segs for w in (s.words or [])]; "
+            "open(sys.argv[2] + '.srt', 'w').write('\\n'.join('%d\\n%s --> %s\\n%s\\n' % (n, f(w.start), f(w.end), w.word.strip()) for n, w in enumerate(ws, 1)))")
+    import sys as _sys
+    return [_sys.executable, "-c", code, wav, base, language]
+
+
+def word_list(items: list, offset: float = 0.0) -> list:
+    """Timed captions as [start, end, word], one word each, in the footage's own time (an entry that still holds two
+    words shares its time between them)."""
+    out = []
+    for a, b, text in items:
+        words = [w for w in re.split(r"\s+", str(text).strip()) if w]
+        if not words or b <= a:
+            continue
+        step = (b - a) / len(words)
+        for k, w in enumerate(words):
+            out.append([round(offset + a + k * step, 3), round(offset + a + (k + 1) * step, 3), w])
+    return out
+
+
+def plain_word(w: str) -> str:
+    return re.sub(r"[^\w']", "", str(w).lower())
+
+
+def is_filler(w: str) -> bool:
+    return plain_word(w) in FILLERS
+
+
+def word_spans(words: list, picks: list, lo: float, hi: float) -> list:
+    """The stretches of footage to take out for the picked words (indices into words), each run of neighbouring
+    words as one, reaching halfway into the quiet on either side so no breath of the word is left: [(from, to)]."""
+    picks = sorted({int(i) for i in picks if 0 <= int(i) < len(words)})
+    runs, out = [], []
+    for i in picks:
+        if runs and i == runs[-1][1] + 1:
+            runs[-1][1] = i
+        else:
+            runs.append([i, i])
+    for i, j in runs:
+        a, b = float(words[i][0]), float(words[j][1])
+        before = float(words[i - 1][1]) if i > 0 else a - 0.08
+        after = float(words[j + 1][0]) if j + 1 < len(words) else b + 0.08
+        a = (before + a) / 2 if before <= a else a
+        b = (b + after) / 2 if after >= b else b
+        a, b = max(lo, a), min(hi, b)
+        if b - a > 0.02:
+            out.append((round(a, 3), round(b, 3)))
+    return out
+
+
+def range_weight(h: np.ndarray, s: np.ndarray, centre: float, width: float) -> np.ndarray:
+    """How much each colour belongs to the range: 1 within width/2 of its hue, falling to 0 over as much again, and
+    less as it greys (a grey has no hue to belong by)."""
+    d = np.abs(((h - centre) + 180.0) % 360.0 - 180.0)
+    half = max(2.0, width / 2.0)
+    w = np.clip(1.0 - (d - half) / half, 0.0, 1.0)
+    w = w * w * (3 - 2 * w)
+    return w * np.clip(s / 0.18, 0.0, 1.0)
+
+
+def range_cube(spec: dict, size: int = 33) -> str:
+    """A 3D LUT (.cube) that changes only one range of colour: its hue turned, its colour made stronger or weaker,
+    lighter or darker. Kept by what it does, so the same change is the same file."""
+    spec = {**RANGE_DEFAULT, **(spec or {})}
+    key = "|".join(f"{k}={float(spec[k]):.3f}" for k in ("hue", "width", "shift", "sat", "light"))
+    path = RANGES / f"{hashlib.sha1(key.encode()).hexdigest()[:16]}.cube"
+    if path.is_file():
+        return str(path)
+    g = np.linspace(0.0, 1.0, size)
+    b, gg, r = np.meshgrid(g, g, g, indexing="ij")                # .cube: red changes fastest
+    rgb = np.stack([r.ravel(), gg.ravel(), b.ravel()], axis=1)
+    mx, mn = rgb.max(axis=1), rgb.min(axis=1)
+    v, c = mx, mx - mn
+    s = np.where(mx > 1e-6, c / np.maximum(mx, 1e-6), 0.0)
+    rr, g2, bb = rgb[:, 0], rgb[:, 1], rgb[:, 2]
+    safe = np.maximum(c, 1e-6)
+    h = np.where(mx == rr, ((g2 - bb) / safe) % 6, np.where(mx == g2, (bb - rr) / safe + 2, (rr - g2) / safe + 4)) * 60.0
+    h = np.where(c < 1e-6, 0.0, h)
+    w = range_weight(h, s, float(spec["hue"]), float(spec["width"]))
+    h2 = (h + w * float(spec["shift"])) % 360.0
+    s2 = np.clip(s * (1 + w * (float(spec["sat"]) - 1)), 0.0, 1.0)
+    v2 = np.clip(v + w * float(spec["light"]) * 0.5, 0.0, 1.0)
+    k = (h2 / 60.0) % 6
+    f = k - np.floor(k)
+    p_, q, t = v2 * (1 - s2), v2 * (1 - s2 * f), v2 * (1 - s2 * (1 - f))
+    i = np.floor(k).astype(int) % 6
+    out = np.select([(i == k)[:, None] for k in range(6)],
+                    [np.stack([v2, t, p_], 1), np.stack([q, v2, p_], 1), np.stack([p_, v2, t], 1),
+                     np.stack([p_, q, v2], 1), np.stack([t, p_, v2], 1), np.stack([v2, p_, q], 1)])
+    RANGES.mkdir(parents=True, exist_ok=True)
+    lines = ["TITLE \"Huginn Clips colour range\"", f"LUT_3D_SIZE {size}"] + [f"{x:.5f} {y:.5f} {z:.5f}" for x, y, z in out]
+    part = path.with_suffix(".part")
+    part.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    os.replace(part, path)
+    return str(path)
+
+
+def range_used(col: dict) -> bool:
+    r = (col or {}).get("range") or {}
+    return bool(r.get("on")) and (abs(float(r.get("shift", 0))) > 0.5 or abs(float(r.get("sat", 1)) - 1) > 0.01 or abs(float(r.get("light", 0))) > 0.005)
+
+
+HEARD = CACHE / "heard"
+FILLER_PROMPT = "Umm, let me think, uh, like, hmm. Okay, er, so, here's what I'm, um, thinking."
+
+
+def heard_path(media: str) -> Path:
+    """Where the timed words of a file are kept (they follow the file: a changed file is listened to again)."""
+    try:
+        st = os.stat(media)
+        sig = f"{media}|{st.st_size}|{int(st.st_mtime)}"
+    except OSError:
+        sig = media
+    return HEARD / f"{hashlib.sha1(sig.encode()).hexdigest()[:16]}.json"
+
+
+def heard_words(media: str) -> list:
+    try:
+        got = json.loads(heard_path(media).read_text(encoding="utf-8"))
+        return [[float(a), float(b), str(w)] for a, b, w in got if b >= a]
+    except (OSError, ValueError, TypeError):
+        return []
+
+
+def smooth_factor(speed: float) -> int:
+    """How many pictures smooth slow motion makes for each one: enough that a slowed clip shows a new one each frame
+    (2, 4 or 8)."""
+    need = 1.0 / max(0.05, min(1.0, float(speed)))
+    return 2 if need <= 2.01 else 4 if need <= 4.01 else 8
+
+
+def smooth_path(media: str, factor: int, span) -> Path:
+    """Where the in-between pictures of the part [from, to] of a file, made factor times as many, are kept (they
+    follow the file)."""
+    try:
+        st = os.stat(media)
+        sig = f"{media}|{st.st_size}|{int(st.st_mtime)}"
+    except OSError:
+        sig = media
+    lo, hi = (float(span[0]), float(span[1])) if span else (0.0, 0.0)
+    return SMOOTH / f"{hashlib.sha1(sig.encode()).hexdigest()[:16]}-x{int(factor)}-{int(round(lo * 1000))}-{int(round(hi * 1000))}.mp4"
+
+
+def smooth_source(m: dict, c: dict) -> str:
+    """What smooth slow motion works from: the steadied copy when the clip is steadied and it's made, else the file."""
+    steady = float((c.get("effects") or {}).get("stabilise") or 0)
+    if steady > 0.01 and stab_path(m.get("path", ""), steady).is_file():
+        return str(stab_path(m.get("path", ""), steady))
+    return m.get("path", "")
+
+
+def smooth_ready(m: dict, c: dict) -> str:
+    """The smooth copy a clip can use now, or "" (not asked for, not slowed, not made yet, or trimmed past it)."""
+    fx = c.get("effects") or {}
+    span, speed = fx.get("smoothSpan"), float(c.get("speed") or 1.0)
+    if not fx.get("smooth") or not span or speed > 0.999 or ramped(c) or backwards(c) or m.get("kind") != "video":
+        return ""
+    if float(c["in"]) < float(span[0]) - 1e-3 or float(c["out"]) > float(span[1]) + 1e-3:
+        return ""
+    made = smooth_path(smooth_source(m, c), smooth_factor(speed), span)
+    return str(made) if made.is_file() else ""
+
+
+def smooth_command(src: str, out: str, fps: float, factor: int, span) -> list:
+    """ffmpeg working out the pictures in between from how things move (motion-compensated interpolation), for
+    the part used, with its sound."""
+    rate = max(1.0, float(fps or 30)) * int(factor)
+    lo, hi = float(span[0]), float(span[1])
+    return ["ffmpeg", "-v", "error", "-y", "-ss", f"{lo:.3f}", "-i", src, "-t", f"{max(0.05, hi - lo):.3f}",
+            "-vf", f"minterpolate=fps={rate:g}:mi_mode=mci:mc_mode=aobmc:me_mode=bidir:vsbmc=1",
+            "-c:v", "libx264", "-preset", "veryfast", "-crf", "16", "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "256k", "-movflags", "+faststart", out]
+
+
+def chapter_list(p: dict, end: float = None) -> list:
+    """The film's chapters, from its markers: [(start, end, name)], the first from the very start (named for the
+    first marker there, else "Start")."""
+    end = total(p) if end is None else end
+    marks = sorted(((float(m["t"]), str(m.get("name") or "").strip() or f"Chapter {k + 1}") for k, m in enumerate(p.get("markers", []))
+                    if 0 <= float(m.get("t", -1)) < end - 0.5), key=lambda x: x[0])
+    if not marks:
+        return []
+    if marks[0][0] > 0.5:
+        marks.insert(0, (0.0, "Start"))
+    else:
+        marks[0] = (0.0, marks[0][1])
+    return [(a, marks[k + 1][0] if k + 1 < len(marks) else end, name) for k, (a, name) in enumerate(marks)]
+
+
+def chapters_meta(chapters: list) -> str:
+    """ffmpeg's metadata file with the chapters, for an exported video's chapter list."""
+    out = [";FFMETADATA1"]
+    for a, b, name in chapters:
+        clean = re.sub(r"([=;#\\\n])", r"\\\1", name)
+        out += ["[CHAPTER]", "TIMEBASE=1/1000", f"START={int(round(a * 1000))}", f"END={int(round(b * 1000))}", f"title={clean}"]
+    return "\n".join(out) + "\n"
+
+
+def chapters_text(chapters: list) -> str:
+    """The chapters as video sites read them from a description: "0:00 Start", one a line."""
+    def at(t):
+        t = int(t)
+        return f"{t // 3600}:{t // 60 % 60:02d}:{t % 60:02d}" if t >= 3600 else f"{t // 60}:{t % 60:02d}"
+    return "\n".join(f"{at(a)} {name}" for a, _b, name in chapters)
+
+
+def blank_adjust(cid: str, track: str, at: float, length: float) -> dict:
+    """An adjustment layer: colour and effects for everything under it, over its span."""
+    base = blank_clip(cid, "", track, at, 0.0, max(0.2, length))
+    return {"id": cid, "kind": "adjust", "track": track, "at": base["at"], "in": 0.0, "out": base["out"], "name": "Adjustment", "speed": 1.0,
+            "fadeIn": 0.0, "fadeOut": 0.0, "colour": base["colour"], "effects": base["effects"], "transform": base["transform"], "sound": {}, "keys": {}, "transition": None}
+
+
 class Builder:
     """Writes the project as an MLT XML document at a given size (the viewer's or the export's)."""
 
@@ -1195,8 +1426,11 @@ class Builder:
         p, fps = self.p, self.fps
         speed = max(0.1, min(16.0, float(c.get("speed") or 1.0)))
         length_f = max(1, self.f(clip_len(c)))
-        props, filters = {}, []
-        if c["kind"] == "title":
+        props, filters, link = {}, [], ""
+        if c["kind"] == "adjust":                             # nothing of its own: it works on what's under it (tractor())
+            props.update({"mlt_service": "color", "resource": "#00000000", "mlt_image_format": "rgba", "length": length_f + 2})
+            pin, plen = 0, length_f + 2
+        elif c["kind"] == "title":
             props.update({"mlt_service": "color", "resource": "#00000000", "mlt_image_format": "rgba", "length": length_f + 2})
             pin, plen = 0, length_f + 2
             filters += self.title_filter(c)
@@ -1215,6 +1449,10 @@ class Builder:
             steady = float((c.get("effects") or {}).get("stabilise") or 0)
             if steady > 0.01 and m.get("kind") == "video" and stab_path(m.get("path", ""), steady).is_file():
                 path = str(stab_path(m.get("path", ""), steady))      # the steadied copy (same length, same sound)
+            smooth = smooth_ready(m, c)
+            shift = 0.0
+            if smooth:                                          # in-between pictures worked out, for the part used: counted from its start
+                path, shift = smooth, float(c["effects"]["smoothSpan"][0])
             track = track_of(p, c["track"])
             link = ""
             if missing(m) and path == m.get("path", ""):       # its file is gone: a dark red card with its name, so the film still plays
@@ -1240,6 +1478,8 @@ class Builder:
                     props["audio_index"] = -1
             else:
                 longest = float(m.get("duration") or clip_len(c))
+                if smooth:
+                    longest = float(c["effects"]["smoothSpan"][1]) - shift
                 media_f = max(1, int(math.floor(longest * fps / speed)))
                 back = backwards(c) and m.get("kind") in ("video", "audio")
                 if back:                                      # played backwards: MLT's timewarp at a speed below nothing
@@ -1249,7 +1489,7 @@ class Builder:
                 else:
                     props.update({"mlt_service": "avformat-novalidate", "resource": path})
                 props["length"] = media_f
-                pin, plen = int(round((max(0.0, longest - float(c["out"])) if back else c["in"]) * fps / speed)), media_f
+                pin, plen = int(round((max(0.0, longest - float(c["out"])) if back else float(c["in"]) - shift) * fps / speed)), media_f
                 if track.get("kind") == "audio" or c.get("soundOnly"):
                     props["video_index"] = -1
                 heard = (track in sounding(p)) if track else bool(c.get("heard", True))
@@ -1336,6 +1576,8 @@ class Builder:
         curves = {ch: pts for ch, pts in (col.get("curves") or {}).items() if ch in CURVE_CHANNELS and not curve_plain(pts)}
         if curves:
             out.append(self.filt("avfilter.curves", {CURVE_CHANNELS[ch]: curve_arg(pts) for ch, pts in curves.items()}))
+        if range_used(col):                                  # one range of colour changed, the rest left alone
+            out.append(self.filt("avfilter.lut3d", {"av.file": range_cube(col["range"]), "av.interp": "tetrahedral"}))
         if window and len(out) > graded:                     # the grade only inside the shape (or outside it)
             out.insert(graded, self.filt("mask_start", {"filter": "frei0r.alphaspot", **{f"filter.{k}": v for k, v in self.shape_props(c, shape, masked=True).items()}}))
             out.append(self.filt("mask_apply", {"transition": "frei0r.cairoblend" if self.cairo else "affine"}))
@@ -1372,6 +1614,8 @@ class Builder:
             out.append(self.filt("frei0r.alphaspot", self.shape_props(c, shape)))
         if self.matte and self.matte == c.get("id"):
             out.append(self.filt("avfilter.alphaextract", {}))
+        if c.get("kind") == "adjust":
+            return [x for x in out if x]                     # (an adjustment layer has no picture of its own to place)
         out.append(self.transform_filter(c, upper))
         return [x for x in out if x]
 
@@ -1519,8 +1763,55 @@ class Builder:
     def tractor(self, tid: str, transparent: bool = False, extra: str = "", at_least: int = 0) -> tuple:
         """The tracks, stacked: -> (what goes before it, the tractor itself, its length in frames). A compound
         clip's insides go on a see-through background, so what's under the clip shows where nothing is."""
-        p, pre, W, H = self.p, self.pre, self.W, self.H
+        p = self.p
         end = max(1, self.f(total(p)) + 1, at_least)
+        below = self.adjusted_below(end)                      # (an adjustment layer: what's under it, made first)
+        if below is not None:
+            return self._tractor_over(tid, transparent, extra, end, *below)
+        return self._tractor_plain(tid, transparent, extra, end)
+
+    def adjusted_below(self, end: int):
+        """The highest video track (but the bottom one) with an adjustment layer on it: -> (the tracks under it, the
+        layer's track, its clips), or None. (Lower layers are found again inside what's under it.)"""
+        videos = [t for t in self.p["tracks"] if t["kind"] == "video"]
+        bottom_first = list(reversed(videos))
+        for k in range(len(bottom_first) - 1, 0, -1):
+            t = bottom_first[k]
+            layers = [c for c in self.p.get("clips", []) if c["track"] == t["id"] and c.get("kind") == "adjust"]
+            if layers:
+                return bottom_first[:k], t, layers
+        return None
+
+    def _tractor_over(self, tid: str, transparent: bool, extra: str, end: int, under: list, layer_track: dict, layers: list) -> tuple:
+        """The tracks under an adjustment layer made into one picture (a tractor of their own, which may hold lower
+        layers in turn), the layer's colour and effects put on that picture over the layer's span, and the rest
+        stacked over it as usual."""
+        p, pre = self.p, self.pre
+        ids = {t["id"] for t in under}
+        heard = [t["id"] for t in sounding(p)]                # (what's heard is decided over the whole film, solos and all)
+        tracks = [dict(t, muted=t["id"] not in heard, solo=False) for t in p["tracks"]]
+        view = {k: v for k, v in p.items() if k not in ("tracks", "clips", "markers")}
+        view.update(tracks=[t for t in tracks if t["id"] in ids], clips=[c for c in p.get("clips", []) if c["track"] in ids], markers=[])
+        inner = Builder(view, self.W, self.H, self.proxies, self.font_for, self.cairo, self.matte, pre=f"{pre}{layer_track['id']}_under_")
+        filters = []
+        for c in layers:
+            fa, fb = self.f(float(c["at"])), self.f(clip_end(c)) - 1
+            for f in self.picture_filters(c, False):
+                for part in f.split("\x00"):
+                    if part:
+                        filters.append(part.replace("<filter>", f'<filter in="{fa}" out="{max(fa, fb)}">', 1))
+        under_parts, under_tractor, _ = inner.tractor(f"{pre}{layer_track['id']}_under", transparent=transparent, extra="".join(filters), at_least=end)
+        rest = {k: v for k, v in p.items() if k not in ("tracks", "clips")}
+        rest.update(tracks=[t for t in tracks if t["id"] not in ids], clips=[c for c in p.get("clips", []) if c["track"] not in ids])
+        self.p = rest
+        try:
+            parts, tractor, end = self._tractor_plain(tid, transparent, extra, end, first=f"{pre}{layer_track['id']}_under")
+        finally:
+            self.p = p
+        return under_parts + [under_tractor] + parts, tractor, end
+
+    def _tractor_plain(self, tid: str, transparent: bool, extra: str, end: int, first: str = "") -> tuple:
+        p, pre, W, H = self.p, self.pre, self.W, self.H
         parts = [f'<producer id="{pre}black" in="0" out="{end - 1}">' + self.prop("mlt_service", "color") + self.prop("resource", "#00000000" if transparent else "#FF000000")
                  + self.prop("length", end) + self.prop("mlt_image_format", "rgba") + "</producer>",
                  f'<playlist id="{pre}background"><entry producer="{pre}black" in="0" out="{end - 1}"/></playlist>']
@@ -1529,7 +1820,7 @@ class Builder:
         order = list(reversed(videos)) + audios                # V1 first above the background, then V2…, then audio
         track_ids = []
         for t in order:
-            upper = t["kind"] == "video" and t["id"] != (videos[-1]["id"] if videos else "")
+            upper = t["kind"] == "video" and (bool(first) or t["id"] != (videos[-1]["id"] if videos else ""))
             pid_xml, play = self.playlist(t, upper)
             parts += pid_xml
             parts.append(play)
@@ -1540,10 +1831,15 @@ class Builder:
             parts += pid_xml
             parts.append(play)
             track_ids.append(vt)
+        if first:                                             # (what's under an adjustment layer, already one picture)
+            track_ids.insert(0, {"id": "__under__", "kind": "video", "producer": first})
         tr = [f'<tractor id="{tid}" in="0" out="{end - 1}"><track producer="{pre}background"/>']
         heard = [x["id"] for x in sounding(p)]
         heard += [f"mc_{c['id']}" for c in p.get("clips", []) if c.get("kind") == "multicam" and c["track"] in heard]
         for i, t in enumerate(track_ids, start=1):
+            if t.get("producer"):
+                tr.append(f'<track producer="{t["producer"]}"/>')
+                continue
             silent = t["id"] not in heard
             if t["kind"] == "audio":
                 hide = ' hide="both"' if silent else ' hide="video"'
@@ -1857,6 +2153,9 @@ class Clips(QObject):
         self._still.timeout.connect(self._render_still)
         self._melt_busy = False
         self._steadying = {}                               # clip id -> share done (0..1), while a steadied copy is made
+        self._smoothing = {}                               # clip id -> share done, while smooth slow motion's pictures are made
+        self._hearing = set()                              # footage (media ids) being listened to word by word
+        self._demo_heard = {}                              # (the demo's made-up words, by media id)
         self._mixing = None
         self._words = {"busy": False, "step": "", "proc": None}  # speech to captions
         self._matte = ""                                   # a clip shown alone as its matte, while keying
@@ -2194,9 +2493,9 @@ class Clips(QObject):
             step = max(1, (b - a) // 120)
             wave = [max(wave[i:i + step] or [0]) for i in range(a, b, step)][:200]
         tr = c.get("transition") or {}
-        name = c.get("text", "") if c["kind"] == "title" else m.get("name", "?")
+        name = c.get("text", "") if c["kind"] == "title" else (c.get("name") or "Adjustment") if c["kind"] == "adjust" else m.get("name", "?")
         return {"id": c["id"], "kind": c["kind"], "track": c["track"], "at": c["at"], "length": clip_len(c), "end": clip_end(c), "name": name,
-                "media": c.get("media", ""), "mediaKind": "title" if c["kind"] == "title" else m.get("kind", ""), "thumbs": thumbs, "wave": wave,
+                "media": c.get("media", ""), "mediaKind": c["kind"] if c["kind"] in ("title", "adjust") else m.get("kind", ""), "thumbs": thumbs, "wave": wave,
                 "speed": c.get("speed", 1.0), "mute": bool(c.get("mute")), "fadeIn": c.get("fadeIn", 0), "fadeOut": c.get("fadeOut", 0),
                 "transition": tr.get("kind", ""), "transitionLength": tr.get("length", 0),
                 "audio": bool(m.get("audio")) and not c.get("mute"), "keys": sum(len(v) for v in (c.get("keys") or {}).values()), "audioTrack": t.get("kind") == "audio",
@@ -2236,6 +2535,10 @@ class Clips(QObject):
                        count=len((c.get("inner") or {}).get("clips") or []), inner=None,
                        shape=dict({"on": False, "kind": "oval", "x": 0.5, "y": 0.5, "w": 0.5, "h": 0.6, "soft": 0.15, "use": "cut", "invert": False}, **(c.get("shape") or {})))
             return out
+        if c["kind"] == "adjust":
+            out.update(name=c.get("name") or "Adjustment", mediaKind="adjust", length=clip_len(c), lengthText=clock(clip_len(c)), sourceText="", hasAudio=False,
+                       trackKind="video", keyTimes=[], ease="linear", sound={}, colourRange={**RANGE_DEFAULT, **((c.get("colour") or {}).get("range") or {})})
+            return out
         out.update(name=c.get("text", "") if c["kind"] == "title" else ("Multicam" if out.get("kind") == "multicam" else m.get("name", "")), mediaKind=m.get("kind", "title"), length=clip_len(c),
                    lengthText=clock(clip_len(c)), sourceText=f"{clock(c['in'])}–{clock(c['out'])}", hasAudio=bool(m.get("audio")),
                    trackKind=track_of(self._p, c["track"]).get("kind", "video"), keyTimes=sorted({k[0] for v in (c.get("keys") or {}).values() for k in v}),
@@ -2247,6 +2550,13 @@ class Clips(QObject):
             out.update(self._ramp_view(c))
         if c.get("kind") == "media" and m.get("kind") in ("video", "image"):
             out["others"] = self._others(c)
+        out["colourRange"] = {**RANGE_DEFAULT, **((c.get("colour") or {}).get("range") or {})}
+        if c.get("kind") == "media" and m.get("kind") == "video":
+            fx = c.get("effects") or {}
+            out["smooth"] = ("off" if not fx.get("smooth") else "making" if c["id"] in self._smoothing else "even" if float(c.get("speed") or 1) > 0.999
+                             else "ready" if smooth_ready(m, c) or self._demo else "stale")
+        if c.get("kind") == "media" and m.get("audio"):
+            out.update(heard=heard_path(m.get("path", "")).is_file() or (self._demo and m["id"] in self._demo_heard), hearing=m["id"] in self._hearing)
         out.update(key=dict({"on": False, "colour": "#1EC828", "strength": 0.35, "soft": 0.2, "spill": 0.5}, **(c.get("key") or {})),
                    shape=dict({"on": False, "kind": "oval", "x": 0.5, "y": 0.5, "w": 0.5, "h": 0.6, "soft": 0.15, "use": "cut", "invert": False}, **(c.get("shape") or {})))
         return out
@@ -2704,6 +3014,8 @@ class Clips(QObject):
                 return
         if path == "text" or path.endswith(".text"):
             value = str(value)[:4000]
+        if path in ("colour.range.on", "effects.smooth"):
+            value = bool(value)
         if path == "reverse":
             value = bool(value)
             if value and (c.get("kind") != "media" or media_of(self._p, c.get("media", "")).get("kind") not in ("video", "audio")):
@@ -2739,6 +3051,8 @@ class Clips(QObject):
             return
         node[last] = value
         self._keep()
+        if path == "speed" and (c.get("effects") or {}).get("smooth"):
+            self._make_smooth(cid)
 
     @Slot(str, str, float)
     @finite
@@ -2884,7 +3198,7 @@ class Clips(QObject):
     def setProject(self, key: str, value) -> None:
         if hasattr(value, "toVariant"):
             value = value.toVariant()
-        if key not in ("name", "size", "fps", "duck", "duckBy", "loudness"):
+        if key not in ("name", "size", "fps", "duck", "duckBy", "loudness", "chapters"):
             return
         if key == "size" and value not in SIZES:
             return
@@ -3178,6 +3492,9 @@ class Clips(QObject):
     eases = Property("QVariantList", lambda self: [{"id": k, "name": v} for k, v in EASES.items()], constant=True)
     anySolo = Property(bool, lambda self: any(t.get("solo") for t in self._p["tracks"]), notify=changed)
     steadying = Property("QVariantMap", lambda self: dict(self._steadying), notify=changed)
+    smoothing = Property("QVariantMap", lambda self: dict(self._smoothing), notify=changed)
+    chapters = Property("QVariantList", lambda self: [{"at": a, "end": b, "name": n} for a, b, n in chapter_list(self._p)], notify=changed)
+    chaptersOn = Property(bool, lambda self: self._p.get("chapters", True) is not False, notify=changed)
     captions = Property("QVariantList", lambda self: [{"at": a, "end": b, "text": t} for a, b, t in captions_of(self._p)], notify=changed)
     hasCaptionTrack = Property(bool, lambda self: bool(caption_track(self._p)), notify=changed)
     words = Property("QVariantMap", lambda self: {"busy": self._words["busy"], "step": self._words["step"]}, notify=changed)
@@ -3262,6 +3579,7 @@ class Clips(QObject):
             self.said.emit(f"{m.get('name', 'The clip')} is steadied.", False)
             self.changed.emit()
             self._show_frame()
+            self._make_smooth(cid)
 
         def failed():
             self._steadying.pop(cid, None)
@@ -3651,7 +3969,17 @@ class Clips(QObject):
                         target.with_suffix(".srt").write_text(to_srt(items), encoding="utf-8")
                     except OSError:
                         pass
-                self.said.emit(f"Saved {target.name} in Videos/Clips" + (" with its captions (.srt)" if items else ""), False)
+                said = f"Saved {target.name} in Videos/Clips" + (" with its captions (.srt)" if items else "")
+                chapters = chapter_list(self._p) if self._p.get("chapters", True) is not False else []
+                if rng:                                     # only the marked part: its chapters, from its start
+                    lo, hi = rng
+                    chapters = [(round(max(0.0, a - lo), 3), round(min(hi, b) - lo, 3), n) for a, b, n in chapters if b > lo + 0.5 and a < hi - 0.5]
+                    if chapters:
+                        chapters[0] = (0.0, chapters[0][1], chapters[0][2])
+                if len(chapters) >= 2 and target.suffix in (".mp4", ".mov", ".m4a", ".webm") and shutil.which("ffmpeg"):
+                    self._put_chapters(target, chapters, said)
+                else:
+                    self.said.emit(said, False)
             else:
                 Path(part_file).unlink(missing_ok=True)
                 if not self._export.get("stopped"):
@@ -3663,6 +3991,35 @@ class Clips(QObject):
         proc.finished.connect(finished)
         proc.start(args[0], args[1:])
         self.changed.emit()
+
+    def _put_chapters(self, target: Path, chapters: list, said: str) -> None:
+        """Write the chapters into the saved video (players show them in their timeline), and alongside as the list
+        video sites read from a description."""
+        meta = target.with_name(f".{target.stem}.chapters.txt")
+        tmp = target.with_name(f".{target.stem}.chaptered{target.suffix}")
+        try:
+            meta.write_text(chapters_meta(chapters), encoding="utf-8")
+            target.with_name(f"{target.stem} chapters.txt").write_text(chapters_text(chapters) + "\n", encoding="utf-8")
+        except OSError:
+            self.said.emit(said, False)
+            return
+        args = ["ffmpeg", "-v", "error", "-y", "-i", str(target), "-i", str(meta), "-map", "0", "-map_metadata", "0", "-map_chapters", "1", "-c", "copy"]
+        if target.suffix in (".mp4", ".mov", ".m4a"):
+            args += ["-movflags", "+faststart"]
+        proc = QProcess(self)
+        proc.setProcessChannelMode(QProcess.MergedChannels)
+
+        def done(code, _s):
+            meta.unlink(missing_ok=True)
+            if code == 0 and tmp.is_file() and tmp.stat().st_size > 0:
+                os.replace(tmp, target)
+                self.said.emit(said + f", {len(chapters)} chapters", False)
+            else:
+                tmp.unlink(missing_ok=True)
+                self.said.emit(said + " (the chapters couldn't be put in; their list is alongside)", False)
+            self.changed.emit()
+        proc.finished.connect(done)
+        proc.start(args[0], args[1:] + [str(tmp)])
 
     @Slot()
     def stopExport(self) -> None:
@@ -4244,13 +4601,13 @@ class Clips(QObject):
             return [(lo + a, lo + b) for a, b in quiet_spans(x, rate)]
         self._bg(work, lambda spans: self._pauses_found(cid, spans if isinstance(spans, list) else []))
 
-    def _pauses_found(self, cid: str, spans: list) -> None:
+    def _pauses_found(self, cid: str, spans: list, what: str = "pause", count: int = 0) -> None:
         c = self._c(cid)
         if not c:
             return
-        cuts = [(c["at"] + out_of(c, a), c["at"] + out_of(c, b)) for a, b in spans if float(c["in"]) <= a < b <= float(c["out"]) + 0.001]
+        cuts = [(c["at"] + out_of(c, a), c["at"] + out_of(c, b)) for a, b in spans if float(c["in"]) - 0.001 <= a < b <= float(c["out"]) + 0.001]
         if not cuts:
-            self.said.emit("No pauses long enough to cut.", False)
+            self.said.emit("No pauses long enough to cut." if what == "pause" else "Nothing to cut there.", False)
             return
         self._before()
         track, gone = c["track"], 0.0
@@ -4262,7 +4619,8 @@ class Clips(QObject):
             ripple_delete(self._p, [piece["id"]])
         self._picked = []
         self._keep()
-        self.said.emit(f"Cut {len(cuts)} pause{'' if len(cuts) == 1 else 's'}: {gone:.1f} s shorter.", False)
+        n = count or len(cuts)
+        self.said.emit(f"Cut {n} {what}{'' if n == 1 else 's'}: {gone:.1f} s shorter.", False)
 
     def _piece_between(self, track: str, a: float, b: float):
         """Blade a track's clip at a and b and give the piece between (a clip's start or end can be one of them)."""
@@ -4277,6 +4635,265 @@ class Clips(QObject):
             made = blade(self._p, a, [c["id"]])
             return self._c(made[0]) if made else None
         return c
+
+    # ---------------------------------------------------------------- round six: editing by what's said
+    def _talking(self, cid: str):
+        """The clip and its footage, if it's footage with sound that can be cut by its words; else says why."""
+        c = self._c(cid)
+        m = media_of(self._p, (c or {}).get("media", ""))
+        if not c or c.get("kind") != "media" or not m.get("audio"):
+            self.said.emit("Pick a clip with someone talking in it.", True)
+            return None, None
+        if backwards(c):
+            self.said.emit("Words are cut from footage played forwards. Turn off Play it backwards first.", True)
+            return None, None
+        return c, m
+
+    def _words_of(self, m: dict) -> list:
+        return list(self._demo_heard.get(m.get("id"), [])) if self._demo else heard_words(m.get("path", ""))
+
+    @Slot(str)
+    def listenWords(self, cid: str) -> None:
+        """Write down what's said in a clip's footage word by word, each word with its time, all on this computer
+        (whisper). Kept with the footage: every clip of it can then be cut by its words."""
+        c, m = self._talking(cid)
+        if not c:
+            return
+        if self._demo:
+            line = "So um we left Tromsø before it was light and uh the harbour was still asleep er by noon the market was full"
+            words, t = [], float(c["in"]) + 0.4
+            for w in line.split():
+                d = 0.22 + 0.035 * len(w)
+                words.append([round(t, 3), round(t + d, 3), w])
+                t += d + (0.35 if w in ("light", "asleep") else 0.08)
+            self._demo_heard[m["id"]] = words
+            self.pickChanged.emit()
+            return
+        if heard_path(m["path"]).is_file() or m["id"] in self._hearing:
+            self.pickChanged.emit()
+            return
+        tool = whisper_tool()
+        if not tool:
+            self.said.emit("Speech to text needs whisper.cpp with a model, or the faster-whisper package.", True)
+            return
+        if not shutil.which("ffmpeg"):
+            self.said.emit("Listening needs ffmpeg.", True)
+            return
+        work = CACHE / "heard-work" / m["id"]
+        work.mkdir(parents=True, exist_ok=True)
+        wav, base = work / "sound.wav", work / "words"
+        for f in (wav, base.with_suffix(".srt")):
+            f.unlink(missing_ok=True)
+        steps = [["ffmpeg", "-v", "error", "-y", "-i", m["path"], "-vn", "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le", str(wav)],
+                 whisper_words_command(tool, str(wav), str(base))]
+        self._hearing.add(m["id"])
+        self.said.emit(f"Listening to {m.get('name', 'the clip')}, word by word…", False)
+        self.pickChanged.emit()
+        mid, path = m["id"], m["path"]
+
+        def next_step(k):
+            if k >= len(steps):
+                return finish()
+            proc = QProcess(self)
+            proc.setProcessChannelMode(QProcess.MergedChannels)
+            proc.setWorkingDirectory(str(work))
+            proc.finished.connect(lambda code, _s: next_step(k + 1) if code == 0 else fail(bytes(proc.readAll()).decode(errors="replace")))
+            proc.start(steps[k][0], steps[k][1:])
+
+        def fail(log):
+            self._hearing.discard(mid)
+            last = [line for line in log.splitlines() if line.strip()][-1:] or ["it stopped"]
+            self.said.emit("Couldn't write down what's said: " + last[0][:140], True)
+            self.pickChanged.emit()
+
+        def finish():
+            self._hearing.discard(mid)
+            try:
+                words = word_list(parse_captions(base.with_suffix(".srt").read_text(encoding="utf-8", errors="replace")))
+            except OSError:
+                words = []
+            wav.unlink(missing_ok=True)
+            if not words:
+                self.said.emit("No speech was heard.", True)
+                self.pickChanged.emit()
+                return
+            HEARD.mkdir(parents=True, exist_ok=True)
+            out = heard_path(path)
+            part = out.with_suffix(".part")
+            part.write_text(json.dumps(words), encoding="utf-8")
+            os.replace(part, out)
+            fillers = sum(1 for w in words if is_filler(w[2]))
+            self.said.emit(f"{len(words)} words written down" + (f", {fillers} of them filler words" if fillers else "") + ". Click words to cut them.", False)
+            self.pickChanged.emit()
+        next_step(0)
+
+    @Slot(str, result="QVariantList")
+    def wordsOf(self, cid: str) -> list:
+        """The words said in a clip, in order: {i (which word of the footage), w, at (on the timeline), filler}."""
+        c = self._c(cid)
+        m = media_of(self._p, (c or {}).get("media", ""))
+        if not c or c.get("kind") != "media" or backwards(c):
+            return []
+        lo, hi = float(c["in"]), float(c["out"])
+        out = []
+        for k, (a, b, w) in enumerate(self._words_of(m)):
+            if lo - EPS <= (a + b) / 2 <= hi + EPS:
+                out.append({"i": k, "w": w, "at": round(c["at"] + max(0.0, out_of(c, max(lo, a))), 3), "end": round(c["at"] + max(0.0, out_of(c, min(hi, b))), 3),
+                            "filler": is_filler(w)})
+        return out[:4000]
+
+    @Slot(str, "QVariantList")
+    def cutWords(self, cid: str, picks) -> None:
+        """Cut the picked words (by their place among the footage's words) out of a clip, closing up its track."""
+        c, m = self._talking(cid)
+        if not c:
+            return
+        if track_of(self._p, c["track"]).get("locked"):
+            self.said.emit("That track is locked.", True)
+            return
+        if hasattr(picks, "toVariant"):
+            picks = picks.toVariant()
+        try:
+            picks = [int(x) for x in (picks or []) if float(x) == float(x)]
+        except (TypeError, ValueError):
+            return
+        words = self._words_of(m)
+        lo, hi = float(c["in"]), float(c["out"])
+        picks = [i for i in picks if 0 <= i < len(words) and lo - EPS <= (words[i][0] + words[i][1]) / 2 <= hi + EPS]
+        if not picks:
+            self.said.emit("Pick the words to cut first.", False)
+            return
+        self._pauses_found(cid, word_spans(words, picks, lo, hi), "word", len(set(picks)))
+
+    @Slot(str)
+    def cutFillers(self, cid: str) -> None:
+        """Cut every um, uh and er out of a clip."""
+        c, m = self._talking(cid)
+        if not c:
+            return
+        words = self._words_of(m)
+        if not words:
+            self.said.emit("Write down what's said first (Words).", False)
+            return
+        lo, hi = float(c["in"]), float(c["out"])
+        picks = [k for k, (a, b, w) in enumerate(words) if is_filler(w) and lo - EPS <= (a + b) / 2 <= hi + EPS]
+        if not picks:
+            self.said.emit("No filler words heard here (um, uh, er…).", False)
+            return
+        self.cutWords(cid, picks)
+
+    # ---------------------------------------------------------------- round six: adjustment layers
+    def _adjust_track(self, at: float, length: float) -> str:
+        """The top picture track if it's free there (never V1 or the captions), else a new one over the others."""
+        vids = [t for t in self._p["tracks"] if t["kind"] == "video" and t.get("role") != "captions"]
+        top = vids[0] if vids else None
+        if top and top["id"] != "v1" and not top.get("locked") and fits(self._p, top["id"], at, length):
+            return top["id"]
+        n = sum(1 for t in self._p["tracks"] if t["kind"] == "video") + 1
+        new = {"id": f"v{n}x{self._p['next']}", "kind": "video", "name": f"V{n}", "hidden": False, "locked": False}
+        self._p["next"] += 1
+        i = next((k for k, t in enumerate(self._p["tracks"]) if t["kind"] == "video" and t.get("role") != "captions"), 0)
+        self._p["tracks"].insert(i, new)
+        return new["id"]
+
+    @Slot(float, result=str)
+    @finite
+    def addAdjustment(self, at: float) -> str:
+        """An adjustment layer at the playhead, over the shot there: its colour and effects change everything under it."""
+        at = max(0.0, self._head if at < 0 else at)
+        under = [x for x in self._p["clips"] if x.get("kind") != "adjust" and track_of(self._p, x["track"]).get("kind") == "video"
+                 and track_of(self._p, x["track"]).get("role") != "captions" and x["at"] - EPS <= at < clip_end(x) - EPS]
+        length = max(0.5, min(clip_end(x) for x in under) - at) if under else 5.0
+        self._before()
+        tid = self._adjust_track(at, length)
+        a = blank_adjust(f"c{self._p['next']}", tid, at, length)
+        self._p["next"] += 1
+        self._p["clips"].append(a)
+        self._picked = [a["id"]]
+        self._keep()
+        self.said.emit("An adjustment layer: its colour and effects change everything under it. Stretch it to cover more.", False)
+        return a["id"]
+
+    # ---------------------------------------------------------------- round six: smooth slow motion
+    @Slot(str, bool)
+    def smoothSlow(self, cid: str, on: bool) -> None:
+        """Slow motion that works out the pictures in between (from how things move), instead of showing each one
+        twice or more."""
+        c = self._c(cid)
+        m = media_of(self._p, (c or {}).get("media", ""))
+        if not c or c.get("kind") != "media" or m.get("kind") != "video":
+            self.said.emit("Smooth slow motion is for video.", True)
+            return
+        if on and (ramped(c) or backwards(c)):
+            self.said.emit("Smooth slow motion is for a clip slowed evenly, played forwards.", True)
+            return
+        self._before()
+        c.setdefault("effects", {})["smooth"] = bool(on)
+        self._keep()
+        if on:
+            self._make_smooth(cid)
+
+    def _make_smooth(self, cid: str) -> None:
+        c = self._c(cid)
+        m = media_of(self._p, (c or {}).get("media", ""))
+        if not c or not (c.get("effects") or {}).get("smooth") or m.get("kind") != "video" or ramped(c) or backwards(c):
+            return
+        speed = float(c.get("speed") or 1.0)
+        fps = float(self._p.get("fps", 30))
+        if speed > 0.999:
+            return                                           # (nothing to work out until it's slowed)
+        if float(m.get("fps") or 0) >= fps / speed - 0.5:
+            self.said.emit("This footage already has a picture for every frame at that speed: it's smooth as it is.", False)
+            return
+        if smooth_ready(m, c) or cid in self._smoothing or self._demo:
+            return
+        if not shutil.which("ffmpeg"):
+            self.said.emit("Smooth slow motion needs ffmpeg.", True)
+            return
+        longest = float(m.get("duration") or c["out"])
+        span = [round(max(0.0, float(c["in"]) - 0.5), 3), round(min(longest, float(c["out"]) + 0.5), 3)]
+        c["effects"]["smoothSpan"] = span                    # (what's worked out: the part used and a little either side, to trim into)
+        self._keep(False)
+        src = smooth_source(m, c)
+        factor = smooth_factor(speed)
+        out = smooth_path(src, factor, span)
+        SMOOTH.mkdir(parents=True, exist_ok=True)
+        part = out.with_name(out.stem + ".part.mp4")
+        args = smooth_command(src, str(part), fps, factor, span)
+        args[1:1] = ["-progress", "pipe:1", "-nostats"]
+        self._smoothing[cid] = 0.0
+        self.changed.emit()
+        self.pickChanged.emit()
+        dur = max(0.1, span[1] - span[0])
+        proc = QProcess(self)
+        proc.setProcessChannelMode(QProcess.MergedChannels)
+
+        def read():
+            got = re.findall(r"out_time_ms=(\d+)", bytes(proc.readAllStandardOutput()).decode(errors="replace"))
+            if got and cid in self._smoothing:
+                self._smoothing[cid] = round(min(0.99, int(got[-1]) / 1e6 / dur), 3)
+                self.changed.emit()
+
+        def done(code, _s):
+            self._smoothing.pop(cid, None)
+            if code == 0 and part.is_file() and part.stat().st_size > 0:
+                os.replace(part, out)
+                self._dirty_xml = True
+                self.said.emit(f"{m.get('name', 'The clip')} is in smooth slow motion.", False)
+                self._show_frame()
+            else:
+                part.unlink(missing_ok=True)
+                self.said.emit("Couldn't work out the pictures in between; it plays as it was.", True)
+            self.changed.emit()
+            self.pickChanged.emit()
+        proc.readyReadStandardOutput.connect(read)
+        proc.finished.connect(done)
+        proc.start(args[0], args[1:])
+
+    @Slot(str)
+    def smoothAgain(self, cid: str) -> None:
+        """Work the pictures out again (after the clip was trimmed past what was made, or steadied)."""
+        self._make_smooth(cid)
 
     @Slot(str)
     def markBeats(self, cid: str) -> None:

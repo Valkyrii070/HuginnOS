@@ -37,7 +37,7 @@ GlassWindow {
     function blendName(t) { var l = Backend.blends; for (var i = 0; i < l.length; i++) if (l[i].key === t.blend) return l[i].name; return "" }
     function tracksTop() { var y = 0, out = []; for (var i = 0; i < Backend.tracks.length; i++) { out.push(y); y += rowH(Backend.tracks[i]) + 4 } return out }
     function trackAt(y) { var tops = tracksTop(); for (var i = Backend.tracks.length - 1; i >= 0; i--) if (y >= tops[i]) return Backend.tracks[i]; return Backend.tracks.length ? Backend.tracks[0] : null }
-    function clipColour(c) { return c.kind === "compound" ? "#EC4899" : c.kind === "multicam" ? "#22D3EE" : c.kind === "title" ? "#8B5CF6" : c.mediaKind === "audio" || c.audioTrack ? "#10B981" : c.mediaKind === "image" ? "#F59E0B" : "#3B82F6" }
+    function clipColour(c) { return c.kind === "adjust" ? "#84CC16" : c.kind === "compound" ? "#EC4899" : c.kind === "multicam" ? "#22D3EE" : c.kind === "title" ? "#8B5CF6" : c.mediaKind === "audio" || c.audioTrack ? "#10B981" : c.mediaKind === "image" ? "#F59E0B" : "#3B82F6" }
     function tc(s) { var f = Backend.fps, n = Math.round(s * f), fr = n % f, sec = Math.floor(n / f) % 60, m = Math.floor(n / f / 60); return m + ":" + (sec < 10 ? "0" : "") + sec + ":" + (fr < 10 ? "0" : "") + fr }
     function dropMedia(px, py) {
         var d = dragMedia; dragMedia = null
@@ -231,6 +231,8 @@ GlassWindow {
             IslandGap {}
             Seg { icon: "plus"; text: "Import"; onClicked: win.ask("import", { list: Backend.mediaChoices() }) }
             Seg { icon: "edit"; text: "Title"; onClicked: { Backend.addTitle("lower", -1); win.tab = "title" } }
+            Seg { objectName: "adjustBtn"; icon: "contrast"; text: "Adjustment"; tip: "A layer whose colour and effects change everything under it"
+                onClicked: { Backend.addAdjustment(-1); win.tab = "colour" } }
             Seg { objectName: "multicamBtn"; visible: Backend.picked.length >= 2 && Backend.picked.length <= 4; icon: "split"; text: "Multicam"
                 tip: "The picked clips are the same moment from different cameras: line them up by their sound"; onClicked: { win.tab = "angles"; Backend.makeMulticam() } }
             Seg { objectName: "compoundBtn"; visible: Backend.picked.length >= 2 || (Backend.picked.length === 1 && win.clip.kind !== "compound"); text: "Compound"
@@ -248,7 +250,7 @@ GlassWindow {
             Rectangle { anchors.fill: parent; radius: win.r; color: "#77000000"; MouseArea { anchors.fill: parent; onClicked: if (!Backend.exporting) win.sheet = null } }
             Rectangle { id: card; anchors.centerIn: parent; width: 560; radius: 18; color: Theme.t.menu_bg; border.width: 1; border.color: Theme.t.menu_border
                 readonly property string kind: win.sheet ? win.sheet.kind : ""
-                height: kind === "export" ? (Backend.markedRange.length === 2 ? 566 : 520) : kind === "captions" ? Math.min(win.height - 100, 330 + Math.min(6, capFiles.count) * 36) : Math.min(win.height - 100, 150 + Math.max(1, picks.count) * 40)
+                height: kind === "export" ? (Backend.markedRange.length === 2 ? 566 : 520) + (Backend.chapters.length >= 2 ? 40 : 0) : kind === "captions" ? Math.min(win.height - 100, 330 + Math.min(6, capFiles.count) * 36) : Math.min(win.height - 100, 150 + Math.max(1, picks.count) * 40)
                 MouseArea { anchors.fill: parent }
                 Label { x: 24; y: 20; font.pixelSize: 17; font.weight: Font.DemiBold; text: card.kind === "export" ? "Make the video" : card.kind === "captions" ? "Captions" : "Bring in footage, music and pictures" }
                 Label { visible: card.kind === "import"; x: 24; y: 46; width: parent.width - 48; wrapMode: Text.WordWrap; secondary: true; font.pixelSize: 12
@@ -305,6 +307,10 @@ GlassWindow {
                         Chips { width: 380; current: win.sheet && win.sheet.part === false ? "all" : "part"
                             items: [["part", "The marked part · " + Backend.clockOf((Backend.markedRange[1] || 0) - (Backend.markedRange[0] || 0))], ["all", "All of it"]]
                             onChosen: function (id) { win.sheet = Object.assign({}, win.sheet, { part: id === "part" }) } } }
+                    Row { objectName: "chaptersRow"; spacing: 10; height: 34; visible: Backend.chapters.length >= 2 && !(win.sheet && win.sheet.preset === "wav")
+                        Toggle { anchors.verticalCenter: parent.verticalCenter; on: Backend.chaptersOn; onToggled: function (v) { Backend.setProject("chapters", v) } }
+                        Label { anchors.verticalCenter: parent.verticalCenter; width: 400; wrapMode: Text.WordWrap; font.pixelSize: 12
+                            text: Backend.chapters.length + " chapters from the markers: in the video, and as a list for video sites" } }
                     Item { width: 1; height: 4 }
                     Meter { visible: Backend.exporting || Backend.exportShare > 0; width: parent.width; value: Backend.exportShare }
                     Label { visible: Backend.exporting || !!Backend.exported; font.pixelSize: 12; secondary: true
@@ -462,11 +468,12 @@ GlassWindow {
     // ================================================================ the inspector
     Rectangle { id: insp; objectName: "inspector"; x: parent.width - width - 12; y: 64; width: 330; height: win.topH; radius: 18; color: Theme.t.island; border.width: 1; border.color: Theme.t.islandLine; clip: true
         readonly property var tabs: !win.hasClip ? [] : win.clip.kind === "title" ? [["title", "Title"], ["video", "Place"], ["colour", "Colour"]]
+                                   : win.clip.kind === "adjust" ? [["colour", "Colour"], ["effects", "Effects"]]
                                    : win.clip.kind === "compound" ? [["video", "Place"], ["colour", "Colour"], ["mask", "Mask"], ["audio", "Sound"]]
                                    : win.multicam ? [["angles", "Angles"], ["video", "Place"], ["colour", "Colour"], ["audio", "Sound"]]
-                                   : win.clip.trackKind === "audio" || win.clip.mediaKind === "audio" ? [["audio", "Sound"], ["speed", "Speed"]]
+                                   : win.clip.trackKind === "audio" || win.clip.mediaKind === "audio" ? [["audio", "Sound"], ["words", "Words"], ["speed", "Speed"]]
                                    : win.clip.mediaKind === "image" ? [["video", "Place"], ["colour", "Colour"], ["effects", "Effects"], ["mask", "Mask"]]
-                                   : [["video", "Place"], ["colour", "Colour"], ["effects", "Effects"], ["mask", "Mask"], ["audio", "Sound"], ["speed", "Speed"]]
+                                   : [["video", "Place"], ["colour", "Colour"], ["effects", "Effects"], ["mask", "Mask"], ["audio", "Sound"]].concat(win.clip.hasAudio ? [["words", "Words"]] : []).concat([["speed", "Speed"]])
         onTabsChanged: { var ok = false; for (var i = 0; i < tabs.length; i++) if (tabs[i][0] === win.tab) ok = true; if (!ok && tabs.length) win.tab = tabs[0][0] }
         Column { x: 16; y: 14; width: parent.width - 32; spacing: 2
             Label { width: parent.width; elide: Text.ElideRight; text: win.hasClip ? win.clip.name || "Title" : Backend.inside ? "Compound clip" : "Project"; font.pixelSize: 15; font.weight: Font.DemiBold }
@@ -563,6 +570,30 @@ GlassWindow {
                         Wheel { label: "Shadows"; at: win.clip.colour ? win.clip.colour.shadows : [0, 0]; onMoved: function (xy) { Backend.set(win.clip.id, "colour.shadows", xy) } }
                         Wheel { label: "Midtones"; at: win.clip.colour ? win.clip.colour.midtones : [0, 0]; onMoved: function (xy) { Backend.set(win.clip.id, "colour.midtones", xy) } }
                         Wheel { label: "Highlights"; at: win.clip.colour ? win.clip.colour.highlights : [0, 0]; onMoved: function (xy) { Backend.set(win.clip.id, "colour.highlights", xy) } } }
+                    Label { text: "ONE COLOUR"; font.pixelSize: 10; font.weight: Font.Bold; font.letterSpacing: 1.2; secondary: true; topPadding: 4 }
+                    Column { id: rangeBox; objectName: "rangeBox"; width: parent.width; spacing: 6
+                        readonly property var r: win.clip.colourRange || ({ on: false, hue: 30, width: 40, shift: 0, sat: 1, light: 0 })
+                        Row { spacing: 10; height: 34
+                            Toggle { objectName: "rangeToggle"; anchors.verticalCenter: parent.verticalCenter; on: !!rangeBox.r.on; onToggled: function (v) { Backend.set(win.clip.id, "colour.range.on", v) } }
+                            Label { anchors.verticalCenter: parent.verticalCenter; width: 230; wrapMode: Text.WordWrap; font.pixelSize: 12; text: "Change one colour and leave the rest (skies, skin, a jacket)" } }
+                        Rectangle { visible: !!rangeBox.r.on; width: parent.width; height: 16; radius: 8
+                            gradient: Gradient { orientation: Gradient.Horizontal
+                                GradientStop { position: 0; color: "#FF3030" } GradientStop { position: 0.1667; color: "#FFFF30" } GradientStop { position: 0.3333; color: "#30FF30" }
+                                GradientStop { position: 0.5; color: "#30FFFF" } GradientStop { position: 0.6667; color: "#3030FF" } GradientStop { position: 0.8333; color: "#FF30FF" } GradientStop { position: 1; color: "#FF3030" } }
+                            Rectangle { x: Math.max(0, Math.min(parent.width - width, rangeBox.r.hue / 360 * parent.width - width / 2)); width: Math.max(6, rangeBox.r.width / 360 * parent.width); height: parent.height + 6; y: -3
+                                radius: 5; color: "transparent"; border.width: 2; border.color: Theme.t.dark ? "#FFFFFF" : "#111111" }
+                            MouseArea { anchors.fill: parent; onClicked: function (m) { Backend.set(win.clip.id, "colour.range.hue", Math.round(m.x / width * 360)) } } }
+                        Chips { visible: !!rangeBox.r.on; width: parent.width; current: String(rangeBox.r.hue)
+                            items: [[0, "Reds"], [30, "Oranges"], [55, "Yellows"], [120, "Greens"], [185, "Cyans"], [220, "Blues"], [275, "Purples"], [320, "Pinks"]]
+                            onChosen: function (id) { Backend.set(win.clip.id, "colour.range.hue", parseFloat(id)) } }
+                        Knob { visible: !!rangeBox.r.on; label: "How wide a range"; value: rangeBox.r.width; from: 5; to: 180; zero: 40; unit: "°"; decimals: 0
+                            onMoved: function (v) { Backend.set(win.clip.id, "colour.range.width", Math.round(v)) } }
+                        Knob { visible: !!rangeBox.r.on; label: "Turn it to another colour"; value: rangeBox.r.shift; from: -180; to: 180; zero: 0; unit: "°"; decimals: 0
+                            onMoved: function (v) { Backend.set(win.clip.id, "colour.range.shift", Math.round(v)) } }
+                        Knob { visible: !!rangeBox.r.on; label: "Its colour strength"; value: rangeBox.r.sat; from: 0; to: 3; zero: 1
+                            onMoved: function (v) { Backend.set(win.clip.id, "colour.range.sat", Math.round(v * 100) / 100) } }
+                        Knob { visible: !!rangeBox.r.on; label: "Lighter or darker"; value: rangeBox.r.light; from: -1; to: 1; zero: 0
+                            onMoved: function (v) { Backend.set(win.clip.id, "colour.range.light", Math.round(v * 100) / 100) } } }
                     Label { text: "LOOK (LUT)"; font.pixelSize: 10; font.weight: Font.Bold; font.letterSpacing: 1.2; secondary: true }
                     Chips { items: [["", "None"]].concat(Backend.lutChoices().map(function (l) { return [l.path, l.name] })); current: win.clip.colour ? win.clip.colour.lut : ""
                         onChosen: function (id) { Backend.set(win.clip.id, "colour.lut", id) } }
@@ -645,7 +676,9 @@ GlassWindow {
 
                 // ---- effects
                 Column { visible: win.hasClip && win.tab === "effects"; width: parent.width; spacing: 6
-                    Knob { id: steadyKnob; objectName: "steadyKnob"; label: "Steady shaky footage"; value: win.clip.effects ? (win.clip.effects.stabilise || 0) : 0; from: 0; to: 1; zero: 0
+                    Label { visible: win.clip.kind === "adjust"; width: parent.width; wrapMode: Text.WordWrap; font.pixelSize: 11; secondary: true
+                        text: "These change everything under the layer, from where it starts to where it ends." }
+                    Knob { id: steadyKnob; objectName: "steadyKnob"; visible: win.clip.kind !== "adjust"; label: "Steady shaky footage"; value: win.clip.effects ? (win.clip.effects.stabilise || 0) : 0; from: 0; to: 1; zero: 0
                         property real want: -1
                         onMoved: function (v) { want = Math.round(v * 20) / 20; steadyCommit.restart() }
                         Timer { id: steadyCommit; interval: 500; onTriggered: { Backend.stabilise(win.clip.id, steadyKnob.want); steadyKnob.want = -1 } } }
@@ -737,12 +770,68 @@ GlassWindow {
                     Row { visible: !!win.clip.ramped; spacing: 10; height: 34
                         Toggle { anchors.verticalCenter: parent.verticalCenter; on: win.clip.rampSmooth !== false; onToggled: function (v) { Backend.set(win.clip.id, "rampSmooth", v) } }
                         Label { anchors.verticalCenter: parent.verticalCenter; text: "Glide from one speed to the next"; font.pixelSize: 12 } }
+                    Row { objectName: "smoothRow"; visible: win.clip.smooth !== undefined && !win.clip.ramped && !win.clip.reverse; spacing: 10; height: 34
+                        Toggle { objectName: "smoothToggle"; anchors.verticalCenter: parent.verticalCenter; on: win.clip.smooth !== "off"; onToggled: function (v) { Backend.smoothSlow(win.clip.id, v) } }
+                        Label { anchors.verticalCenter: parent.verticalCenter; width: 230; wrapMode: Text.WordWrap; font.pixelSize: 12; text: "Smooth slow motion (works out the pictures in between)" } }
+                    Row { visible: win.clip.smooth !== undefined && win.clip.smooth !== "off" && !win.clip.ramped; spacing: 8; width: parent.width
+                        readonly property var share: Backend.smoothing[win.clip.id]
+                        Meter { visible: parent.share !== undefined; width: 90; value: parent.share || 0; anchors.verticalCenter: parent.verticalCenter }
+                        Label { width: parent.width - (parent.share !== undefined ? 100 : 0); wrapMode: Text.WordWrap; font.pixelSize: 10; secondary: true; anchors.verticalCenter: parent.verticalCenter
+                            text: parent.share !== undefined ? "Working out the pictures in between: " + Math.round(parent.share * 100) + "%. It plays as it was meanwhile."
+                                : win.clip.smooth === "even" ? "Slow the clip down and the pictures in between are worked out."
+                                : win.clip.smooth === "stale" ? "Trimmed past what was worked out, or steadied since: it plays as it was."
+                                : "Smooth: a new picture every frame. Fast movement can smear a little at its edges." } }
+                    Btn { visible: win.clip.smooth === "stale"; text: "Work Them Out Again"; onClicked: Backend.smoothAgain(win.clip.id) }
                     Repeater { model: win.clip.holdsView || []
                         Knob { required property var modelData; label: "Held at " + modelData.at.toFixed(1) + " s, for"; value: modelData.length; from: 0; to: 10; zero: 2; unit: " s"; decimals: 1
                             onMoved: function (v) { Backend.setHold(win.clip.id, modelData.k, Math.round(v * 10) / 10) } } }
                     Row { visible: !!win.clip.ramped; spacing: 6
                         Btn { visible: parent.parent.seg.k > 0; text: "Join With the One Before"; onClicked: { Backend.removeSpeedChange(win.clip.id, parent.parent.seg.k); win.segment = 0 } }
                         Btn { text: "Back to One Speed"; onClicked: { Backend.clearRamp(win.clip.id); win.segment = 0 } } } }
+
+                // ---- words: what's said, to cut by
+                Column { id: wordsTab; objectName: "wordsTab"; visible: win.hasClip && win.tab === "words"; width: parent.width; spacing: 8
+                    readonly property var list: visible && win.clip.heard ? Backend.wordsOf(win.clip.id) : []
+                    readonly property int fillers: { var n = 0; for (var i = 0; i < list.length; i++) if (list[i].filler) n++; return n }
+                    property var sel: ({})
+                    property int anchor: -1
+                    readonly property int picked: Object.keys(sel).length
+                    Connections { target: win; function onClipChanged() { wordsTab.sel = ({}); wordsTab.anchor = -1 } }
+                    Label { text: "WHAT'S SAID"; font.pixelSize: 10; font.weight: Font.Bold; font.letterSpacing: 1.2; secondary: true }
+                    Label { visible: !win.clip.heard; width: parent.width; wrapMode: Text.WordWrap; font.pixelSize: 12
+                        text: win.clip.hearing ? "Listening, word by word…" : "Write down what's said in this footage, every word with its time. Then cut words out by clicking them, like editing text. It's all done on this computer." }
+                    Btn { objectName: "listenBtn"; visible: !win.clip.heard; enabled: !win.clip.hearing; primary: true; text: win.clip.hearing ? "Listening…" : "Write Down What's Said"
+                        onClicked: Backend.listenWords(win.clip.id) }
+                    Flow { objectName: "wordFlow"; visible: !!win.clip.heard; width: parent.width; spacing: 3
+                        Repeater { model: wordsTab.list
+                            Rectangle { required property var modelData; required property int index
+                                readonly property bool on: wordsTab.sel[modelData.i] === true
+                                readonly property bool now: Backend.head >= modelData.at && Backend.head < modelData.end
+                                width: wt.implicitWidth + 8; height: 22; radius: 5
+                                color: on ? Qt.alpha("#EF4444", 0.35) : modelData.filler ? Qt.alpha("#F59E0B", 0.22) : now ? Qt.alpha(Theme.t.accent, 0.25) : "transparent"
+                                border.width: now ? 1 : 0; border.color: Theme.t.accent
+                                Text { id: wt; anchors.centerIn: parent; text: modelData.w; font.pixelSize: 13; color: Theme.t.text; font.strikeout: parent.on }
+                                MouseArea { anchors.fill: parent; acceptedButtons: Qt.LeftButton
+                                    onClicked: function (m) {
+                                        var s = Object.assign({}, wordsTab.sel)
+                                        if ((m.modifiers & Qt.ShiftModifier) && wordsTab.anchor >= 0) {
+                                            var a = Math.min(wordsTab.anchor, index), b = Math.max(wordsTab.anchor, index)
+                                            for (var k = a; k <= b; k++) s[wordsTab.list[k].i] = true
+                                        } else if (m.modifiers & Qt.ControlModifier) {
+                                            if (s[modelData.i]) delete s[modelData.i]; else s[modelData.i] = true
+                                            wordsTab.anchor = index
+                                        } else {
+                                            s = ({}); s[modelData.i] = true; wordsTab.anchor = index
+                                            Backend.seek(modelData.at)
+                                        }
+                                        wordsTab.sel = s } } } } }
+                    Label { visible: !!win.clip.heard; width: parent.width; wrapMode: Text.WordWrap; font.pixelSize: 10; secondary: true
+                        text: "Click a word to go to it; Shift-click to pick up to it, Ctrl-click to pick more. Filler words are marked in amber." }
+                    Row { visible: !!win.clip.heard; spacing: 6
+                        Btn { objectName: "cutWordsBtn"; enabled: wordsTab.picked > 0; danger: true; text: wordsTab.picked > 0 ? "Cut " + wordsTab.picked + (wordsTab.picked === 1 ? " Word" : " Words") : "Cut Words"
+                            onClicked: { Backend.cutWords(win.clip.id, Object.keys(wordsTab.sel).map(Number)); wordsTab.sel = ({}) } }
+                        Btn { objectName: "cutFillersBtn"; enabled: wordsTab.fillers > 0; text: wordsTab.fillers > 0 ? "Cut the Ums (" + wordsTab.fillers + ")" : "No Ums"
+                            onClicked: Backend.cutFillers(win.clip.id) } } }
 
                 // ---- title
                 Column { visible: win.hasClip && win.tab === "title"; width: parent.width; spacing: 8
@@ -882,7 +971,7 @@ GlassWindow {
                                             Text { anchors.centerIn: parent; text: parent.parent.modelData[1] + 1; font.pixelSize: 9; font.weight: Font.Bold; color: "#06202A" } } } }
                                 Rectangle { width: parent.width; height: 16; color: Qt.rgba(0, 0, 0, 0.35)
                                     Label { x: 6; width: parent.width - 12; elide: Text.ElideRight; anchors.verticalCenter: parent.verticalCenter; font.pixelSize: 10; color: "#FFFFFF"
-                                        text: (cl.modelData.kind === "title" ? "T  " : cl.modelData.kind === "compound" ? "⧉  " : "") + cl.modelData.name
+                                        text: (cl.modelData.kind === "title" ? "T  " : cl.modelData.kind === "compound" ? "⧉  " : cl.modelData.kind === "adjust" ? "◐  " : "") + cl.modelData.name
                                               + (cl.modelData.speed !== 1 && !cl.modelData.bands.length ? "  " + cl.modelData.speed + "×" : "") + (cl.modelData.keys ? "  ◆" + cl.modelData.keys : "")
                                               + (cl.modelData.keyed ? "  · keyed" : "") + (cl.modelData.shaped ? "  · shape" : "") } }
                                 // the music's beat, marked on the clip

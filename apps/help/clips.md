@@ -70,3 +70,18 @@ The camera button under the viewer (Ctrl+Shift+S) saves the frame under the play
 
 ## When footage goes missing
 If a file is moved, renamed or on a drive that isn't plugged in, its library tile says missing and its clips show a dark red card with its name; everything else still plays. Press Find Missing: Clips looks for it by name in Videos, Music, Pictures, Downloads, Documents, the Desktop and plugged-in drives. If it's somewhere else, drop the file on the window and Clips picks up where it left off.
+
+## Editing by what's said
+Pick a clip with someone talking and open Words. Write Down What's Said listens to its footage, on this computer, and writes every word with its time (it needs whisper.cpp with a model, or the faster-whisper package). Then cut by the words, like editing text: click a word to go to it, Shift-click to pick up to another, Ctrl-click to pick more, and Cut Words takes them out and closes up the gap. Cut the Ums takes out every um, uh and er at once (they're marked in amber). The words are kept with the footage, so every clip of it can be cut this way, and undo brings anything back.
+
+## Adjustment layers
+Adjustment (in the top bar) puts a layer over the shot under the playhead. Its Colour and Effects change everything under it, for as long as it lasts: grade a whole scene at once, or fade it to black and white. Stretch it, move it and cut it like any clip; what's on tracks above it isn't changed. Layers can sit over other layers.
+
+## One colour on its own
+In Colour, One Colour changes a single range of colour and leaves the rest: pick Reds, Blues or any other (or click the strip), then turn it to another colour, make it stronger or weaker, or lighter or darker. How Wide a Range takes in more or fewer neighbouring colours. Greys and whites are left alone.
+
+## Smooth slow motion
+In Speed, slow a clip down and turn on Smooth Slow Motion: instead of showing each picture twice or more, Clips works out the pictures in between from how things move, in the background, for the part of the footage used. It plays as it was until they're ready. Footage filmed at a high frame rate is already smooth and needs none. Fast movement can smear a little at its edges.
+
+## Chapters
+Markers become chapters when you make the video: named by the markers, the first from the start. They're written into the video (players show them in their timeline) and beside it as a list video sites read from a description ("0:00 Start"). Turn them off in Make the Video.

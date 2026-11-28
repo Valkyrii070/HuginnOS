@@ -905,6 +905,35 @@ surround.
   this round: 56 of 56, 23 of 23, 40 of 41 (a tolerance in an old check), and one that stops at a check written for an older undo. On screen: the missing tile and Find Missing, picking and
   overwriting, the 2× chip, the Screen layer. Not tested: sound while shuttling (no sound card here).
 
+**Clips, pro round six** (`apps/huginn_clips.py`, `apps/qml/Clips.qml`): cutting by what's said, adjustment layers, one colour on its
+own, smooth slow motion, chapters
+- *Editing by what's said* (Words tab): whisper (whisper.cpp with `-ml 1`, or faster-whisper with word times) writes down a clip's footage
+  word by word, with a prompt full of ums so it keeps them (it leaves them out otherwise). The words are kept with the file
+  (`~/.cache/huginn/clips/heard`), so every clip of it can be cut by them. Picked words come out with Cut Words; Cut the Ums takes every um,
+  uh and er. Each cut reaches halfway into the quiet either side, neighbouring words go as one cut, and the track closes up (the same
+  blade-and-ripple as Cut Pauses, from the end, so earlier times hold).
+- *Adjustment layers*: a clip with nothing of its own on a picture track (never V1 or the captions), over the shot under the playhead. The
+  tracks under the highest layer are built as one tractor of their own, the layer's colour and effects go on that tractor over the
+  layer's span, and the rest is stacked over it; lower layers are found again inside it, so layers stack. Solos and mutes are decided over
+  the whole film before it's split.
+- *One colour* (Colour tab): an HSL secondary baked into a 33³ `.cube` LUT (kept by what it does, so the same change is the same file) and
+  put through `avfilter.lut3d` after the grade: the range's hue turned, its colour stronger or weaker, lighter or darker, with a soft
+  edge and greys left alone.
+- *Smooth slow motion* (Speed tab): ffmpeg's `minterpolate` (motion-compensated, both ways) makes 2, 4 or 8 times the pictures for the part
+  used and half a second either side, in the background like steadying; the clip plays as it was until it's ready, and says when a trim
+  has gone past what was made. From the steadied copy when there is one. Not with ramps or backwards (they belong to the footage's own
+  time); footage with enough pictures already is left alone.
+- *Chapters*: markers become the video's chapters (ffmpeg's metadata file, copied in without re-encoding, for .mp4, .mov, .m4a and
+  .webm), and a "0:00 Start" list beside it for video sites; a marked part gets its own chapters from its start.
+- Tested (`scripts/tests/clips_round6_test.py`, 85 checks): the word lists, cuts and whisper's commands; the LUT's arithmetic (red to
+  green, blue and grey untouched); an adjustment layer greying what's under it but not a clip over it, a second layer over both, undo;
+  the colour range on red and blue footage; listening (through a stand-in for whisper.cpp), the ums cut out to the hundredth of a second,
+  a picked word, locked tracks and backwards clips refused; smooth slow motion going from each picture shown twice to a new one every
+  frame, at the same moment of the footage, twice then four times the pictures, stale after a trim; an exported video's three chapters, named
+  and timed, and the list beside it. In the window (`clips_round6_ui.py`, 15 checks): the Words tab, its ums button, the one-colour and
+  smooth switches, an adjustment layer's tabs, the chapters line, no QML complaints. The fuzz has the new commands (1,500 steps, nothing
+  found); round five's test still gives 120 of 120.
+
 **Audit, first pass (static checks and the security surfaces)**. `scripts/lint.sh` runs all of it; `ruff.toml` holds
 the Python rules and says, rule by rule, why each one left out was left out.
 - *What was run*: ruff's bug and security rules (pyflakes, bugbear, bandit) over all 118 Python files (about

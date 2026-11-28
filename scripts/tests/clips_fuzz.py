@@ -157,6 +157,13 @@ OPS = [
     (1, lambda: ("clearMatch", rc())),
     (1, lambda: ("showMatte", rc(), random.random() < 0.5)),
     (1, lambda: ("setZoom", random.choice([0.01, 1, 50, 0, -1, 1e9]))),
+    (2, lambda: ("addAdjustment", rt())),
+    (2, lambda: ("set", rc(), random.choice(["colour.range.on", "colour.range.hue", "colour.range.shift", "colour.range.sat", "colour.range.width"]),
+                 random.choice([True, False, 0, 120, -400, 999, 0.5, "x"]))),
+    (1, lambda: ("cutWords", rc(), random.choice([[0], [1, 2], [999], [-1], ["x"], []]))),
+    (1, lambda: ("cutFillers", rc())),
+    (1, lambda: ("smoothSlow", rc(), random.random() < 0.6)),
+    (1, lambda: ("setProject", "chapters", random.random() < 0.5)),
     (6, lambda: ("undo",)),
     (4, lambda: ("redo",)),
 ]
