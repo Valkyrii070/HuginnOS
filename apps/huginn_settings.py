@@ -1598,7 +1598,8 @@ def load_look() -> dict:
         size = 24
     return {"loginRealm": realm, "canChange": os.access(LOGIN_LOOK, os.X_OK) and bool(HAVE("pkexec")),
             "iconThemes": hl.list_icon_themes(), "iconTheme": current_icon_theme(),
-            "pointerThemes": pointers, "pointerTheme": kconfig_read(CONFIG / "kcminputrc", ["Mouse"], "cursorTheme", "") or "Huginn",
+            "pointerThemes": pointers, "pointerTheme": ("Huginn" if (kconfig_read(CONFIG / "kcminputrc", ["Mouse"], "cursorTheme", "") or "Huginn").startswith("Huginn")
+                                                        else kconfig_read(CONFIG / "kcminputrc", ["Mouse"], "cursorTheme", "")),
             "pointerSize": size, "live": hl.list_live(), "appIcons": sorted(changed, key=lambda a: a["name"].lower())}
 
 
@@ -3042,6 +3043,13 @@ class SystemSettings(QObject):
             return
 
         def work():
+            nonlocal ident
+            if ident == "Huginn":                                # Huginn's pointers come in the realm's colours
+                try:
+                    import huginn_look
+                    ident = huginn_look.pointer_theme_for(huginn_look.read_settings()[0])
+                except Exception:                                # noqa: BLE001
+                    ident = "Huginn"
             kconfig_write(CONFIG / "kcminputrc", ["Mouse"], "cursorTheme", ident)
             if HAVE("gsettings"):
                 RUN(["gsettings", "set", "org.gnome.desktop.interface", "cursor-theme", ident], None, 5)

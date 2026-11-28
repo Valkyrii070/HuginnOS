@@ -233,11 +233,55 @@ def _huginn_pointers() -> None:
         pass
 
 
+POINTER_THEMES = {"aurora": "Huginn", "bifrost": "Huginn-Bifrost", "muspelheim": "Huginn-Muspelheim", "niflheim": "Huginn-Niflheim"}
+
+
+def pointer_theme_for(realm: str) -> str:
+    """Huginn's pointers in a realm's colours (Aurora's are plain "Huginn"), when they're there."""
+    want = POINTER_THEMES.get(realm, "Huginn")
+    return want if (SHARE / "icons" / want / "cursors" / "default").exists() else "Huginn"
+
+
+def is_huginn_pointers(theme: str) -> bool:
+    return theme == "Huginn" or theme in POINTER_THEMES.values()
+
+
+def _realm_pointers(realm: str) -> bool:
+    """Huginn's pointers follow the realm: when the pointer theme is Huginn's (any realm's), it becomes this realm's
+    (the compositor, Qt, GTK and X11 apps' default). Any other theme chosen in Settings stays. True when it changed."""
+    kin = CONFIG / "kcminputrc"
+    ini = configparser.ConfigParser(interpolation=None, strict=False)
+    ini.optionxform = str
+    try:
+        ini.read(kin, encoding="utf-8")
+    except configparser.Error:
+        return False
+    now = ini.get("Mouse", "cursorTheme", fallback="Huginn") or "Huginn"
+    want = pointer_theme_for(realm)
+    if not is_huginn_pointers(now) or now == want:
+        return False
+    _ini(kin, {"cursorTheme": want}, "Mouse")
+    for version in ("gtk-3.0", "gtk-4.0"):
+        if (CONFIG / version / "settings.ini").exists():
+            _ini(CONFIG / version / "settings.ini", {"gtk-cursor-theme-name": want})
+    _run(["gsettings", "set", "org.gnome.desktop.interface", "cursor-theme", want])
+    default = Path.home() / ".icons" / "default" / "index.theme"
+    try:
+        if default.exists() and any(f"Inherits={t}" in default.read_text(encoding="utf-8") for t in POINTER_THEMES.values()):
+            default.write_text(f"[Icon Theme]\nInherits={want}\n", encoding="utf-8")
+    except OSError:
+        pass
+    _run(["gdbus", "call", "--session", "--dest", "org.huginn.Compositor", "--object-path", "/org/huginn/Compositor",
+          "--method", "org.huginn.Compositor.ReloadAccess"])          # (Huginn's compositor draws the new ones at once)
+    return True
+
+
 def apply(realm: str, dark: bool, contrast: bool = False, force: bool = False) -> bool:
     """Put the realm's look in place for this user. Returns False when it was already in place."""
     name = name_for(realm, dark)
     stamp = f"{name} contrast={contrast} gtk=huginn qt=huginn kstyle=huginn pointers=huginn"  # (a new part of the look: in place once more)
     changed = write_qt(realm, dark)                             # (each time: cheap, and only written when it changed)
+    changed = _realm_pointers(realm) or changed
     if not force:
         try:
             if STATE.read_text(encoding="utf-8").strip() == stamp:
@@ -266,6 +310,7 @@ def apply(realm: str, dark: bool, contrast: bool = False, force: bool = False) -
         _ini(folder / "settings.ini", {"gtk-theme-name": named, "gtk-application-prefer-dark-theme": "true" if dark else "false",
                                        "gtk-font-name": "Inter Variable 10"})
     _huginn_pointers()
+    _realm_pointers(realm)
     # GTK on Wayland reads GNOME's interface settings (dconf) rather than settings.ini
     iface = "org.gnome.desktop.interface"
     _run(["gsettings", "set", iface, "gtk-theme", theme])

@@ -127,6 +127,9 @@ check("updates draw them from the tree", up.make_pointers(KIT, theme / "pointers
 want = up.wanted_files(KIT, theme)
 check("…and put every one in place as a file", all(f"usr/share/icons/Huginn/cursors/{n}" in want for n in names)
       and "usr/share/icons/Huginn/cursor.theme" in want and want["usr/share/icons/Huginn/cursors/default"][1] == 0o644)
+check("…every realm's, the other realms' with their own index (Huginn's index is the icon theme's)",
+      all(f"usr/share/icons/Huginn-{r}/cursors/wait" in want and f"usr/share/icons/Huginn-{r}/index.theme" in want for r in ("Bifrost", "Muspelheim", "Niflheim"))
+      and "pointers" not in str(want.get("usr/share/icons/Huginn/index.theme", ("",))[0]))
 check("…GTK told the pointer theme too", "gtk-cursor-theme-name=Huginn" in want["etc/gtk-3.0/settings.ini"][0].read_text())
 root = home / "root"
 (root / "usr/share/icons/Huginn/cursors").mkdir(parents=True)
@@ -162,6 +165,47 @@ icons.write_text("[Icon Theme]\nInherits=breeze_cursors\n")
 kin.write_text("[Mouse]\ncursorTheme=breeze_cursors\n")
 hl._huginn_pointers()
 check("X11 apps' default moves too", icons.read_text().strip().endswith("Inherits=Huginn"))
+
+# ------------------------------------------------------------------------------------------------ each realm's colours
+sys.path.insert(0, str(KIT / "pointers"))
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+import make_pointers as mp  # noqa: E402
+from PySide6.QtGui import QGuiApplication  # noqa: E402
+_app = QGuiApplication.instance() or QGuiApplication(["x"])
+realms = home / "realms"
+got = subprocess.run(tool + ["--realms", str(realms), "--links"], capture_output=True, text=True, timeout=600)
+check("every realm's pointers, side by side", got.returncode == 0 and all((realms / t / "cursors/default").is_file() for t in
+      ("Huginn", "Huginn-Bifrost", "Huginn-Muspelheim", "Huginn-Niflheim")), got.stderr[-300:])
+bif = (realms / "Huginn-Bifrost/index.theme").read_text()
+check("…the others named for their realm, falling back to Huginn", "Name=Huginn Bifröst" in bif and "Inherits=Huginn" in bif
+      and "Inherits=Huginn-Muspelheim" in (realms / "Huginn-Muspelheim/cursor.theme").read_text())
+def mean(img):
+    w, h = img.width(), img.height()
+    px = [img.pixelColor(x, y) for x in range(w) for y in range(h)]
+    px = [c for c in px if c.alpha() > 200]
+    return [sum(getattr(c, k)() for c in px) / max(1, len(px)) for k in ("red", "green", "blue")]
+fire, ice = mean(mp.render("wait", "glass", 0.0, 64, "muspelheim")), mean(mp.render("wait", "glass", 0.0, 64, "niflheim"))
+check("the busy pointer in the realm's colours: Muspelheim's fire, Niflheim's ice", fire[0] > fire[2] + 80 and ice[2] > ice[0] + 40, (fire, ice))
+w0, w8 = mp.render("wait", "glass", 0.0, 64), mp.render("wait", "glass", 0.5, 64)
+check("…it turns", w0 != w8)
+edge = [w0.pixelColor(32 + int(19 * c), 32 + int(19 * s_)) for c, s_ in ((1, 0), (0, 1), (-1, 0), (0, -1), (0.7, 0.7), (-0.7, -0.7))]
+check("…a solid disc, with no white or dark ring round it", all(c.alpha() > 200 and not (c.red() > 230 and c.green() > 230 and c.blue() > 230)
+      and max(c.red(), c.green(), c.blue()) > 90 for c in edge), [(c.red(), c.green(), c.blue(), c.alpha()) for c in edge])
+check("the rims follow the realm too", mp.svg("default", "glass", 0, "muspelheim") != mp.svg("default", "glass", 0, "aurora") and "#FFAD7A" in mp.svg("default", "glass", 0, "muspelheim"))
+check("…and the marks (the link's orb)", "#FFAD7A" in mp.svg("pointer", "glass", 0, "muspelheim") and "@L1@" not in mp.svg("pointer", "glass", 0, "muspelheim"))
+check("a realm that isn't one is refused", subprocess.run(tool + [str(home / "y"), "--realm", "asgard"], capture_output=True).returncode != 0)
+# the look swaps Huginn's pointers to the realm's; anyone else's stay
+(share / "icons/Huginn-Bifrost/cursors").mkdir(parents=True)
+(share / "icons/Huginn-Bifrost/cursors/default").write_bytes(b"x")
+for before, realm, after in (("Huginn", "bifrost", "Huginn-Bifrost"), ("Huginn-Bifrost", "aurora", "Huginn"), ("Adwaita", "bifrost", "Adwaita"),
+                             ("Huginn", "niflheim", "Huginn")):
+    kin.write_text(f"[Mouse]\ncursorTheme={before}\n")
+    hl._realm_pointers(realm)
+    check(f"{before} in {realm}: {after}", f"cursorTheme={after}" in kin.read_text(), kin.read_text())
+import huginn_looks as hls  # noqa: E402
+hls.ICON_DIRS = [share / "icons"]
+ids = [t["id"] for t in hls.list_pointer_themes()]
+check("Settings lists Huginn once (the realm's colours come with it)", "Huginn" in ids and "Huginn-Bifrost" not in ids, ids)
 
 shutil.rmtree(home, ignore_errors=True)
 print(f"\n{passed} passed, {failed} failed")

@@ -353,6 +353,8 @@ def list_pointer_themes() -> list:
             cur = folder / "cursors"
             if ident in seen or ident == "default" or not cur.is_dir():
                 continue
+            if ident.startswith("Huginn-"):                    # (Huginn's pointers in another realm's colours: "Huginn" follows the realm)
+                continue
             if not any((cur / n).exists() for n in ("left_ptr", "default", "arrow")):
                 continue
             seen.add(ident)

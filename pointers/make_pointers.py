@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Huginn's own pointers: every pointer an app can ask for, drawn here and packed as an X cursor theme.
 
-    make_pointers.py <out folder> [--style glass|frost] [--links]
+    make_pointers.py <out folder> [--style glass|frost] [--realm aurora|bifrost|muspelheim|niflheim] [--links]
+    make_pointers.py --realms <icons folder> [--links]   all four realms' themes: Huginn (Aurora), Huginn-Bifrost, …
         -> <out>/cursors/<name> (Xcursor files, sizes 24, 32, 48 and 64), <out>/cursor.theme (for X11's default:
            /usr/share/icons/default), and <out>/index.theme when there is none (the image puts them in Huginn's icon
            theme, /usr/share/icons/Huginn, as Adwaita keeps its pointers in its icons)
@@ -20,19 +21,30 @@ import sys
 from pathlib import Path
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-from PySide6.QtCore import QByteArray, QRectF, Qt  # noqa: E402
-from PySide6.QtGui import QColor, QGuiApplication, QImage, QLinearGradient, QPainter  # noqa: E402
+from PySide6.QtCore import QByteArray, QPointF, QRectF, Qt  # noqa: E402
+from PySide6.QtGui import QColor, QConicalGradient, QGuiApplication, QImage, QLinearGradient, QPainter, QRadialGradient  # noqa: E402
 from PySide6.QtSvg import QSvgRenderer  # noqa: E402
 
 SIZES = (24, 32, 48, 64)
 STYLE = "glass"                                 # the one the image and updates make
 FRAMES, FRAME_MS = 16, 55                       # the busy orb: one turn in 0.88 s
 STYLES = {
-    # the shell's glass: a dark (or frosted light) body lit from above, a rim running teal to violet, a soft glow
-    "glass": {"top": "#3B4550", "mid": "#1D232A", "low": "#0D1014", "rim": "#8AF5DE", "rim2": "#A99BFF", "edge": "#07090C",
-              "sheen": 0.42, "glow": (61, 214, 181, 70), "ink": "#E9FFF9"},
-    "frost": {"top": "#FFFFFF", "mid": "#E9EEF3", "low": "#C9D3DD", "rim": "#14A889", "rim2": "#6A52F0", "edge": "#FFFFFF",
-              "sheen": 0.55, "glow": (61, 214, 181, 45), "ink": "#0D1014"},
+    # the shell's glass: a dark (or frosted light) body lit from above, a rim in the realm's two colours, a faint glow
+    "glass": {"top": "#3B4550", "mid": "#1D232A", "low": "#0D1014", "edge": "#07090C", "sheen": 0.42, "glow": 34, "ink": "#E9FFF9", "rims": "light"},
+    "frost": {"top": "#FFFFFF", "mid": "#E9EEF3", "low": "#C9D3DD", "edge": "#FFFFFF", "sheen": 0.55, "glow": 26, "ink": "#0D1014", "rims": "deep"},
+}
+REALM = "aurora"
+# each realm's pointers: its theme's folder and name, the rim's two colours (light ones on dark glass, deep ones on
+# frost), the faint glow's colour, and the colours that turn in the busy pointer (tokens.json's realms, widened)
+REALMS = {
+    "aurora": {"theme": "Huginn", "name": "Huginn", "light": ("#8AF5DE", "#A99BFF"), "deep": ("#0E9C80", "#5B45E0"), "glow": (61, 214, 181),
+               "spin": ["#3DD6B5", "#86F2CF", "#4FB6F0", "#7B61FF", "#C36BFF", "#5FE0C0"]},
+    "bifrost": {"theme": "Huginn-Bifrost", "name": "Huginn Bifröst", "light": ("#B3A6FF", "#FF9CCB"), "deep": ("#563AD1", "#C2367A"), "glow": (142, 123, 255),
+                "spin": ["#8E7BFF", "#5BC8F5", "#6EF0A6", "#FFD36B", "#FF8A6B", "#FF7AB8"]},
+    "muspelheim": {"theme": "Huginn-Muspelheim", "name": "Huginn Muspelheim", "light": ("#FFAD7A", "#FFD98A"), "deep": ("#AE4518", "#B8741A"),
+                   "glow": (255, 138, 76), "spin": ["#FF5F3A", "#FF8A4C", "#FFC857", "#FFE7A3", "#FF9A5C", "#E8452C"]},
+    "niflheim": {"theme": "Huginn-Niflheim", "name": "Huginn Niflheim", "light": ("#A6D6FF", "#E6F4FF"), "deep": ("#2361AE", "#4A86CF"), "glow": (124, 196, 255),
+                 "spin": ["#4F8DF7", "#7CC4FF", "#D6EEFF", "#9FD2FF", "#6FA8FF", "#B9E2FF"]},
 }
 TEAL, VIOLET, RED = "#3DD6B5", "#7B61FF", "#FF5F57"
 
@@ -49,8 +61,8 @@ SMALL_DART = ("M4.5 2.5 L5.8 19.5 Q6 20.8 7 20 L10.4 15.6 L17.4 15.2 Q18.6 15.1 
 
 def orb_dot(cx, cy, r):
     """Huginn's orb, small and lit: teal to violet, a highlight up and to the left."""
-    return (f'<defs><radialGradient id="od" cx="0.36" cy="0.3" r="0.8"><stop offset="0" stop-color="#C8FFF2"/>'
-            f'<stop offset="0.45" stop-color="{TEAL}"/><stop offset="1" stop-color="{VIOLET}"/></radialGradient></defs>'
+    return (f'<defs><radialGradient id="od" cx="0.36" cy="0.3" r="0.8"><stop offset="0" stop-color="#FFFFFF" stop-opacity="0.9"/>'
+            f'<stop offset="0.45" stop-color="@L1@"/><stop offset="1" stop-color="@L2@"/></radialGradient></defs>'
             f'<circle cx="{cx}" cy="{cy}" r="{r + 1.1}" fill="#0B0E12" stroke="#FFFFFF" stroke-opacity="0.85" stroke-width="0.9"/>'
             f'<circle cx="{cx}" cy="{cy}" r="{r}" fill="url(#od)"/>')
 
@@ -58,8 +70,8 @@ def orb_dot(cx, cy, r):
 def badge(cx, cy, inner, colour=None):
     """A round badge at the dart's foot (copy, link, menu, ask, no): the orb's colours, or red."""
     fill = colour or "url(#bd)"
-    grad = ("" if colour else '<defs><linearGradient id="bd" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#7BF0D6"/>'
-            '<stop offset="1" stop-color="#9F8CFF"/></linearGradient></defs>')
+    grad = ("" if colour else '<defs><linearGradient id="bd" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="@L1@"/>'
+            '<stop offset="1" stop-color="@L2@"/></linearGradient></defs>')
     return (grad + f'<circle cx="{cx}" cy="{cy}" r="6.4" fill="{fill}" stroke="#0B0E12" stroke-width="1.3"/>'
             f'<g fill="none" stroke="#06231D" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">{inner}</g>')
 
@@ -88,8 +100,8 @@ def grip(w, h, gap):
 
 
 def grip_dots(rows, cols, step, r, colour="url(#gd)"):
-    out = ['<defs><linearGradient id="gd" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#8AF5DE"/>'
-           '<stop offset="1" stop-color="#A99BFF"/></linearGradient></defs>']
+    out = ['<defs><linearGradient id="gd" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="@L1@"/>'
+           '<stop offset="1" stop-color="@L2@"/></linearGradient></defs>']
     for i in range(rows):
         for j in range(cols):
             out.append(f'<circle cx="{16 + (j - (cols - 1) / 2) * step:.2f}" cy="{16 + (i - (rows - 1) / 2) * step:.2f}" r="{r}" fill="{colour}"/>')
@@ -108,6 +120,53 @@ QUILL = '<path d="M4 28 L5.2 22.2 Q12 10 25.6 4.2 Q27.6 3.4 27 5.4 Q22 19.6 9.8 
 PICKER = ('<path d="M4 28 L4.6 24.4 L15.6 13.4 L18.6 16.4 L7.6 27.4 Z"/>'
           '<path d="M14.4 9.6 L17.4 6.6 Q20.6 3.4 23.8 4.2 Q27.8 5.4 27.8 8.2 Q28.6 11.4 25.4 14.6 L22.4 17.6 Z"/>')
 LENS = '<circle cx="13" cy="13" r="9.2"/><path d="M19 17.2 L28.6 26.8 Q29.6 28.2 28.2 29.4 Q26.9 30.4 25.6 29.2 L16.6 19.6 Z"/>'
+
+
+class Spinner:
+    """The busy pointer: the realm's light turning in a disc, no outline round it (not macOS's pinwheel of separate
+    colours: bands that run into each other like the aurora, two layers turning at different speeds, so it seems to
+    swirl), lit from the top left like a drop of glass. Drawn with QPainter (QtSvg has no conical gradients)."""
+
+    def __init__(self, cx, cy, r):
+        self.cx, self.cy, self.r = cx, cy, r
+
+    def draw(self, p: QPainter, size: int, turn: float, colours: list) -> None:
+        k = size / 32
+        cx, cy, r = self.cx * k, self.cy * k, self.r * k
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        p.setPen(Qt.PenStyle.NoPen)
+
+        def conic(angle, cols):
+            g = QConicalGradient(QPointF(cx, cy), angle)
+            for i, c in enumerate(cols + cols[:1]):
+                g.setColorAt(i / len(cols), QColor(c))
+            return g
+        p.setBrush(conic(-turn * 360, colours))
+        p.drawEllipse(QPointF(cx, cy), r, r)
+        # the inner layer turns the other way, slower, and fades out toward the edge (no line where it ends): a swirl
+        layer = QImage(size, size, QImage.Format.Format_ARGB32_Premultiplied)
+        layer.fill(Qt.GlobalColor.transparent)
+        q = QPainter(layer)
+        q.setRenderHint(QPainter.RenderHint.Antialiasing)
+        q.setPen(Qt.PenStyle.NoPen)
+        q.setBrush(conic(turn * 180 + 90, colours[::-1]))
+        q.drawEllipse(QPointF(cx, cy), r * 0.78, r * 0.78)
+        q.setCompositionMode(QPainter.CompositionMode.CompositionMode_DestinationIn)
+        fade = QRadialGradient(QPointF(cx, cy), r * 0.78)
+        fade.setColorAt(0.0, QColor(0, 0, 0, 200))
+        fade.setColorAt(0.45, QColor(0, 0, 0, 150))
+        fade.setColorAt(1.0, QColor(0, 0, 0, 0))
+        q.fillRect(layer.rect(), fade)
+        q.end()
+        p.drawImage(0, 0, layer)
+        shade = QRadialGradient(QPointF(cx - r * 0.32, cy - r * 0.38), r * 1.32)
+        shade.setColorAt(0.0, QColor(255, 255, 255, 150))
+        shade.setColorAt(0.28, QColor(255, 255, 255, 40))
+        shade.setColorAt(0.62, QColor(255, 255, 255, 0))
+        shade.setColorAt(0.9, QColor(0, 0, 0, 40))
+        shade.setColorAt(1.0, QColor(0, 0, 0, 70))
+        p.setBrush(shade)
+        p.drawEllipse(QPointF(cx, cy), r, r)
 
 
 def orb(cx, cy, r, turn, ring=2.6):
@@ -137,7 +196,7 @@ SHAPES = {
     "pointer": (f'<path d="{DART}"/>', orb_dot(11.6, 14.6, 3.3), (5.4, 3.6)),
     "text": (IBEAM, "", (16, 16)),
     "vertical-text": (f'<g transform="rotate(90 16 16)">{IBEAM}</g>', "", (16, 16)),
-    "crosshair": (CROSS, '<circle cx="16" cy="16" r="3.2" fill="none" stroke="#8AF5DE" stroke-width="1.4"/>', (16, 16)),
+    "crosshair": (CROSS, '<circle cx="16" cy="16" r="3.2" fill="none" stroke="@L1@" stroke-width="1.4"/>', (16, 16)),
     "move": (MOVE, orb_dot(16, 16, 2.2), (16, 16)),
     "grab": (grip(15, 20, 0), grip_dots(3, 2, 5, 1.55), (16, 16)),
     "grabbing": (grip(14, 14, 0), grip_dots(2, 2, 4.2, 1.7), (16, 16)),
@@ -159,10 +218,10 @@ SHAPES = {
     "row-resize": (bar_two_way(True), "", (16, 16)),
     "zoom-in": (LENS, '<path d="M13 9 L13 17 M9 13 L17 13" stroke="INK" stroke-width="2" stroke-linecap="round"/>', (13, 13)),
     "zoom-out": (LENS, '<path d="M9 13 L17 13" stroke="INK" stroke-width="2" stroke-linecap="round"/>', (13, 13)),
-    "pencil": (QUILL, '<path d="M5.2 22.2 L9.8 26.8" stroke="#8AF5DE" stroke-width="1.5"/><path d="M8.6 21 Q15.6 12.6 24.2 6.8" fill="none" stroke="#8AF5DE" stroke-opacity="0.6" stroke-width="0.9"/>', (4, 28)),
+    "pencil": (QUILL, '<path d="M5.2 22.2 L9.8 26.8" stroke="@L1@" stroke-width="1.5"/><path d="M8.6 21 Q15.6 12.6 24.2 6.8" fill="none" stroke="@L1@" stroke-opacity="0.6" stroke-width="0.9"/>', (4, 28)),
     "color-picker": (PICKER, "", (4, 28)),
-    "wait": ("", lambda turn: orb(16, 16, 8.6, turn), (16, 16)),
-    "progress": (f'<path d="{SMALL_DART}"/>', lambda turn: orb(23, 23, 5.2, turn, 2.0), (4.8, 3.1)),
+    "wait": ("", Spinner(16, 16, 10.2), (16, 16)),
+    "progress": (f'<path d="{SMALL_DART}"/>', Spinner(23.2, 23.2, 6.3), (4.8, 3.1)),
 }
 # every other name apps use for them (CSS, X, GTK, Qt's hashed names), each to the pointer drawn for it
 ALIASES = {
@@ -196,31 +255,35 @@ ALIASES = {
 }
 
 
-def layers(name, style, turn=0.0) -> tuple:
+def layers(name, style, turn=0.0, realm=REALM) -> tuple:
     """A pointer's drawing as layers: (the rim and its dark edge, the glass body, the body alone in white for the
     sheen, what goes on top), each an SVG."""
     body, extras, _hot = SHAPES[name]
     s = STYLES[style]
-    if callable(extras):
+    rim1, rim2 = REALMS[realm][s["rims"]]
+    if isinstance(extras, Spinner):
+        extras = ""                                            # (drawn by render())
+    elif callable(extras):
         extras = extras(turn)
     head_ = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">'
     rim = glass = mask = ""
     if body:
-        rim = (head_ + f'<defs><linearGradient id="rim" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="{s["rim"]}"/>'
-               f'<stop offset="1" stop-color="{s["rim2"]}"/></linearGradient></defs>'
+        rim = (head_ + f'<defs><linearGradient id="rim" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="{rim1}"/>'
+               f'<stop offset="1" stop-color="{rim2}"/></linearGradient></defs>'
                f'<g fill="{s["edge"]}" stroke="{s["edge"]}" stroke-opacity="0.75" stroke-width="3.9" stroke-linejoin="round">{body}</g>'
                f'<g fill="url(#rim)" stroke="url(#rim)" stroke-width="2.3" stroke-linejoin="round">{body}</g></svg>')
         glass = (head_ + f'<defs><linearGradient id="gl" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="{s["top"]}"/>'
                  f'<stop offset="0.5" stop-color="{s["mid"]}"/><stop offset="1" stop-color="{s["low"]}"/></linearGradient></defs>'
                  f'<g fill="url(#gl)">{body}</g></svg>')
         mask = head_ + f'<g fill="#FFFFFF">{body}</g></svg>'
-    top = head_ + extras.replace("INK", s["ink"]) + "</svg>"
+    light = REALMS[realm]["light"]
+    top = head_ + extras.replace("INK", s["ink"]).replace("@L1@", light[0]).replace("@L2@", light[1]) + "</svg>"   # (marks in the realm's colours)
     return rim, glass, mask, top
 
 
-def svg(name, style, turn=0.0) -> str:
-    """The pointer as one SVG, without the sheen and glow that render() adds (for looking at it elsewhere)."""
-    rim, glass, _mask, top = layers(name, style, turn)
+def svg(name, style, turn=0.0, realm=REALM) -> str:
+    """The pointer as one SVG, without the sheen, glow and spinner that render() adds (for looking at it elsewhere)."""
+    rim, glass, _mask, top = layers(name, style, turn, realm)
     inner = lambda t: t[t.index(">") + 1:-len("</svg>")] if t else ""  # noqa: E731
     return '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">' + inner(rim) + inner(glass) + inner(top) + "</svg>"
 
@@ -248,11 +311,11 @@ def _soft(img: QImage, size: int, colour: QColor, shrink: int) -> QImage:
     return out.scaled(size, size, Qt.AspectRatioMode.IgnoreAspectRatio, Qt.TransformationMode.SmoothTransformation)
 
 
-def render(name: str, style: str, turn: float, size: int) -> QImage:
-    """The pointer at size×size pixels, premultiplied ARGB: a soft glow round it and a shadow below, the rim, the
-    glass, light across its top half (the sheen), and what goes on top."""
+def render(name: str, style: str, turn: float, size: int, realm: str = REALM) -> QImage:
+    """The pointer at size×size pixels, premultiplied ARGB: a faint glow in the realm's colour round it and a shadow
+    below, the rim, the glass, light across its top half (the sheen), what goes on top, and the spinner."""
     s = STYLES[style]
-    rim, glass, mask, top = layers(name, style, turn)
+    rim, glass, mask, top = layers(name, style, turn, realm)
     art = _draw(rim, size)
     p = QPainter(art)
     p.drawImage(0, 0, _draw(glass, size))
@@ -267,11 +330,14 @@ def render(name: str, style: str, turn: float, size: int) -> QImage:
         q.end()
         p.drawImage(0, 0, sheen)
     p.drawImage(0, 0, _draw(top, size))
+    spin = SHAPES[name][1]
+    if isinstance(spin, Spinner):
+        spin.draw(p, size, turn, REALMS[realm]["spin"])
     p.end()
     out = QImage(size, size, QImage.Format.Format_ARGB32_Premultiplied)
     out.fill(Qt.GlobalColor.transparent)
     p = QPainter(out)
-    p.drawImage(0, 0, _soft(art, size, QColor(*s["glow"]), 6))
+    p.drawImage(0, 0, _soft(art, size, QColor(*REALMS[realm]["glow"], s["glow"]), 6))
     p.drawImage(round(size / 32), round(size * 1.4 / 32), _soft(art, size, QColor(0, 0, 0, 110), 5))
     p.drawImage(0, 0, art)
     p.end()
@@ -292,26 +358,30 @@ def xcursor(images) -> bytes:
     return header + toc + chunks
 
 
-def make(name, style) -> bytes:
+def make(name, style, realm=REALM) -> bytes:
     _body, extras, (hx, hy) = SHAPES[name]
-    frames = FRAMES if callable(extras) else 1
+    frames = FRAMES if callable(extras) or isinstance(extras, Spinner) else 1
     images = []
     for size in SIZES:
         for f in range(frames):
-            img = render(name, style, f / frames, size)
+            img = render(name, style, f / frames, size, realm)
             images.append((size, min(size - 1, round(hx * size / 32)), min(size - 1, round(hy * size / 32)), FRAME_MS if frames > 1 else 0, img))
     return xcursor(images)
 
 
-def write_theme(out: Path, style: str, links: bool) -> int:
+def write_theme(out: Path, style: str, links: bool, realm: str = REALM) -> int:
+    """One realm's pointers into a theme folder. Aurora's are "Huginn" (inside Huginn's icon theme); the others are
+    themes of pointers alone, "Huginn-Bifrost" and so on, which the look swaps to when the realm changes."""
     cursors = out / "cursors"
     cursors.mkdir(parents=True, exist_ok=True)
+    r = REALMS[realm]
     if not (out / "index.theme").exists():
-        (out / "index.theme").write_text("[Icon Theme]\nName=Huginn\nComment=Huginn OS's own pointers\n", encoding="utf-8")
-    (out / "cursor.theme").write_text("[Icon Theme]\nName=Huginn\nInherits=Huginn\n", encoding="utf-8")
+        (out / "index.theme").write_text(f"[Icon Theme]\nName={r['name']}\nComment=Huginn OS's own pointers"
+                                         + (f", in {realm.title()}'s colours\nInherits=Huginn\n" if realm != "aurora" else "\n"), encoding="utf-8")
+    (out / "cursor.theme").write_text(f"[Icon Theme]\nName={r['name']}\nInherits={r['theme']}\n", encoding="utf-8")
     count = 0
     for name in SHAPES:
-        data = make(name, style)
+        data = make(name, style, realm)
         (cursors / name).write_bytes(data)
         count += 1
         for other in ALIASES.get(name, []):
@@ -326,23 +396,24 @@ def write_theme(out: Path, style: str, links: bool) -> int:
     return count
 
 
-def sheet(path: Path, styles) -> None:
-    """A picture of the main pointers at 48 px, each look on dark and on light."""
+def sheet(path: Path, styles, realms=("aurora",)) -> None:
+    """A picture of the main pointers at 48 px, each look (and realm) on dark and on light."""
     names = ["default", "pointer", "text", "wait", "progress", "help", "grab", "grabbing", "move", "crosshair",
              "not-allowed", "copy", "alias", "ns-resize", "nwse-resize", "col-resize", "zoom-in", "color-picker"]
     cell, pad = 64, 24
     width = pad * 2 + cell * len(names)
-    height = pad + len(styles) * 2 * (cell + 8) + pad
+    height = pad + len(styles) * len(realms) * 2 * (cell + 8) + pad
     img = QImage(width, height, QImage.Format.Format_ARGB32_Premultiplied)
     img.fill(QColor("#0E1013"))
     p = QPainter(img)
     y = pad
-    for style in styles:
-        for bg in ("#1E2227", "#E9ECEF"):
-            p.fillRect(pad, y, cell * len(names), cell, QColor(bg))
-            for i, name in enumerate(names):
-                p.drawImage(pad + i * cell + 8, y + 8, render(name, style, 0.15, 48))
-            y += cell + 8
+    for realm in realms:
+        for style in styles:
+            for bg in ("#1E2227", "#E9ECEF"):
+                p.fillRect(pad, y, cell * len(names), cell, QColor(bg))
+                for i, name in enumerate(names):
+                    p.drawImage(pad + i * cell + 8, y + 8, render(name, style, 0.15, 48, realm))
+                y += cell + 8
     p.end()
     img.save(str(path))
 
@@ -351,12 +422,20 @@ if __name__ == "__main__":
     app = QGuiApplication.instance() or QGuiApplication(sys.argv[:1])
     args = sys.argv[1:]
     style = args[args.index("--style") + 1] if "--style" in args else STYLE
+    realm = args[args.index("--realm") + 1] if "--realm" in args else REALM
     if style not in STYLES:
         sys.exit(f"no style {style}: {', '.join(STYLES)}")
+    if realm not in REALMS and realm != "all":
+        sys.exit(f"no realm {realm}: {', '.join(REALMS)}")
     if "--sheet" in args:
         chosen = [style] if "--style" in args else list(STYLES)
-        sheet(Path(args[args.index("--sheet") + 1]), chosen)
+        sheet(Path(args[args.index("--sheet") + 1]), chosen, list(REALMS) if realm == "all" else [realm])
+        sys.exit(0)
+    if "--realms" in args:                                     # every realm's theme, side by side in an icons folder
+        base = Path(args[args.index("--realms") + 1])
+        n = sum(write_theme(base / r["theme"], style, "--links" in args, key) for key, r in REALMS.items())
+        print(n, "pointers written for", len(REALMS), "realms")
         sys.exit(0)
     if not args or args[0].startswith("-"):
         sys.exit(__doc__)
-    print(write_theme(Path(args[0]), style, "--links" in args), "pointers written")
+    print(write_theme(Path(args[0]), style, "--links" in args, realm), "pointers written")

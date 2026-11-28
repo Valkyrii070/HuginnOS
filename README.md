@@ -2049,7 +2049,14 @@ app can ask for and packs them as an X cursor theme.
   running teal to violet over a dark hairline (so it holds on white too), a soft teal glow and a shadow. Frost (light
   glass) is a flag away. The busy pointer is the orb with a light running round it (16 frames, 55 ms each); "working
   in the background" is the dart with a small turning orb. Copy, link, menu, ask, no-drop and move are the dart with
-  a badge in the orb's colours. QtSvg can't clip or blur, so the sheen, glow and shadow are drawn in layers with
+  a badge in the orb's colours.
+- **The realm's colours, and a busy pointer of its own** (later the same night): the busy pointer is now a solid drop
+  of the realm's light, with no ring round it: bands that run into each other like the aurora (not macOS's pinwheel of
+  separate colours), an inner layer turning the other way and fading out, so it seems to swirl, lit from the top left
+  (QConicalGradient, drawn with QPainter). The rims, the link's orb, the badges, grips and the quill's line take the
+  realm's colours, and the glow is fainter. Each realm has its own theme (`--realms`: Huginn is Aurora's, then
+  Huginn-Bifrost, Huginn-Muspelheim, Huginn-Niflheim); Settings lists Huginn once, and the look (`huginn_look.py`)
+  swaps to the realm's own when the realm changes, as long as the pointers are Huginn's. Updates draw all four. QtSvg can't clip or blur, so the sheen, glow and shadow are drawn in layers with
   QPainter.
 - **Every name**: 30 drawn (CSS's names: default, pointer, text, wait, progress, help, grab, the eight resizes and
   the rest), 120 names in all with X's old ones, GTK's, and Qt's hashed ones. Sizes 24, 32, 48 and 64.

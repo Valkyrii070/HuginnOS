@@ -351,12 +351,16 @@ def wanted_files(kit: Path, theme: Path = None) -> dict:
                                            "gtk-application-prefer-dark-theme=true\ngtk-font-name=Inter Variable 10\n", encoding="utf-8")
         for v in ("3.0", "4.0"):
             out[f"etc/gtk-{v}/settings.ini"] = (made / "settings.ini", 0o644)
-        pointers = theme / "pointers"                              # Huginn's pointers, when make_pointers drew them
-        for f in (pointers / "cursors").glob("*") if (pointers / "cursors/default").is_file() else []:
-            if f.is_file() and not f.is_symlink():
-                out[f"{POINTERS}/cursors/{f.name}"] = (f, 0o644)
-        if (pointers / "cursor.theme").is_file():
-            out[f"{POINTERS}/cursor.theme"] = (pointers / "cursor.theme", 0o644)
+        pointers = theme / "pointers"                              # Huginn's pointers, each realm's, when make_pointers drew them
+        for one in sorted(pointers.glob("Huginn*")) if (pointers / "Huginn/cursors/default").is_file() else []:
+            where = f"usr/share/icons/{one.name}"
+            for f in (one / "cursors").glob("*") if (one / "cursors/default").is_file() else []:
+                if f.is_file() and not f.is_symlink():
+                    out[f"{where}/cursors/{f.name}"] = (f, 0o644)
+            if (one / "cursor.theme").is_file():
+                out[f"{where}/cursor.theme"] = (one / "cursor.theme", 0o644)
+            if one.name != "Huginn" and (one / "index.theme").is_file():   # (Huginn's own index is the icon theme's)
+                out[f"{where}/index.theme"] = (one / "index.theme", 0o644)
     return out
 
 
@@ -482,12 +486,13 @@ POINTERS = "usr/share/icons/Huginn"
 
 
 def make_pointers(kit: Path, out: Path, runner=run) -> bool:
-    """Huginn's pointers from the tree (pointers/make_pointers.py), into `out` (cursors/ and cursor.theme; every name a
-    file of its own, since what an update puts in place is files). False when they couldn't be made."""
+    """Huginn's pointers from the tree (pointers/make_pointers.py), every realm's, into `out`: Huginn/ (Aurora's),
+    Huginn-Bifrost/ and the rest, each with cursors/ and cursor.theme; every name a file of its own, since what an
+    update puts in place is files. False when they couldn't be made."""
     if not (Path(kit) / "pointers/make_pointers.py").is_file():
         return False
-    code, _text = runner([sys.executable, str(Path(kit) / "pointers/make_pointers.py"), str(out)], 300)
-    return code == 0 and (Path(out) / "cursors/default").is_file()
+    code, _text = runner([sys.executable, str(Path(kit) / "pointers/make_pointers.py"), "--realms", str(out)], 600)
+    return code == 0 and (Path(out) / "Huginn/cursors/default").is_file()
 
 
 def plan(kit: Path, root, theme: Path = None) -> dict:
