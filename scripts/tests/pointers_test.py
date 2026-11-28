@@ -97,7 +97,7 @@ if lib:
                 bad.append((name, size))
     check("libXcursor reads every one at 24, 32, 48 and 64 pixels", not bad, bad[:6])
     arrow = load("default", 32)[0]
-    check("the arrow's hotspot is its tip", (arrow[3], arrow[4]) == (6, 4), arrow[3:5])
+    check("the dart's hotspot is its tip", (arrow[3], arrow[4]) == (5, 4), arrow[3:5])
     px = arrow[6]
     a = lambda v: v >> 24  # noqa: E731
     check("…something drawn there, and clear in the far corner", a(px[5 * 32 + 6]) > 128 and a(px[31 * 32 + 31]) == 0)
@@ -109,14 +109,14 @@ if lib:
           and waits[0][6] != waits[4][6], (len(waits), waits[0][5] if waits else None))
     check("…and the arrow with the orb", len(load("left_ptr_watch", 24)) == mp.FRAMES)
     hand = load("pointer", 48)[0]
-    check("the hand's hotspot is its fingertip", abs(hand[3] - 21) <= 1 and abs(hand[4] - 4) <= 1, hand[3:5])
+    check("a link's pointer (the dart with the orb lit) points with the same tip", abs(hand[3] - 8) <= 1 and abs(hand[4] - 5) <= 1, hand[3:5])
     check("a resize pointer's hotspot is its middle", load("ns-resize", 32)[0][3:5] == (16, 16))
 else:
     check("libXcursor to read them (not found here)", False)
 
-# ------------------------------------------------------------------------------------------------ the three looks, the sheet
+# ------------------------------------------------------------------------------------------------ the two looks, the sheet
 got = subprocess.run(tool + ["--sheet", str(home / "sheet.png")], capture_output=True, text=True, timeout=300)
-check("a picture of the three looks", got.returncode == 0 and (home / "sheet.png").stat().st_size > 20000, got.stderr[-300:])
+check("a picture of the two looks (glass and frost)", got.returncode == 0 and (home / "sheet.png").stat().st_size > 20000, got.stderr[-300:])
 check("a look that isn't one is refused", subprocess.run(tool + [str(home / "x"), "--style", "neon"], capture_output=True).returncode != 0)
 
 # ------------------------------------------------------------------------------------------------ updates

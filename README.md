@@ -2010,10 +2010,15 @@ for, and Breeze's icons leave the image: with the pointers above, nothing of KDE
 Breeze's pointers (KDE's artwork) are replaced by Huginn's own: `pointers/make_pointers.py` draws every pointer an
 app can ask for and packs them as an X cursor theme.
 
-- **The look**: three were drawn (Slate: a dark shape with a white rim; Aurora: the rim in the aurora's colours;
-  Frost: white with a dark rim); Slate is the one made (`STYLE`), the others a flag away. Each has a soft shadow.
-  The busy pointer is Huginn's orb with a light running round it (16 frames, 55 ms each); "working in the
-  background" is the arrow with a small orb. Copy, link, menu, ask, no-drop and move are the arrow with a round badge.
+- **The look** (redrawn the same day: the first shapes were generic and the finish wasn't the shell's): shapes of
+  Huginn's own and the shell's glass. The arrow is a notched dart (a raven's quill, no stem); a link lights Huginn's
+  orb inside the dart; things to take hold of are rounded grips with dots, not hands; the two-way pointers end in dart
+  heads; the pencil is a quill. Each is dark glass lit from above (a gradient, then a sheen across its top half), a rim
+  running teal to violet over a dark hairline (so it holds on white too), a soft teal glow and a shadow. Frost (light
+  glass) is a flag away. The busy pointer is the orb with a light running round it (16 frames, 55 ms each); "working
+  in the background" is the dart with a small turning orb. Copy, link, menu, ask, no-drop and move are the dart with
+  a badge in the orb's colours. QtSvg can't clip or blur, so the sheen, glow and shadow are drawn in layers with
+  QPainter.
 - **Every name**: 30 drawn (CSS's names: default, pointer, text, wait, progress, help, grab, the eight resizes and
   the rest), 120 names in all with X's old ones, GTK's, and Qt's hashed ones. Sizes 24, 32, 48 and 64.
 - **Made with Qt alone** (QtSvg, offscreen), so the image build and updates draw them on the machine itself and no
