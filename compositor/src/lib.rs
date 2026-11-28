@@ -16,6 +16,7 @@ pub mod dbus;
 pub mod displays;
 pub mod input;
 pub mod places;
+pub mod afar;
 #[cfg(feature = "rdp")]
 pub mod rdp;
 pub mod tearing;

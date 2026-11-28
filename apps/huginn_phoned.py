@@ -8,7 +8,10 @@ eight-character code. Then:
 
   from the phone: its battery; calls (to the island, with Silence and a text back); its notifications, in Huginn's,
   with their buttons and replies, cleared on one side when cleared on the other; files (to Downloads), web addresses
-  (opened) and words (copied) it shares; its clipboard; a ping; and "ring my computer";
+  (opened) and words (copied) it shares; its clipboard; a ping; "ring my computer"; the phone as a remote (its
+  touchpad and keyboard, and slides' Next and Back, through the compositor's keys and mouse from afar:
+  org.huginn.Compositor PointerBy, PointerButton, Scroll, Key, TypeText); and the music playing here, played, paused,
+  skipped, sought and turned up from the phone (every MPRIS player, with its cover);
   to the phone: files, words, a web address, the clipboard, a ping, ring it, silence a call, and text messages.
 
 Phone, the island and Shortcuts use it over D-Bus (session bus): org.huginn.Phone at /org/huginn/Phone (XML below);
@@ -57,8 +60,10 @@ NAME_BAD = re.compile(r"[\"',;:.!?()\[\]<>]")
 
 # What this side takes in, and sends out (the phone turns on what matches)
 INCOMING = ["kdeconnect.ping", "kdeconnect.battery", "kdeconnect.telephony", "kdeconnect.notification", "kdeconnect.share.request",
+            "kdeconnect.mousepad.request", "kdeconnect.mpris.request",
             "kdeconnect.clipboard", "kdeconnect.clipboard.connect", "kdeconnect.findmyphone.request"]
 OUTGOING = ["kdeconnect.ping", "kdeconnect.findmyphone.request", "kdeconnect.share.request", "kdeconnect.clipboard", "kdeconnect.clipboard.connect",
+            "kdeconnect.mousepad.keyboardstate", "kdeconnect.mousepad.echo", "kdeconnect.mpris",
             "kdeconnect.telephony.request_mute", "kdeconnect.sms.request", "kdeconnect.notification.request", "kdeconnect.notification.reply",
             "kdeconnect.notification.action"]
 
@@ -597,6 +602,7 @@ class Core:
         if dev.paired:
             dev.protocol = link.protocol
             self._save()
+            link.send("kdeconnect.mousepad.keyboardstate", {"state": True})     # (the phone's remote shows its keyboard)
         self._view()
         return True
 
@@ -640,9 +646,91 @@ class Core:
             content = body.get("content")
             if isinstance(content, str) and content:
                 self.desk.copy(content)
+        elif kind == "kdeconnect.mousepad.request":
+            self._remote(dev, body)
+        elif kind == "kdeconnect.mpris.request":
+            self.desk.media(dev.id, body)
         elif kind == "kdeconnect.findmyphone.request":
             self.desk.notify(f"ring:{dev.id}", "Looking for this computer", f"{dev.name} is ringing it. Here it is.", urgency=2, category="call.incoming",
                              actions=[("found", "Found It")])
+
+    def _remote(self, dev: Device, body: dict) -> None:
+        """The phone as a remote: its touchpad, buttons, scrolling, keys and typing, to the compositor."""
+        if body.get("sendAck"):
+            dev.link.send("kdeconnect.mousepad.echo", dict(body, isAck=True))
+        clicks = {"singleclick": [(272, True), (272, False)], "doubleclick": [(272, True), (272, False)] * 2,
+                  "middleclick": [(274, True), (274, False)], "rightclick": [(273, True), (273, False)],
+                  "singlehold": [(272, True)], "singlerelease": [(272, False)]}
+        for what, presses in clicks.items():
+            if body.get(what):
+                for code, down in presses:
+                    self.desk.input("PointerButton", "(ub)", (code, down))
+                return
+        dx, dy = float_or(body.get("dx")), float_or(body.get("dy"))
+        if body.get("scroll"):
+            if dx or dy:
+                self.desk.input("Scroll", "(dd)", (dx, dy))
+            return
+        special = number(body.get("specialKey"))
+        text = body.get("key") if isinstance(body.get("key"), str) else ""
+        if (0 < special < len(SPECIAL_KEYS) and SPECIAL_KEYS[special]) or text:
+            mods = [code for name, code in (("ctrl", 29), ("alt", 56), ("shift", 42), ("super", 125)) if body.get(name)]
+            for code in mods:
+                self.desk.input("Key", "(ub)", (code, True))
+            if 0 < special < len(SPECIAL_KEYS) and SPECIAL_KEYS[special]:
+                self.desk.input("Key", "(ub)", (SPECIAL_KEYS[special], True))
+                self.desk.input("Key", "(ub)", (SPECIAL_KEYS[special], False))
+            else:
+                self.desk.input("TypeText", "(s)", (text[:2000],))
+            for code in reversed(mods):
+                self.desk.input("Key", "(ub)", (code, False))
+            return
+        if dx or dy:
+            self.desk.input("PointerBy", "(dd)", (dx, dy))
+
+    def media_reply(self, ident: str, body: dict, art: str = "") -> None:
+        """From the desk's music players to one phone (`art`: a cover to send along), or to every paired phone in
+        reach (ident "")."""
+        for dev in list(self.devices.values()):
+            if (ident and dev.id != ident) or not dev.paired or not dev.link:
+                continue
+            if art:
+                self.loop.create_task(self.offer(dev, "kdeconnect.mpris", body, Path(art)))
+            else:
+                dev.link.send("kdeconnect.mpris", body)
+
+    async def offer(self, dev: Device, kind: str, body: dict, path: Path) -> bool:
+        """One packet with a file as its payload, on a port of its own (as files are sent; used for covers)."""
+        try:
+            size = path.stat().st_size
+        except OSError:
+            return False
+        came = asyncio.Queue()
+        server, port = None, 0
+        for p in self.payload_ports:
+            try:
+                server = await asyncio.start_server(lambda r, w: came.put_nowait((r, w)), host=None, port=p, ssl=self.me.server(dev.cert_pem),
+                                                    ssl_handshake_timeout=15)
+                port = p
+                break
+            except OSError:
+                continue
+        if not server:
+            return False
+        try:
+            if not dev.link or not dev.link.send(kind, body, (size, port)):
+                return False
+            _reader, writer = await asyncio.wait_for(came.get(), 20)
+            with open(path, "rb") as src:
+                while chunk := src.read(1 << 16):
+                    writer.write(chunk)
+                    await asyncio.wait_for(writer.drain(), 30)
+            writer.close()
+            return True
+        except (OSError, ssl.SSLError, asyncio.TimeoutError, ConnectionError):
+            return False
+        finally:
+            server.close()
 
     def _call(self, dev: Device, body: dict) -> None:
         event, num = str(body.get("event", "")), str(body.get("phoneNumber", ""))
@@ -842,6 +930,7 @@ class Core:
         self._pair_over(dev)
         dev.paired, dev.cert_pem, dev.protocol = True, der_to_pem(dev.link.cert), dev.link.protocol
         self._save()
+        dev.link.send("kdeconnect.mousepad.keyboardstate", {"state": True})
         self.desk.close(f"pair:{dev.id}")
         self.desk.notify(f"pair:{dev.id}", f"Paired with {dev.name}", "Open Phone to send it something.", glyph="phone")
         self._view()
@@ -986,6 +1075,20 @@ class Core:
             self.desk.changed()
 
 
+# KDE Connect's remote keys (specialKey), as evdev codes: Backspace, Tab, Linefeed, the arrows, Page Up and Down, Home,
+# End, Enter, Delete, Escape, SysRq, Scroll Lock, Ctrl, Alt, Shift, Super, F1-F12
+SPECIAL_KEYS = [0, 14, 15, 101, 105, 103, 106, 108, 104, 109, 102, 107, 28, 111, 1, 99, 70, 29, 56, 42, 125,
+                59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 87, 88]
+
+
+def float_or(value, default: float = 0.0) -> float:
+    try:
+        out = float(value)
+    except (TypeError, ValueError):
+        return default
+    return out if out == out and abs(out) < 1e6 else default
+
+
 def safe_filename(name) -> str:
     name = os.path.basename(str(name or "").replace("\\", "/")).strip().lstrip(".")
     name = re.sub(r"[\x00-\x1f/]", "", name)
@@ -1042,6 +1145,7 @@ class Desk:
         self.Gio, self.GLib = Gio, GLib
         self.core, self.bus = None, None
         self.ids, self.keys, self.targets = {}, {}, {}           # our key -> notification id, and back; key -> file
+        self.music = None
 
     def attach(self, core: Core, bus) -> None:
         Gio = self.Gio
@@ -1050,6 +1154,7 @@ class Desk:
         bus.register_object(PATH, node.interfaces[0], self._method, None, None)
         for signal in ("ActionInvoked", "NotificationClosed", "NotificationReplied"):
             bus.signal_subscribe(None, "org.freedesktop.Notifications", signal, "/org/freedesktop/Notifications", None, Gio.DBusSignalFlags.NONE, self._noted)
+        self.music = Music(bus, lambda ident, body, art="": core.loop.call_soon_threadsafe(core.media_reply, ident, body, art))
 
     # ---- the core asks
     def _idle(self, fn, *args) -> None:
@@ -1073,11 +1178,23 @@ class Desk:
     def copy(self, text) -> None:
         threading.Thread(target=self._copy, args=(text,), daemon=True).start()
 
+    def input(self, method: str, sig: str, args: tuple) -> None:
+        """The phone as a remote: to the compositor's keys and mouse from afar (in order; nothing waits)."""
+        self._idle(self._input, method, sig, args)
+
+    def media(self, ident: str, body: dict) -> None:
+        """A phone's media controls, to the music players here."""
+        self._idle(lambda: self.music and self.music.handle(ident, body))
+
     def open(self, uri) -> None:
         threading.Thread(target=lambda: subprocess.run(["xdg-open", uri], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL),
                          daemon=True).start()
 
     # ---- on GLib's side
+    def _input(self, method, sig, args) -> None:
+        self.bus.call("org.huginn.Compositor", "/org/huginn/Compositor", "org.huginn.Compositor", method, self.GLib.Variant(sig, args), None,
+                      self.Gio.DBusCallFlags.NO_AUTO_START, 2000, None, None, None)
+
     def _emit(self, signal, params) -> None:
         with contextlib.suppress(Exception):
             self.bus.emit_signal(None, PATH, IFACE, signal, params)
@@ -1168,6 +1285,141 @@ class Desk:
                 ok, msg = False, f"That didn't work ({type(err).__name__})."
             GLib.idle_add(lambda: (invocation.return_value(GLib.Variant("(bs)", (bool(ok), str(msg)))), False)[1])
         future.add_done_callback(answer)
+
+
+class Music:
+    """The music players here (MPRIS), for a phone's media controls: their list, what each is playing, and play, pause,
+    skip, seek, volume, repeat and shuffle; a cover that's a file here goes to the phone. Changes are passed on as
+    they happen. (On GLib's side; `reply(ident, body, art)` sends to one phone, or to all with ident "".)"""
+    PREFIX = "org.mpris.MediaPlayer2."
+    PATH = "/org/mpris/MediaPlayer2"
+    ACTIONS = {"Play", "Pause", "PlayPause", "Stop", "Next", "Previous"}
+
+    def __init__(self, bus, reply):
+        from gi.repository import Gio, GLib
+        self.Gio, self.GLib, self.bus, self.reply = Gio, GLib, bus, reply
+        self.players, self.owners, self.listed, self.soon = {}, {}, None, False
+        flags = Gio.DBusSignalFlags.NONE
+        bus.signal_subscribe("org.freedesktop.DBus", "org.freedesktop.DBus", "NameOwnerChanged", "/org/freedesktop/DBus", None, flags, self._owner)
+        bus.signal_subscribe(None, "org.freedesktop.DBus.Properties", "PropertiesChanged", self.PATH, None, flags, self._changed)
+        bus.signal_subscribe(None, "org.mpris.MediaPlayer2.Player", "Seeked", self.PATH, None, flags, self._seeked)
+        self._refresh()
+
+    def _call(self, dest, iface, method, args=None, reply=None, path=None):
+        try:
+            got = self.bus.call_sync(dest, path or self.PATH, iface, method, args, self.GLib.VariantType(reply) if reply else None,
+                                     self.Gio.DBusCallFlags.NO_AUTO_START, 1500, None)
+        except Exception:
+            return None
+        return got.unpack() if got is not None else ()
+
+    def _refresh(self) -> None:
+        self.soon = False
+        names = (self._call("org.freedesktop.DBus", "org.freedesktop.DBus", "ListNames", reply="(as)", path="/org/freedesktop/DBus") or ([],))[0]
+        players, owners = {}, {}
+        for name in sorted(n for n in names if n.startswith(self.PREFIX) and not n.startswith(self.PREFIX + "kdeconnect.") and n != self.PREFIX + "playerctld"):
+            got = self._call(name, "org.freedesktop.DBus.Properties", "Get", self.GLib.Variant("(ss)", ("org.mpris.MediaPlayer2", "Identity")), "(v)")
+            shown = str(got[0]) if got and got[0] else name[len(self.PREFIX):]
+            unique, n = shown, 2
+            while unique in players:
+                unique, n = f"{shown} [{n}]", n + 1
+            players[unique] = name
+            owner = self._call("org.freedesktop.DBus", "org.freedesktop.DBus", "GetNameOwner", self.GLib.Variant("(s)", (name,)), "(s)",
+                               "/org/freedesktop/DBus")
+            if owner:
+                owners[owner[0]] = unique
+        self.players, self.owners = players, owners
+        listed = sorted(players)
+        if listed != self.listed:
+            self.listed = listed
+            self.reply("", self.player_list())
+
+    def player_list(self) -> dict:
+        return {"playerList": sorted(self.players), "supportAlbumArtPayload": True}
+
+    def _owner(self, _c, _s, _p, _i, _sig, params) -> None:
+        name = params.unpack()[0]
+        if name.startswith(self.PREFIX) and not self.soon:
+            self.soon = True
+            self.GLib.timeout_add(300, lambda: (self._refresh(), False)[1])        # (a player starting registers more than once)
+
+    def _changed(self, _c, sender, _p, _i, _sig, params) -> None:
+        iface = params.unpack()[0]
+        player = self.owners.get(sender)
+        if player and iface == "org.mpris.MediaPlayer2.Player":
+            self.reply("", self.now_playing(player))
+
+    def _seeked(self, _c, sender, _p, _i, _sig, params) -> None:
+        player = self.owners.get(sender)
+        if player:
+            self.reply("", {"player": player, "pos": int(params.unpack()[0]) // 1000})
+
+    def _props(self, player: str) -> dict:
+        got = self._call(self.players[player], "org.freedesktop.DBus.Properties", "GetAll", self.GLib.Variant("(s)", ("org.mpris.MediaPlayer2.Player",)), "(a{sv})")
+        return got[0] if got else {}
+
+    def now_playing(self, player: str) -> dict:
+        """What KDE Connect's apps expect: the song, where in it, and what can be done (times in milliseconds)."""
+        p = self._props(player)
+        meta = p.get("Metadata") or {}
+        artist = meta.get("xesam:artist") or []
+        url = str(meta.get("xesam:url") or "")
+        title, album = str(meta.get("xesam:title") or ""), str(meta.get("xesam:album") or "")
+        if not title and not artist and url.startswith("file://"):
+            parts = url.rstrip("/").split("/")
+            title = self.GLib.uri_unescape_string(parts[-1], None) or parts[-1]
+            album = album or (self.GLib.uri_unescape_string(parts[-2], None) if len(parts) > 3 else "")
+        length = meta.get("mpris:length")
+        out = {"player": player, "title": title, "artist": ", ".join(artist) if isinstance(artist, list) else str(artist), "album": album,
+               "albumArtUrl": str(meta.get("mpris:artUrl") or ""), "url": url, "length": int(length) // 1000 if isinstance(length, (int, float)) else -1,
+               "pos": int(p.get("Position") or 0) // 1000, "isPlaying": p.get("PlaybackStatus") == "Playing",
+               "canPause": bool(p.get("CanPause")), "canPlay": bool(p.get("CanPlay")), "canGoNext": bool(p.get("CanGoNext")),
+               "canGoPrevious": bool(p.get("CanGoPrevious")), "canSeek": bool(p.get("CanSeek"))}
+        if "Volume" in p:
+            out["volume"] = int(round(float(p["Volume"]) * 100))
+        if "LoopStatus" in p:
+            out["loopStatus"] = str(p["LoopStatus"])
+        if "Shuffle" in p:
+            out["shuffle"] = bool(p["Shuffle"])
+        return out
+
+    def _set(self, player: str, prop: str, value) -> None:
+        self._call(self.players[player], "org.freedesktop.DBus.Properties", "Set",
+                   self.GLib.Variant("(ssv)", ("org.mpris.MediaPlayer2.Player", prop, value)))
+
+    def handle(self, ident: str, body: dict) -> None:
+        GLib = self.GLib
+        player = body.get("player") if isinstance(body.get("player"), str) else ""
+        if "albumArtUrl" in body:
+            # a cover asked for: only the one this player says it has, and only a file here
+            art = str(body.get("albumArtUrl") or "")
+            if player in self.players and art.startswith("file://") and art == self.now_playing(player)["albumArtUrl"]:
+                path = Path(GLib.filename_from_uri(art)[0])
+                if path.is_file():
+                    self.reply(ident, {"transferringAlbumArt": True, "player": player, "albumArtUrl": art}, str(path))
+            return
+        if player not in self.players or body.get("requestPlayerList"):
+            self.reply(ident, self.player_list())
+            if player not in self.players:
+                return
+        name = self.players[player]
+        action = body.get("action")
+        if isinstance(action, str) and action in self.ACTIONS:
+            self._call(name, "org.mpris.MediaPlayer2.Player", action)
+        if body.get("setLoopStatus") in ("None", "Track", "Playlist"):
+            self._set(player, "LoopStatus", GLib.Variant("s", body["setLoopStatus"]))
+        if isinstance(body.get("setShuffle"), bool):
+            self._set(player, "Shuffle", GLib.Variant("b", body["setShuffle"]))
+        if isinstance(body.get("setVolume"), (int, float)):
+            self._set(player, "Volume", GLib.Variant("d", max(0.0, min(1.0, float(body["setVolume"]) / 100))))
+        if isinstance(body.get("Seek"), (int, float)):
+            self._call(name, "org.mpris.MediaPlayer2.Player", "Seek", GLib.Variant("(x)", (int(body["Seek"]),)))
+        if isinstance(body.get("SetPosition"), (int, float)):
+            track = (self._props(player).get("Metadata") or {}).get("mpris:trackid")
+            if track:
+                self._call(name, "org.mpris.MediaPlayer2.Player", "SetPosition", GLib.Variant("(ox)", (str(track), max(0, int(body["SetPosition"])) * 1000)))
+        if body.get("requestNowPlaying") or body.get("requestVolume"):
+            self.reply(ident, self.now_playing(player))
 
 
 def name_process(name: str) -> None:

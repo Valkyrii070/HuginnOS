@@ -642,7 +642,6 @@ impl<BackendData: Backend> HuginnState<BackendData> {
 
     /// The pointer to a place on the desktop, from afar (Screen Sharing): as an absolute move from a tablet or a
     /// virtual machine's pointer goes, and sent once more if a menu's grab that just ended swallowed it.
-    #[cfg(feature = "rdp")]
     pub(crate) fn pointer_to(&mut self, pos: Point<f64, Logical>, time: InputTime) {
         let pointer = self.pointer.clone();
         if self.huginn.wm.divider.is_some() {

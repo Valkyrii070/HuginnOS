@@ -107,6 +107,10 @@ pub struct Huginn {
     /// Screen Sharing, while it's on (rdp.rs)
     #[cfg(feature = "rdp")]
     pub share: Option<crate::rdp::Share>,
+    /// Characters from afar that no key makes, waiting for the app's text field to take them (afar.rs), and since
+    /// when the compositor has been the input method for them
+    pub afar_text: Option<(String, std::time::Instant)>,
+    pub afar_im: Option<std::time::Instant>,
 }
 
 impl std::fmt::Debug for Huginn {
@@ -191,6 +195,7 @@ impl<B: Backend + 'static> HuginnState<B> {
         self.sync_toplevels();
         #[cfg(feature = "rdp")]
         self.share_tick();
+        self.afar_tick();
         self.huginn.places_tick = self.huginn.places_tick.wrapping_add(1);
         if self.huginn.places_tick % 5 == 0 {
             self.note_places();
@@ -246,6 +251,7 @@ impl<B: Backend + 'static> HuginnState<B> {
             }
             Request::SetKeyboardLayout(which) => self.set_keyboard_layout(which),
             Request::SignOut => self.sign_out(),
+            Request::Afar(ev) => self.afar(ev),
             #[cfg(feature = "rdp")]
             Request::ShareStart(output, port, user, password, cert, key, tx) => {
                 let ask = crate::rdp::Ask { output, port, user, password, cert: cert.into(), key: key.into() };

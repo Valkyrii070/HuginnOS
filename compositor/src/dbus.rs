@@ -73,6 +73,8 @@ pub enum Request {
     KeyboardLayout(mpsc::Sender<String>),
     /// Use one of them by its place (-1: the next)
     SetKeyboardLayout(i32),
+    /// Keys and the mouse from afar (afar.rs: Phone's remote control)
+    Afar(crate::afar::Afar),
     /// Screen Sharing (rdp.rs): start (screen, port, name, password, certificate, key): "" when listening, else why
     /// not; stop; how it's going (JSON), which also keeps it going.
     #[cfg(feature = "rdp")]
@@ -195,8 +197,9 @@ impl Compositor {
         let _ = self.to_loop.send(Request::Blank(off));
     }
 
-    /// Screen Sharing: this screen over RDP (rdp.rs), only with Network Level Authentication, `user` and
-    /// `password` (8 characters or more), TLS with `cert` and `key` (PEM files). `output` "" is the first screen.
+    /// Screen Sharing: this computer's screens over RDP (rdp.rs), only with Network Level Authentication, `user`
+    /// and `password` (8 characters or more), TLS with `cert` and `key` (PEM files). `output` "" is the first
+    /// screen, "*" all of them side by side, else a screen's name (DP-1…).
     /// "" when listening, else why not, in words for the person. It stops with `share_stop`, or when
     /// `share_status` hasn't been asked for 20 seconds.
     #[cfg(feature = "rdp")]
@@ -222,6 +225,33 @@ impl Compositor {
             return "{\"on\":false}".into();
         }
         rx.recv_timeout(Duration::from_secs(1)).unwrap_or_else(|_| "{\"on\":false}".into())
+    }
+
+    /// Keys and the mouse from afar (Phone's remote control; afar.rs), through the same paths as a real keyboard
+    /// and mouse. The pointer moved by `dx`, `dy` (desktop pixels).
+    fn pointer_by(&self, dx: f64, dy: f64) {
+        let _ = self.to_loop.send(Request::Afar(crate::afar::Afar::By(dx, dy)));
+    }
+
+    /// A mouse button (evdev code: 272 left, 273 right, 274 middle) pressed or let go.
+    fn pointer_button(&self, button: u32, pressed: bool) {
+        let _ = self.to_loop.send(Request::Afar(crate::afar::Afar::Button(button, pressed)));
+    }
+
+    /// Smooth scrolling, in pixels: right and down are positive.
+    fn scroll(&self, dx: f64, dy: f64) {
+        let _ = self.to_loop.send(Request::Afar(crate::afar::Afar::Scroll(dx, dy)));
+    }
+
+    /// A key (evdev code) pressed or let go.
+    fn key(&self, code: u32, pressed: bool) {
+        let _ = self.to_loop.send(Request::Afar(crate::afar::Afar::Key(code, pressed)));
+    }
+
+    /// Characters, typed with the keys the layout in use has for them (one it hasn't is skipped).
+    fn type_text(&self, text: &str) {
+        let text: String = text.chars().take(2000).collect();
+        let _ = self.to_loop.send(Request::Afar(crate::afar::Afar::Text(text)));
     }
 
     /// A picture of the screen, saved: its path ("" when it can't be done yet).

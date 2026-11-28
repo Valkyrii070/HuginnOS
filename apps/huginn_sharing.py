@@ -4,7 +4,8 @@ Sharing is Huginn's compositor's own RDP server (compositor/src/rdp.rs, asked ov
 fresh one-time password, only while this window is open: the password is proved before anything is shown (Network
 Level Authentication), over TLS with a certificate of this computer's own (~/.local/share/huginn/sharing). Any
 Remote Desktop app can connect: Huginn's own viewer, Windows' Remote Desktop Connection, Microsoft's Windows App on
-a Mac or phone. While someone is looking, the island says so, with Stop. Looking at another computer runs FreeRDP's
+a Mac or phone. One screen or all of them; what's playing comes along, and the clipboard's text goes both ways. While
+someone is looking, the island says so, with Stop. Looking at another computer runs FreeRDP's
 viewer (sdl-freerdp, package freerdp-sdl), handing it the password on stdin so it never shows up in the process
 list."""
 import json
@@ -255,11 +256,12 @@ class Sharing(QObject):
         return app.screens() if app else []
 
     def _get_screens(self) -> list:
-        """One screen at a time is shared: the first unless another is picked (none listed with one screen)."""
+        """The first screen is shared unless another is picked, or all of them, side by side as they're arranged
+        (none listed with one screen)."""
         if self._demo:
-            return [{"name": "Built-in screen"}, {"name": "DELL U2720Q"}]
+            return [{"name": "Built-in screen"}, {"name": "DELL U2720Q"}, {"name": "All screens"}]
         screens = self._screens()
-        return [{"name": s.model() or s.name()} for s in screens] if len(screens) > 1 else []
+        return [{"name": s.model() or s.name()} for s in screens] + [{"name": "All screens"}] if len(screens) > 1 else []
 
     addresses = Property("QVariantList", _get_addresses, notify=changed)
     screens = Property("QVariantList", _get_screens, constant=True)
@@ -294,7 +296,7 @@ class Sharing(QObject):
             self.changed.emit()
             return
         screens = self._screens()
-        output = screens[self._monitor].name() if 0 <= self._monitor < len(screens) else ""
+        output = screens[self._monitor].name() if 0 <= self._monitor < len(screens) else "*" if self._monitor == len(screens) > 1 else ""
         password = one_time_password()
         got = self._call("ShareStart", "sqssss", (output, self._port, LOGIN, password, str(cert), str(key)))
         why = got[0] if got else "The compositor didn't answer."

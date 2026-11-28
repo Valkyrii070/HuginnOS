@@ -1725,16 +1725,29 @@ own, Microsoft's Windows App on a Mac or phone, FreeRDP) connects as before.
 - **Network Level Authentication only** (CredSSP): the one-time password is proved before anything is shown, over TLS
   with this computer's own certificate (made the first time, `~/.local/share/huginn/sharing`, the key private to
   you). One person at a time. IPv4 and IPv6, or IPv4 alone where IPv6 is off.
-- **The picture**: one screen (the first, or the one picked), with the pointer. After each frame the compositor draws
-  it again into a buffer of its own with a damage tracker of its own, so a picture is read back only when something
-  changed, at most 30 a second; the newest waits in one slot, so a slow connection skips pictures rather than lag,
-  and only the parts that changed go over the wire.
-- **Keys and the mouse** come back through the compositor's own input paths (an input backend of their own), so
-  shortcuts, sticky keys and the rest behave as at the computer; a text-console switch from afar is ignored.
+- **The picture**: one screen (the first, or the one picked) or **all of them**, side by side as they're arranged
+  (at the largest screen scale; RDP allows 8192 pixels each way), with the pointer. After each frame the compositor
+  draws a shared screen again into a buffer of its own with a damage tracker of its own, so a picture is read back
+  only when something changed, at most 30 a second; each screen's newest waits in a slot of its own, so a slow
+  connection skips pictures rather than lag, and only the parts that changed go over the wire. Screens changing (one
+  plugged in, a new resolution or arrangement) start the share again to match, same password.
+- **Keys and the mouse** come back through the compositor's own input paths (`compositor/src/afar.rs`, an input
+  backend of their own), so shortcuts, sticky keys and the rest behave as at the computer; a text-console switch from
+  afar is ignored. **Characters** (phones' on-screen keyboards send characters, not keys) are typed with the keys the
+  layout in use has for them; ones it hasn't (é on a US layout, emoji) go straight into the focused app's text field,
+  the compositor acting as its input method (text-input; Qt and GTK apps take them).
+- **Sound**: what's playing here, recorded from the default output's monitor (`pw-record`, 44.1 kHz stereo) while the
+  viewer wants it (its "play on this computer" setting).
+- **The clipboard**: text both ways (`wl-paste --watch` tells the viewer when something's copied here; text copied
+  there is fetched at once and offered here with `wl-copy`).
 - **The island** says "Your screen is shared" with Stop while someone is looking (the Privacy Report's watcher only
   sees PipeWire, which this doesn't use).
-- **Not yet**: sound, the clipboard across, sharing every screen at once (one at a time), typing from phones' on-
-  screen keyboards (they send characters, not keys).
+- **Not yet**: files on the clipboard (text only), the viewer's microphone.
+- Seen with FreeRDP 3.32 in the nested session: the clipboard both ways with accented text; characters typed (é, ñ,
+  not on the US layout, into the launcher's search and a Qt app's text field, in order), and through the bus as
+  Phone's remote does; sound negotiated and streaming (from a stand-in for `pw-record`: the nested session has no
+  PipeWire). All screens at once was only seen with the nested session's one screen. The last build (control
+  characters from a viewer skipped) was only built, not run again.
 
 ## Phone's own link (2026-11-27)
 
@@ -1761,12 +1774,20 @@ OS directly. It starts with the session (and by D-Bus when Phone asks): `org.hug
 - **Coming from KDE Connect**: the first time, a computer that had it brings its id, key and paired phones along, so
   phones paired before stay paired. `kdeconnect` is in not-wanted.list; on a system updated from before, it stays
   installed but nothing starts it.
-- **Not carried over yet**: the phone as a remote (mouse, keyboard, slides), controlling music here from the phone,
-  browsing the phone's files, whole text conversations, running commands.
-- Tested: `phone_test.py` (84) against a stand-in phone written from the protocol (TLS the other way round, pairing
+- **The phone as a remote** (the app's Remote input and Presentation remote): its touchpad moves the pointer, taps
+  click (double, right, middle, drag), two fingers scroll, and its keyboard types here, modifiers and special keys
+  included, through the compositor's keys and mouse from afar (`org.huginn.Compositor`: `PointerBy`,
+  `PointerButton`, `Scroll`, `Key`, `TypeText`; see Screen Sharing for how characters go in).
+- **Music here, from the phone** (the app's Multimedia control): every MPRIS player by name, what's playing (title,
+  artist, album, length, where), play/pause/next/previous/stop, seek and a place in the song, volume, repeat and
+  shuffle; the cover, when it's a file here, and only the file the player says is its cover. Changes reach the phone
+  as they happen.
+- **Not carried over yet**: browsing the phone's files, whole text conversations, running commands.
+- Tested: `phone_test.py` (98) against a stand-in phone written from the protocol (TLS the other way round, pairing
   both ways, payloads on ports of their own, a wrong certificate, a clock out, the timeout), a second copy of the link
-  (a paired computer, found by its greeting and connected to), KDE Connect's files coming along, and the D-Bus service
-  with its signals; `phone_real_check.py` (22, as root) against **KDE Connect's own daemon** (`kdeconnectd` 25.12, as
+  (a paired computer, found by its greeting and connected to), KDE Connect's files coming along, the remote's and the
+  media controls' packets, and the D-Bus service with its signals, against stand-ins for the compositor's keys and
+  mouse from afar and for a music player; `phone_real_check.py` (22, as root) against **KDE Connect's own daemon** (`kdeconnectd` 25.12, as
   Ubuntu ships it) across two network namespaces: they find each other, pair both ways with the same code, ping,
   words and a file each way, ring, reconnect both ways round, and unpair. **Not tried with a real phone.**
 

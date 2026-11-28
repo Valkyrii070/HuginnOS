@@ -44,7 +44,7 @@ GlassWindow {
                 Column { width: mine.width - 52 - 150 - 22; spacing: 6; anchors.verticalCenter: parent.verticalCenter
                     Label { text: win.on ? "Your screen is shared" : "Let someone see this screen"; font.pixelSize: 21; font.weight: Font.Bold; width: parent.width; wrapMode: Text.WordWrap }
                     Label { width: parent.width; wrapMode: Text.WordWrap; secondary: true; font.pixelSize: 12
-                        text: win.on ? "They can see your screen and use your mouse and keyboard. Sharing stops when you press Stop or close this window."
+                        text: win.on ? "They can see your screen, hear what's playing, use your mouse and keyboard, and copy and paste both ways. Sharing stops when you press Stop or close this window."
                                      : "They'll see your screen and can use your mouse and keyboard, so only share with people you trust. They can use any Remote Desktop app, on any computer or phone." } } }
             Item { width: 1; height: 4 }
             Column { visible: win.on; width: parent.width; spacing: 12

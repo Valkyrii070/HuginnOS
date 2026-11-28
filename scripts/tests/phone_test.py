@@ -66,6 +66,13 @@ class Desk:
 
     def __init__(self):
         self.log, self.notes, self.closed, self.copied, self.opened, self.calls, self.asked, self.changes = [], {}, [], [], [], [], [], 0
+        self.inputs, self.medias = [], []
+
+    def input(self, method, sig, args):
+        self.inputs.append((method, sig, args))
+
+    def media(self, ident, body):
+        self.medias.append((ident, body))
 
     def changed(self):
         self.changes += 1
@@ -270,6 +277,38 @@ async def scenario():
     saved = json.loads((conf / "devices.json").read_text())["devices"]
     check("paired: its certificate pinned and kept", pixel.id in saved and ph.pem_to_der(saved[pixel.id]["cert"]) == pixel.der and saved[pixel.id]["name"] == "Astrids Pixel")
     check("…and the notification gives way to 'Paired'", f"pair:{pixel.id}" in desk.closed and desk.notes[f"pair:{pixel.id}"]["summary"].startswith("Paired"))
+    check("…and the phone's remote is told it can type here", (await pixel.get("kdeconnect.mousepad.keyboardstate"))["body"] == {"state": True})
+
+    # ---- the phone as a remote
+    for body in ({"dx": 12.5, "dy": -3}, {"singleclick": True}, {"doubleclick": True}, {"rightclick": True}, {"singlehold": True}, {"singlerelease": True},
+                 {"scroll": True, "dx": 0, "dy": 40}, {"key": "hé", "ctrl": True}, {"specialKey": 6}, {"specialKey": 31, "alt": True, "super": True},
+                 {"specialKey": 99}, {"dx": "nan", "dy": None}):
+        pixel.send("kdeconnect.mousepad.request", body)
+    L, R = 272, 273
+    want = [("PointerBy", "(dd)", (12.5, -3.0)), ("PointerButton", "(ub)", (L, True)), ("PointerButton", "(ub)", (L, False)),
+            ("PointerButton", "(ub)", (L, True)), ("PointerButton", "(ub)", (L, False)), ("PointerButton", "(ub)", (L, True)), ("PointerButton", "(ub)", (L, False)),
+            ("PointerButton", "(ub)", (R, True)), ("PointerButton", "(ub)", (R, False)), ("PointerButton", "(ub)", (L, True)), ("PointerButton", "(ub)", (L, False)),
+            ("Scroll", "(dd)", (0.0, 40.0)), ("Key", "(ub)", (29, True)), ("TypeText", "(s)", ("hé",)), ("Key", "(ub)", (29, False)),
+            ("Key", "(ub)", (106, True)), ("Key", "(ub)", (106, False)),
+            ("Key", "(ub)", (56, True)), ("Key", "(ub)", (125, True)), ("Key", "(ub)", (87, True)), ("Key", "(ub)", (87, False)), ("Key", "(ub)", (125, False)),
+            ("Key", "(ub)", (56, False))]
+    check("the phone as a remote: its touchpad, clicks, drag, scrolling, typing with Ctrl, an arrow, Alt+Super+F11; nothing for nonsense",
+          await until(lambda: len(desk.inputs) >= len(want)) and desk.inputs == want, desk.inputs)
+    pixel.send("kdeconnect.mousepad.request", {"dx": 1, "dy": 1, "sendAck": True})
+    got = await pixel.get("kdeconnect.mousepad.echo")
+    check("…and an echo when it asks for one", got["body"].get("isAck") is True and got["body"].get("dx") == 1)
+
+    # ---- the music here, from the phone
+    pixel.send("kdeconnect.mpris.request", {"requestPlayerList": True})
+    check("its media controls go to the desk's music players", await until(lambda: desk.medias) and desk.medias[0] == (pixel.id, {"requestPlayerList": True}))
+    core.media_reply(pixel.id, {"playerList": ["Music"], "supportAlbumArtPayload": True})
+    check("…and the players' answers come back", (await pixel.get("kdeconnect.mpris"))["body"] == {"playerList": ["Music"], "supportAlbumArtPayload": True})
+    cover = home / "cover.png"
+    cover.write_bytes(b"\x89PNG cover" * 50)
+    core.media_reply(pixel.id, {"transferringAlbumArt": True, "player": "Music", "albumArtUrl": cover.as_uri()}, str(cover))
+    got = await pixel.get("kdeconnect.mpris")
+    ok, data = await pixel.take(got, me.cert_der)
+    check("…a cover, as a payload of its own", got["body"]["transferringAlbumArt"] is True and ok and data == cover.read_bytes())
 
     # ---- what a paired phone sends
     pixel.send("kdeconnect.battery", {"currentCharge": 64, "isCharging": True, "thresholdEvent": 0})
@@ -506,6 +545,68 @@ dpem = (home / "dbus/.config/huginn/phone/cert.pem").read_text()
 did = ph.common_name(ph.pem_to_der(dpem))
 
 
+# stand-ins on the test bus: the compositor's keys and mouse from afar, and a music player
+heard, player_heard = [], []
+COMP = """<node><interface name="org.huginn.Compositor">
+  <method name="PointerBy"><arg type="d" direction="in"/><arg type="d" direction="in"/></method>
+  <method name="PointerButton"><arg type="u" direction="in"/><arg type="b" direction="in"/></method>
+  <method name="Scroll"><arg type="d" direction="in"/><arg type="d" direction="in"/></method>
+  <method name="Key"><arg type="u" direction="in"/><arg type="b" direction="in"/></method>
+  <method name="TypeText"><arg type="s" direction="in"/></method></interface></node>"""
+PLAYER = """<node><interface name="org.mpris.MediaPlayer2"><property name="Identity" type="s" access="read"/></interface>
+  <interface name="org.mpris.MediaPlayer2.Player">
+  <method name="PlayPause"/><method name="Play"/><method name="Pause"/><method name="Next"/><method name="Previous"/><method name="Stop"/><method name="Quit"/>
+  <method name="Seek"><arg type="x" direction="in"/></method>
+  <method name="SetPosition"><arg type="o" direction="in"/><arg type="x" direction="in"/></method>
+  <property name="Metadata" type="a{sv}" access="read"/><property name="PlaybackStatus" type="s" access="read"/>
+  <property name="Position" type="x" access="read"/><property name="Volume" type="d" access="readwrite"/>
+  <property name="CanPause" type="b" access="read"/><property name="CanPlay" type="b" access="read"/><property name="CanGoNext" type="b" access="read"/>
+  <property name="CanGoPrevious" type="b" access="read"/><property name="CanSeek" type="b" access="read"/></interface></node>"""
+music = {"PlaybackStatus": "Playing", "Volume": 0.5}
+stand_ins = {}
+
+
+def stand_in_bus():
+    from gi.repository import Gio, GLib
+    ctx = GLib.MainContext.new()
+    ctx.push_thread_default()
+    conn = Gio.DBusConnection.new_for_address_sync(address, Gio.DBusConnectionFlags.AUTHENTICATION_CLIENT | Gio.DBusConnectionFlags.MESSAGE_BUS_CONNECTION, None, None)
+    stand_ins["conn"], stand_ins["GLib"] = conn, GLib
+
+    def comp(_c, _s, _p, _i, method, params, inv):
+        heard.append((method, params.unpack()))
+        inv.return_value(None)
+    conn.register_object("/org/huginn/Compositor", Gio.DBusNodeInfo.new_for_xml(COMP).interfaces[0], comp, None, None)
+    node = Gio.DBusNodeInfo.new_for_xml(PLAYER)
+    meta = {"mpris:trackid": GLib.Variant("o", "/track/1"), "xesam:title": GLib.Variant("s", "Song"), "xesam:artist": GLib.Variant("as", ["Band", "Friend"]),
+            "xesam:album": GLib.Variant("s", "Album"), "mpris:length": GLib.Variant("x", 200_000_000), "mpris:artUrl": GLib.Variant("s", (home / "art.png").as_uri())}
+
+    def play(_c, _s, _p, _i, method, params, inv):
+        player_heard.append((method, params.unpack()))
+        inv.return_value(None)
+
+    def get(_c, _s, _p, iface, prop):
+        values = {"Identity": GLib.Variant("s", "Test Player"), "Metadata": GLib.Variant("a{sv}", meta), "PlaybackStatus": GLib.Variant("s", music["PlaybackStatus"]),
+                  "Position": GLib.Variant("x", 61_500_000), "Volume": GLib.Variant("d", music["Volume"])}
+        return values.get(prop, GLib.Variant("b", True))
+
+    def put(_c, _s, _p, _i, prop, value):
+        music[prop] = value.unpack()
+        player_heard.append(("set " + prop, value.unpack()))
+        return True
+    for iface in node.interfaces:
+        conn.register_object("/org/mpris/MediaPlayer2", iface, play, get, put)
+    for name in ("org.huginn.Compositor", "org.mpris.MediaPlayer2.testplayer"):
+        conn.call_sync("org.freedesktop.DBus", "/org/freedesktop/DBus", "org.freedesktop.DBus", "RequestName", GLib.Variant("(su)", (name, 4)), None,
+                       Gio.DBusCallFlags.NONE, 3000, None)
+    GLib.MainLoop(ctx).run()
+
+
+(home / "art.png").write_bytes(b"cover art " * 300)
+__import__("threading").Thread(target=stand_in_bus, daemon=True).start()
+time.sleep(1)
+
+
 async def over_dbus():
     phone = Phone("Sam's phone")
     await phone.dial(port, dpem, target=did)
@@ -521,12 +622,53 @@ async def over_dbus():
     check("a call: the island's signal", gdbus("SendSms", phone.id, "+15550100", "Can't talk now").stdout.strip() == "(true, 'Sent.')"
           and (await phone.get("kdeconnect.sms.request"))["body"]["messageBody"] == "Can't talk now")
     check("…Silence from the island", gdbus("Mute", phone.id).stdout.strip() == "(true, 'Silenced.')" and (await phone.get())["type"] == "kdeconnect.telephony.request_mute")
+    for body in ({"dx": 5, "dy": 7}, {"key": "x", "shift": True}, {"specialKey": 12}):
+        phone.send("kdeconnect.mousepad.request", body)
+    await asyncio.sleep(0.8)
+    check("over D-Bus: the remote reaches the compositor's keys and mouse from afar, in order",
+          heard == [("PointerBy", (5.0, 7.0)), ("Key", (42, True)), ("TypeText", ("x",)), ("Key", (42, False)), ("Key", (28, True)), ("Key", (28, False))], heard)
+
+    async def mpris(cond, wait=5):
+        end = time.monotonic() + wait
+        while time.monotonic() < end:
+            got = await phone.get("kdeconnect.mpris", max(0.1, end - time.monotonic()))
+            if cond(got["body"]):
+                return got
+        return None
+    phone.send("kdeconnect.mpris.request", {"requestPlayerList": True})
+    got = await mpris(lambda b: "playerList" in b)
+    check("…the music players here, by name", got and got["body"]["playerList"] == ["Test Player"] and got["body"]["supportAlbumArtPayload"] is True, got)
+    phone.send("kdeconnect.mpris.request", {"player": "Test Player", "requestNowPlaying": True, "requestVolume": True})
+    got = await mpris(lambda b: "title" in b)
+    b = got["body"] if got else {}
+    check("…what's playing, as KDE Connect's apps expect it (milliseconds)", b.get("title") == "Song" and b.get("artist") == "Band, Friend" and b.get("album") == "Album"
+          and b.get("length") == 200000 and b.get("pos") == 61500 and b.get("isPlaying") is True and b.get("volume") == 50 and b.get("canSeek") is True, b)
+    for body in ({"action": "PlayPause"}, {"action": "Quit"}, {"setVolume": 80}, {"Seek": 5_000_000}, {"SetPosition": 30000}):
+        phone.send("kdeconnect.mpris.request", dict(body, player="Test Player"))
+    await asyncio.sleep(0.8)
+    check("…play/pause, volume, seeking and a place in the song reach the player; anything else doesn't",
+          player_heard == [("PlayPause", ()), ("set Volume", 0.8), ("Seek", (5000000,)), ("SetPosition", ("/track/1", 30000000))], player_heard)
+    art = (home / "art.png").as_uri()
+    phone.send("kdeconnect.mpris.request", {"player": "Test Player", "albumArtUrl": "file:///etc/passwd"})
+    phone.send("kdeconnect.mpris.request", {"player": "Test Player", "albumArtUrl": art})
+    got = await mpris(lambda b: b.get("transferringAlbumArt"))
+    ok, data = await phone.take(got, ph.pem_to_der(dpem)) if got else (False, b"")
+    check("…its cover, and only the file the player says is its cover", got and got["body"]["albumArtUrl"] == art and ok and data == (home / "art.png").read_bytes(), got)
+    conn, GLib = stand_ins["conn"], stand_ins["GLib"]
+    music["PlaybackStatus"] = "Paused"
+    conn.emit_signal(None, "/org/mpris/MediaPlayer2", "org.freedesktop.DBus.Properties", "PropertiesChanged",
+                     GLib.Variant("(sa{sv}as)", ("org.mpris.MediaPlayer2.Player", {"PlaybackStatus": GLib.Variant("s", "Paused")}, [])))
+    got = await mpris(lambda b: b.get("isPlaying") is False)
+    check("…and paused here, the phone hears so at once", got and got["body"]["player"] == "Test Player", got)
+
     f = home / "via-dbus.txt"
     f.write_text("sent over D-Bus")
     sending = asyncio.ensure_future(asyncio.to_thread(gdbus, "SendFiles", phone.id, f"['{f}']"))
     got = await phone.get("kdeconnect.share.request", 10)
     ok, data = await phone.take(got, ph.pem_to_der(dpem))
     check("…and a file", ok and data == b"sent over D-Bus" and (await sending).stdout.strip() == "(true, 'Sent “via-dbus.txt”.')")
+    phone.wire.transport.close()                                  # (and out of reach)
+    await asyncio.sleep(0.5)
     return phone.id
 
 pid_phone = asyncio.run(over_dbus())

@@ -27,6 +27,9 @@ tokio = { version = "1", default-features = false, features = ["rt", "net", "syn
 async-trait = { version = "0.1", optional = true }
 anyhow = { version = "1", optional = true }
 bytes = { version = "1", optional = true }
+ironrdp-core = { version = "0.2", optional = true }
+ironrdp-cliprdr = { version = "0.7", optional = true }
+ironrdp-rdpsnd = { version = "0.9", optional = true }
 
 # Smithay's main branch, pinned (its last release, 0.7.0, is from June 2025)
 # Smithay at fd8e3f50, vendored with Huginn OS's patch for tearing page flips (third_party/smithay)
@@ -47,7 +50,7 @@ version = "0.14.0"
 
 [features]
 default = ["egl", "winit", "udev", "xwayland", "rdp"]
-rdp = ["ironrdp-server", "tokio", "async-trait", "anyhow", "bytes"]
+rdp = ["ironrdp-server", "ironrdp-core", "ironrdp-cliprdr", "ironrdp-rdpsnd", "tokio", "async-trait", "anyhow", "bytes"]
 egl = ["smithay/use_system_lib", "smithay/backend_egl"]
 udev = [
   "smithay-drm-extras",
