@@ -1888,6 +1888,29 @@ module (`libhuginn-menus.so`).
   Settings), File › New from there and Ctrl+N in the window both opening a document. An app that gives itself no name
   goes by GDK's ("geany" → "Geany"). `osupdate_test.py` (81). Not yet tried: wxWidgets apps (Audacity, FileZilla).
 
+## Huginn's shapes for GTK 3 apps (2026-11-28)
+
+GTK 3 apps wore Huginn's colours on Adwaita's shapes. `themes/Huginn/gtk-3.0/shapes.css` (brought in by both
+`gtk.css` and `gtk-dark.css`) now gives them Huginn's shapes over Adwaita's drawing, as Huginn's Qt style does over
+Fusion's, so a GTK app and a Qt app side by side look alike:
+
+- Controls with 7 px corners (the tokens' control radius), roomier buttons, and a soft ring of the accent round
+  whatever has the keyboard; linked buttons stay joined.
+- Pill switches with a round, shadowed knob; round radio buttons and softly squared checks; thin pill sliders,
+  progress and level bars; scroll bars as thin pills that thicken under the pointer.
+- Lists, sidebars and cards with 10 px corners, sidebar rows rounded within them; tabs rounded at the top, the chosen
+  one underlined in the accent (Adwaita's own, more specific rule had kept drawing it in Adwaita's blue: fixed).
+- Menus and pop-ups with 10 px (12 px) corners, room round their items and the items rounded within them; rounded
+  tooltips.
+- Windows GTK draws itself with Huginn's 14 px corners (square when maximised or tiled), a roomier header bar with a
+  semibold title, and round window buttons on a soft pill, the close one red under the pointer.
+- Each person's copy of the theme (`~/.local/share/themes/Huginn`, for App Store apps) follows at their next sign-in,
+  and updates bring the file like any other.
+- Tested: `gtk_shapes_test.py` (8) in a real GTK 3 window: GTK reads it with no parsing error or warning; buttons,
+  entries and the suggested button come out with 7 px corners, switches as pills, menus with 10, the header bar 44 px
+  tall; and a picture of the same controls before and after (checked: rounded controls, pill switch, round window
+  buttons, the accent under the chosen tab).
+
 ## Huginn's icon theme on its own: no Breeze underneath (2026-11-28)
 
 Huginn's icon theme used to inherit Breeze's for anything it didn't draw itself. It now answers every name apps ask
@@ -2052,8 +2075,8 @@ The goal is a desktop that is Huginn's from the first screen to the last. Where 
 - **Everyone else's apps wear the realm** (`apps/huginn_look.py`, run by the shell at sign-in and on every change):
   Qt apps get Huginn's own Qt look in the realm's colours (`~/.config/huginn/qt.conf`, followed by open apps at
   once), and apps built on KDE's libraries (from the App Store) the realm's colours in kdeglobals. GTK 3 apps get
-  Huginn's own theme (`/usr/share/themes/Huginn`: Adwaita's shapes, which GTK carries, with Huginn's colours on every
-  surface, control and selection; the realm's and mode's colours come from `~/.config/gtk-3.0/colors.css`, generated
+  Huginn's own theme (`/usr/share/themes/Huginn`: Adwaita's drawing, which GTK carries, with Huginn's shapes
+  (`shapes.css`) and Huginn's colours on every surface, control and selection; the realm's and mode's colours come from `~/.config/gtk-3.0/colors.css`, generated
   as `Huginn<Realm><Mode>-gtk3.css`, and a copy in `~/.local/share/themes` lets App Store apps wear it too), and
   libadwaita apps its named colours. Breeze's Qt style and Breeze-GTK are gone (2026-11-27); Breeze's icons (under
   Huginn's) and pointers stay, as artwork. Inter is the font everywhere. Icons are Huginn's own theme (see "Icons and looks"); Papirus is gone.

@@ -1,5 +1,6 @@
-/* Huginn OS's look for GTK 3 apps: Adwaita's shapes (built into GTK 3) in the realm's colours. huginn_look.py puts
+/* Huginn OS's look for GTK 3 apps: Adwaita's drawing (built into GTK 3) with Huginn's shapes (shapes.css) in the realm's colours. huginn_look.py puts
    the realm's and the mode's colours into ~/.config/gtk-3.0/colors.css, which comes after these and so wins. */
 @import url("resource:///org/gtk/libgtk/theme/Adwaita/gtk-contained.css");
 @import url("colors-light.css");
 @import url("huginn.css");
+@import url("shapes.css");
