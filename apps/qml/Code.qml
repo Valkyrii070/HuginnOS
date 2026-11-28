@@ -1,12 +1,14 @@
 import QtQuick
 
-// Code, "the workbench": the project down the left in one tall island (files, search, Git, problems), the open
-// files as tabs floating across the top, and the code itself on a dark, quiet slab that takes up the rest. The
-// terminal slides up under the slab; the status runs along the bottom edge. Everything has a key, and the palette
-// (Ctrl+P, or Ctrl+Shift+P for every command) reaches all of it.
+// Code, "the workbench", in glass panels: a slim rail of tools down the left (files, search, Git, problems, tests,
+// the outline) beside the panel it opens, the open files as pills floating across the top, and the code on a deeper
+// pane of Code's own indigo glass that takes up the rest. The terminal slides up under the code; the status line is a
+// row of small islands along the bottom. Everything has a key, and the palette (Ctrl+P, or Ctrl+Shift+P for every
+// command) reaches all of it.
 GlassWindow {
     id: win
-    title: "Code"; heading: Backend.rootName; width: 1280; height: 820; minimumWidth: 900; minimumHeight: 560; glow: "left"
+    title: "Code"; heading: Backend.rootName; width: 1280; height: 820; minimumWidth: 900; minimumHeight: 560; glow: "left"; glowBoost: 1.3
+    islandColor: glass; islandLineColor: glassLine
     visible: true
     property string panel: "files"
     property bool side: true
@@ -57,17 +59,28 @@ GlassWindow {
     property int curCol: 1
     property var menuFor: null
     property string browseAt: Backend.home
-    readonly property int sideW: side ? 280 : 0
+    readonly property int sideW: side ? 240 : 0
+    readonly property int foot: zen ? 12 : 52              // room under the panels: the status islands
+    // ---- the glass: the panels are Code's own tinted glass and the code sits on a deeper pane of it, with the window's
+    // light coming through. Reduce Transparency makes them solid; a VS Code theme you imported keeps its own paper.
+    readonly property bool clear: !Theme.t.solid
+    readonly property color glass: !clear ? Theme.t.island : Theme.t.dark ? Qt.rgba(1, 1, 1, 0.065) : Qt.rgba(1, 1, 1, 0.55)
+    readonly property color glassLine: Theme.t.contrast || !clear ? Theme.t.islandLine : Theme.t.dark ? Qt.rgba(1, 1, 1, 0.1) : Qt.rgba(0.08, 0.12, 0.16, 0.13)
+    readonly property color glassHover: Qt.tint(glass, Theme.t.hover)
+    readonly property color topIsle: lifted ? Theme.t.island : glass                  // (in the top bar's row: the bar's own)
+    readonly property color topLine: lifted ? Theme.t.islandLine : glassLine
     readonly property string mono: Qt.fontFamilies().indexOf(Theme.t.fontMono) >= 0 ? Theme.t.fontMono : Qt.fontFamilies().indexOf("DejaVu Sans Mono") >= 0 ? "DejaVu Sans Mono" : "monospace"
     readonly property var tab: Backend.current >= 0 && Backend.current < Backend.tabs.length ? Backend.tabs[Backend.current] : null
     // A VS Code colour theme you imported (Backend.theme) takes the editor's colours; without one, the system's light and dark.
     readonly property var vsTheme: Backend.theme
     readonly property bool themed: !!vsTheme.name
     readonly property bool codeDark: themed ? !!vsTheme.dark : Theme.t.dark
-    readonly property color slab: themed && vsTheme.paper ? vsTheme.paper : Theme.t.dark ? "#111318" : "#FCFCFE"
+    readonly property color solidSlab: themed && vsTheme.paper ? vsTheme.paper : Theme.t.dark ? "#111318" : "#FCFCFE"
+    readonly property color slabFill: (themed && vsTheme.paper) || !clear ? solidSlab : Theme.t.dark ? Qt.rgba(0.035, 0.043, 0.086, 0.74) : Qt.rgba(1, 1, 1, 0.84)
+    readonly property color slab: slabFill.a >= 1 ? slabFill : Qt.tint(baseColor, slabFill)   // what the glass looks like, for what covers code
     readonly property color codeInk: themed && vsTheme.ink ? vsTheme.ink : themed ? (codeDark ? "#D4D4D4" : "#1F2328") : Theme.t.text
     readonly property color gutterInk: themed && vsTheme.gutter ? vsTheme.gutter : codeDark ? "#5A6170" : "#A3A9B4"
-    readonly property color lineGlow: themed && vsTheme.line ? vsTheme.line : themed ? Qt.alpha(codeInk, 0.07) : Theme.t.dark ? "#1A1D24" : "#F1F2F8"
+    readonly property color lineGlow: themed && vsTheme.line ? vsTheme.line : themed ? Qt.alpha(codeInk, 0.07) : !clear ? (Theme.t.dark ? "#1A1D24" : "#F1F2F8") : Qt.alpha(Theme.t.accent, Theme.t.dark ? 0.12 : 0.08)
     readonly property color addInk: "#3FB950"
     readonly property color modInk: "#4D8DFF"
     readonly property color delInk: "#F85149"
@@ -499,18 +512,18 @@ GlassWindow {
 
     islands: [
         // the open files, floating across the top
-        Item { id: tabsBar; objectName: "tabsBar"; x: Math.max(win.sideW + 24, win.lifted ? win.titleEnd + 10 : 0); y: win.topY; height: 40; width: win.width - x - toolBox.width - 26; visible: Backend.tabs.length > 0 && !win.zen
+        Item { id: tabsBar; objectName: "tabsBar"; x: Math.max(slab.x, win.titleEnd + 12); y: win.topY; height: 40; width: win.width - x - toolBox.width - 26; visible: Backend.tabs.length > 0 && !win.zen
             ListView { id: tabList; anchors.fill: parent; orientation: ListView.Horizontal; spacing: 6; clip: true; model: Backend.tabs; boundsBehavior: Flickable.StopAtBounds
                 currentIndex: Backend.current
                 onCurrentIndexChanged: positionViewAtIndex(currentIndex, ListView.Contain)
                 delegate: Pressable { id: tabPill; required property var modelData; required property int index; readonly property bool on: index === Backend.current
                     width: Math.min(230, tabRow.width + 26); height: 36; y: 2; radius: 18
-                    color: on ? win.slab : hovered ? Theme.t.hover : Theme.t.island; border.width: 1; border.color: on ? Theme.t.accent : Theme.t.islandLine
+                    color: on ? Qt.alpha(Theme.t.accent, Theme.t.dark ? 0.26 : 0.18) : hovered ? win.glassHover : win.topIsle; border.width: 1; border.color: on ? Qt.alpha(Theme.t.accent, 0.62) : win.topLine
                     onClicked: Backend.select(index)
                     Row { id: tabRow; x: 12; anchors.verticalCenter: parent.verticalCenter; spacing: 7
                         Rectangle { width: 8; height: 8; radius: 4; anchors.verticalCenter: parent.verticalCenter; color: win.langInk(tabPill.modelData.lang) }
                         Label { text: tabPill.modelData.name; font.pixelSize: 12; font.weight: tabPill.on ? Font.DemiBold : Font.Normal; width: Math.min(implicitWidth, 150); elide: Text.ElideMiddle
-                            color: tabPill.modelData.errors > 0 ? win.delInk : tabPill.on ? win.codeInk : Theme.t.text }
+                            color: tabPill.modelData.errors > 0 ? win.delInk : tabPill.on ? Theme.t.text : Theme.t.text_secondary }
                         Item { width: 16; height: 16; anchors.verticalCenter: parent.verticalCenter
                             Rectangle { visible: tabPill.modelData.dirty && !closeX.hovered; anchors.centerIn: parent; width: 8; height: 8; radius: 4; color: Theme.t.text }
                             Pressable { id: closeX; anchors.fill: parent; radius: 8; color: hovered ? Theme.t.hover : "transparent"; visible: !tabPill.modelData.dirty || hovered || tabPill.hovered
@@ -519,17 +532,17 @@ GlassWindow {
         // The tools on the left, Run and Debug on their own at the right edge: a quick second click on the terminal
         // (or anything else) never lands on Run
         Item { id: toolBox; visible: !win.zen; anchors { right: parent.right; rightMargin: win.liftRight } y: win.topY; height: runBox.height; width: toolsIsland.width + 12 + runBox.width
-            Island { id: toolsIsland; objectName: "toolsIsland"
+            Island { id: toolsIsland; objectName: "toolsIsland"; color: win.topIsle; border.color: win.topLine
                 Seg { objectName: "newFileButton"; icon: "newfile"; tip: "New file (Ctrl+N)"; onClicked: win.newFile() }
                 Seg { icon: "search"; tip: "Go to a file or command (Ctrl+P)"; onClicked: win.openPalette("") }
                 Seg { objectName: "termButton"; icon: "terminal"; tip: "Terminal (Ctrl+`)"; on: win.term; onClicked: win.toggleTerm() }
                 Seg { icon: "split"; tip: "Two editors side by side (Ctrl+\\)"; on: win.split; onClicked: win.toggleSplit() }
                 Seg { objectName: "settingsButton"; icon: "gear"; tip: "Settings (Ctrl+,)"; onClicked: win.ask("settings") } }
-            Island { id: runBox; objectName: "runIsland"; x: toolsIsland.width + 12
+            Island { id: runBox; objectName: "runIsland"; x: toolsIsland.width + 12; color: win.topIsle; border.color: win.topLine
                 Seg { icon: "bug"; text: win.dbg.active ? "Debugging" : "Debug"; on: win.dbg.active; tip: "Debug (F5)"; onClicked: win.debugIt() }
                 Seg { objectName: "buildButton"; visible: win.bld.tasks.length > 0; icon: win.bld.running ? "stop" : "check"; text: win.bld.running ? "Stop" : "Build"; on: win.bld.running
                     tip: win.bld.running ? "Stop “" + win.bld.taskName + "”" : "Build (Ctrl+Shift+B)"; onClicked: win.bld.running ? win.bld.stop() : win.buildIt() }
-                Seg { objectName: "runButton"; icon: "play"; text: "Run"; tip: "Run (Ctrl+F5): " + (Backend.runCommand() || "nothing yet"); onClicked: win.runIt() } } },
+                Seg { objectName: "runButton"; icon: "play"; text: "Run"; primary: !win.dbg.active; tip: "Run (Ctrl+F5): " + (Backend.runCommand() || "nothing yet"); onClicked: win.runIt() } } },
         Toast { id: toast; anchors { horizontalCenter: parent.horizontalCenter; bottom: parent.bottom; bottomMargin: 56 } },
         AiPanel { id: aiPanel; z: 27; width: Math.min(680, win.width - 80); x: (win.width - width) / 2; anchors { bottom: parent.bottom; bottomMargin: 48 } maxHeight: win.height * 0.6 },
 
@@ -865,17 +878,23 @@ GlassWindow {
     onSheetChanged: if (sheet && ["new", "rename", "run", "renamesym", "debugprog", "aiask", "unreal", "theme", "remote"].indexOf(sheet.kind) >= 0) {
         nameBox.text = sheet.kind === "rename" || sheet.kind === "renamesym" ? sheet.name : sheet.kind === "run" || sheet.kind === "debugprog" || sheet.kind === "unreal" || sheet.kind === "theme" || sheet.kind === "remote" || sheet.kind === "space" ? (sheet.now || "") : ""; nameBox.focusIn(); nameBox.input.selectAll() }
 
-    // ================================================================ the side island
-    Rectangle { id: sideBox; visible: win.side; x: 12; y: 64; width: win.sideW; height: parent.height - y - 12; radius: 18; color: Theme.t.island; border.width: 1; border.color: Theme.t.islandLine; clip: true
-        Row { id: panes; x: 10; y: 10; spacing: 4
+    // ================================================================ the rail, and the panel it opens
+    // The rail stays when the panel is put away (Ctrl+B, or a click on the tool that's showing); zen hides both.
+    Rectangle { id: railBox; objectName: "rail"; visible: !win.zen; z: 3; x: 12; y: 64; width: 48; height: parent.height - y - win.foot; radius: 16
+        color: win.glass; border.width: 1; border.color: win.glassLine
+        Grid { id: panes; columns: 1; x: 6; y: 6; spacing: 4
             Repeater { model: [["files", "folder", "Files (Ctrl+Shift+E)"], ["search", "search", "Search (Ctrl+Shift+F)"], ["git", "route", "Changes (Ctrl+Shift+G)"], ["problems", "info", "Problems (Ctrl+Shift+M)"], ["tests", "check", "Tests (Ctrl+Shift+T)"], ["outline", "list", "Outline"]]
-                Seg { required property var modelData; icon: modelData[1]; tip: modelData[2]; on: win.panel === modelData[0]; onClicked: win.showPanel(modelData[0])
+                Seg { required property var modelData; objectName: "rail-" + modelData[0]; width: 36; height: 36; radius: 12; tipRight: true
+                    icon: modelData[1]; tip: modelData[2]; on: win.side && win.panel === modelData[0]
+                    onClicked: if (on) win.side = false; else win.showPanel(modelData[0])
                     Rectangle { visible: (modelData[0] === "git" && Backend.changes.length > 0) || (modelData[0] === "problems" && Backend.problems.length > 0)
                                          || (modelData[0] === "tests" && Backend.tests.some(function (t) { return t.status === "failed" }))
-                        anchors { right: parent.right; top: parent.top } width: 8; height: 8; radius: 4; color: modelData[0] === "git" ? win.modInk : win.delInk } } } }
+                        anchors { right: parent.right; top: parent.top; margins: 2 } width: 8; height: 8; radius: 4; color: modelData[0] === "git" ? win.modInk : win.delInk } } } } }
+    Rectangle { id: sideBox; objectName: "sidePanel"; visible: win.side; x: railBox.x + railBox.width + 8; y: 64; width: win.sideW; height: parent.height - y - win.foot; radius: 16
+        color: win.glass; border.width: 1; border.color: win.glassLine; clip: true
 
         // ---- files
-        Item { visible: win.panel === "files"; x: 0; y: 52; width: parent.width; height: parent.height - 52
+        Item { visible: win.panel === "files"; x: 0; y: 12; width: parent.width; height: parent.height - 12
             Row { x: 14; width: parent.width - 28; height: 28; spacing: 4
                 Label { width: parent.width - 96; elide: Text.ElideRight; anchors.verticalCenter: parent.verticalCenter; text: (Backend.folders.length ? "Workspace · " + Backend.folders.length + " folders" : Backend.rootName || "No folder").toUpperCase(); font.pixelSize: 11; font.weight: Font.Bold; font.letterSpacing: 1; secondary: true }
                 Seg { visible: !!Backend.root; icon: "plus"; tip: "New file"; onClicked: win.ask("new", { folder: Backend.root, dir: false }) }
@@ -904,7 +923,7 @@ GlassWindow {
                     Btn { anchors.horizontalCenter: parent.horizontalCenter; primary: true; text: "Open Folder…"; onClicked: { win.browseAt = Backend.home; win.ask("open") } } } } }
 
         // ---- search
-        Item { visible: win.panel === "search"; x: 12; y: 52; width: parent.width - 24; height: parent.height - 52
+        Item { visible: win.panel === "search"; x: 12; y: 12; width: parent.width - 24; height: parent.height - 12
             Column { id: sCol; width: parent.width; spacing: 8
                 TextBox { id: searchBox; objectName: "searchBox"; width: parent.width; placeholder: "Search the project"; onAccepted: win.runSearch(); onEdited: searchTimer.restart() }
                 Row { spacing: 4
@@ -928,7 +947,7 @@ GlassWindow {
                             return (s ? "…" : "") + esc(t.substring(s, c).replace(/^\s+/, "")) + "<b><font color='" + Theme.t.accent + "'>" + esc(t.substr(c, n)) + "</font></b>" + esc(t.substring(c + n, c + n + 80)) } } } } }
 
         // ---- changes (Git)
-        Item { id: gitPanel; objectName: "gitPanel"; visible: win.panel === "git"; x: 12; y: 52; width: parent.width - 24; height: parent.height - 52
+        Item { id: gitPanel; objectName: "gitPanel"; visible: win.panel === "git"; x: 12; y: 12; width: parent.width - 24; height: parent.height - 12
             Column { visible: !Backend.isGit; width: parent.width; spacing: 10; y: 20
                 Label { width: parent.width; wrapMode: Text.WordWrap; secondary: true; text: Backend.root ? "This folder isn't a Git repository yet." : "Open a folder first." }
                 Btn { visible: !!Backend.root; text: "Make It a Repository"; onClicked: Backend.initRepo() } }
@@ -984,7 +1003,7 @@ GlassWindow {
                             onClicked: ch.modelData.staged && !ch.modelData.unstaged ? Backend.unstage(ch.modelData.path) : Backend.stage(ch.modelData.path) } } } } }
 
         // ---- outline: the file's functions, classes and headings
-        ListView { id: outlineList; objectName: "outlineList"; visible: win.panel === "outline"; x: 10; y: 56; width: parent.width - 20; height: parent.height - 66; clip: true
+        ListView { id: outlineList; objectName: "outlineList"; visible: win.panel === "outline"; x: 10; y: 14; width: parent.width - 20; height: parent.height - 24; clip: true
             model: win.outlineRows; boundsBehavior: Flickable.StopAtBounds
             Timer { id: outlineTick; interval: 600; onTriggered: if (win.panel === "outline") win.refreshOutline() }
             Connections { target: Backend; function onChanged() { if (win.panel === "outline") outlineTick.restart() } }
@@ -1001,7 +1020,7 @@ GlassWindow {
                 text: "No functions, classes or headings found in this file" } }
 
         // ---- problems
-        ListView { id: probList; objectName: "probList"; visible: win.panel === "problems"; x: 10; y: 56; width: parent.width - 20; height: parent.height - 66; clip: true; model: Backend.problems
+        ListView { id: probList; objectName: "probList"; visible: win.panel === "problems"; x: 10; y: 14; width: parent.width - 20; height: parent.height - 24; clip: true; model: Backend.problems
             boundsBehavior: Flickable.StopAtBounds
             delegate: Pressable { required property var modelData; width: probList.width; height: probText.height + 26; radius: 8; color: hovered ? Theme.t.hover : "transparent"
                 onClicked: { Backend.select(modelData.tab); Qt.callLater(function () { var v = docs.itemAt(modelData.tab); if (v) v.goTo(modelData.line, modelData.col) }) }
@@ -1011,7 +1030,7 @@ GlassWindow {
             Label { visible: probList.count === 0; anchors.centerIn: parent; secondary: true; text: "No problems in your open files" } }
 
         // ---- tests
-        Item { id: testPanel; objectName: "testPanel"; visible: win.panel === "tests"; x: 12; y: 52; width: parent.width - 24; height: parent.height - 52
+        Item { id: testPanel; objectName: "testPanel"; visible: win.panel === "tests"; x: 12; y: 12; width: parent.width - 24; height: parent.height - 12
             readonly property int failed: Backend.tests.filter(function (t) { return t.status === "failed" }).length
             readonly property int passed: Backend.tests.filter(function (t) { return t.status === "passed" }).length
             Row { id: tRow; spacing: 4; height: 30
@@ -1038,8 +1057,9 @@ GlassWindow {
     function runSearch() { Backend.search(searchBox.text, sCase.on2, sRe.on2, sWord.on2) }
 
     // ================================================================ the slab: the code
-    Rectangle { id: slab; objectName: "slab"; x: win.sideW + (win.side ? 24 : 12); y: win.zen ? 56 : 64; width: parent.width - x - 12; height: parent.height - y - (win.zen ? 12 : 46) - (termBox.visible ? termBox.height + 10 : 0)
-        radius: 18; color: win.slab; border.width: 1; border.color: Theme.t.islandLine; clip: true
+    Rectangle { id: slab; objectName: "slab"; x: win.zen ? 12 : win.side ? sideBox.x + sideBox.width + 12 : railBox.x + railBox.width + 12; y: win.zen ? 56 : 64
+        width: parent.width - x - 12; height: parent.height - y - win.foot - (termBox.visible ? termBox.height + 10 : 0)
+        radius: 16; color: win.slabFill; border.width: 1; border.color: win.glassLine; clip: true
         Repeater { id: docs; model: docModel
             delegate: Item { id: v; required property string path; required property int index
                 readonly property int side: !win.split ? (index === Backend.current ? 0 : -1) : (index === Backend.current ? win.pane : index === win.otherTab ? 1 - win.pane : -1)
@@ -1829,7 +1849,7 @@ GlassWindow {
     }
 
     // ================================================================ the terminal
-    Rectangle { visible: win.split; z: 4; x: slab.x + slab.width / 2 - 1; y: slab.y + 8; width: 2; height: slab.height - 16; radius: 1; color: Theme.t.islandLine }
+    Rectangle { visible: win.split; z: 4; x: slab.x + slab.width / 2 - 1; y: slab.y + 8; width: 2; height: slab.height - 16; radius: 1; color: win.glassLine }
     // the debugger's controls: in the bottom panel's header, or floating at the foot of the editor when the panel is closed
     component DebugButtons: Row { spacing: 2
         Rectangle { width: 8; height: 8; radius: 4; anchors.verticalCenter: parent.verticalCenter; color: win.dbg.state === "stopped" ? "#F5B83D" : "#30A46C" }
@@ -1844,7 +1864,8 @@ GlassWindow {
         color: Theme.t.island; border.width: 1; border.color: Theme.t.islandLine
         DebugButtons { id: dbgFloat; x: 7; anchors.verticalCenter: parent.verticalCenter } }
     Rectangle { id: termBox; objectName: "termBox"; visible: win.term; x: slab.x; width: slab.width; height: Math.min(280, win.height * 0.34); y: slab.y + slab.height + 10; radius: 16
-        color: Theme.t.dark ? "#0B0D10" : "#F7F8FA"; border.width: 1; border.color: Theme.t.islandLine; clip: true
+        color: !win.clear ? (Theme.t.dark ? "#0B0D10" : "#F7F8FA") : Theme.t.dark ? Qt.rgba(0.024, 0.028, 0.06, 0.8) : Qt.rgba(1, 1, 1, 0.88)
+        border.width: 1; border.color: win.glassLine; clip: true
         property var sh: win.term && win.bottom === "terminal" ? Backend.terminal : null
         Row { x: 8; y: 6; spacing: 2; z: 3
             Seg { text: "Terminal"; on: win.bottom === "terminal"; onClicked: { win.bottom = "terminal"; Qt.callLater(function () { termKeys.forceActiveFocus() }) } }
@@ -1963,44 +1984,49 @@ GlassWindow {
             Glyph { anchors.centerIn: parent; name: "x"; size: 11 }
             MouseArea { id: closeTerm; anchors.fill: parent; hoverEnabled: true; onClicked: win.toggleTerm() } } }
 
-    // ================================================================ the status line
-    Item { id: statusBar; objectName: "statusBar"; visible: !win.zen; x: slab.x; width: slab.width; y: parent.height - 38; height: 28
-        Row { x: 6; spacing: 14; anchors.verticalCenter: parent.verticalCenter
-            Pressable { visible: Backend.isGit; width: brRow.width + 12; height: 24; radius: 12; color: hovered ? Theme.t.hover : "transparent"; onClicked: win.ask("branches")
-                Row { id: brRow; x: 6; spacing: 5; anchors.verticalCenter: parent.verticalCenter
-                    Glyph { name: "route"; size: 12; anchors.verticalCenter: parent.verticalCenter }
+    // ================================================================ the status line: a row of small islands
+    // The branch, the problems and whatever is going on at the left; where the cursor is, wrapping and the language
+    // at the right. Each one is a way in: the branches, the problems, Go to Line, wrapping, the language's helper.
+    component StatusPill: Pressable { height: 28; radius: 14; color: hovered ? win.glassHover : win.glass; border.width: 1; border.color: win.glassLine }
+    Item { id: statusBar; objectName: "statusBar"; visible: !win.zen; x: 12; width: parent.width - 24; y: parent.height - 12 - height; height: 28
+        Row { id: statusLeft; spacing: 8; width: parent.width - statusRight.width - 16; height: parent.height; clip: true
+            StatusPill { objectName: "branchPill"; visible: Backend.isGit; width: brRow.width + 24; onClicked: win.ask("branches")
+                Row { id: brRow; x: 12; spacing: 6; anchors.verticalCenter: parent.verticalCenter
+                    Glyph { name: "route"; size: 12; ink: Theme.t.accent; anchors.verticalCenter: parent.verticalCenter }
                     Label { text: Backend.branch + (Backend.changes.length ? " · " + Backend.changes.length + " changed" : ""); font.pixelSize: 11 } } }
-            Pressable { width: prRow.width + 12; height: 24; radius: 12; color: hovered ? Theme.t.hover : "transparent"; onClicked: win.showPanel("problems")
-                Row { id: prRow; x: 6; spacing: 5; anchors.verticalCenter: parent.verticalCenter
+            StatusPill { objectName: "problemsPill"; width: prRow.width + 24; onClicked: win.showPanel("problems")
+                Row { id: prRow; x: 12; spacing: 6; anchors.verticalCenter: parent.verticalCenter
                     Rectangle { width: 7; height: 7; radius: 4; anchors.verticalCenter: parent.verticalCenter; color: Backend.problems.length ? win.delInk : win.addInk }
                     Label { text: Backend.problems.length ? Backend.problems.length + (Backend.problems.length === 1 ? " problem" : " problems") : "No problems"; font.pixelSize: 11 } } }
-            Pressable { objectName: "remotePill"; visible: !!Backend.remote.spec; width: rmRow.width + 12; height: 24; radius: 12; color: hovered ? Theme.t.hover : Qt.alpha(Theme.t.accent, 0.16); onClicked: win.openPalette(">Remote")
-                Row { id: rmRow; x: 6; spacing: 5; anchors.verticalCenter: parent.verticalCenter
+            StatusPill { objectName: "remotePill"; visible: !!Backend.remote.spec; width: rmRow.width + 24; color: hovered ? win.glassHover : Qt.tint(win.glass, Qt.alpha(Theme.t.accent, 0.18)); onClicked: win.openPalette(">Remote")
+                Row { id: rmRow; x: 12; spacing: 6; anchors.verticalCenter: parent.verticalCenter
                     Rectangle { width: 7; height: 7; radius: 4; anchors.verticalCenter: parent.verticalCenter; color: Backend.remote.connected ? win.addInk : win.delInk }
                     Label { font.pixelSize: 11; text: "SSH: " + (Backend.remote.spec || "") + (Backend.remote.connected ? "" : "  (not connected)") } } }
-            Pressable { objectName: "containerPill"; visible: !!Backend.container.has && !Backend.remote.spec; width: bxRow.width + 12; height: 24; radius: 12
-                color: hovered ? Theme.t.hover : !!Backend.container.running ? Qt.alpha(Theme.t.accent, 0.16) : "transparent"; onClicked: !!Backend.container.running ? win.openPalette(">Container") : win.containerAsk()
-                Row { id: bxRow; x: 6; spacing: 5; anchors.verticalCenter: parent.verticalCenter
+            StatusPill { objectName: "containerPill"; visible: !!Backend.container.has && !Backend.remote.spec; width: bxRow.width + 24
+                color: hovered ? win.glassHover : !!Backend.container.running ? Qt.tint(win.glass, Qt.alpha(Theme.t.accent, 0.18)) : win.glass; onClicked: !!Backend.container.running ? win.openPalette(">Container") : win.containerAsk()
+                Row { id: bxRow; x: 12; spacing: 6; anchors.verticalCenter: parent.verticalCenter
                     Rectangle { visible: !!Backend.container.running || !!Backend.container.starting; width: 7; height: 7; radius: 4; anchors.verticalCenter: parent.verticalCenter; color: Backend.container.running ? win.addInk : Theme.t.text_secondary }
                     Label { font.pixelSize: 11; text: Backend.container.running ? "Container: " + Backend.container.title : Backend.container.starting ? "Container: starting…" : "Open in Container" } } }
-            Pressable { objectName: "buildPill"; visible: win.bld.running || win.bld.errors + win.bld.warnings > 0; width: bpRow.width + 12; height: 24; radius: 12; color: hovered ? Theme.t.hover : "transparent"; onClicked: win.showBuild()
-                Row { id: bpRow; x: 6; spacing: 5; anchors.verticalCenter: parent.verticalCenter
+            StatusPill { objectName: "buildPill"; visible: win.bld.running || win.bld.errors + win.bld.warnings > 0; width: bpRow.width + 24; onClicked: win.showBuild()
+                Row { id: bpRow; x: 12; spacing: 6; anchors.verticalCenter: parent.verticalCenter
                     Rectangle { width: 7; height: 7; radius: 4; anchors.verticalCenter: parent.verticalCenter; color: win.bld.running ? win.modInk : win.bld.errors ? win.delInk : "#E3B341" }
                     Label { font.pixelSize: 11; text: win.bld.running ? "Building…" : win.bld.errors ? win.bld.errors + (win.bld.errors === 1 ? " build error" : " build errors") : win.bld.warnings + (win.bld.warnings === 1 ? " build warning" : " build warnings") } } }
-            Row { objectName: "crumbs"; visible: !!win.tab && win.crumbs.length > 0; spacing: 2; anchors.verticalCenter: parent.verticalCenter
-                Repeater { model: win.crumbs
-                    Pressable { required property var modelData; required property int index; width: crL.width + 12; height: 22; radius: 11; color: hovered ? Theme.t.hover : "transparent"
-                        onClicked: { var v = win.view(); if (v) v.goTo(modelData.line, 0) }
-                        Label { id: crL; anchors.centerIn: parent; text: (index ? "› " : "") + modelData.name; font.pixelSize: 11; font.family: win.mono; secondary: index < win.crumbs.length - 1 } } } }
-            Label { visible: Backend.busy !== ""; anchors.verticalCenter: parent.verticalCenter; text: Backend.busy + "…"; font.pixelSize: 11; secondary: true } }
-        Row { visible: !!win.tab; anchors { right: parent.right; rightMargin: 6; verticalCenter: parent.verticalCenter } spacing: 16
-            Label { text: "Ln " + win.curLine + ", Col " + win.curCol; font.pixelSize: 11; secondary: true }
-            Label { text: (Backend.status.indent || "") + (Backend.status.config ? " · .editorconfig" : ""); font.pixelSize: 11; secondary: true }
-            Label { text: Backend.status.encoding || ""; font.pixelSize: 11; secondary: true }
-            Label { text: Backend.status.eol || ""; font.pixelSize: 11; secondary: true }
-            Pressable { width: wrapL.width + 10; height: 22; radius: 11; color: hovered ? Theme.t.hover : "transparent"; onClicked: Backend.setWrap(!Backend.wrap)
+            Rectangle { objectName: "crumbs"; visible: !!win.tab && win.crumbs.length > 0; height: 28; radius: 14; width: crumbRow.width + 8; color: win.glass; border.width: 1; border.color: win.glassLine
+                Row { id: crumbRow; x: 4; spacing: 0; anchors.verticalCenter: parent.verticalCenter
+                    Repeater { model: win.crumbs
+                        Pressable { required property var modelData; required property int index; width: crL.width + 14; height: 22; radius: 11; color: hovered ? Theme.t.hover : "transparent"
+                            onClicked: { var v = win.view(); if (v) v.goTo(modelData.line, 0) }
+                            Label { id: crL; anchors.centerIn: parent; text: (index ? "› " : "") + modelData.name; font.pixelSize: 11; font.family: win.mono; secondary: index < win.crumbs.length - 1 } } } } }
+            Label { visible: Backend.busy !== ""; anchors.verticalCenter: parent.verticalCenter; leftPadding: 4; text: Backend.busy + "…"; font.pixelSize: 11; secondary: true } }
+        Row { id: statusRight; visible: !!win.tab; anchors { right: parent.right; verticalCenter: parent.verticalCenter } spacing: 8
+            StatusPill { objectName: "cursorPill"; width: curL.width + 24; onClicked: win.openPalette(":")
+                Label { id: curL; anchors.centerIn: parent; font.pixelSize: 11; secondary: true
+                    text: ["Ln " + win.curLine + ", Col " + win.curCol, (Backend.status.indent || "") + (Backend.status.config ? " (.editorconfig)" : ""), Backend.status.encoding || "", Backend.status.eol || ""]
+                          .filter(function (t) { return t !== "" }).join("  ·  ") } }
+            StatusPill { objectName: "wrapPill"; width: wrapL.width + 24; onClicked: Backend.setWrap(!Backend.wrap)
                 Label { id: wrapL; anchors.centerIn: parent; text: Backend.wrap ? "Wrap" : "No wrap"; font.pixelSize: 11; secondary: true } }
-            Row { spacing: 5
-                Rectangle { width: 8; height: 8; radius: 4; anchors.verticalCenter: parent.verticalCenter; color: win.tab ? win.langInk(win.tab.lang) : "transparent" }
-                Label { text: (Backend.status.lang || "") + (Backend.status.server ? "  ·  " + Backend.status.server : ""); font.pixelSize: 11; font.weight: Font.DemiBold } } } }
+            StatusPill { objectName: "langPill"; width: lgRow.width + 24; onClicked: win.ask("langs", { mode: "manage" })
+                Row { id: lgRow; x: 12; spacing: 6; anchors.verticalCenter: parent.verticalCenter
+                    Rectangle { width: 8; height: 8; radius: 4; anchors.verticalCenter: parent.verticalCenter; color: win.tab ? win.langInk(win.tab.lang) : "transparent" }
+                    Label { text: (Backend.status.lang || "") + (Backend.status.server ? "  ·  " + Backend.status.server : ""); font.pixelSize: 11; font.weight: Font.DemiBold } } } } }
 }

@@ -7,6 +7,7 @@ import QtQuick.Shapes
 Window {
     id: win
     property string glow: "bottom"            // where the light comes from: bottom, top, left, right, centre or none
+    property real glowBoost: 1                // an app can turn its light up (Code's glass panels): a factor on the theme's
     property real glowX: 0.5                  // for "centre": the light's place, as fractions of the window
     property real glowY: 0.42
     property color baseColor: Theme.t.appBase  // the window's own colour (Terminal is darker than its tint)
@@ -34,6 +35,11 @@ Window {
     readonly property real liftRight: lifted ? (barInfo.right || 0) + 8 : 12
     readonly property real r: maximised || visibility === Window.FullScreen ? 0.01 : corner
     property color tintColor: Theme.t.accent   // Help borrows the colour of the app it is talking about
+    readonly property real glowPeak: Math.min(0.75, Theme.t.glowStrength * glowBoost)
+    // The name island's colour: an app whose panels are its own glass (Code) gives it the same; in the top bar's row
+    // (filled, under Huginn's own compositor) it stays the bar's, beside the shell's islands
+    property color islandColor: Theme.t.island
+    property color islandLineColor: Theme.t.islandLine
     // Where something `w` wide sits to be in the middle (a start screen's picture and button), in the window's own
     // coordinates: the middle of the whole window, unless that would run into the island down the left (`rail`, or the
     // sidebar); then the middle of the room beside it. `top` and `h`: where it is up and down, for whether they meet.
@@ -58,8 +64,8 @@ Window {
                 centerY: win.glow === "bottom" ? win.height * 1.1 : win.glow === "top" ? -win.height * 0.1 : win.glow === "centre" ? win.height * win.glowY : win.height / 2
                 focalX: centerX; focalY: centerY; focalRadius: 0
                 centerRadius: win.glow === "left" || win.glow === "right" ? win.height * 0.85 : win.glow === "centre" ? win.height * 0.62 : Math.max(win.width * 0.48, win.height * 0.8)
-                GradientStop { position: 0; color: Qt.rgba(win.tintColor.r, win.tintColor.g, win.tintColor.b, Theme.t.glowStrength) }
-                GradientStop { position: 0.55; color: Qt.rgba(win.tintColor.r, win.tintColor.g, win.tintColor.b, Theme.t.glowStrength * 0.28) }
+                GradientStop { position: 0; color: Qt.rgba(win.tintColor.r, win.tintColor.g, win.tintColor.b, win.glowPeak) }
+                GradientStop { position: 0.55; color: Qt.rgba(win.tintColor.r, win.tintColor.g, win.tintColor.b, win.glowPeak * 0.28) }
                 GradientStop { position: 1; color: Qt.rgba(win.tintColor.r, win.tintColor.g, win.tintColor.b, 0) }
             }
             startX: win.r; startY: 0
@@ -88,6 +94,7 @@ Window {
     readonly property real toolStart: toolIsland.opacity > 0 ? toolIsland.x : width - 12     // and where the toolbar begins
     Island {   // close, minimise, maximise and the app's name: always top left
         id: titleIsland; bar: true; x: win.liftLeft; y: win.topY; z: 6; drags: true; visible: !win.bare
+        color: win.lifted ? Theme.t.island : win.islandColor; border.color: win.lifted ? Theme.t.islandLine : win.islandLineColor
         Item { width: 4; height: 1 }
         Repeater {
             model: [["#FF5F57", "Close"], ["#FEBC2E", "Minimize"], ["#28C840", "Maximize"]]

@@ -468,9 +468,10 @@ What was and wasn't tested (all on this sandbox, every screen rendered in dark a
 
 ## Code and Clips Pro (round 1 of several)
 
-**Code** (`apps/huginn_code.py`, `qml/Code.qml`), "the workbench": the project in one tall island on the left (files,
-project search, Git, problems), open files as tabs floating across the top, the code on a dark slab, a terminal that
-slides up beneath it, and a status line. Text and code files open here by default (`mimeapps.list`); Documents now
+**Code** (`apps/huginn_code.py`, `qml/Code.qml`), "the workbench", in glass panels: a slim rail of tools on the left
+(files, project search, Git, problems, tests, the outline) beside the panel it opens, open files as pills floating
+across the top, the code on a deeper pane of Code's indigo glass, a terminal that slides up beneath it, and the status
+line as small islands along the bottom. Text and code files open here by default (`mimeapps.list`); Documents now
 reads PDFs only and hands anything else to Code. One Code at a time: opening a file while it runs sends it to the open
 window.
 - Editing: per-tab undo, syntax colouring for ~25 languages (block comments, Python's triple quotes, decorators,
@@ -1213,6 +1214,20 @@ Also fixed, found by the fuzz: completion asked for a line below zero raised an 
   game's output, carrying on to the end), and for Unreal with a small C program as UnrealEditor in a made-up engine
   folder: GDB really stops at the breakpoint in it, shows its variables, and runs it to the end with `-game` passed.
   Not tried: Godot 4's real editor and a real Unreal Engine (neither can run in the build container).
+
+**Code in glass panels** (`apps/qml/Code.qml`, with `GlassWindow.qml` and `Seg.qml`; `scripts/tests/code_glass_ui.py`,
+34 checks, with Reduce Transparency on as well). Code was the last big app still on opaque slabs, so it now wears the same glass as the rest:
+- **A rail and a panel.** The tools that switched the side panel now stand in their own slim rail (tips beside them,
+  badges for changes, problems and failed tests). Click the lit tool, or Ctrl+B, and the panel goes away while the rail
+  stays; the code moves up beside it. Zen still hides everything but the code.
+- **Glass, not slabs.** The panels, the top islands, the name island and the status pills are Code's own tinted glass,
+  and the code sits on a deeper, see-through pane with the window's light coming through (the light is turned up a
+  little for Code: `GlassWindow.glowBoost`). The current line is a faint wash of Code's colour. Reduce Transparency
+  makes all of it solid again, and an imported VS Code theme keeps its own paper.
+- **The status line as islands**: branch and changes, problems, remote, container and build at the left; where the
+  cursor is (click: Go to Line), wrapping, and the language (click: Languages) at the right.
+- **Run** is the island's one filled button (`Seg.primary`), so it's found at a glance.
+- Under Huginn's own top bar, maximised, the top islands keep the bar's colour, beside the shell's.
 
 **The "grub>" prompt after installing** (seen on real hardware; `search --file` and `configfile` by hand started the
 system, so the menu was fine and the pointer to it was not). GRUB finds its menu through a small pointer file that
