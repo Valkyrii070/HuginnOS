@@ -934,6 +934,39 @@ own, smooth slow motion, chapters
   smooth switches, an adjustment layer's tabs, the chapters line, no QML complaints. The fuzz has the new commands (1,500 steps, nothing
   found); round five's test still gives 120 of 120.
 
+**Tempo, pro pass five** (`apps/huginn_tempo.py`, `apps/huginn_tempo_engine.py`, `apps/qml/Tempo.qml`): from a recording, its
+drums as notes and its chords; mastering toward a song you like; a film to score
+- *Drums to Notes* (region pane, on a recording): onsets from the rise in forty log-spaced bands; each onset's new sound (as power,
+  so hits at the same moment add up) split between a kick, a snare and a hi-hat by non-negative least squares on their spectra,
+  first guessed and then learnt from the recording's clearest hits (each only in its own range, so a kick's click isn't learnt as
+  a hat); what each drum leaves in the others' parts on its own is measured and taken away before deciding what else was hit.
+  The hits go on a drum track under the recording as notes, velocity from how hard. Where every kick comes with a hat, the hat
+  can't be told from the kick's click, and stays part of it.
+- *Find the Chords* (a recording, or a region of notes): twelve-note chroma beat by beat (60 Hz–1.2 kHz, peaks only, the low
+  notes counting a little more), major and minor triads with their overtones (an E's fifth overtone is a G#), and the best path
+  through them (a change must be worth more than staying; quiet beats count less). Drums and noise get no chord. Play the
+  Chords puts them on a pad under the region.
+- *A reference song* (Mastering): its loudness, balance and width; Master Like It moves the four bands 80 % of the way to its
+  balance (at most 6 dB) and makes the song as loud as it. Hear It in Place of Your Song plays the reference where the song is,
+  turned to the song's loudness as it plays (mastered or not), so the comparison is fair.
+- *Scoring a film*: a film dropped on Tempo becomes the song's picture: small pictures (ten a second, four for a film over a
+  quarter of an hour) are read once in the background and the Picture window shows the one at the playhead; its sound comes in on
+  a track of its own; where in the film the song starts can be moved. Export › The Film, With the Music copies the picture as it
+  is and puts the song under it (AAC), starting where it should.
+- Fuzzed (`apps_fuzz.py`, 1,600 calls): a region could be made any length, and a MIDI region is drawn whole, so one stretched
+  a thousand hours out asked for 10 GB while playing. Regions now go up to 2,000 beats; drum and chord tracks are no longer than
+  the sound they came from. Track names now stay words.
+- Tested (`scripts/tests/tempo_pass5_test.py`, 56 checks): a beat on Tempo's own studio kit, every one of its 40 hits found and
+  none made up, each to within 6 ms, a hit at the very start; three kits at two tempos, hits from half as hard to full under a
+  noise floor: 9 in 10 found, next to nothing made up; the chords of a progression of eight on an organ and an electric piano,
+  every one where it changes, six of eight on a bright plucked synth (a minor chord can read as major), written notes, a passing
+  note, silence; the reference's loudness and balance, a dull mix mastered nearer it than plain mastering gets, as loud as it;
+  in Tempo, a drum track made from a recording with its 40 notes, the chords of notes and of a recording, a pad playing them,
+  the reference heard sample for sample where the song is and as loud, mastered like it, undo; a film's length and sound, its
+  picture for each second, moved, and exported with the song under it (the picture copied, 4 s). In the window
+  (`tempo_pass5_ui.py`, 12 checks): the region pane's new buttons and chord chips, the Picture window following the playhead
+  and hiding, the film export, the reference box, no QML complaints. Pass three's test still gives 81 of 81.
+
 **Audit, first pass (static checks and the security surfaces)**. `scripts/lint.sh` runs all of it; `ruff.toml` holds
 the Python rules and says, rule by rule, why each one left out was left out.
 - *What was run*: ruff's bug and security rules (pyflakes, bugbear, bandit) over all 118 Python files (about

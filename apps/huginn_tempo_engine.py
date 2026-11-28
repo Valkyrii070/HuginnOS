@@ -1575,13 +1575,25 @@ class Mastering:
         return np.clip(out, -self.ceiling, self.ceiling).astype(np.float32)
 
 
-def assist_master(mix: np.ndarray, character: str = "clean", target: str = "streaming") -> dict:
+def reference_of(x: np.ndarray) -> dict:
+    """What a reference song is to the mastering assistant: its loudness and its balance (each band against the
+    whole), and its width."""
+    if x.ndim == 1:
+        x = np.stack([x, x], axis=1)
+    mid, side = (x[:, 0] + x[:, 1]) / 2, (x[:, 0] - x[:, 1]) / 2
+    return {"loud": round(loudness(x), 2), "bands": [round(v, 2) for v in band_levels(x)],
+            "width": round(float(np.sqrt((side.astype(np.float64) ** 2).mean() / max((mid.astype(np.float64) ** 2).mean(), 1e-12))), 3)}
+
+
+def assist_master(mix: np.ndarray, character: str = "clean", target: str = "streaming", reference: dict = None) -> dict:
     """What the mastering assistant sets for a mix: each band toward a balanced mix (at most 4 dB either way), the
     width brought toward healthy (a mix nearly mono opened a little, a very wide one narrowed), the compressor's
     threshold just under the mix's loud parts, and the gain that gets the loudness asked for (checked by running it
-    through, then put right)."""
+    through, then put right). With a reference song, its balance is the one to move toward (further: 80 % of the
+    way, at most 6 dB), and "reference" as the target means as loud as it is."""
     levels = band_levels(mix)
-    eq = [round(max(-4.0, min(4.0, (want - got) * 0.6)), 1) for want, got in zip(BALANCE, levels)]
+    balance, share, most = (reference["bands"], 0.8, 6.0) if reference and reference.get("bands") else (BALANCE, 0.6, 4.0)
+    eq = [round(max(-most, min(most, (want - got) * share)), 1) for want, got in zip(balance, levels)]
     mid, side = (mix[:, 0] + mix[:, 1]) / 2, (mix[:, 0] - mix[:, 1]) / 2
     ratio = float(np.sqrt((side ** 2).mean() / max((mid ** 2).mean(), 1e-12)))
     width = 1.15 if ratio < 0.08 else 0.9 if ratio > 0.6 else 1.0
@@ -1589,6 +1601,10 @@ def assist_master(mix: np.ndarray, character: str = "clean", target: str = "stre
     m = {"on": True, "character": character, "target": target, "eq": eq, "width": width, "threshold": round(loud_rms - 4, 1), "ceiling": -1.0, "gain": 0.0,
          "before": round(loudness(mix), 1)}
     want = TARGETS.get(target, -14.0)
+    if target == "reference" and reference:
+        want = max(-24.0, min(-6.0, float(reference.get("loud", -14.0))))
+    if reference:
+        m["toReference"] = True
     for _ in range(3):                                # gain, measured through the whole chain, put right
         out = Mastering(m).run(mix)
         got = loudness(out)
@@ -1695,6 +1711,13 @@ class Mixer:
         self.master_fx = [(i, f, make_effect(f, self.tempo)) for i, f in enumerate(m.get("effects", [])) if f.get("on", True)]
         self.mastering = Mastering(m.get("mastering") or {})
         self.lim_gain = 1.0
+        self.ref, ref = None, m.get("reference") or {}
+        if m.get("hearRef") and ref.get("file"):              # the reference song heard in the song's place, as loud as the song
+            try:
+                a = load_audio(resolve(ref["file"], self.audio_dir))
+                self.ref = (a if a.ndim == 2 else np.stack([a, a], axis=1)) * db(float(ref.get("match", 0)))
+            except Exception:                                 # noqa: BLE001  (gone: the song plays)
+                self.ref = None
 
     def seek(self, sample: int) -> None:
         self.pos = max(0, int(sample))
@@ -1844,6 +1867,13 @@ class Mixer:
                 return True
             return t.get("kind") == "stack" and any(o.get("output") == t["id"] and o["id"] in soloed for o in tracks)
 
+        if self.ref is not None:                       # A/B: the reference where the song is, at the same place
+            out = np.zeros((n, 2), np.float32)
+            piece = self.ref[s0:s0 + n]
+            out[:len(piece)] = piece
+            self.levels = {"master": float(np.abs(out).max()) if out.size else 0.0}
+            self.pos += n
+            return np.clip(out, -1.0, 1.0)
         raw = {t["id"]: self.track_block(t, s0, n) for t in tracks if t.get("kind") != "stack"}
         bus = {sid: np.zeros((n, 2), np.float32) for sid in stacks}
         mix = np.zeros((n, 2), np.float32)
@@ -2294,3 +2324,215 @@ def loop_notes(loop_id: str, key: int = 0, mode: str = "major", beats_per_bar: i
                         for p in ch:
                             notes.append({"t": base + t, "d": d, "p": p, "v": 90 if t in (0, 2) else 72})
     return notes
+
+
+
+# ------------------------------------------------------------------ pass five: drums into notes, chords, picture
+DRUM_PITCH = {"kick": 36, "snare": 38, "hat": 42}
+OFFSET_DRUMS = 850                                         # where in its frame a found onset is (measured on Tempo's own kit)
+BAND_EDGES = np.geomspace(30.0, 16000.0, 41)                 # forty bands, even to the ear
+
+
+def _band_powers(mono: np.ndarray, N: int, hop: int, sr: int = SR) -> np.ndarray:
+    """The power in each of forty log-spaced bands, frame by frame (worked in pieces, so a long song needs little memory)."""
+    f = np.fft.rfftfreq(N, 1 / sr)
+    which = np.digitize(f, BAND_EDGES) - 1
+    keep = (which >= 0) & (which < len(BAND_EDGES) - 1)
+    M = np.zeros((len(f), len(BAND_EDGES) - 1))
+    M[np.nonzero(keep)[0], which[keep]] = 1.0
+    starts = np.arange(0, max(0, len(mono) - N), hop)
+    win = np.hanning(N)
+    out = np.zeros((len(starts), M.shape[1]))
+    for k in range(0, len(starts), 2048):
+        idx = starts[k:k + 2048][:, None] + np.arange(N)[None, :]
+        spec = np.abs(np.fft.rfft(mono[idx] * win, axis=1)) ** 2
+        out[k:k + len(idx)] = spec @ M
+    return out
+
+
+def _proto(centre: float, width: float) -> np.ndarray:
+    c = np.sqrt(BAND_EDGES[:-1] * BAND_EDGES[1:])
+    return np.exp(-((np.log(c) - math.log(centre)) / width) ** 2)
+
+
+def drum_hits(x: np.ndarray, sr: int = SR) -> list:
+    """The hits in a drum recording: [(seconds, "kick" | "snare" | "hat", strength 0..1)]. Onsets from the rise in
+    forty bands; each onset's new sound split between a kick, a snare and a hi-hat (non-negative least squares on
+    their spectra, which are first guessed and then learnt from the recording itself), so hits on the same moment
+    are each found."""
+    from scipy.optimize import nnls
+    mono = (x.mean(axis=1) if x.ndim == 2 else x).astype(np.float64)
+    N, hop = 1024, 256
+    if len(mono) < N * 2:
+        return []
+    mono = np.concatenate([np.zeros(2 * N), mono, np.zeros(N)])    # (a hit right at the start has a silence before it)
+    B = _band_powers(mono, N, hop, sr)
+    L = 10 * np.log10(B + 1e-10)
+    rise = np.maximum(0.0, L[2:] - np.maximum(L[1:-1], L[:-2]))
+    nov = np.concatenate([[0.0, 0.0], (rise * (L[2:] > L.max() - 75)).sum(axis=1)])
+    if nov.max() <= 0:
+        return []
+    from scipy.ndimage import median_filter
+    floor = median_filter(nov, size=31) + 0.12 * np.percentile(nov, 99.5)
+    peaks = [i for i in range(2, len(nov) - 6) if nov[i] > floor[i] and nov[i] == nov[max(0, i - 3):i + 4].max()]
+    onsets = []
+    for i in peaks:                                    # no two within 30 ms
+        if onsets and (i - onsets[-1]) * hop / sr < 0.03:
+            if nov[i] > nov[onsets[-1]]:
+                onsets[-1] = i
+            continue
+        onsets.append(i)
+    if not onsets:
+        return []
+    # each onset's new sound, as power (sounds at the same moment add up as power, so they can be told apart)
+    D = np.array([np.maximum(0.0, B[i:i + 6].max(axis=0) - B[max(0, i - 3):i].mean(axis=0)) for i in onsets])
+    # first guesses: a kick is low (50-200 Hz), a snare's crack is noise round 2-7 kHz over a body, a hat is all highs
+    T = np.stack([_proto(90, 0.5) ** 2, _proto(210, 0.3) ** 2 + 0.8 * _proto(4500, 0.6) ** 2, _proto(11000, 0.4) ** 2])
+    T = T / np.linalg.norm(T, axis=1, keepdims=True)
+    c = np.sqrt(BAND_EDGES[:-1] * BAND_EDGES[1:])
+    room = np.stack([c < 1500, (c > 120) & (c < 9000), c > 5000]).astype(float)   # what each may learn: a kick's click isn't a hat
+    for _round in range(4):                            # the kit's own sound, learnt from its clearest hits
+        A = np.array([nnls(T.T, d)[0] for d in D])
+        parts = A[:, :, None] * T[None, :, :]
+        share = (parts ** 2).sum(axis=2) / np.maximum((parts ** 2).sum(axis=(1, 2))[:, None], 1e-20)
+        fresh = []
+        for k in range(3):
+            clear = share[:, k] > 0.8
+            if clear.sum() >= 2:
+                v = (D[clear] / np.maximum(np.linalg.norm(D[clear], axis=1, keepdims=True), 1e-12)).mean(axis=0)
+                v = v * room[k]
+                fresh.append(0.5 * T[k] + 0.5 * v / max(np.linalg.norm(v), 1e-12))
+            else:
+                fresh.append(T[k])
+        T = np.stack(fresh)
+        T = T / np.linalg.norm(T, axis=1, keepdims=True)
+    A = np.array([nnls(T.T, d)[0] for d in D])
+    parts = A[:, :, None] * T[None, :, :]
+    share = (parts ** 2).sum(axis=2) / np.maximum((parts ** 2).sum(axis=(1, 2))[:, None], 1e-20)
+    # what each drum leaves in the others' parts on its own (a kick's click in the hat's): the least of it over the
+    # hits where that drum leads, taken away before deciding what else was hit there
+    lead = share.argmax(axis=1)
+    leak = np.zeros((3, 3))
+    for a in range(3):
+        mine = (lead == a) & (share[:, a] > 0.5)
+        if mine.sum():
+            for b in range(3):
+                if b != a:
+                    r = A[mine, b] / np.maximum(A[mine, a], 1e-12)
+                    leak[a, b] = float(np.percentile(r, 10) if len(r) >= 5 else r.min())
+    rest = A - A @ leak                                # (leak[a, b]: how much of b one of a brings)
+    out = []
+    for k, name in enumerate(("kick", "snare", "hat")):
+        mine = (lead == k) & (share[:, k] > 0.5)
+        strong = float(np.percentile(A[mine, k], 75)) if mine.any() else 0.0
+        if strong <= 0:
+            continue
+        for j, i in enumerate(onsets):
+            if rest[j, k] > 0.2 * strong:                  # (power: a hit half as hard is a quarter of it)
+                t = max(0.0, (i * hop + OFFSET_DRUMS - 2 * N) / sr)
+                out.append((round(t, 4), name, round(float(min(1.0, rest[j, k] / strong)), 3)))
+    return sorted(out)
+
+
+def hits_to_notes(hits: list, beat_of, start_beat: float) -> list:
+    """Drum hits as notes for a drum track's region, in beats from its start (velocity from how hard)."""
+    out = []
+    for t, name, strength in hits:
+        b = beat_of(t) - start_beat
+        if b >= 0:
+            out.append({"t": round(b, 4), "d": 0.25, "p": DRUM_PITCH[name], "v": int(round(45 + 82 * max(0.0, min(1.0, strength))))})
+    return out
+
+
+CHORD_ROOTS = ["C", "C#", "D", "Eb", "E", "F", "F#", "G", "Ab", "A", "Bb", "B"]
+
+
+def chroma_of(x: np.ndarray, t0: float, t1: float, sr: int = SR) -> np.ndarray:
+    """How much of each of the twelve notes sounds between two moments (60 Hz to 1.2 kHz, every octave alike)."""
+    mono = (x.mean(axis=1) if x.ndim == 2 else x).astype(np.float64)
+    a, b = int(max(0.0, t0) * sr), int(max(0.0, t1) * sr)
+    seg = mono[a:b]
+    out = np.zeros(12)
+    N = 8192
+    if len(seg) < N // 2:
+        return out
+    if len(seg) < N:
+        seg = np.pad(seg, (0, N - len(seg)))
+    f = np.fft.rfftfreq(N, 1 / sr)
+    use = (f >= 60) & (f <= 1200)
+    pc = (np.round(12 * np.log2(f[use] / 440.0) + 69).astype(int)) % 12
+    tilt = (f[use] / 100.0) ** -0.3                    # the notes' own pitches count a little more than their overtones
+    for s in range(0, len(seg) - N + 1, N // 2):
+        mag = np.abs(np.fft.rfft(seg[s:s + N] * np.hanning(N)))[use]
+        mag = mag * (mag > 0.05 * mag.max())               # (peaks: the noise between notes says nothing)
+        out += np.bincount(pc, weights=mag * tilt, minlength=12)
+    return out
+
+
+def notes_chroma(notes: list, b0: float, b1: float) -> np.ndarray:
+    """The same from written notes: each note for as long as it sounds between two beats, by how hard it's played."""
+    out = np.zeros(12)
+    for n in notes:
+        a, e = float(n["t"]), float(n["t"]) + float(n["d"])
+        over = min(e, b1) - max(a, b0)
+        if over > 0:
+            out[int(n["p"]) % 12] += over * (0.4 + int(n.get("v", 100)) / 127) * (1.6 if int(n["p"]) < 52 else 1.0)
+    return out
+
+
+def _templates() -> list:
+    """Major and minor triads as they sound: each note with its overtones (an E's fifth overtone is a G#, which
+    mustn't make E minor sound major)."""
+    over = [(round(12 * math.log2(h)) % 12, 0.6 ** (h - 1)) for h in range(1, 7)]
+    out = []
+    for r in range(12):
+        for minor in (False, True):
+            v = np.zeros(12)
+            for note, w in ((r, 1.0), ((r + (3 if minor else 4)) % 12, 0.9), ((r + 7) % 12, 0.8)):
+                for step, hw in over:
+                    v[(note + step) % 12] += w * hw
+            out.append((CHORD_ROOTS[r] + ("m" if minor else ""), v / np.linalg.norm(v)))
+    return out
+
+
+def name_chords(chromas: list, stay: float = 0.08) -> list:
+    """The chord of each stretch (major and minor triads), choosing the best path through them all: a change has to be
+    worth a little more than staying, so a passing note doesn't make a chord. "" where nothing sounds."""
+    tpl = _templates()
+    T = np.stack([v for _n, v in tpl])
+    loud = [float(np.linalg.norm(c)) for c in chromas]
+    top = max(loud + [1e-12])
+    # a quiet stretch (a chord dying away) counts for less than one where it's struck
+    scores = [(T @ (c / max(np.linalg.norm(c), 1e-12))) * math.sqrt(loud[k] / top) for k, c in enumerate(chromas)]
+    n = len(chromas)
+    if not n:
+        return []
+    best, back = scores[0].copy(), []
+    for k in range(1, n):
+        stay_or_move = best[:, None] - stay * (1 - np.eye(len(tpl)))
+        back.append(stay_or_move.argmax(axis=0))
+        best = stay_or_move.max(axis=0) + scores[k]
+    path = [int(best.argmax())]
+    for b in reversed(back):
+        path.append(int(b[path[-1]]))
+    path.reverse()
+    # nothing where it's quiet, or where what sounds isn't like a chord at all (drums, noise: every note a little)
+    return [tpl[i][0] if loud[k] > 0.08 * top and scores[k][i] / max(math.sqrt(loud[k] / top), 1e-9) > 0.72 else "" for k, i in enumerate(path)]
+
+
+def merge_chords(starts: list, names: list) -> list:
+    """[[beat, name]], one entry where each chord starts; "" where a silence starts (so the chord before it ends)."""
+    out, prev = [], ""
+    for b, name in zip(starts, names):
+        if name != prev and (name or prev):
+            out.append([round(float(b), 4), name])
+        prev = name
+    return out
+
+
+def chord_pitches(name: str) -> list:
+    """The notes to play a chord with: its root low (an octave and more under middle C), then the chord near it."""
+    minor = name.endswith("m")
+    root = CHORD_ROOTS.index(name[:-1] if minor else name)
+    base = 60 + root if root < 6 else 48 + root
+    return [36 + root, base, base + (3 if minor else 4), base + 7]

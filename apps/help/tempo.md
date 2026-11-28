@@ -51,3 +51,25 @@ Drop any sound on Instruments (or on Smart Controls) and play it across the keys
 
 ## Arpeggiator and chords
 In Smart Controls, the arpeggiator plays held notes one at a time, in time with the song (up, down, up and down, as played or random, over one to three octaves). The chord trigger turns one finger into a chord: a fixed shape, or the chords of the song's key.
+
+## Groove
+Pick a MIDI region and open the region pane: Swing pushes every other eighth (or sixteenth) late, from straight at 50 % to a triplet feel at 66 % and beyond; Humanize moves each note a little off the grid and a little softer or harder, the same way each time. The notes stay where you wrote them; it's how they're played.
+
+## Freezing and bouncing
+A track heavy with plugins can be frozen (Smart Controls): its sound is drawn once and played from the file, light on the computer, with its fader, pan and sends still working. Change anything it depends on and it plays live again until you freeze it again. Bounce in Place puts the same sound on an audio track of its own beside it and mutes the original.
+
+## Putting a recording in tune
+Pick a recording, then Find the Notes: every note sung or played is found and drawn over the line as it was sung. Tune to the Key moves them all toward the song's key by as much as you like; drag a note to put it exactly on a pitch, double-click it to let it follow the key again. Make MIDI puts the notes on an instrument track.
+
+## Drums to notes
+Pick a drum recording and choose Drums to Notes: its kick, snare and hi-hat are heard (even when they're hit together) and written as notes on a drum track under it, as hard as they were hit. Pick any kit for them, double a thin kick, or mute the recording and keep only the notes. Check them: a hi-hat under a loud snare can hide.
+
+## Finding the chords
+Find the Chords (on a recording, or on a region of notes) works out its chords beat by beat, major and minor, and shows them over the region; click one to go to it. Play the Chords puts them on a pad on a new track under it, a low root and the chord held for each: a start for strings, or a bass line.
+
+## Mastering
+Beside the Mixer, Master My Song listens to the whole song and sets the master to it: its balance, its width, a gentle compressor, and as loud as where it's going (streaming, loud, podcast), never past −1 dB. Turn it off to hear the difference.
+A reference song is one that sounds the way you'd like yours to: choose one, and Master Like It moves your balance toward it and makes your song as loud. Hear It in Place of Your Song plays the reference where your song is, turned to be just as loud, so you can compare what's left fairly.
+
+## Scoring a film
+Drop a film on Tempo (or Export › Score a Film…) and it's the song's picture: the Picture window shows it where the playhead is, its sound comes in on a track of its own, and −¼ s and +¼ s move where in the film the song starts. Ctrl+Shift+P hides and shows the window. Export › The Film, With the Music saves the film with your song under it (the picture as it is, not made again).

@@ -25,8 +25,60 @@ from pathlib import Path
 import numpy as np
 from PySide6.QtCore import Property, QByteArray, QObject, QStandardPaths, QTimer, QUrl, Signal, Slot
 
+import hashlib
+import shutil
+import subprocess
+
 import huginn_tempo_engine as se
 import huginn_tempo_game as tg
+
+LONGEST = 2000.0      # beats: the longest a region can be (a MIDI region is drawn whole: 2000 beats at 60 a minute is 1.5 GB of sound)
+VIDEO = (".mp4", ".mov", ".mkv", ".webm", ".avi", ".m4v", ".mpg", ".mpeg")
+PICTURES = Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache") / "huginn" / "tempo" / "picture"
+
+
+def probe_video(path: str) -> dict:
+    """{duration, fps, width, height, audio} of a video file, or {} if it isn't one ffprobe can read."""
+    try:
+        out = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration:stream=codec_type,avg_frame_rate,width,height", "-of", "json", path],
+                             capture_output=True, text=True, timeout=30)
+        data = json.loads(out.stdout or "{}")
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return {}
+    streams = data.get("streams") or []
+    v = next((x for x in streams if x.get("codec_type") == "video"), None)
+    if not v:
+        return {}
+    try:
+        a, b = (v.get("avg_frame_rate") or "25/1").split("/")
+        fps = float(a) / float(b or 1) if float(b or 1) else 25.0
+    except ValueError:
+        fps = 25.0
+    return {"duration": float((data.get("format") or {}).get("duration") or 0), "fps": round(fps if 1 <= fps <= 240 else 25.0, 3),
+            "width": int(v.get("width") or 0), "height": int(v.get("height") or 0), "audio": any(x.get("codec_type") == "audio" for x in streams)}
+
+
+def picture_dir(path: str) -> Path:
+    """Where a video's small pictures for the Picture window are kept (they follow the file)."""
+    try:
+        st = os.stat(path)
+        sig = f"{path}|{st.st_size}|{int(st.st_mtime)}"
+    except OSError:
+        sig = path
+    return PICTURES / hashlib.sha1(sig.encode()).hexdigest()[:16]
+
+
+def picture_rate(duration: float, fps: float) -> float:
+    """How many pictures a second the Picture window gets: ten (or the film's own, if fewer), four for a long film."""
+    return min(float(fps or 25), 10.0 if duration <= 900 else 4.0)
+
+
+def mux_command(video: str, song: str, out: str, offset: float, duration: float) -> list:
+    """ffmpeg putting the song under the picture: the picture copied as it is, the song starting at `offset`
+    seconds into the film (before it, if negative), for as long as the film."""
+    args = ["ffmpeg", "-v", "error", "-y", "-i", video]
+    args += (["-itsoffset", f"{offset:.3f}", "-i", song] if offset >= 0 else ["-ss", f"{-offset:.3f}", "-i", song])
+    return args + ["-map", "0:v:0", "-map", "1:a:0", "-c:v", "copy", "-c:a", "aac", "-b:a", "256k", "-t", f"{max(0.1, duration):.3f}", out]
 
 try:
     from PySide6.QtMultimedia import QAudioFormat, QAudioSink, QAudioSource, QMediaDevices
@@ -599,7 +651,7 @@ class Tempo(QObject):
                 "colour": self._track_view(t)["colour"] if t else "", "takeViews": views, "comp": r.get("comp") or [], "take": int(r.get("take", 0)),
                 "span": self._tm().clock(float(r["start"]))(float(r["length"])),
                 "tuneTargets": [round(se.tune_target(n, r["tune"], int(self._p.get("key", 0)), self._p.get("mode", "major")), 3) for n in (r.get("tune") or {}).get("notes", [])],
-                "finding": rid in self._busy}
+                "finding": rid in self._busy, "drumming": f"drums:{rid}" in self._busy, "chording": f"chords:{rid}" in self._busy}
 
     @Slot(str, result="QVariantList")
     def smartControls(self, tid: str) -> list:
@@ -949,6 +1001,10 @@ class Tempo(QObject):
             value = round(max(-1.0, min(1.0, float(value))), 2)
         elif key in ("reverb", "echo"):
             value = round(max(0.0, min(1.0, float(value))), 2)
+        elif key == "name":                                   # (a name is words: nothing else shows in the window)
+            value = str(value if value is not None else "")[:80].strip() or t.get("name", "Track")
+        elif key in ("mute", "solo", "arm", "open"):
+            value = bool(value)
         self._before(("track", tid, key) if key in ("volume", "pan", "reverb", "echo") else None)
         t[key] = value
         if key == "arm" and value:                           # one armed track at a time, like a tape machine
@@ -1900,7 +1956,7 @@ class Tempo(QObject):
         r = self._r(rid)
         if r:
             self._before(("resize", rid))
-            r["length"] = max(0.25, round(float(length) * 4) / 4)
+            r["length"] = max(0.25, min(LONGEST, round(float(length) * 4) / 4))
             if r.get("kind") == "drummer":
                 t = self._t(r["track"])
                 r["notes"] = self._drummer_region(t, r["start"], max(1, int(round(r["length"] / self._bar_len(r["start"])))))["notes"]
@@ -2088,7 +2144,8 @@ class Tempo(QObject):
         def work():
             try:
                 mix = se.render_song(snap, self._folder, tail=1.0)
-                m = se.assist_master(mix, character, target) if len(mix) > se.SR else None
+                ref = (snap.get("master") or {}).get("reference")
+                m = se.assist_master(mix, character, target, ref) if len(mix) > se.SR else None
             except Exception:                                 # noqa: BLE001
                 mix, m = None, None
 
@@ -2124,7 +2181,7 @@ class Tempo(QObject):
                 self.masterSong(value if key == "character" else m.get("character", "clean"), value if key == "target" else m.get("target", "streaming"))
                 return
             fresh = se.assist_master(self._master_mix, value if key == "character" else m.get("character", "clean"),
-                                     value if key == "target" else m.get("target", "streaming"))
+                                     value if key == "target" else m.get("target", "streaming"), self._p["master"].get("reference"))
             fresh["on"] = m.get("on", True)
             self._before()
             self._p["master"]["mastering"] = fresh
@@ -2658,6 +2715,8 @@ class Tempo(QObject):
             low = path.lower()
             if low.endswith((".mid", ".midi")):
                 self.importMidi(path)
+            elif low.endswith(VIDEO) and probe_video(path):
+                self.setVideo(path)
             else:
                 a = se.load_audio(path)
                 if a.size == 0:
@@ -2749,7 +2808,26 @@ class Tempo(QObject):
 
         def work():
             try:
-                if kind == "stems":
+                if kind == "video":                            # the song under the film's picture
+                    v = snap.get("video") or {}
+                    if not v.get("file") or not Path(v["file"]).is_file():
+                        raise OSError("the film isn't where it was")
+                    if not shutil.which("ffmpeg"):
+                        raise OSError("it needs ffmpeg")
+                    ext = Path(v["file"]).suffix.lower() if Path(v["file"]).suffix.lower() in (".mov", ".mkv") else ".mp4"
+                    target = self._free(folder, name, ext)
+                    wav = target.with_name(f".{target.stem}.song.wav")
+                    se.write_wav(str(wav), se.render_song(snap, folder_in), 24)
+                    try:
+                        done = subprocess.run(mux_command(v["file"], str(wav), str(target), float(v.get("offset", 0)), float(v.get("duration", 0))),
+                                              capture_output=True, text=True, timeout=3600)
+                    finally:
+                        wav.unlink(missing_ok=True)
+                    if done.returncode != 0 or not target.is_file():
+                        target.unlink(missing_ok=True)
+                        raise OSError((done.stderr.strip().splitlines() or ["ffmpeg stopped"])[-1][:140])
+                    result = (str(target), f"Saved {target.name} in Music/Tempo Exports, the film with your music")
+                elif kind == "stems":
                     out_dir = self._free(folder, f"{name} stems", "")
                     out_dir.mkdir(parents=True)
                     for t in snap["tracks"]:
@@ -2778,6 +2856,329 @@ class Tempo(QObject):
         self.changed.emit()
 
     lastExport = Property(str, lambda self: getattr(self, "_last_export", ""), notify=changed)
+
+    # ---------------------------------------------------------------- pass five: from a recording, notes and chords
+    def _heard(self, r: dict) -> np.ndarray:
+        """A region's sound as it plays in the song (its takes, comp, offset, tempo and tune), before the track's effects."""
+        m = se.Mixer(json.loads(json.dumps(self._p)), self._folder)
+        return m._region_audio(self._t(r["track"]) or {}, r)
+
+    @Slot(str)
+    def drumNotes(self, rid: str) -> None:
+        """A drum recording's hits as notes on a drum track under it (kick, snare and hi-hat, as hard as they were hit),
+        to play with another kit, or alongside to fill it out."""
+        if self._p is None:
+            return
+        r = self._r(rid)
+        if r is None or r.get("kind") != "audio" or f"drums:{rid}" in self._busy:
+            if r is not None and r.get("kind") != "audio":
+                self.said.emit("Drum notes come from a recording of drums.", True)
+            return
+        try:
+            audio = self._heard(r)
+        except Exception:                                     # noqa: BLE001
+            self.said.emit("Couldn't read that recording.", True)
+            return
+        tm, start = self._tm(), float(r["start"])
+        sec0 = tm.seconds(start)
+        heard_len = min(float(r["length"]), LONGEST, tm.beat(sec0 + len(audio) / se.SR) - start + 1.0)   # (no longer than its sound)
+        self._busy.add(f"drums:{rid}")
+        self.changed.emit()
+
+        def work():
+            try:
+                notes = se.hits_to_notes(se.drum_hits(audio), lambda t: tm.beat(sec0 + t), start)
+            except Exception:                                 # noqa: BLE001
+                notes = None
+
+            def done():
+                self._busy.discard(f"drums:{rid}")
+                r2 = self._r(rid)
+                if r2 is None or notes is None:
+                    self.said.emit("Couldn't hear the drums in that.", True)
+                elif not notes:
+                    self.said.emit("No drum hits were heard in it.", True)
+                else:
+                    self._before()
+                    src = self._t(r2["track"]) or {}
+                    t = self._add_track("instrument", "drums", f"{src.get('name', 'Drums')[:18]} notes")
+                    order = [x["id"] for x in self._p["tracks"]]             # just under the recording
+                    self._p["tracks"].insert(order.index(r2["track"]) + 1, self._p["tracks"].pop(order.index(t["id"])))
+                    reg = {"id": self._id("r"), "track": t["id"], "start": start, "length": round(max(1.0, heard_len), 4), "kind": "midi", "name": "Drum notes",
+                           "notes": [n for n in notes if n["t"] < heard_len]}
+                    self._p["regions"].append(reg)
+                    self._sel_region, self._sel_track = reg["id"], t["id"]
+                    self._keep()
+                    count = {k: sum(1 for n in reg["notes"] if n["p"] == p) for k, p in se.DRUM_PITCH.items()}
+                    self.said.emit(f"{len(reg['notes'])} hits on a drum track under it: {count['kick']} kick, {count['snare']} snare, {count['hat']} hi-hat. "
+                                   "Pick any kit; the recording still plays (mute it to hear only the notes).", False)
+                self.changed.emit()
+            self._back.emit(done)
+        threading.Thread(target=work, daemon=True).start()
+
+    @Slot(str)
+    def findChords(self, rid: str) -> None:
+        """The chords of a region, beat by beat (a recording listened to, written notes read), shown over it."""
+        if self._p is None:
+            return
+        r = self._r(rid)
+        if r is None or f"chords:{rid}" in self._busy:
+            return
+        tm, start, length = self._tm(), float(r["start"]), float(r["length"])
+        beats = [float(b) for b in np.arange(0.0, length, 1.0)]
+        if r.get("kind") != "audio":
+            notes = [n for n in (r.get("notes") or []) if n["p"] >= 21]
+            t = self._t(r["track"]) or {}
+            if se.settings(t.get("instrument") or {}).get("engine") == "kit":
+                self.said.emit("Drums have no chords.", True)
+                return
+            names = se.name_chords([se.notes_chroma(notes, b, b + 1.0) for b in beats])
+            return self._chords_found(rid, se.merge_chords(beats, names))
+        try:
+            audio = self._heard(r)
+        except Exception:                                     # noqa: BLE001
+            self.said.emit("Couldn't read that recording.", True)
+            return
+        sec0 = tm.seconds(start)
+        self._busy.add(f"chords:{rid}")
+        self.changed.emit()
+
+        def work():
+            try:
+                names = se.name_chords([se.chroma_of(audio, tm.seconds(start + b) - sec0, tm.seconds(start + b + 1.0) - sec0) for b in beats])
+                found = se.merge_chords(beats, names)
+            except Exception:                                 # noqa: BLE001
+                found = None
+
+            def done():
+                self._busy.discard(f"chords:{rid}")
+                if found is None:
+                    self.said.emit("Couldn't hear chords in that.", True)
+                    self.changed.emit()
+                else:
+                    self._chords_found(rid, found)
+            self._back.emit(done)
+        threading.Thread(target=work, daemon=True).start()
+
+    def _chords_found(self, rid: str, found: list) -> None:
+        r = self._r(rid)
+        if r is None:
+            return
+        names = [c[1] for c in found if c[1]]
+        if not names:
+            self.said.emit("No chords were heard in it.", True)
+            self.changed.emit()
+            return
+        self._before()
+        r["chords"] = found
+        self._keep()
+        shown = " ".join(dict.fromkeys(names))
+        self.said.emit(f"{len(names)} chord{'s' if len(names) != 1 else ''}: {shown[:80]}", False)
+
+    @Slot(str, result=str)
+    def chordsToTrack(self, rid: str) -> str:
+        """The chords found in a region, played on a pad on a new track under it (a low root and the chord, held for
+        each). Returns the new region's id."""
+        if self._p is None:
+            return ""
+        r = self._r(rid)
+        chords = (r or {}).get("chords") or []
+        if r is None or not any(c[1] for c in chords):
+            self.said.emit("Find the chords first.", True)
+            return ""
+        length = min(float(r["length"]), LONGEST, max(float(c[0]) for c in chords) + 64.0)
+        notes = []
+        for k, (b, name) in enumerate(chords):
+            end = float(chords[k + 1][0]) if k + 1 < len(chords) else length
+            if not name or end <= b:
+                continue
+            for p in se.chord_pitches(name):
+                notes.append({"t": round(float(b), 4), "d": round(min(end, length) - float(b), 4), "p": p, "v": 78 if p < 48 else 70})
+        self._before()
+        src = self._t(r["track"]) or {}
+        t = self._add_track("instrument", "pad", f"{src.get('name', 'Chords')[:18]} chords")
+        order = [x["id"] for x in self._p["tracks"]]
+        self._p["tracks"].insert(order.index(r["track"]) + 1, self._p["tracks"].pop(order.index(t["id"])))
+        reg = {"id": self._id("r"), "track": t["id"], "start": float(r["start"]), "length": length, "kind": "midi", "name": "Chords", "notes": notes,
+               "chords": [list(c) for c in chords]}
+        self._p["regions"].append(reg)
+        self._sel_region, self._sel_track = reg["id"], t["id"]
+        self._keep()
+        self.said.emit(f"The chords on a pad under it: {len(set(n['t'] for n in notes))} of them. Pick any instrument.", False)
+        return reg["id"]
+
+    # ---------------------------------------------------------------- pass five: mastering toward a song you like
+    @Slot(str)
+    def setReference(self, path: str) -> None:
+        """A finished song to master toward: its balance and loudness are listened to (in the background), and it can
+        be heard in place of yours, just as loud, to compare."""
+        if self._p is None:
+            return
+        path = QUrl(path).toLocalFile() if str(path).startswith("file:") else str(path)
+        if not path or not Path(path).is_file():
+            self.said.emit("That song isn't there.", True)
+            return
+        if "reference" in self._busy:
+            return
+        snap = json.loads(json.dumps(self._p))
+        snap.setdefault("master", {})["hearRef"] = False
+        self._busy.add("reference")
+        self.changed.emit()
+        self.said.emit(f"Listening to {Path(path).name}…", False)
+
+        def work():
+            try:
+                ref = se.load_audio(path)
+                info = se.reference_of(ref) if len(ref) > se.SR * 2 else None
+                song = se.render_song(snap, self._folder, tail=1.0) if snap.get("regions") else np.zeros((0, 2), np.float32)
+                info["songLoud"] = round(se.loudness(song), 2) if info and len(song) > se.SR else (info or {}).get("loud", -14.0)
+            except Exception:                                 # noqa: BLE001
+                info = None
+
+            def done():
+                self._busy.discard("reference")
+                if not info:
+                    self.said.emit("Tempo can't read that as a song (or it's too short).", True)
+                else:
+                    self._before()
+                    self._p.setdefault("master", {})["reference"] = dict(info, file=path, name=Path(path).stem[:60])
+                    self._match_reference()
+                    self._keep()
+                    self.said.emit(f"{Path(path).stem[:40]}: {info['loud']} LUFS. Master toward it, or hear it in place of your song.", False)
+                self.changed.emit()
+            self._back.emit(done)
+        threading.Thread(target=work, daemon=True).start()
+
+    def _match_reference(self) -> None:
+        """How much the reference is turned up or down to be just as loud as the song as it plays (mastered or not)."""
+        m = self._p.get("master") or {}
+        ref, mastering = m.get("reference"), m.get("mastering") or {}
+        if ref:
+            here = float(mastering["after"]) if mastering.get("on") and "after" in mastering else float(ref.get("songLoud", ref.get("loud", -14)))
+            ref["match"] = round(max(-30.0, min(30.0, here - float(ref.get("loud", -14)))), 2)
+
+    @Slot(bool)
+    def hearReference(self, on: bool) -> None:
+        """A/B: the reference in place of the song, at the same place and just as loud (playing goes on)."""
+        if self._p is None or not (self._p.get("master") or {}).get("reference"):
+            return
+        self._match_reference()
+        self._p["master"]["hearRef"] = bool(on)
+        self._keep()
+
+    @Slot()
+    def removeReference(self) -> None:
+        if self._p is not None and (self._p.get("master") or {}).get("reference"):
+            self._before()
+            self._p["master"].pop("reference", None)
+            self._p["master"].pop("hearRef", None)
+            self._keep()
+
+    hearingReference = Property(bool, lambda self: bool(((self._p or {}).get("master") or {}).get("hearRef")), notify=changed)
+    referencing = Property(bool, lambda self: "reference" in self._busy, notify=changed)
+
+    # ---------------------------------------------------------------- pass five: a film to score
+    @Slot(str)
+    def setVideo(self, path: str) -> None:
+        """A film to write music to: its pictures follow the playhead in the Picture window, its sound comes in on a
+        track of its own, and Export › Film puts the song under it."""
+        path = QUrl(path).toLocalFile() if str(path).startswith("file:") else str(path)
+        info = probe_video(path)
+        if not info:
+            self.said.emit("Tempo can't read that film (it needs ffmpeg).", True)
+            return
+        if self._p is None:
+            self.newProject("empty", Path(path).stem)
+        self._before()
+        self._p["video"] = dict(info, file=path, name=Path(path).name, offset=0.0)
+        self._keep()
+        self._make_pictures()
+        if info["audio"]:
+            sound = se.load_audio(path)
+            if sound.size:
+                t = self._add_track("audio", "", f"{Path(path).stem[:16]} sound")
+                self._add_audio_region(t["id"], sound, 0.0, Path(path).stem)
+                self._undo.pop()                             # (one undo takes the film and its sound away together)
+        self.said.emit(f"{Path(path).name} is the song's picture: it follows the playhead.", False)
+
+    def _make_pictures(self) -> None:
+        v = (self._p or {}).get("video") or {}
+        if not v.get("file") or self._demo:
+            return
+        out = picture_dir(v["file"])
+        if (out / "done").is_file() or "picture" in self._busy:
+            return
+        rate = picture_rate(float(v.get("duration", 0)), float(v.get("fps", 25)))
+        self._busy.add("picture")
+        self.changed.emit()
+
+        def work():
+            out.mkdir(parents=True, exist_ok=True)
+            try:
+                ok = subprocess.run(["ffmpeg", "-v", "error", "-y", "-i", v["file"], "-vf", f"fps={rate:g},scale=-2:200", "-q:v", "5", str(out / "f%05d.jpg")],
+                                    capture_output=True, timeout=7200).returncode == 0
+                if ok:
+                    (out / "done").write_text(json.dumps({"rate": rate, "count": len(list(out.glob("f*.jpg")))}))
+            except (OSError, subprocess.SubprocessError):
+                ok = False
+
+            def done():
+                self._busy.discard("picture")
+                if not ok:
+                    self.said.emit("Couldn't read the film's pictures.", True)
+                self.changed.emit()
+                self.clockChanged.emit()
+            self._back.emit(done)
+        threading.Thread(target=work, daemon=True).start()
+
+    def _video_view(self) -> dict:
+        v = (self._p or {}).get("video")
+        if not v:
+            return {}
+        info = {}
+        try:
+            info = json.loads((picture_dir(v["file"]) / "done").read_text())
+        except (OSError, ValueError):
+            pass
+        return {"name": v.get("name", ""), "duration": v.get("duration", 0), "offset": v.get("offset", 0.0), "fps": v.get("fps", 25),
+                "ready": bool(info), "making": "picture" in self._busy, "there": Path(v.get("file", "")).is_file(), "width": v.get("width", 16), "height": v.get("height", 9)}
+
+    video = Property("QVariantMap", _video_view, notify=changed)
+    seconds = Property(float, lambda self: self._tm().seconds(self._pos) if self._p is not None else 0.0, notify=clockChanged)
+
+    @Slot(float, result=str)
+    def videoFrame(self, seconds: float) -> str:
+        """The film's picture at a moment of the song (as a file:// address), "" before or after it."""
+        v = (self._p or {}).get("video")
+        if not v or not math.isfinite(seconds):
+            return ""
+        d = picture_dir(v["file"])
+        try:
+            info = json.loads((d / "done").read_text())
+        except (OSError, ValueError):
+            return ""
+        at = seconds + float(v.get("offset", 0))
+        if at < 0 or at > float(v.get("duration", 0)) + 0.05:
+            return ""
+        k = max(1, min(int(info.get("count", 1)), int(at * float(info.get("rate", 10))) + 1))
+        f = d / f"f{k:05d}.jpg"
+        return QUrl.fromLocalFile(str(f)).toString() if f.is_file() else ""
+
+    @Slot(float)
+    def setVideoOffset(self, seconds: float) -> None:
+        """Where in the film the song starts (a film's opening titles before the music, say)."""
+        v = (self._p or {}).get("video")
+        if v and math.isfinite(seconds):
+            self._before("videoOffset")
+            v["offset"] = round(max(-3600.0, min(float(v.get("duration", 0)), float(seconds))), 3)
+            self._keep()
+
+    @Slot()
+    def removeVideo(self) -> None:
+        if self._p is not None and self._p.get("video"):
+            self._before()
+            self._p.pop("video")
+            self._keep()
 
     # ---------------------------------------------------------------- for games (huginn_tempo_game.py has the sound of it)
     loudnessNow = Property("QVariantMap", lambda self: self._meter.read(), notify=clockChanged)

@@ -79,6 +79,24 @@ GlassWindow {
     readonly property color lcd: "#FF9F5A"
     function trackColour(t) { return t ? t.colour : hot }
     Connections { target: Backend; function onSaid(msg, bad) { toast.say(msg, bad) } }
+    // ---- a film to score: its picture where the playhead is, above everything
+    Rectangle { id: picture; objectName: "pictureWindow"; visible: Backend.hasSong && !!Backend.video.name && win.showPicture; z: 50
+        x: parent.width - width - 24; y: 84; width: 300; height: width * Math.max(0.3, Math.min(1.5, (Backend.video.height || 9) / Math.max(1, Backend.video.width || 16))) + 40
+        radius: 12; color: "#E0101114"; border.width: 1; border.color: Theme.t.islandLine
+        DragHandler { target: picture }
+        Image { id: frame; objectName: "pictureFrame"; x: 6; y: 6; width: parent.width - 12; height: parent.height - 40; fillMode: Image.PreserveAspectFit; asynchronous: false; cache: true
+            source: Backend.video.ready ? Backend.videoFrame(Backend.seconds) : "" }
+        Label { anchors.centerIn: frame; visible: frame.source == ""; color: "#FFFFFF"; font.pixelSize: 11
+            text: Backend.video.making ? "Reading the film…" : !Backend.video.there ? "The film isn't where it was" : Backend.video.ready ? "(before or after the film)" : "" }
+        Row { x: 8; y: parent.height - 30; spacing: 6; height: 24
+            Label { anchors.verticalCenter: parent.verticalCenter; width: 110; color: "#FFFFFF"; font.family: Theme.t.fontMono; font.pixelSize: 11
+                readonly property real at: Backend.seconds + (Backend.video.offset || 0)
+                text: Math.floor(at / 60) + ":" + ("0" + (Math.floor(at) % 60)).slice(-2) + ":" + ("0" + Math.floor((at % 1) * (Backend.video.fps || 25))).slice(-2) }
+            Seg { anchors.verticalCenter: parent.verticalCenter; text: "−¼ s"; tip: "The song starts earlier in the film"; onClicked: Backend.setVideoOffset((Backend.video.offset || 0) - 0.25) }
+            Seg { anchors.verticalCenter: parent.verticalCenter; text: "+¼ s"; tip: "The song starts later in the film"; onClicked: Backend.setVideoOffset((Backend.video.offset || 0) + 0.25) }
+            Seg { anchors.verticalCenter: parent.verticalCenter; icon: "x"; tip: "Hide (Ctrl+Shift+P shows it)"; onClicked: win.showPicture = false } } }
+    property bool showPicture: true
+    Shortcut { sequence: "Ctrl+Shift+P"; onActivated: win.showPicture = !win.showPicture }
     // MIDI files and sounds dropped on the window come in as tracks (loops have a drop area of their own)
     DropArea { anchors.fill: parent; keys: ["text/uri-list"]; onDropped: function (d) { if (d.hasUrls) Backend.importFiles(d.urls) } }
 
@@ -559,6 +577,23 @@ GlassWindow {
                                     onReleased: { var step = (pitchView.height - 10) / Math.max(1, pitchView.hi - pitchView.lo), to = Math.round(blob.target - blob.dy / step); blob.dy = 0
                                         Backend.moveTuneNote(win.reg.id, blob.index, to) }
                                     onDoubleClicked: Backend.moveTuneNote(win.reg.id, blob.index, -1) } } } } }
+                // what's in it: drum hits as notes, the chords (of a recording, or of written notes)
+                Column { objectName: "insidePane"; visible: !!win.reg.id && !win.reg.kit; width: 230; spacing: 6
+                    readonly property var chords: (win.reg.chords || []).filter(function (c) { return c[1] !== "" })
+                    Heading { text: win.reg.kind === "audio" ? "FROM THE RECORDING" : "CHORDS" }
+                    Btn { objectName: "drumNotesBtn"; visible: win.reg.kind === "audio"; text: win.reg.drumming ? "Listening…" : "Drums to Notes"
+                        onClicked: if (!win.reg.drumming) Backend.drumNotes(win.reg.id) }
+                    Btn { objectName: "findChordsBtn"; text: win.reg.chording ? "Listening…" : parent.chords.length ? "Find Them Again" : "Find the Chords"
+                        onClicked: if (!win.reg.chording) Backend.findChords(win.reg.id) }
+                    Flow { objectName: "chordFlow"; visible: parent.chords.length > 0; width: 226; spacing: 4
+                        Repeater { model: parent.parent.chords
+                            Rectangle { required property var modelData; width: chordName.implicitWidth + 14; height: 24; radius: 7; color: Qt.alpha(win.hot, 0.18); border.width: 1; border.color: Qt.alpha(win.hot, 0.5)
+                                Text { id: chordName; anchors.centerIn: parent; text: modelData[1]; color: Theme.t.text; font.pixelSize: 12; font.weight: Font.DemiBold }
+                                MouseArea { anchors.fill: parent; onClicked: Backend.seek((win.reg.start || 0) + modelData[0]) } } } }
+                    Btn { objectName: "chordsToTrackBtn"; visible: parent.chords.length > 0; text: "Play the Chords"; onClicked: Backend.chordsToTrack(win.reg.id) }
+                    Label { width: 226; wrapMode: Text.WordWrap; font.pixelSize: 10; secondary: true
+                        text: win.reg.kind === "audio" ? "Drums to Notes hears the kick, snare and hi-hat (check them: a hat under a snare can hide). The chords are major and minor, beat by beat."
+                                                       : "The chords the notes make, beat by beat (major and minor). Click one to go to it." } }
                 Column { visible: win.reg.kind === "audio"; width: 230; spacing: 6
                     Heading { text: "THE RECORDING" }
                     Label { text: "Gain  " + ((win.reg.gain || 0) > 0 ? "+" : "") + (win.reg.gain || 0).toFixed(1) + " dB"; font.pixelSize: 11 }
@@ -888,7 +923,25 @@ GlassWindow {
                     text: masterPane.m ? "Width " + Math.round(masterPane.m.width * 100) + " %  ·  gain " + (masterPane.m.gain > 0 ? "+" : "") + masterPane.m.gain.toFixed(1) + " dB" : "" }
                 Row { visible: !!masterPane.m; spacing: 4; height: 30
                     Seg { text: Backend.mastering ? "Listening…" : "Listen Again"; tip: "After changing the song"; onClicked: if (!Backend.mastering) Backend.masterSong(masterPane.m.character, masterPane.m.target) }
-                    Seg { icon: "trash"; danger: true; tip: "Take it off"; onClicked: Backend.removeMastering() } } } } }
+                    Seg { icon: "trash"; danger: true; tip: "Take it off"; onClicked: Backend.removeMastering() } }
+                // a finished song to master toward, and to hear in place of yours, as loud
+                Item { width: 1; height: 6 }
+                Heading { text: "REFERENCE" }
+                Column { objectName: "referenceBox"; width: parent.width; spacing: 6
+                    readonly property var r: (win.song.master || {}).reference || null
+                    Label { visible: !parent.r; width: parent.width; wrapMode: Text.WordWrap; font.pixelSize: 10; secondary: true
+                        text: "A finished song that sounds the way you'd like yours to: mastering moves your balance toward it, and you can hear it in your song's place, just as loud, to compare." }
+                    Btn { objectName: "referenceBtn"; visible: !parent.r; text: Backend.referencing ? "Listening…" : "Choose a Song…"
+                        onClicked: if (!Backend.referencing) Picker.open("A song to compare with", [["Songs", "*.wav *.flac *.mp3 *.ogg *.m4a *.aac *.opus *.aiff"]], function (paths) { if (paths.length) Backend.setReference(paths[0]) }) }
+                    Label { visible: !!parent.r; width: parent.width; elide: Text.ElideRight; font.pixelSize: 12; font.weight: Font.DemiBold; text: parent.r ? parent.r.name : "" }
+                    Label { visible: !!parent.r; font.pixelSize: 10; secondary: true; text: parent.r ? parent.r.loud + " LUFS  ·  yours " + (masterPane.m && masterPane.m.on ? masterPane.m.after : parent.r.songLoud) + " LUFS" : "" }
+                    Row { visible: !!parent.r; spacing: 8; height: 30
+                        Toggle { objectName: "hearRefToggle"; anchors.verticalCenter: parent.verticalCenter; on: Backend.hearingReference; onToggled: function (v) { Backend.hearReference(v) } }
+                        Label { anchors.verticalCenter: parent.verticalCenter; width: 200; wrapMode: Text.WordWrap; font.pixelSize: 11; text: Backend.hearingReference ? "Hearing the reference (as loud as yours)" : "Hear it in place of your song" } }
+                    Row { visible: !!parent.r; spacing: 4; height: 30
+                        Seg { objectName: "likeRefBtn"; text: Backend.mastering ? "Listening…" : "Master Like It"; tip: "Its balance and its loudness"
+                            onClicked: if (!Backend.mastering) Backend.masterSong(masterPane.m ? masterPane.m.character : win.masterChar, "reference") }
+                        Seg { icon: "trash"; danger: true; tip: "Take the reference away"; onClicked: Backend.removeReference() } } } } } }
         ListView { id: mixer; objectName: "mixerStrips"; visible: win.benchKind === "mixer"; x: 12; y: 46; width: parent.width - 24 - masterPane.width - 10; height: parent.height - 56; orientation: ListView.Horizontal; spacing: 6; clip: true
             boundsBehavior: Flickable.StopAtBounds
             readonly property var list: Backend.tracks
@@ -1113,7 +1166,11 @@ GlassWindow {
                 Flow { width: parent.width; spacing: 6
                     Repeater { model: [["wav", "WAV (best)"], ["flac", "FLAC"], ["mp3", "MP3"], ["m4a", "AAC"], ["ogg", "Ogg"], ["stems", "Stems (a WAV per track)"], ["midi", "MIDI"]]
                         Btn { required property var modelData; text: modelData[1]; primary: modelData[0] === "wav"; onClicked: Backend.export(modelData[0]) } } }
-                Btn { objectName: "gameButton"; text: "For a Game…"; onClicked: win.sheet = "game" }
+                Row { spacing: 6
+                    Btn { objectName: "gameButton"; text: "For a Game…"; onClicked: win.sheet = "game" }
+                    Btn { objectName: "filmExport"; visible: !!Backend.video.name; text: "The Film, With the Music"; onClicked: Backend.export("video") }
+                    Btn { objectName: "filmChoose"; visible: !Backend.video.name; text: "Score a Film…"
+                        onClicked: Picker.open("A film to write music for", [["Films", "*.mp4 *.mov *.mkv *.webm *.avi *.m4v *.MP4 *.MOV"]], function (paths) { if (paths.length) { Backend.setVideo(paths[0]); win.sheet = "" } }) } }
                 Label { visible: Backend.lastExport !== ""; width: parent.width; elide: Text.ElideMiddle; font.pixelSize: 11; secondary: true; text: "Last: " + Backend.lastExport } }
             // ---- for a game: sections, layers and regions as files an engine takes, loops joined, at one loudness
             Item { id: game; objectName: "gameSheet"; visible: win.sheet === "game"; x: 24; y: 56; width: parent.width - 48; height: parent.height - 56 - 60
