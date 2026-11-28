@@ -537,6 +537,15 @@ CASPER
     # so the two packages ride on the ISO, in pool/ (stage_image moves them there).
     install -d "$CHROOT/var/cache/huginn-pool"
     in_chroot sh -c 'cd /var/cache/huginn-pool && apt-get download grub-efi-amd64 grub-pc'
+    # Unlocking with the TPM and a PIN (the installer's Encrypt choice): systemd-cryptenroll and dracut, whose
+    # start-up asks for the PIN, in place of initramfs-tools (which can't). The live system keeps initramfs-tools
+    # (casper needs it), so these ride on the ISO too, in pool/tpm, with what they need that the image hasn't.
+    install -d "$CHROOT/var/cache/huginn-pool/tpm/partial"
+    if ! in_chroot apt-get install -y --download-only -o Dir::Cache::Archives=/var/cache/huginn-pool/tpm \
+            dracut systemd-cryptsetup > "$WORK/tpm-pool.log" 2>&1; then
+        log "(the TPM unlock's packages couldn't be fetched, see $WORK/tpm-pool.log: the installer won't offer it)"
+    fi
+    rm -rf "$CHROOT/var/cache/huginn-pool/tpm/partial" "$CHROOT/var/cache/huginn-pool/tpm/lock"
 }
 
 stage_cleanup() {
@@ -559,14 +568,22 @@ stage_image() {
     mkdir -p "$IMAGE"/{casper,boot/grub,.disk,pool}
     # The installer's GRUB packages: fetched into the chroot by stage_customise, kept in $WORK/pool so that
     # --from image can repack again and again.
-    mkdir -p "$WORK/pool"
+    mkdir -p "$WORK/pool/tpm"
     if compgen -G "$CHROOT/var/cache/huginn-pool/*.deb" >/dev/null; then
         rm -f "$WORK"/pool/*.deb
         mv "$CHROOT"/var/cache/huginn-pool/*.deb "$WORK/pool/"
     fi
-    rmdir "$CHROOT/var/cache/huginn-pool" 2>/dev/null || true
+    if compgen -G "$CHROOT/var/cache/huginn-pool/tpm/*.deb" >/dev/null; then
+        rm -f "$WORK"/pool/tpm/*.deb
+        mv "$CHROOT"/var/cache/huginn-pool/tpm/*.deb "$WORK/pool/tpm/"
+    fi
+    rmdir "$CHROOT/var/cache/huginn-pool/tpm" "$CHROOT/var/cache/huginn-pool" 2>/dev/null || true
     compgen -G "$WORK/pool/*.deb" >/dev/null || die "no GRUB packages for the installer: run with --from customise"
     cp "$WORK"/pool/*.deb "$IMAGE/pool/"
+    if compgen -G "$WORK/pool/tpm/*.deb" >/dev/null; then                 # (TPM and PIN unlocking, when they came)
+        mkdir -p "$IMAGE/pool/tpm"
+        cp "$WORK"/pool/tpm/*.deb "$IMAGE/pool/tpm/"
+    fi
 
     local kernel initrd
     kernel="$(find "$CHROOT/boot" -maxdepth 1 -name 'vmlinuz-*' | sort -V | tail -1)"

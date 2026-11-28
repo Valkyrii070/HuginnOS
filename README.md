@@ -1763,6 +1763,19 @@ trying Huginn OS, and it waits in the launcher.
     up on a broken task after three tries; and the window: ten islands and the orb, answers kept, From Windows
     there only when Windows stays, every new step's choices, the plan they make, the last look and the
     installation's steps to the end, with no QML complaints.
+  - **Bookmarks from Windows**: From Windows counts the bookmarks in each person's Edge, Chrome, Brave, Vivaldi, Opera
+    and Firefox (Chromium's Bookmarks files, Firefox's places.sqlite opened read-only and immutable) and offers
+    "Bookmarks into Huginn". The first start adds them to Huginn's Favorites (its browser-data.json, after any there,
+    none twice); with Huginn already open it leaves "Bookmarks from Windows.html" in the home to import instead.
+    Saved passwords and Wi‑Fi keys stay in Windows.
+  - **The chip and a PIN** (Safety, with encryption, on computers with a TPM 2.0): the disk opens with a short PIN
+    on the boot screen instead of the password. initramfs-tools can't ask a TPM, so the installed system switches to
+    dracut: `dracut` and `systemd-cryptsetup` ride on the ISO in `pool/tpm` (fetched by the build, installed offline),
+    `systemd-cryptenroll --tpm2-device=auto --tpm2-pcrs=7 --tpm2-with-pin=yes` seals the PIN to the chip with Secure
+    Boot's state (the password and PIN go in its environment, never on a command line or in the log), crypttab gets
+    `tpm2-device=auto`. The password and recovery key keep working; with no chip, no packages, or the chip refusing,
+    it's the password alone and initramfs-tools stays. Tested (`scripts/tests/installer_gaps_test.py`, 28 checks)
+    against made-up browsers and a fake chip; not yet on a real TPM.
 - **Steps** (before the dock path), in a rail at the left that can be gone back along: Welcome (language, then Try or Install), Keyboard
   (search, and a place to try it; picked from the language, applied to the live session at once), Network (Wi‑Fi
   through NetworkManager; optional), Disk, You (name → user name and computer name suggested, password with its

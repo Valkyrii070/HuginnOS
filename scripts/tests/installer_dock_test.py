@@ -43,7 +43,7 @@ check("first start: Microsoft's fonts with their licence, fonts for every script
       and "printer-driver-all" in t["packages"] and "git-lfs" in t["packages"], t["packages"])
 check("…media formats to build (not downloaded)", t["build"] == ["codecs"] and not set(eng.CODEC_PACKAGES) & set(t["packages"]))
 check("…apps from Flathub: Godot and the Windows apps that are real", t["flatpaks"] == ["org.godotengine.Godot", "com.discordapp.Discord", "com.obsproject.Studio"], t["flatpaks"])
-check("…NVIDIA's driver, and Windows by its UUID with only real folders", t["drivers"] and t["windows"] == {"uuid": "ABCD-1234", "user": "Astrid", "how": "copy", "folders": ["documents", "pictures"]})
+check("…NVIDIA's driver, and Windows by its UUID with only real folders", t["drivers"] and t["windows"] == {"uuid": "ABCD-1234", "user": "Astrid", "how": "copy", "folders": ["documents", "pictures"], "bookmarks": False})
 t2 = eng.first_start_tasks({"user": {"name": "a"}, "extras": {"codecs": "download"}})
 check("downloaded formats are Ubuntu's packages", set(eng.CODEC_PACKAGES) <= set(t2["packages"]) and not t2["build"] and t2["windows"] is None)
 check("nothing chosen, nothing to do", eng.first_start_tasks({"user": {"name": "a"}}) == {"owner": "a", "packages": [], "debconf": [], "flatpaks": [], "flathub": True,

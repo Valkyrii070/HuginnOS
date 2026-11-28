@@ -101,9 +101,9 @@ def first_start_tasks(plan: dict, windows_uuid: str = "") -> dict:
     tasks = {"owner": (plan.get("user") or {}).get("name", ""), "packages": list(dict.fromkeys(packages)), "debconf": debconf,
              "flatpaks": list(dict.fromkeys(flatpaks)), "flathub": apps.get("flathub", True) is not False, "build": build,
              "drivers": bool(ex.get("nvidia")), "windows": None}
-    if windows_uuid and win.get("user") and (win.get("folders") or win.get("how") == "link"):
+    if windows_uuid and win.get("user") and (win.get("folders") or win.get("how") == "link" or win.get("bookmarks")):
         tasks["windows"] = {"uuid": windows_uuid, "user": str(win["user"]), "how": "link" if win.get("how") == "link" else "copy",
-                            "folders": [f for f in (win.get("folders") or []) if f in WINDOWS_FOLDERS]}
+                            "folders": [f for f in (win.get("folders") or []) if f in WINDOWS_FOLDERS], "bookmarks": bool(win.get("bookmarks"))}
     return tasks
 
 
@@ -137,7 +137,13 @@ def windows_survey(root: Path, budget: float = 12.0) -> dict:
                     out["counted"] = False
                     break
             folders[key] = {"files": files, "bytes": size}
-        out["users"].append({"name": d.name, "folders": folders})
+        try:                                                    # (the same reader the first start uses)
+            from huginn_first_start import windows_bookmarks
+            marks = windows_bookmarks(d)
+        except Exception:                                       # noqa: BLE001
+            marks = []
+        out["users"].append({"name": d.name, "folders": folders,
+                             "bookmarks": {"count": len(marks), "browsers": list(dict.fromkeys(m["browser"] for m in marks))}})
     seen = set()
     places = [root / "Program Files", root / "Program Files (x86)", root / "ProgramData/Microsoft/Windows/Start Menu/Programs"]
     for d in people:
@@ -335,8 +341,23 @@ def fstab(root_uuid: str, efi_uuid: str = "", boot_uuid: str = "", encrypted: bo
     return "\n".join(rows) + "\n"
 
 
-def crypttab(luks_uuid: str) -> str:
+def crypttab(luks_uuid: str, tpm: bool = False) -> str:
+    if tpm:
+        return (f"# Unlocked at start-up by this computer's security chip (TPM) and your PIN; the password or the recovery key\n"
+                f"# open it too.\n{MAPPER}  UUID={luks_uuid}  none  luks,discard,tpm2-device=auto\n")
     return f"# Unlocked at start-up with the password asked on the boot screen.\n{MAPPER}  UUID={luks_uuid}  none  luks,discard\n"
+
+
+def tpm2_here(sysfs: Path = Path("/sys")) -> bool:
+    """A TPM 2.0 chip the firmware has turned on."""
+    try:
+        return (sysfs / "class/tpm/tpm0/tpm_version_major").read_text().strip() == "2"
+    except OSError:
+        return False
+
+
+DRACUT_CONF = ("# Huginn OS (the installer): the start-up opens the disk with the TPM and a PIN, asked on the boot screen\n"
+               'hostonly="yes"\nhostonly_cmdline="no"\nadd_dracutmodules+=" crypt systemd tpm2-tss "\n')
 
 
 def good_hostname(name: str) -> str:
@@ -367,6 +388,10 @@ def check_plan(p: dict) -> list:
             problems.append("No EFI system partition was chosen.")
         if p.get("encrypt"):
             problems.append("Encryption needs the installer to make the partitions (erase, or use free space).")
+    if p.get("tpmPin") and not p.get("encrypt"):
+        problems.append("Unlocking with the security chip and a PIN needs the disk encrypted.")
+    if p.get("tpmPin") and not 4 <= len(str(p["tpmPin"])) <= 64:
+        problems.append("The PIN should be 4 to 64 characters.")
     if p.get("encrypt") and len(p.get("passphrase", "")) < 8:
         problems.append("The disk password is too short (8 characters at least).")
     if p.get("encrypt") and p.get("recoveryKey") and not re.fullmatch(r"[a-z]+(-[a-z]+){5,}", str(p["recoveryKey"])):
@@ -412,11 +437,12 @@ class Engine:
         except OSError:
             pass
 
-    def run(self, cmd: list, stdin: str = None, chroot: bool = False, check: bool = True, timeout: int = 3600) -> str:
+    def run(self, cmd: list, stdin: str = None, chroot: bool = False, check: bool = True, timeout: int = 3600, secrets: dict = None) -> str:
+        """secrets: environment for the command alone (passwords for systemd-cryptenroll), never logged."""
         if chroot:
             cmd = ["chroot", str(self.t)] + cmd
         self.log("$ " + " ".join(cmd))
-        env = dict(os.environ, LC_ALL="C", DEBIAN_FRONTEND="noninteractive", HUGINN_INSTALLING="1")   # (no restore points from apt's hook)
+        env = dict(os.environ, LC_ALL="C", DEBIAN_FRONTEND="noninteractive", HUGINN_INSTALLING="1", **(secrets or {}))   # (no restore points from apt's hook)
         r = subprocess.run(cmd, input=stdin, capture_output=True, text=True, timeout=timeout, env=env)
         out = (r.stdout + r.stderr).strip()
         if out:
@@ -651,6 +677,38 @@ class Engine:
         if self.p.get("firmware") == "uefi" and efivars.is_dir() and any(efivars.iterdir()):
             self.mount("efivarfs", self.t / "sys/firmware/efi/efivars", "-t", "efivarfs")
 
+    def tpm_unlock(self) -> bool:
+        """The disk opened by the TPM and a PIN: dracut and systemd-cryptenroll from the medium's pool/tpm (offline),
+        the PIN sealed to the chip with Secure Boot's state (PCR 7), crypttab told to try the chip first. The password
+        and the recovery key keep working. False (and the password alone) when there's no chip or no packages."""
+        p, t = self.p, self.t
+        pool = self.medium / "pool/tpm"
+        debs = sorted(pool.glob("*.deb")) if pool.is_dir() else []
+        if not debs or not tpm2_here():
+            self.log("(no TPM 2.0 here, or the medium hasn't its packages: the disk opens with the password)")
+            return False
+        stage = t / "tmp/huginn-tpm"
+        stage.mkdir(exist_ok=True)
+        try:
+            for d in debs:
+                shutil.copy2(d, stage / d.name)
+            self.run(["apt-get", "install", "-y", "--no-download"] + [f"/tmp/huginn-tpm/{d.name}" for d in debs], chroot=True, timeout=1200)
+        except Failed as err:
+            self.log(f"(the TPM unlock couldn't be set up: {err})")
+            return False
+        finally:
+            shutil.rmtree(stage, ignore_errors=True)
+        try:
+            self.run(["systemd-cryptenroll", "--tpm2-device=auto", "--tpm2-pcrs=7", "--tpm2-with-pin=yes", self.dev["root"]],
+                     chroot=True, timeout=300, secrets={"PASSWORD": p["passphrase"], "NEWPIN": str(p["tpmPin"])})
+        except Failed as err:
+            self.log(f"(the chip didn't take the PIN: {err}; the disk opens with the password)")
+            return False
+        (t / "etc/dracut.conf.d").mkdir(parents=True, exist_ok=True)
+        (t / "etc/dracut.conf.d/90-huginn.conf").write_text(DRACUT_CONF)
+        (t / "etc/crypttab").write_text(crypttab(self.uuid(self.dev["root"]), tpm=True))
+        return True
+
     def settings(self) -> None:
         p, t = self.p, self.t
         self.step("settings", 0)
@@ -876,8 +934,13 @@ class Engine:
                 if not n:
                     g += f"{k}={v}\n"
             grub.write_text(g)
-        self.run(["update-initramfs", "-c", "-k", self.version] if not (t / f"boot/initrd.img-{self.version}").exists()
-                 else ["update-initramfs", "-u", "-k", self.version], chroot=True, timeout=1800)
+        if p.get("encrypt") and p.get("tpmPin") and self.tpm_unlock():
+            self.run(["dracut", "--force", "--kver", self.version, f"/boot/initrd.img-{self.version}"], chroot=True, timeout=1800)
+        elif (t / "usr/sbin/update-initramfs").exists():
+            self.run(["update-initramfs", "-c", "-k", self.version] if not (t / f"boot/initrd.img-{self.version}").exists()
+                     else ["update-initramfs", "-u", "-k", self.version], chroot=True, timeout=1800)
+        else:                                                    # (dracut came, the chip didn't take the PIN: dracut asks the password)
+            self.run(["dracut", "--force", "--kver", self.version, f"/boot/initrd.img-{self.version}"], chroot=True, timeout=1800)
         self.step("boot", 0.4)
         # GRUB's package for this computer's firmware (it keeps GRUB up to date later); the ISO carries both
         pkg = "grub-efi-amd64" if p.get("firmware") == "uefi" else "grub-pc"

@@ -595,9 +595,10 @@ class Installer(QObject):
                         "nvidia": any(g["vendor"] == "nvidia" for g in self._gpus)}
         self._apps = {"gamedev": False, "flathub": True, "fromWindows": []}
         self._windows = {"state": "", "part": "", "users": [], "apps": [], "fastStartup": False, "problem": "", "counted": True}
-        self._bring = {"user": "", "folders": ["documents", "pictures", "music", "videos", "desktop", "downloads"], "how": "copy", "skip": False}
+        self._bring = {"user": "", "folders": ["documents", "pictures", "music", "videos", "desktop", "downloads"], "how": "copy", "skip": False, "bookmarks": True}
         self._win_probe = None
         self._safety = {"restorePoints": True, "firewall": True, "autoUpdates": True}
+        self._tpm = {"on": False, "pin": ""}                  # the disk opened by the security chip and a PIN
         self._access = {"reader": False, "bigger": False, "contrast": False, "motion": False, "osk": False}
         self._recovery = engine.recovery_key()
         self._state = "setup"                               # setup → installing → done | error
@@ -711,6 +712,8 @@ class Installer(QObject):
                 return "The disk password needs 8 characters at least."
             if self._mode == "manual":
                 return "To encrypt, let the installer make the partitions (erase the disk, or use its free space)."
+            if self._tpm["on"] and self._can_tpm() and not 4 <= len(self._tpm["pin"]) <= 64:
+                return "The PIN needs 4 characters at least."
         if s == "windows" and not self._bring["skip"] and self._windows["state"] == "ok" and not self._bring["user"]:
             return "Choose whose things to bring."
         if s == "you":
@@ -1024,7 +1027,8 @@ class Installer(QObject):
         if self._demo:
             demo = {"users": [{"name": "Astrid", "folders": {"documents": {"files": 2140, "bytes": 3 * 10 ** 9}, "pictures": {"files": 8902, "bytes": 41 * 10 ** 9},
                                                              "music": {"files": 1100, "bytes": 9 * 10 ** 9}, "videos": {"files": 210, "bytes": 60 * 10 ** 9},
-                                                             "desktop": {"files": 66, "bytes": 2 * 10 ** 8}, "downloads": {"files": 400, "bytes": 5 * 10 ** 9}}}],
+                                                             "desktop": {"files": 66, "bytes": 2 * 10 ** 8}, "downloads": {"files": 400, "bytes": 5 * 10 ** 9}},
+                               "bookmarks": {"count": 214, "browsers": ["Edge", "Firefox"]}}],
                     "apps": ["discord", "obs", "spotify", "vlc"], "fastStartup": False, "problem": "", "counted": True}
             QTimer.singleShot(500, lambda: self._windows_read(json.dumps(demo), part))
             return
@@ -1057,8 +1061,10 @@ class Installer(QObject):
             f = (person or {}).get("folders", {}).get(key, {"files": 0, "bytes": 0})
             folders.append({"key": key, "name": name, "files": f["files"], "sizeText": size_text(f["bytes"]) if f["bytes"] else "", "on": key in b["folders"]})
         total = sum(f["bytes"] for k, f in ((person or {}).get("folders") or {}).items() if k in b["folders"])
+        marks = (person or {}).get("bookmarks") or {"count": 0, "browsers": []}
         return {"state": w["state"], "here": self._windows_here(), "problem": w["problem"], "fastStartup": w["fastStartup"], "users": [u["name"] for u in w["users"]],
-                "user": b["user"], "folders": folders, "how": b["how"], "skip": b["skip"], "sizeText": size_text(total) if total else "", "counted": w["counted"]}
+                "user": b["user"], "folders": folders, "how": b["how"], "skip": b["skip"], "sizeText": size_text(total) if total else "", "counted": w["counted"],
+                "bookmarks": {"count": marks["count"], "browsers": ", ".join(marks["browsers"]), "on": b["bookmarks"] and marks["count"] > 0}}
     windows = Property("QVariantMap", _windows_view, notify=changed)
 
     @Slot(str, "QVariant")
@@ -1073,14 +1079,30 @@ class Installer(QObject):
             b["how"] = value
         elif key == "skip":
             b["skip"] = bool(value)
+        elif key == "bookmarks":
+            b["bookmarks"] = bool(value)
         else:
             return
         self.changed.emit()
 
     def _safety_view(self) -> dict:
         return dict(self._safety, encrypt=self._encrypt, canEncrypt=self._mode != "manual", recoveryKey=self._recovery if self._encrypt else "",
-                    recoveryWords=self._recovery.split("-") if self._encrypt else [])
+                    recoveryWords=self._recovery.split("-") if self._encrypt else [], canTpm=self._can_tpm(),
+                    tpm=self._encrypt and self._tpm["on"] and self._can_tpm(), tpmPinOk=4 <= len(self._tpm["pin"]) <= 64)
     safety = Property("QVariantMap", _safety_view, notify=changed)
+
+    def _can_tpm(self) -> bool:
+        """A TPM 2.0 chip here, and the medium carries what unlocking with it needs."""
+        if self._demo:
+            return True
+        if not hasattr(self, "_tpm_here"):
+            self._tpm_here = engine.tpm2_here() and (engine.live_medium() / "pool/tpm").is_dir()
+        return self._tpm_here
+
+    @Slot(bool, str)
+    def setTpm(self, on: bool, pin: str) -> None:
+        self._tpm = {"on": bool(on), "pin": pin or ""}
+        self.changed.emit()
 
     @Slot(str, bool)
     def setSafety(self, key: str, on: bool) -> None:
@@ -1128,7 +1150,7 @@ class Installer(QObject):
         out = {"welcome": self.languageLabel.split(" (")[0].replace("American English", "English").replace("British English", "English (UK)"), "keyboard": self._layout.upper(),
                "check": ("All good" if not warn else f"{warn} to see to"), "disk": where, "extras": codecs,
                "apps": "+ game tools" if self._apps["gamedev"] else ("+ " + str(len(self._apps["fromWindows"])) + " apps" if self._apps["fromWindows"] else "Included"),
-               "windows": win, "you": (self._you["name"] or ""), "time": self.zoneCity, "safety": "Encrypted" if self._encrypt else "Not locked", "ready": ""}
+               "windows": win, "you": (self._you["name"] or ""), "time": self.zoneCity, "safety": ("Encrypted · chip and PIN" if self._encrypt and self._tpm["on"] and self._can_tpm() else "Encrypted") if self._encrypt else "Not locked", "ready": ""}
         return [{"id": k, "label": l, "answer": out.get(k, ""), "here": i == self._step, "done": i < self._step,
                  "off": k == "windows" and not self._windows_here()} for i, (k, l) in enumerate(zip(STEPS, LABELS))]
     answers = Property("QVariantList", _answers, notify=summaryChanged)
@@ -1150,13 +1172,16 @@ class Installer(QObject):
             p.update(root=self._root, efi=self._efi, formatEfi=self._format_efi)
         if self._encrypt:
             p["recoveryKey"] = self._recovery
+            if self._tpm["on"] and self._can_tpm():
+                p["tpmPin"] = self._tpm["pin"]
         p["extras"] = dict(self._extras)
         p["apps"] = {"gamedev": self._apps["gamedev"], "flathub": self._apps["flathub"], "fromWindows": list(self._apps["fromWindows"])}
         p["safety"] = dict(self._safety)
         p["access"] = {k: v for k, v in self._access.items() if k != "contrast"}
         b = self._bring
         if self._windows_here() and self._windows["state"] == "ok" and not b["skip"] and b["user"]:
-            p["windows"] = {"part": self._windows["part"], "user": b["user"], "folders": list(b["folders"]), "how": b["how"]}
+            p["windows"] = {"part": self._windows["part"], "user": b["user"], "folders": list(b["folders"]), "how": b["how"],
+                            "bookmarks": bool(self._windows_view()["bookmarks"]["on"])}
         return p
 
     def _summary(self) -> list:

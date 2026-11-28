@@ -30,6 +30,7 @@ Window {
     property string encOne: ""
     property string encTwo: ""
     Connections { target: Backend; function onSaid(text, bad) { toast.say(text, bad) } }
+    property string tpmPin: ""
     function pushEncryption() { Backend.setEncrypt(Backend.encrypt, win.encOne === win.encTwo ? win.encOne : "") }
     function indexOf(id) { for (var i = 0; i < Backend.steps.length; i++) if (Backend.steps[i].id === id) return i; return -1 }
 
@@ -487,6 +488,10 @@ Window {
                                 on: Backend.windows.how === "copy"; onPicked: Backend.setBring("how", "copy") }
                             Choice { width: (parent.width - 10) / 2; title: "Use them where they are"; line: "Windows' folders show in Files, read-only, and stay in Windows."
                                 on: Backend.windows.how === "link"; onPicked: Backend.setBring("how", "link") } }
+                        Switch { visible: Backend.windows.state === "ok" && !Backend.windows.skip && !!Backend.windows.bookmarks && Backend.windows.bookmarks.count > 0
+                            objectName: "bring-bookmarks"
+                            title: "Bookmarks into Huginn (" + (Backend.windows.bookmarks || {}).count + " from " + (Backend.windows.bookmarks || {}).browsers + ")"
+                            on: !!(Backend.windows.bookmarks || {}).on; onFlipped: function (v) { Backend.setBring("bookmarks", v) } }
                         Switch { visible: Backend.windows.state === "ok"; title: "Don't bring anything"; on: !!Backend.windows.skip; onFlipped: function (v) { Backend.setBring("skip", v) } }
                         Label { visible: !!Backend.windows.fastStartup; width: parent.width; wrapMode: Text.WordWrap; color: win.amber; font.pixelSize: 12
                             text: "Windows' Fast Startup is on: shut Windows down fully before the first start of Huginn, or your things can't be read then." } }
@@ -590,6 +595,11 @@ Window {
                             TextBox { objectName: "encOne"; width: (sfL.width - 10) / 2; secret: true; placeholder: "Disk password"; onEdited: { win.encOne = text; win.pushEncryption() } }
                             TextBox { objectName: "encTwo"; width: (sfL.width - 10) / 2; secret: true; placeholder: "Again"; onEdited: { win.encTwo = text; win.pushEncryption() } } }
                         Label { visible: Backend.encrypt && win.encOne !== "" && win.encTwo !== "" && win.encOne !== win.encTwo; text: "The two aren't the same."; color: Theme.t.danger; font.pixelSize: 12 }
+                        Switch { objectName: "tpmUnlock"; visible: Backend.encrypt && !!Backend.safety.canTpm; title: "Open it with this computer's security chip and a PIN"
+                            line: "The chip (TPM) checks the computer hasn't been tampered with; you type a short PIN instead of the password. The password still works."
+                            on: !!Backend.safety.tpm; onFlipped: function (v) { Backend.setTpm(v, win.tpmPin) } }
+                        TextBox { objectName: "tpmPin"; visible: !!Backend.safety.tpm; width: sfL.width / 2; secret: true; placeholder: "PIN (4 or more)"
+                            onEdited: { win.tpmPin = text; Backend.setTpm(true, text) } }
                         Rectangle { objectName: "recoveryKey"; visible: Backend.encrypt; width: parent.width; height: rkCol.height + 24; radius: 14; color: Qt.rgba(0, 0, 0, 0.22); border.width: 1; border.color: win.edge
                             Column { id: rkCol; x: 14; y: 12; width: parent.width - 28; spacing: 8
                                 Row { width: parent.width
