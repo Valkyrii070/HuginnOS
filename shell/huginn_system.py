@@ -204,6 +204,7 @@ class System(QObject):
     tourWanted = Signal()                                  # Huginn's menu: Take the tour again
     shellMenuAction = Signal(str)                          # a menu item the shell itself does (about, aboutApp, appWindows, pin)
     _gtkMenusRead = Signal(object, object, object, object) # (a GTK app's menus, read on a thread: see loadMenus)
+    _dbusMenusRead = Signal(object, object, object, object)  # (a dbusmenu app's, the same way)
 
     def __init__(self, demo: bool, apps=None):
         super().__init__()
@@ -224,6 +225,9 @@ class System(QObject):
         self._menus = {}                                   # the app in front's menus (the top bar's one menu)
         self._gtk_where, self._gtk_refs = None, {}         # a GTK app's: where they are, and what each item does
         self._gtkMenusRead.connect(self._gtk_menus_read)
+        self._dbm_where, self._dbm_refs = None, {}         # an app's exported as dbusmenu (huginn_appmenu.py)
+        self._dbusMenusRead.connect(self._dbus_menus_read)
+        self._registrar = None
         self._overview, self._snap_preview, self._snap_assist, self._switcher = {}, {}, {}, {}
         self._menu_bus = ""
         self._bt_path = ""
@@ -258,6 +262,14 @@ class System(QObject):
             Gio.bus_own_name_on_connection(self.sb, "org.huginn.Shell", Gio.BusNameOwnerFlags.REPLACE | Gio.BusNameOwnerFlags.ALLOW_REPLACEMENT, None, None)
         except GLib.Error:
             self.sb = None
+        if self.sb is not None:
+            # com.canonical.AppMenu.Registrar: with it on the bus, Qt apps on KDE's platform theme (App Store apps) and
+            # X11 apps with a global menu (Electron) export their menu bars as dbusmenu for the top bar
+            import huginn_appmenu
+            try:
+                self._registrar = huginn_appmenu.Registrar(self.sb)
+            except GLib.Error:
+                self._registrar = None
         try:
             self.yb = Gio.bus_get_sync(Gio.BusType.SYSTEM, None)
         except GLib.Error:
@@ -342,7 +354,9 @@ if (!w || w.normalWindow || w.dialog)
                          "title": w.get("title", ""), "minimised": bool(w.get("minimised")), "active": bool(w.get("active") or w.get("focused")),
                          "space": int(w.get("space", 0)), "full": bool(w.get("full")), "x": w.get("x", 0), "y": w.get("y", 0), "w": w.get("w", 0), "h": w.get("h", 0),
                          "above": bool(w.get("above")), "screen": w.get("screen", ""), "snap": w.get("snap", ""), "max": bool(w.get("max")),
-                         "gtkMenus": w.get("gtkMenus") if isinstance(w.get("gtkMenus"), dict) else None})
+                         "gtkMenus": w.get("gtkMenus") if isinstance(w.get("gtkMenus"), dict) else None,
+                         "appMenu": w.get("appMenu") if isinstance(w.get("appMenu"), dict) else None,
+                         "xid": w.get("xid") if isinstance(w.get("xid"), int) else None})
         self._windows = rows
         self._others = self._other_apps(rows)
         self._spaces = {"current": int(data.get("current", 0)), "names": list(data.get("spaces") or ["Main"])}
@@ -516,6 +530,7 @@ for (var i = 0; i < all.length; i++) {{ var w = all[i]; if (String(w.internalId)
         self._menus = self._on_top_label(self._basic_menus(name), front)
         self._menu_bus = ""
         self._gtk_where, self._gtk_refs = None, {}
+        self._dbm_where, self._dbm_refs = None, {}
         self.menusChanged.emit()
         pid = (front or {}).get("pid", 0)
         if self._demo or not self.sb:
@@ -533,6 +548,23 @@ for (var i = 0; i < all.length; i++) {{ var w = all[i]; if (String(w.internalId)
                 except GLib.Error:
                     return
                 self._gtkMenusRead.emit(wid, where, menus, refs)
+            threading.Thread(target=work, daemon=True).start()
+            return
+        dbm = (front or {}).get("appMenu")
+        if not dbm and self._registrar is not None:
+            dbm = self._registrar.lookup((front or {}).get("xid"), pid)
+        if dbm:
+            # a menu bar exported as dbusmenu: a Qt app on KDE's platform theme (the compositor was told where:
+            # appmenu.rs), or an X11 app that registered its window; read off the main thread, as GTK's are
+            conn, wid = self.sb, front.get("id")
+
+            def work():
+                import huginn_appmenu
+                try:
+                    menus, refs = huginn_appmenu.read(conn, dbm, name)
+                except GLib.Error:
+                    return
+                self._dbusMenusRead.emit(wid, dbm, menus, refs)
             threading.Thread(target=work, daemon=True).start()
             return
         if not pid:
@@ -559,6 +591,14 @@ for (var i = 0; i < all.length; i++) {{ var w = all[i]; if (String(w.internalId)
             return                                         # (another window came to the front meanwhile)
         self._menus = self._on_top_label(menus, front)
         self._gtk_where, self._gtk_refs = where, refs
+        self.menusChanged.emit()
+
+    def _dbus_menus_read(self, wid, where, menus, refs) -> None:
+        front = self._front_window()
+        if not front or front.get("id") != wid:
+            return
+        self._menus = self._on_top_label(menus, front)
+        self._dbm_where, self._dbm_refs = where, refs
         self.menusChanged.emit()
 
     @staticmethod
@@ -627,6 +667,12 @@ for (var i = 0; i < all.length; i++) {{ var w = all[i]; if (String(w.internalId)
                         self.windowDo(w["id"], "minimise")
             else:
                 self.shellMenuAction.emit(what)
+            return
+        if act.startswith("dbm:"):
+            ref = self._dbm_refs.get(act)
+            if ref is not None and self.sb and self._dbm_where:
+                import huginn_appmenu
+                huginn_appmenu.activate(self.sb, self._dbm_where, ref)
             return
         if act.startswith("gtk:"):
             ref = self._gtk_refs.get(act)

@@ -608,9 +608,17 @@ impl<B: Backend + 'static> HuginnState<B> {
         let gtk = w.0.toplevel().and_then(|t| crate::gtkshell::menus_of(t.wl_surface())).map(|m| {
             serde_json::json!({"bus": m.bus, "menubar": m.menubar, "app": m.app, "window": m.window, "appId": m.app_id})
         });
+        // a Qt app's menu bar on KDE's platform theme (appmenu.rs: App Store apps): where its dbusmenu is
+        let app_menu = w.0.toplevel().and_then(|t| crate::appmenu::menu_of(t.wl_surface())).map(|m| serde_json::json!({"service": m.service, "path": m.path}));
+        // an X11 window's own number (an X11 app registers its menu bar under it: com.canonical.AppMenu.Registrar)
+        #[cfg(feature = "xwayland")]
+        let xid = w.0.x11_surface().map(|x| x.window_id());
+        #[cfg(not(feature = "xwayland"))]
+        let xid: Option<u32> = None;
         serde_json::json!({"id": window_id(w).to_string(), "app": app, "title": title, "minimised": minimised,
                            "active": !minimised && Some(w) == focused, "space": Self::window_space(w).unwrap_or(0), "pid": pid, "full": full, "x": at.x, "y": at.y, "w": size.w, "h": size.h,
-                           "above": crate::wm::is_above(w), "screen": screen, "snap": snap, "max": Self::is_maximised(w), "gtkMenus": gtk})
+                           "above": crate::wm::is_above(w), "screen": screen, "snap": snap, "max": Self::is_maximised(w), "gtkMenus": gtk,
+                           "appMenu": app_menu, "xid": xid})
     }
 
     /// Every window (bottom to top, then the hidden ones) and the spaces, for the shell.

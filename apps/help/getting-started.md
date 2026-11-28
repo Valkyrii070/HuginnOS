@@ -61,7 +61,7 @@ A notification blooms out of the top right with its app's colour running round i
 ## The app's menu
 Every app's settings, help and commands are in one place: click the app's name in the top bar (or press Alt on its own). At the top are a search box (type to find any command), About and Settings; then the app's own groups, File, Edit, View and so on, each opening to the side; Open Recent cascades too. With nothing open, the name says Huginn and the menu is the desktop's own. If you'd rather have the groups along the bar, Settings › Desktop & Dock › App menus has "A row of menus".
 
-Other apps' menus are here too: a Qt app's menu bar, and a GTK app's (older GTK apps' menu bars too, such as Audacity's or Geany's), move out of the window into this menu, with their About, Settings and Quit where every app has them, and their shortcuts work as before. Apps that have no menu bar of their own (browsers, many GNOME-style apps) get the basics: About, Keep on Top, Minimise, Close and Quit.
+Other apps' menus are here too: a Qt app's menu bar (App Store ones too), and a GTK app's (older GTK apps' menu bars too, such as Audacity's or Geany's), move out of the window into this menu, with their About, Settings and Quit where every app has them, and their shortcuts work as before. Apps that have no menu bar of their own (browsers, many GNOME-style apps) get the basics: About, Keep on Top, Minimise, Close and Quit.
 
 ## Today
 Click the date in the top bar, or press Super+T: the month, the weather, what's coming and a few clocks, as islands. Type straight away to add something: "lunch with Astrid friday 12" becomes an event and "remind me to call Sam at 6pm" a reminder; a preview shows what it understood before you press Enter.

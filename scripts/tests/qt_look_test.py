@@ -51,6 +51,7 @@ out = subprocess.run([sys.executable, str(KIT / "tokens/gen_theme.py"), str(KIT 
 check("the tokens make Huginn's Qt colours for every realm, dark and light", out.returncode == 0 and len(list((home / "theme/qt").glob("*.conf"))) == 8, out.stdout[-300:])
 (share / "huginn-os").mkdir(parents=True)
 os.symlink(home / "theme/qt", share / "huginn-os/qt")
+os.symlink(home / "theme/color-schemes", share / "color-schemes")
 qt_conf = home / ".config/huginn/qt.conf"
 
 
@@ -71,6 +72,15 @@ check("…menus kept in the window when the person said so, through a change of 
 qt_conf.unlink()
 check("apply() writes it with the rest of the look", hl.apply("aurora", True, force=True) is True and qt_conf.is_file()
       and f"accent={colours_of('HuginnAuroraDark')['accent']}" in qt_conf.read_text())
+kg = home / ".config/kdeglobals"
+kd = kg.read_text() if kg.is_file() else ""
+check("…and kdeglobals, which App Store Qt apps read: Huginn's style and fonts", "widgetStyle=Huginn" in kd
+      and "\nfont=Inter Variable,10," in kd and "\nfixed=JetBrains Mono,10," in kd and "ColorScheme=HuginnAuroraDark" in kd, kd[:300])
+kg.write_text(kd.replace("\nfont=Inter Variable,10,-1,5,400,0,0,0,0,0,0,0,0,0,0,1", "\nfont=Noto Sans,11", 1))
+hl.apply("aurora", False, force=True)
+check("…a font chosen there is kept through a change of look", "\nfont=Noto Sans,11" in kg.read_text() and "widgetStyle=Huginn" in kg.read_text()
+      and "ColorScheme=HuginnAuroraLight" in kg.read_text())
+hl.apply("aurora", True, force=True)
 (home / ".config/huginn-shell").mkdir(parents=True, exist_ok=True)
 (home / ".config/huginn-shell/settings.json").write_text(json.dumps({"realm": "niflheim", "dark": "false"}))
 hl.write_qt(icons="Huginn")

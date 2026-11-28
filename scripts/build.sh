@@ -250,6 +250,17 @@ build_qt() {
         install -D -m 644 "$CHROOT/tmp/hq/build/libhuginnstyle.so" "$CHROOT$plugins/styles/libhuginnstyle.so"
         install -d "$CHROOT$qml/org/huginn/layershell"
         install -m 644 "$CHROOT/tmp/hq/build/org/huginn/layershell/"{qmldir,libhuginnlayershell.so,huginnlayershell.qmltypes} "$CHROOT$qml/org/huginn/layershell/"
+        # App Store Qt apps (KDE's Flatpak runtime) find the style as an extension Flatpak doesn't manage
+        # (org.kde.KStyle.Huginn), for the runtimes from the Qt it was built with on (a plugin loads in a newer Qt, not
+        # an older one); kdeglobals tells them to use it (huginn_look.py). apps/huginn_osupdate.py keeps it the same.
+        local qtv minor b
+        qtv=$(in_chroot dpkg-query -W -f='${Version}' libqt6core6t64 2>/dev/null | sed 's/^[0-9]*://; s/[^0-9.].*//')
+        minor=$(echo "$qtv" | cut -d. -f2)
+        case "$minor" in ''|*[!0-9]*) minor="" ;; esac
+        for b in ${minor:+0 1 2}; do
+            install -D -m 644 "$CHROOT/tmp/hq/build/libhuginnstyle.so" \
+                "$CHROOT/var/lib/flatpak/extension/org.kde.KStyle.Huginn/x86_64/6.$((minor + b))/styles/libhuginnstyle.so"
+        done
         # (kept for whoever makes the ready-built copy updates carry: apps/huginn_osupdate.py prebuilt-qt)
         rm -rf "$WORK/qt-built"; mkdir -p "$WORK/qt-built"
         cp -r "$CHROOT/tmp/hq/build/"libhuginn*.so "$CHROOT/tmp/hq/build/org" "$WORK/qt-built/"

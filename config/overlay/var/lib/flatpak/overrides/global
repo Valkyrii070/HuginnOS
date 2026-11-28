@@ -1,2 +1,8 @@
 [Context]
 filesystems=xdg-config/gtk-3.0:ro;xdg-config/gtk-4.0:ro;xdg-data/themes:ro;xdg-config/kdeglobals:ro;xdg-config/fontconfig:ro;
+
+[Environment]
+QT_QPA_PLATFORMTHEME=kde
+
+[Session Bus Policy]
+com.canonical.AppMenu.Registrar=talk

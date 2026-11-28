@@ -98,6 +98,10 @@ def _ini(path: Path, values: dict) -> None:
 
 
 QT_FONT = "Inter Variable,10"
+KDE_FONTS = {"font": "Inter Variable,10,-1,5,400,0,0,0,0,0,0,0,0,0,0,1", "menuFont": "Inter Variable,10,-1,5,400,0,0,0,0,0,0,0,0,0,0,1",
+             "toolBarFont": "Inter Variable,9,-1,5,400,0,0,0,0,0,0,0,0,0,0,1",
+             "smallestReadableFont": "Inter Variable,8,-1,5,400,0,0,0,0,0,0,0,0,0,0,1",
+             "fixed": "JetBrains Mono,10,-1,5,400,0,0,0,0,0,0,0,0,0,0,1"}
 QT_FIXED = "JetBrains Mono,10"
 QT_MARK = "; Huginn OS: written by huginn_look.py (Qt apps' look: Huginn's own, qt/). It is written again when the look changes."
 
@@ -170,6 +174,14 @@ def _apply_colours(scheme: Path, name: str) -> None:
     if not dst.has_section("General"):
         dst.add_section("General")
     dst.set("General", "ColorScheme", name)
+    # App Store Qt apps (KDE's Flatpak runtime) see only this file, not /etc/xdg's: Huginn's widget style (put where
+    # they find it: build.sh, the org.kde.KStyle.Huginn extension) and Huginn's fonts, unless fonts were chosen here
+    for key, font in KDE_FONTS.items():
+        if not dst.get("General", key, fallback=""):
+            dst.set("General", key, font)
+    if not dst.has_section("KDE"):
+        dst.add_section("KDE")
+    dst.set("KDE", "widgetStyle", "Huginn")
     try:
         (CONFIG).mkdir(parents=True, exist_ok=True)
         with open(CONFIG / "kdeglobals", "w", encoding="utf-8") as fh:
@@ -192,7 +204,7 @@ def _run(cmd: list) -> None:
 def apply(realm: str, dark: bool, contrast: bool = False, force: bool = False) -> bool:
     """Put the realm's look in place for this user. Returns False when it was already in place."""
     name = name_for(realm, dark)
-    stamp = f"{name} contrast={contrast} gtk=huginn qt=huginn"  # (a new part of the look: in place once more)
+    stamp = f"{name} contrast={contrast} gtk=huginn qt=huginn kstyle=huginn"  # (a new part of the look: in place once more)
     changed = write_qt(realm, dark)                             # (each time: cheap, and only written when it changed)
     if not force:
         try:

@@ -234,9 +234,12 @@ got, why = up.qt_ready(kits[3], root)
 ok("a system with another Qt keeps its own, and says why", got == {} and "for Qt 6.10.2" in why and "6.9.1" in why, why)
 dpkg.write_text("Package: libqt6core6t64\nStatus: deinstall ok config-files\nVersion: 6.10.2+dfsg-1\n\nPackage: libqt6core6t64\nStatus: install ok installed\nVersion: 6.10.3+dfsg-1\n\n")
 got, why = up.qt_ready(kits[3], root)
-ok("one with the same Qt (another patch) gets every part, where Qt looks for it", got == {rel: parts[k] for k, (_n, rel) in up.QT_PARTS.items()}, why)
+styles = {f"var/lib/flatpak/extension/org.kde.KStyle.Huginn/x86_64/{b}/styles/libhuginnstyle.so": parts["style"] for b in ("6.10", "6.11", "6.12")}
+ok("one with the same Qt (another patch) gets every part, where Qt looks for it, and the style for App Store apps too",
+   got == {**{rel: parts[k] for k, (_n, rel) in up.QT_PARTS.items()}, **styles}, why)
+ok("…the style as Flatpak's extension for KDE's runtimes from its Qt on", up.kstyle_paths("6.10.2") == list(styles) and up.kstyle_paths("six") == [])
 p_qt = up.plan(kits[3], root, None)
-ok("…in the plan", set(p_qt["qt"]) == {rel for _n, rel in up.QT_PARTS.values()})
+ok("…in the plan", set(p_qt["qt"]) == {rel for _n, rel in up.QT_PARTS.values()} | set(styles))
 up.apply_plan(p_qt, root, home / "discard-qt")
 ok("…put in place, readable by everyone", (root / up.QT_PARTS["theme"][1]).read_bytes() == parts["theme"]
    and (root / up.QT_PARTS["layershell-qmldir"][1]).stat().st_mode & 0o777 == 0o644)

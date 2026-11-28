@@ -163,7 +163,7 @@ GlassWindow {
                                                    : "Runs on the system's own libraries. Updates come with Software Update; installing asks for your password." },
                                 { key: "flathub", title: "Flathub", here: !!win.app.flatInstalled,
                                   sub: "From the developer" + (win.app.version ? "  ·  " + win.app.version : "") + (win.app.size ? "  ·  " + win.app.size : ""),
-                                  text: win.app.qt ? "Usually newer, in its own sandbox. It brings its own Qt, so its look and menus stay inside its window. Updates come in the App Store."
+                                  text: win.app.qt ? "Usually newer, in its own sandbox. Its menus go to the top bar and it takes Huginn's colours and fonts, but its icons stay its own. Updates come in the App Store."
                                                    : "Usually newer, in its own sandbox. Updates come in the App Store." }]
                         Rectangle {
                             id: from

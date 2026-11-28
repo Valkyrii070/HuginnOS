@@ -382,6 +382,19 @@ QT_PARTS = {"theme": ("libhuginntheme.so", f"{QT_PLUGINS}/platformthemes/libhugi
 QT_DEFAULT = "; Huginn OS: Qt apps' look until the shell writes each person's own (~/.config/huginn/qt.conf)\n[Look]\nscheme=dark\nicons=Huginn\nfont=Inter Variable,10\nfixed=JetBrains Mono,10\n\n[Menus]\ntop_bar=true\n\n"
 
 
+KSTYLE = "var/lib/flatpak/extension/org.kde.KStyle.Huginn/x86_64/{branch}/styles/libhuginnstyle.so"
+
+
+def kstyle_paths(qt: str) -> list:
+    """Where the style goes for App Store Qt apps: an extension Flatpak doesn't manage (org.kde.KStyle.Huginn) for
+    KDE's runtimes from the Qt it was built with on, as build.sh puts it (a plugin loads in a newer Qt, not an older)."""
+    found = re.fullmatch(r"(\d+)\.(\d+)\.\d+", qt or "")
+    if not found:
+        return []
+    major, minor = int(found.group(1)), int(found.group(2))
+    return [KSTYLE.format(branch=f"{major}.{minor + i}") for i in range(3)]
+
+
 def qt_version(root) -> str:
     """The Qt this system has ("6.10.2"), from dpkg's records, or ""."""
     try:
@@ -419,6 +432,8 @@ def qt_ready(kit: Path, root) -> tuple:
         if hashlib.sha256(data).hexdigest() != note.get(f"{part}_sha256") or (data[:4] == b"\x7fELF") != program:
             return {}, "the ready-built Qt look isn't the one its note describes"
         out[rel] = data
+    for rel in kstyle_paths(note.get("qt", "")):
+        out[rel] = out[QT_PARTS["style"][1]]
     return out, ""
 
 

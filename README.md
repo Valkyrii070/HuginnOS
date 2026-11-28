@@ -1888,6 +1888,41 @@ module (`libhuginn-menus.so`).
   Settings), File › New from there and Ctrl+N in the window both opening a document. An app that gives itself no name
   goes by GDK's ("geany" → "Geany"). `osupdate_test.py` (81). Not yet tried: wxWidgets apps (Audacity, FileZilla).
 
+## App Store Qt apps: Huginn's look and the top bar's menus (2026-11-27)
+
+A Qt app from Flathub runs on KDE's Flatpak runtime with its own Qt, so Huginn's Qt look (`qt/`) can't load into it.
+That runtime does carry KDE's own platform theme, which takes its colours, fonts and widget style from kdeglobals and
+hands menu bars over as dbusmenu. Huginn now works with that:
+
+- **The look**: the system-wide Flatpak override (`/var/lib/flatpak/overrides/global`) sets
+  `QT_QPA_PLATFORMTHEME=kde` (it already let them read `~/.config/kdeglobals`). `huginn_look.py` writes there, with
+  the realm's colours, `widgetStyle=Huginn` and Huginn's fonts (fonts someone chose there are kept). Huginn's widget
+  style reaches the sandbox as an extension Flatpak doesn't manage, `org.kde.KStyle.Huginn`
+  (`/var/lib/flatpak/extension/org.kde.KStyle.Huginn/x86_64/<branch>/styles/`): the KDE runtime's own extension
+  point for styles. It's built against the system's Qt 6.10 and needs only glibc 2.4 and GCC 12's C++ library, so it
+  goes in for runtimes 6.10, 6.11 and 6.12 (a Qt plugin loads in a newer Qt, not an older one); apps on older
+  runtimes get the colours and fonts but their own style. `build.sh` puts the copies in, and updates keep them the
+  same as the style (`huginn_osupdate.kstyle_paths`). Their icons stay the runtime's.
+- **The menus**: an app on KDE's theme exports its menu bar only while `com.canonical.AppMenu.Registrar` is on the
+  bus, and says per window where it is through KDE's Wayland protocol `org_kde_kwin_appmenu`. The compositor now
+  speaks it (`compositor/src/appmenu.rs`, the protocol file from plasma-wayland-protocols, MIT) and puts the address
+  in its window list (`appMenu`, checked to be a sound bus name and path); the shell owns the registrar and reads
+  the menu bar (`shell/huginn_appmenu.py`: GetLayout, AboutToShow for menus filled as they open, Event to do an item)
+  into the same menu as every other app's, About, Settings and Quit where Huginn has them. The override lets
+  sandboxed apps see the registrar.
+- **X11 apps** that use the registrar the classic way (Electron and Chromium under XWayland, Qt apps on X11), which
+  hide their own menu bar once it's there, register their window's number: the window list now carries X11 windows'
+  numbers (`xid`), and a registration counts only for a window of the process that made it.
+- Tested: `appmenu_test.py` (31) with a real Qt app handing its menu bar to the registrar on X11 (registration under
+  its own name and process, the menus as read, doing items, greyed ones not, another app unable to unregister it,
+  forgotten when it goes); `qt_look_test.py` (43: kdeglobals); the compositor's address check (`cargo test`). In the
+  nested Wayland session: a Qt app on KDE's platform theme (the theme the Flatpak runtime carries, here from
+  Ubuntu's package) loaded Huginn's style and Inter from kdeglobals, told the compositor where its menu bar is, and
+  showed it in the top bar (picture checked), where choosing Large reached the app. **Not tried inside a real
+  Flatpak**: Flathub can't be reached from here, so the extension being mounted and the override's effect are
+  untested; nor with a real Electron app. The App Store's cards now say Flathub Qt apps keep their own icons rather
+  than their own look; Ubuntu's package stays the default for Qt apps (it fits in fully).
+
 ## Phone's own link (2026-11-27)
 
 Phone no longer needs KDE Connect's desktop program: `apps/huginn_phoned.py` speaks its protocol (version 8) itself,
