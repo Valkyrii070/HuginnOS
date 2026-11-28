@@ -249,6 +249,33 @@ for f in ["huginn-qt.for"] + [f"huginn-qt-{k}.xz" for k in up.QT_PARTS]:
     (kits[3] / "prebuilt" / f).unlink()
 shutil.rmtree(kits[3] / "qt")
 
+# ------------------------------------------------------------------------------------------------- the GTK menu module
+(kits[3] / "gtk").mkdir(exist_ok=True); (kits[3] / "gtk/menus.c").write_text("/* menus */\n"); (kits[3] / "gtk/build.sh").write_text("# build\n")
+module = b"\x7fELF" + os.urandom(3000)
+(home / "libhuginn-menus.so").write_bytes(module)
+gnote = up.make_prebuilt_gtk(kits[3], home / "libhuginn-menus.so")
+ok("the GTK menu module, built, is put in a tree, noted as for its sources", gnote.get("written") and gnote["sources"] == up.gtk_sources(kits[3])
+   and (kits[3] / "prebuilt/huginn-gtk-menus.xz").is_file())
+ok("…made again from the same, the tree doesn't change", not up.make_prebuilt_gtk(kits[3], home / "libhuginn-menus.so").get("written"))
+ok("…not from something that isn't a library", "isn't a built library" in problem(up.make_prebuilt_gtk, kits[3], kits[3] / "gtk/menus.c"))
+(kits[3] / "gtk/build.sh").write_text("# build, reworded\n")
+got, why = up.gtk_ready(kits[3], root)
+ok("an update brings it, where GTK looks for modules (its build script's wording isn't part of it)", got == {up.GTK_MODULE: module} and why == "", why)
+p_gtk = up.plan(kits[3], root, None)
+ok("…in the plan", set(p_gtk["gtk"]) == {up.GTK_MODULE})
+up.apply_plan(p_gtk, root, home / "discard-gtk")
+ok("…put in place, readable by everyone", (root / up.GTK_MODULE).read_bytes() == module and (root / up.GTK_MODULE).stat().st_mode & 0o777 == 0o644)
+ok("…and not again when it is already the one", up.plan(kits[3], root, None)["gtk"] == {})
+(kits[3] / "gtk/menus.c").write_text("/* changed */\n")
+ok("a ready-built one for other sources isn't used", up.gtk_ready(kits[3], root) == ({}, "the GTK menu module's sources changed after its ready-built copy was made"))
+up.make_prebuilt_gtk(kits[3], home / "libhuginn-menus.so"); (kits[3] / "prebuilt/huginn-gtk-menus.xz").write_bytes(lzma.compress(b"\x7fELFx"))
+ok("nor one whose bytes aren't what its note says", up.gtk_ready(kits[3], root) == ({}, "the ready-built GTK menu module isn't the one its note describes"))
+ok("…which making it again puts right", up.make_prebuilt_gtk(kits[3], home / "libhuginn-menus.so").get("written") and up.gtk_ready(kits[3], root)[1] == "")
+for f in ("huginn-gtk.for", "huginn-gtk-menus.xz"):
+    (kits[3] / "prebuilt" / f).unlink()
+ok("an update without one says so", up.gtk_ready(kits[3], root) == ({}, "this update carries no ready-built GTK menu module"))
+shutil.rmtree(kits[3] / "gtk")
+
 # ----------------------------------------------------------------------------- what a real system is told afterwards
 ran = []
 runner = lambda argv, timeout=0, env=None: (ran.append(argv), (0, ""))[1]       # noqa: E731

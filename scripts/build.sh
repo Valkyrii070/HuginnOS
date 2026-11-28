@@ -264,6 +264,31 @@ build_qt() {
     [ -f "$CHROOT$qml/org/huginn/layershell/qmldir" ] || die "Huginn's Qt parts didn't build (see $WORK/qt-build.log): the shell's windows need its layer-shell module"
 }
 
+build_gtk_menus() {
+    # Old GTK 3 apps' menu bars in the top bar (gtk/menus.c): a GTK module every GTK 3 app in the session loads
+    # (huginn-desktop-session sets GTK_MODULES when it's there). Built against the image's GTK; the compiler and the
+    # headers are taken out again afterwards.
+    local src="$ROOT/gtk" modules=/usr/lib/x86_64-linux-gnu/gtk-3.0/modules
+    [ -f "$src/menus.c" ] || return 0
+    rm -rf "$CHROOT/tmp/hg"; mkdir -p "$CHROOT/tmp/hg"
+    cp "$src/menus.c" "$src/build.sh" "$CHROOT/tmp/hg/"
+    in_chroot sh -c "dpkg-query -W -f='\${Package}\n' | sort > /tmp/hg-before.txt"
+    if in_chroot env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends gcc libc6-dev pkg-config libgtk-3-dev > "$WORK/gtk-deps.log" 2>&1 \
+       && in_chroot sh /tmp/hg/build.sh /tmp/hg > "$WORK/gtk-build.log" 2>&1; then
+        install -D -m 644 "$CHROOT/tmp/hg/libhuginn-menus.so" "$CHROOT$modules/libhuginn-menus.so"
+        # (kept for whoever makes the ready-built copy updates carry: apps/huginn_osupdate.py prebuilt-gtk)
+        rm -rf "$WORK/gtk-built"; mkdir -p "$WORK/gtk-built"
+        cp "$CHROOT/tmp/hg/libhuginn-menus.so" "$WORK/gtk-built/"
+    else
+        warn "the GTK menu module didn't build (see $WORK/gtk-build.log): old GTK 3 apps keep their menu bars in their windows"
+        tail -15 "$WORK/gtk-build.log" "$WORK/gtk-deps.log" 2>/dev/null || true
+    fi
+    in_chroot sh -c "dpkg-query -W -f='\${Package}\n' | sort > /tmp/hg-after.txt; comm -13 /tmp/hg-before.txt /tmp/hg-after.txt > /tmp/hg-new.txt"
+    in_chroot sh -c 'grep -E -- "-dev\$|-dev-bin\$|^(gcc|gcc-[0-9]+|cpp|cpp-[0-9]+|pkg-config|pkgconf|pkgconf-bin|libwayland-bin|wayland-protocols|gir1.2-.*-dev)\$" /tmp/hg-new.txt | xargs -r env DEBIAN_FRONTEND=noninteractive apt-get purge -y' > "$WORK/gtk-purge.log" 2>&1 || true
+    in_chroot env DEBIAN_FRONTEND=noninteractive apt-get autoremove -y --purge >> "$WORK/gtk-purge.log" 2>&1 || true
+    rm -rf "$CHROOT/tmp/hg" "$CHROOT"/tmp/hg-*.txt
+}
+
 build_compositor() {
     # Huginn's own compositor (compositor/, Rust, built on Smithay): the "own compositor" session at the sign-in screen.
     # Rust and the headers are put in the image only while it builds, then taken out again, as for rounded corners.
@@ -390,6 +415,7 @@ stage_customise() {
 
     build_compositor
     build_qt
+    build_gtk_menus
     build_whisper
     # KWin is gone (config/not-wanted.list): its rounded-corners effect and the screenshot helper it authorised
     # (huginn-grab) go with it; Huginn's compositor rounds corners and takes the pictures itself.

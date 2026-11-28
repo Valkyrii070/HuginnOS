@@ -1855,6 +1855,39 @@ icons (under Huginn's) and pointers, as artwork.
   `greeter_test.py` (46) and `locker_test.py` (14) both ways; `osupdate_test.py` (70, the five Qt parts);
   `qt_look_test.py` (41); `ci-smoke.py` (56). A fresh install simulated from the package lists brings no KDE code.
 
+## Older GTK 3 apps' menu bars in the top bar (2026-11-27)
+
+GtkApplication apps already hand their menus to the top bar through the compositor (gtk_shell1). Older GTK 3 apps
+build a menu bar widget themselves (GtkMenuBar: Audacity, Geany, Thunar, FileZilla, Pidgin, wxWidgets apps), and
+appmenu-gtk-module, which once moved those, doesn't work on Wayland. Huginn now has its own: `gtk/menus.c`, a GTK 3
+module (`libhuginn-menus.so`).
+
+- **Loaded into every GTK 3 app** of the session: `huginn-desktop-session` sets `GTK_MODULES=huginn-menus` when the
+  module is installed. (GTK on Wayland takes modules from nowhere else; settings.ini's `gtk-modules` is for X11.)
+- **While Huginn's shell is on the bus**, an app answers as `org.huginn.App.p<pid>` (`Menus`, `Trigger`), like Qt
+  apps and Huginn's own, so the shell needed no change. A window's menu bar is hidden (no room is kept for it); one
+  in a header bar, toolbar or popover is left where it is. Its shortcuts keep working: GTK only lets a menu item's
+  shortcut act while its menu bar is showing, so the module tells it yes (`can-activate-accel`). If the shell goes
+  away the menu bar comes back, and whatever the app did with it meanwhile (shown, hidden) is kept.
+  `HUGINN_GTK_MENUS=0` leaves an app's menu bar alone.
+- **The menus as GTK shows them**: each one is opened as GTK opens it (`activate`), so menus an app fills as they
+  open have their items (Open Recent); labels without mnemonics; shortcuts from an accel group, an accel path
+  (GtkUIManager) or a GMenuModel; check and radio items, greyed and hidden ones, separators; About, Preferences and
+  Quit moved to where Huginn has them. The window in front decides, and a dialog counts as its window.
+- **Built** by `build_gtk_menus` (`gtk/build.sh`, against the image's GTK; the compiler and headers go again).
+  **Updates** carry it ready-built (`prebuilt/huginn-gtk-menus.xz`, `huginn_osupdate.py prebuilt-gtk`), for exactly
+  its sources; GTK 3 keeps its module interface, so any GTK 3 loads it.
+- Not reached: GTK 3 apps from Flathub (their sandbox has its own GTK and no Huginn module) and GTK 2 apps (which
+  print a one-line note that they couldn't load it).
+- Tested: `gtk3_menus_test.py` (49) with a real GTK 3 app (`gtk3_menubar_app.py`: a menu bar built item by item and
+  one from a GMenuModel, with a stand-in shell on a bus of its own): the menu bar leaving and coming back with the
+  shell, the menus as read, doing items, shortcuts with the menu bar gone, a dialog, a header bar's menu bar left
+  alone. In the nested Wayland session with Huginn's shell: the menu bar gone from the window, Sketchbook's menus in
+  the top bar (picture checked), Large chosen there and Ctrl+N pressed in the window both reaching the app. And with
+  **Geany 2.1** (Ubuntu's): its whole menu bar in the top bar (File … Help, greyed Save, shortcuts, Preferences as
+  Settings), File › New from there and Ctrl+N in the window both opening a document. An app that gives itself no name
+  goes by GDK's ("geany" → "Geany"). `osupdate_test.py` (81). Not yet tried: wxWidgets apps (Audacity, FileZilla).
+
 ## Phone's own link (2026-11-27)
 
 Phone no longer needs KDE Connect's desktop program: `apps/huginn_phoned.py` speaks its protocol (version 8) itself,

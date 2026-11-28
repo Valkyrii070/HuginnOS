@@ -422,6 +422,40 @@ def qt_ready(kit: Path, root) -> tuple:
     return out, ""
 
 
+GTK_MODULE = "usr/lib/x86_64-linux-gnu/gtk-3.0/modules/libhuginn-menus.so"
+
+
+def gtk_sources(kit) -> str:
+    """One number for the GTK menu module's sources (gtk/'s C files)."""
+    h = hashlib.sha256()
+    for f in sorted((Path(kit) / "gtk").glob("*.[ch]")):
+        h.update(f.name.encode() + b"\0" + sha256(f).encode() + b"\n")
+    return h.hexdigest()
+
+
+def gtk_ready(kit: Path, root) -> tuple:
+    """({path on the system: bytes}, why not): Huginn's GTK menu module ready-built (gtk/menus.c), for exactly the
+    tree's sources. GTK 3 keeps its interface for modules, so any GTK 3 loads it. (The session asks GTK apps to load it
+    only when it's there: huginn-desktop-session.)"""
+    kit, root = Path(kit), Path(root)
+    out, why = {}, ""
+    note = read_pairs(kit / "prebuilt/huginn-gtk.for")
+    if not note:
+        why = "this update carries no ready-built GTK menu module"
+    elif note.get("sources") != gtk_sources(kit):
+        why = "the GTK menu module's sources changed after its ready-built copy was made"
+    else:
+        try:
+            data = lzma.decompress((kit / "prebuilt/huginn-gtk-menus.xz").read_bytes())
+        except (lzma.LZMAError, OSError, EOFError):
+            data = b""
+        if data[:4] != b"\x7fELF" or hashlib.sha256(data).hexdigest() != note.get("sha256"):
+            why = "the ready-built GTK menu module isn't the one its note describes"
+        else:
+            out[GTK_MODULE] = data
+    return out, why
+
+
 def plan(kit: Path, root, theme: Path = None) -> dict:
     """What applying a tree would do to the system under `root`, without doing it:
     {write: {path: (source, mode)}, remove: [paths], kept: [your changed settings files left alone], compositor: bytes|None, note}."""
@@ -463,8 +497,10 @@ def plan(kit: Path, root, theme: Path = None) -> dict:
         binary = None                                              # (already this one)
     qt, qt_note = qt_ready(kit, root)
     qt = {rel: data for rel, data in qt.items() if not ((root / rel).is_file() and hashlib.sha256(data).hexdigest() == sha256(root / rel))}
+    gtk, gtk_note = gtk_ready(kit, root)
+    gtk = {rel: data for rel, data in gtk.items() if not ((root / rel).is_file() and hashlib.sha256(data).hexdigest() == sha256(root / rel))}
     return {"write": write, "remove": remove, "kept": kept, "compositor": binary, "note": note, "qt": qt, "qt_note": qt_note,
-            "want": want, "held": held}
+            "gtk": gtk, "gtk_note": gtk_note, "want": want, "held": held}
 
 
 # ------------------------------------------------------------------------------------------------ putting it in place
@@ -490,7 +526,7 @@ def apply_plan(p: dict, root, keep: Path) -> dict:
     work = dict(p["write"])
     if p.get("compositor") is not None:
         work["usr/bin/huginn-compositor"] = (p["compositor"], 0o755)
-    for rel, data in (p.get("qt") or {}).items():
+    for rel, data in list((p.get("qt") or {}).items()) + list((p.get("gtk") or {}).items()):
         work[rel] = (data, 0o644)
     for rel in list(work) + list(p["remove"]):
         dest = root / rel
@@ -658,7 +694,8 @@ def apply(root, runner=run, log=print) -> dict:
     failed = after(root, done["written"], done["removed"], kit, runner)
     result = {"sha": staged["sha"], "date": staged["date"], "written": len(done["written"]), "removed": len(done["removed"]), "kept": p["kept"],
               "compositor": "replaced" if p["compositor"] is not None else (p["note"] or "already this version's"),
-              "qt": "replaced" if p.get("qt") else (p.get("qt_note") or "already this version's"), "failed": failed, "from": have["commit"], "when": int(time.time())}
+              "qt": "replaced" if p.get("qt") else (p.get("qt_note") or "already this version's"),
+              "gtk": "replaced" if p.get("gtk") else (p.get("gtk_note") or "already this version's"), "failed": failed, "from": have["commit"], "when": int(time.time())}
     shutil.rmtree(state_dir(root) / "staged", ignore_errors=True)
     save_state(root, staged=None, applied=result, previous={"commit": have["commit"], "date": have["date"]}, skip="", problem="")
     (state_dir(root) / "ready").unlink(missing_ok=True)
@@ -747,6 +784,30 @@ def make_prebuilt_qt(kit, built, qt: str) -> dict:
     return note
 
 
+def make_prebuilt_gtk(kit, built) -> dict:
+    """The same for the GTK menu module (gtk/), from the library gtk/build.sh made, noted as being for exactly the
+    tree's gtk/ sources."""
+    kit, out = Path(kit), Path(kit) / "prebuilt"
+    try:
+        data = Path(built).read_bytes()
+    except OSError:
+        raise Problem(f"{built} isn't there: build gtk/ first (gtk/build.sh).") from None
+    if data[:4] != b"\x7fELF":
+        raise Problem(f"{built} isn't a built library.")
+    note = {"sources": gtk_sources(kit), "sha256": hashlib.sha256(data).hexdigest()}
+    try:
+        same = lzma.decompress((out / "huginn-gtk-menus.xz").read_bytes()) == data
+    except (lzma.LZMAError, OSError, EOFError):
+        same = False
+    if read_pairs(out / "huginn-gtk.for") != note or not same:
+        out.mkdir(exist_ok=True)
+        (out / "huginn-gtk-menus.xz").write_bytes(lzma.compress(data, preset=6))
+        (out / "huginn-gtk.for").write_text("# Huginn's GTK menu module (gtk/), built for exactly these sources.\n"
+                                            + "".join(f"{k}: {v}\n" for k, v in note.items()), encoding="utf-8")
+        note["written"] = True
+    return note
+
+
 # ------------------------------------------------------------------------------------------------ the command
 def main(argv: list) -> int:
     what = argv[0] if argv else "look"
@@ -761,6 +822,9 @@ def main(argv: list) -> int:
             return 0
         if what == "prebuilt-qt" and len(argv) >= 4:               # prebuilt-qt <tree> <folder qt/ was built in> <Qt version>
             print(json.dumps(make_prebuilt_qt(argv[1], argv[2], argv[3])))
+            return 0
+        if what == "prebuilt-gtk" and len(argv) >= 3:              # prebuilt-gtk <tree> <built libhuginn-menus.so>
+            print(json.dumps(make_prebuilt_gtk(argv[1], argv[2])))
             return 0
         if what == "look":                                         # anyone may ask
             say(look(root))
@@ -796,6 +860,7 @@ def main(argv: list) -> int:
                   + (f" Left alone because you changed them: {', '.join(done['kept'][:6])}." if done["kept"] else "")
                   + ("" if done["compositor"] == "replaced" else f" The compositor: {done['compositor']}.")
                   + ("" if done.get("qt", "replaced") in ("replaced", "already this version's") else f" Qt apps' look: {done['qt']}.")
+                  + ("" if done.get("gtk", "replaced") in ("replaced", "already this version's") else f" Old GTK apps' menus: {done['gtk']}.")
                   + (f" Not everything afterwards worked: {'; '.join(done['failed'][:3])}." if done["failed"] else ""))
             return 0
         if what == "back":

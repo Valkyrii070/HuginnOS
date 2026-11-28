@@ -3,7 +3,7 @@
 # With --services (Huginn's own compositor starts it once it's listening): the services only, since the shell is
 # drawn inside the compositor.
 dbus-update-activation-environment --systemd WAYLAND_DISPLAY DISPLAY XDG_CURRENT_DESKTOP XDG_SESSION_DESKTOP QT_QPA_PLATFORM \
-    QT_QPA_PLATFORMTHEME GTK_USE_PORTAL GDK_DEBUG
+    QT_QPA_PLATFORMTHEME GTK_USE_PORTAL GDK_DEBUG GTK_MODULES
 # (left by sessions before KDE's integration went: apps started by systemd mustn't look for Plasma's menu)
 systemctl --user unset-environment XDG_MENU_PREFIX PLASMA_INTEGRATION_USE_PORTAL 2>/dev/null
 # Desktop, Documents, Downloads, Pictures… in the home folder (and in the user's language), as other desktops make
