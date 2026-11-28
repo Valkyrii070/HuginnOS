@@ -36,6 +36,8 @@ pub enum Request {
     Woke,
     /// Ctrl+V into the window that has the keyboard (clipboard history's pick)
     Paste,
+    /// An app is starting: the busy pointer until its window appears.
+    Launching,
     /// logind's "unlock the session" (`loginctl unlock-session`, from a text console if the lock screen ever can't).
     Unlock,
     Blank(bool),
@@ -186,6 +188,12 @@ impl Compositor {
     /// Clipboard history picked something: Ctrl+V into the window in front, once the history's panel has gone.
     fn paste(&self) {
         let _ = self.to_loop.send(Request::Paste);
+    }
+
+    /// The shell started an app: the pointer shows it's busy (the realm's turning drop) until a new window
+    /// appears, or for 8 seconds at most.
+    fn launching(&self) {
+        let _ = self.to_loop.send(Request::Launching);
     }
 
     fn locked(&self) -> bool {

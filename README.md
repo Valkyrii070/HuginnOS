@@ -3326,6 +3326,9 @@ Lock's light, automatic sign-in and renaming (they need the real hardware and sy
 - **Pointer** (Appearance › Pointer): each pointer theme shown by its own arrow, hand, text, wait and move pointers
   (read from its Xcursor files), with the size; choosing one sets the compositor's pointer at once (`ReloadAccess`),
   kcminputrc, GNOME's setting and X11's default (~/.icons/default).
+- **While an app opens**: the shell tells the compositor (`Launching` on org.huginn.Compositor), and the pointer is the
+  realm's turning drop beside the arrow until the app's first window appears, or for 8 seconds at most. A pointer an app
+  asks for itself (text, hand…) is left alone.
 - **Themes from a file** (both cards: Add from a file, Find More → gnome-look.org): a downloaded .tar.gz, .tar.xz, .tar.bz2
   or .zip, unpacked with tarfile's "data" filter (nothing outside, no odd links), every icon or pointer theme in it put in
   ~/.local/share/icons; ones added can be removed (the system's can't).

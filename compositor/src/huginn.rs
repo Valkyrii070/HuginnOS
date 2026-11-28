@@ -111,6 +111,8 @@ pub struct Huginn {
     /// when the compositor has been the input method for them
     pub afar_text: Option<(String, std::time::Instant)>,
     pub afar_im: Option<std::time::Instant>,
+    /// An app is starting (the shell said so): the pointer turns busy until a new window appears, for 8 s at most.
+    pub launching: Option<std::time::Instant>,
 }
 
 impl std::fmt::Debug for Huginn {
@@ -221,6 +223,7 @@ impl<B: Backend + 'static> HuginnState<B> {
             Request::LockForSleep(done) => self.lock_for_sleep(done),
             Request::Woke => self.touched(),
             Request::Paste => self.paste_soon(),
+            Request::Launching => self.huginn.launching = Some(std::time::Instant::now() + std::time::Duration::from_secs(8)),
             Request::Unlock => self.unlock_now(),
             Request::Blank(off) => {
                 self.huginn.blank = off;
@@ -750,6 +753,7 @@ impl<B: Backend + 'static> HuginnState<B> {
     /// A new window, once it has a size: in the middle of the screen the pointer is on (between the top bar and the
     /// dock), a little lower and to the right if another window is already exactly there.
     pub fn place_window(&mut self, window: &WindowElement) {
+        self.huginn.launching = None; // (the app that was starting is here: the pointer isn't busy any more)
         self.claim_window(window);
         // a window that went fullscreen as it opened (a game asking for it as it maps) stays as that put it
         if self.space.outputs().any(|o| o.user_data().get::<FullscreenSurface>().and_then(|f| f.get()).as_ref() == Some(window)) {

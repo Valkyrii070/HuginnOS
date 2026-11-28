@@ -1852,10 +1852,18 @@ impl HuginnState<UdevData> {
 
         // the pointer's picture: the shape asked for, sharp at this screen's size of things
         let cursor_scale = output.current_scale().fractional_scale().ceil().max(1.0) as u32;
-        let icon = match &self.cursor_status {
+        let mut icon = match &self.cursor_status {
             CursorImageStatus::Named(icon) => *icon,
             _ => smithay::input::pointer::CursorIcon::Default,
         };
+        // an app is starting: busy, where nothing else asked for a pointer of its own (huginn.rs)
+        if let Some(until) = self.huginn.launching {
+            if Instant::now() >= until {
+                self.huginn.launching = None;
+            } else if icon == smithay::input::pointer::CursorIcon::Default && !matches!(self.cursor_status, CursorImageStatus::Surface(_)) {
+                icon = smithay::input::pointer::CursorIcon::Progress;
+            }
+        }
         let frame = self.backend_data.pointer_image.get_image(icon, cursor_scale, self.clock.now().into());
         let named_hotspot = Point::<i32, Logical>::from(((frame.xhot / cursor_scale) as i32, (frame.yhot / cursor_scale) as i32));
 

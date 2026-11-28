@@ -1124,6 +1124,13 @@ class Apps(QObject):
         parts = shlex.split(command) if command else []
         if parts:
             QProcess.startDetached(parts[0], parts[1:])
+            if not self._demo:                               # the pointer shows the app is on its way (the compositor)
+                try:
+                    from PySide6.QtDBus import QDBusConnection, QDBusMessage
+                    QDBusConnection.sessionBus().asyncCall(QDBusMessage.createMethodCall(
+                        "org.huginn.Compositor", "/org/huginn/Compositor", "org.huginn.Compositor", "Launching"))
+                except ImportError:
+                    pass
         app = next((a for a in self._apps if a["exec"] and a["exec"] == command), None)
         if app:
             self.used(app["name"])
