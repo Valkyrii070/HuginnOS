@@ -4912,6 +4912,9 @@ def advice(sky: Sky) -> str:
                 (root / ".huginn-debug").write_text(program + "\n", encoding="utf-8")
             except OSError:
                 pass
+        if (d.path.endswith((".gd", ".tscn"))) and self._root and (self._root / "project.godot").is_file():
+            self.debugGame("godot-scene" if d.path.endswith(".tscn") else "godot")   # (GDScript runs inside Godot: debugged through its editor)
+            return
         program = program or hd.saved_program(root)
         try:
             argv, launch, name = hd.adapter_for(d.lang, d.path, root, program)
@@ -4925,6 +4928,54 @@ def advice(sky: Sky) -> str:
             self.said.emit(f"Would debug {Path(d.path).name} with {name}.", False)
             return
         self._debug_start(argv, launch, name, str(root))
+
+    @Slot(str)
+    def debugGame(self, how: str) -> None:
+        """Debug the game this project makes: "godot" (its main scene, through Godot's editor), "godot-current" (the
+        scene open in the editor), "godot-scene" (the .tscn file in front), "unreal-editor" (Unreal Editor with the
+        project, under GDB) or "unreal-game" (the game on its own)."""
+        if self._dbg.active:
+            self.said.emit("The debugger is already running: stop it first.", True)
+            return
+        root = self._root
+        if root is None:
+            self.said.emit("Open the game's project folder first.", True)
+            return
+        self.saveAll()
+        try:
+            if how.startswith("godot"):
+                scene = {"godot": "main", "godot-current": "current"}.get(how)
+                if scene is None:
+                    d = self._docs[self._at] if 0 <= self._at < len(self._docs) else None
+                    scene = d.path if d is not None else ""
+                argv, launch, name = hd.godot_for(root, scene or "main", reachable=(lambda h, p: True) if self._demo else hd.port_open)
+                after, what = [], "the game in Godot" if launch["scene"] == "main" else f"{launch['scene']} in Godot"
+            elif how in ("unreal-editor", "unreal-game"):
+                up = hb.uproject_of(root)
+                if up is None:
+                    raise ValueError("This isn't an Unreal project (it has no .uproject).")
+                engine = hb.unreal_root(up)
+                if not engine:
+                    raise ValueError("Unreal Engine wasn't found: choose its folder in the Build tab (Unreal: Choose the Engine Folder…).")
+                argv, launch, name, after = hd.unreal_for(up, engine, how == "unreal-game")
+                what = f"{up.stem} ({'the game' if how == 'unreal-game' else 'in Unreal Editor'})"
+            else:
+                return
+        except ValueError as err:
+            self.said.emit(str(err), True)
+            return
+        if self._demo:
+            self.said.emit(f"Would debug {what} with {name}.", False)
+            return
+        self._dbg.start(argv, launch, name, str(root), "launch", what, after=after)
+
+    @Property("QVariantMap", notify=changed)
+    def gameDebug(self):
+        """Which game debugging this project offers (the palette and the Build tab show these)."""
+        root = self._root
+        godot = bool(root) and (root / "project.godot").is_file()
+        unreal = bool(root) and hb.uproject_of(root) is not None
+        return {"godot": godot, "unreal": unreal}
 
     def _debug_start(self, argv: list, launch: dict, name: str, cwd: str, request: str = "launch", what: str = "") -> None:
         """Start the debugger where the project runs: here, or on the other computer / in the container, where the

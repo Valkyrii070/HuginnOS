@@ -178,6 +178,11 @@ GlassWindow {
         { name: "Workspace: Add a Folder…", key: "", run: function () { win.browseAt = Backend.root ? Backend.root.replace(/\/[^\/]+\/?$/, "") || "/" : Backend.home; win.ask("open", { add: true }) } },
         { name: "Workspace: Save as a .code-workspace File…", key: "", run: function () { if (Backend.folders.length) win.ask("space", { now: Backend.workspaceFile || (Backend.folders[0].path + ".code-workspace") }); else toast.say("One folder isn't a workspace: add another first.", true) } },
         { name: "Debug: Attach to a Running Program…", key: "", run: function () { win.attachAsk("") } },
+        { name: "Debug: The Game in Godot (main scene)", key: "", run: function () { win.bottom = "debug"; win.term = true; Backend.debugGame("godot") }, when: function () { return Backend.gameDebug.godot } },
+        { name: "Debug: The Scene Open in Godot's Editor", key: "", run: function () { win.bottom = "debug"; win.term = true; Backend.debugGame("godot-current") }, when: function () { return Backend.gameDebug.godot } },
+        { name: "Debug: This Scene in Godot", key: "", run: function () { win.bottom = "debug"; win.term = true; Backend.debugGame("godot-scene") }, when: function () { return Backend.gameDebug.godot } },
+        { name: "Debug: Unreal Editor with This Project", key: "", run: function () { win.bottom = "debug"; win.term = true; Backend.debugGame("unreal-editor") }, when: function () { return Backend.gameDebug.unreal } },
+        { name: "Debug: The Game on Its Own (Unreal)", key: "", run: function () { win.bottom = "debug"; win.term = true; Backend.debugGame("unreal-game") }, when: function () { return Backend.gameDebug.unreal } },
         { name: "Container: Open This Project in Its Container…", key: "", run: function () { win.containerAsk() } },
         { name: "Container: Open a Shell Inside", key: "", run: function () { if (Backend.container.running) { win.bottom = "terminal"; win.term = true; Backend.containerShell() } else toast.say("No container is running for this project.", true) } },
         { name: "Container: Stop", key: "", run: function () { if (Backend.container.running || Backend.container.starting) Backend.containerStop(false); else toast.say("No container is running for this project.", true) } },
@@ -377,7 +382,7 @@ GlassWindow {
         var out = [], q = text.toLowerCase(), i
         if (text.charAt(0) === ">") {
             q = q.substring(1).trim()
-            for (i = 0; i < commands.length; i++) if (commands[i].name.toLowerCase().indexOf(q) >= 0 && (!commands[i].ai || win.aiOn)) out.push({ label: commands[i].name, detail: win.keyOf(commands[i]), act: "cmd", n: i })
+            for (i = 0; i < commands.length; i++) if (commands[i].name.toLowerCase().indexOf(q) >= 0 && (!commands[i].ai || win.aiOn) && (!commands[i].when || commands[i].when())) out.push({ label: commands[i].name, detail: win.keyOf(commands[i]), act: "cmd", n: i })
             var ls = Backend.launches, ts = win.bld.tasks
             for (i = 0; i < ls.length; i++) if (("debug: " + ls[i].name).toLowerCase().indexOf(q) >= 0) out.push({ label: "Debug: " + ls[i].name, detail: ls[i].ok ? "launch.json" : "can't start here", act: "launch", name: ls[i].name })
             var xs = Backend.extensionCommands

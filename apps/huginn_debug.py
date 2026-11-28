@@ -55,6 +55,78 @@ def adapter_for(lang: str, file: str, root: Path, program: str = "", python: str
     raise ValueError(f"Code can't debug {lang or 'this kind of file'} yet. Run it instead (Ctrl+F5).")
 
 
+# ---------------------------------------------------------------- games: Godot through its editor, Unreal under GDB
+GODOT_DAP_PORT = 6006           # Godot 4's editor: Editor Settings › Network › Debug Adapter › Remote Port
+
+
+def port_open(host: str, port: int, wait: float = 0.3) -> bool:
+    import socket
+    try:
+        with socket.create_connection((host, port), timeout=wait):
+            return True
+    except OSError:
+        return False
+
+
+def godot_scene(root: Path, scene: str) -> str:
+    """What Godot's editor is asked to play: "main", "current" (the scene open in the editor), or a scene file of the
+    project, as a res:// path."""
+    if scene in ("main", "current") or scene.startswith("res://"):
+        return scene
+    try:
+        rel = Path(scene).resolve().relative_to(root.resolve())
+    except ValueError:
+        raise ValueError("That scene isn't in this project.") from None
+    if rel.suffix not in (".tscn", ".scn"):
+        raise ValueError("Only a scene (.tscn) can be played.")
+    return "res://" + rel.as_posix()
+
+
+def godot_for(root: Path, scene: str = "main", port: int = GODOT_DAP_PORT, python: str = "python3", reachable=port_open) -> tuple:
+    """(adapter command, launch arguments, name) to debug a Godot 4 game. Godot's editor is the debug adapter itself:
+    while the project is open in it, it answers on 127.0.0.1:6006, starts the game when asked and stops it at Code's
+    breakpoints in GDScript (huginn_lsp_tcp.py carries the conversation; this computer only)."""
+    import huginn_build as hb
+    root = Path(root)
+    if not (root / "project.godot").is_file():
+        raise ValueError("This isn't a Godot project (it has no project.godot).")
+    if hb.godot_major(root) == 3:
+        raise ValueError("Godot 3's editor can't be debugged from outside it; Godot 4's can.")
+    if not reachable("127.0.0.1", port):
+        raise ValueError("Open the project in Godot's editor first (Build › Open in the editor): the game is debugged through it. "
+                         f"(It listens on port {port}: Editor Settings › Network › Debug Adapter.)")
+    args = {"type": "godot", "request": "launch", "name": "Huginn Code", "project": str(root), "scene": godot_scene(root, scene),
+            "platform": "host", "noDebug": False}
+    return ([python, str(Path(__file__).resolve().with_name("huginn_lsp_tcp.py")), "127.0.0.1", str(int(port))], args, "Godot")
+
+
+def unreal_printers(engine: str) -> list:
+    """GDB's commands that load Epic's pretty printers (FString, TArray, TMap… shown as their contents), when the engine
+    has them (Engine/Extras/GDBPrinters)."""
+    folder = Path(engine) / "Engine/Extras/GDBPrinters"
+    try:
+        found = sorted(p for p in folder.glob("*.py") if p.is_file())
+    except OSError:
+        found = []
+    return [f"source {found[0]}"] if found else []
+
+
+def unreal_for(uproject: Path, engine: str, game: bool = False) -> tuple:
+    """(adapter command, launch arguments, name, commands for GDB after it starts) to debug an Unreal project's C++:
+    the editor with the project open (game False), or the game on its own (-game). The project's code must have been
+    built (Build › Build the editor) for its breakpoints to be found."""
+    exe = Path(engine) / "Engine/Binaries/Linux/UnrealEditor"
+    if not exe.is_file():
+        raise ValueError("Unreal Editor isn't built in that engine folder yet (Engine/Binaries/Linux/UnrealEditor).")
+    if not gdb_has_dap():
+        raise ValueError("Debugging Unreal needs GDB 14 or later (the gdb package).")
+    args = {"program": str(exe), "args": [str(uproject)] + (["-game", "-log", "-windowed"] if game else []), "cwd": str(Path(uproject).parent),
+            "stopAtBeginningOfMainSubprogram": False}
+    # the engine signals itself in the course of things; those aren't stops
+    after = ["handle SIGUSR1 nostop noprint pass", "handle SIGUSR2 nostop noprint pass"] + unreal_printers(engine)
+    return (["gdb", "-q", "-i", "dap"], args, "GDB", after)
+
+
 # ---------------------------------------------------------------- attaching to a program that is already running
 def processes(limit: int = 400) -> list:
     """The user's own running programs, newest first: [{pid, name, command, kind}] where kind is "python" (debugpy can

@@ -37,6 +37,8 @@ Ctrl+` opens a terminal under the code, in the project's folder. Run (Ctrl+F5) s
 Click beside a line number (or press F9) to put a red breakpoint there, then press F5. The program runs until it reaches one and stops; that line is marked, and the Debug panel shows the call stack, what every variable holds (open lists and objects a level at a time) and a console where you can work out an expression in the stopped program. F5 carries on, F10 steps over a line, F11 steps into a function, Shift+F11 steps out, Shift+F5 stops. Breakpoints stay with the project and move with their lines as you edit.
 Python is debugged with debugpy. C, C++, Rust and Go use GDB on the program you built (build it with debugging information, such as gcc -g or cargo build): Code asks which program the first time, guesses the newest one in the build folders, and keeps it in .huginn-debug.
 
+**Games.** In a Godot 4 project, open it in Godot's editor, then use the command palette's "Debug: The Game in Godot" (or F5 in a script or scene): the game starts from the editor and stops at your breakpoints in GDScript. In an Unreal project, "Debug: Unreal Editor with This Project" or "Debug: The Game on Its Own (Unreal)" runs it under GDB, after building it in the Build tab.
+
 ## Side by side and the minimap
 Ctrl+\ shows two files side by side (click either to type in it; picking a tab swaps them). Long files get a minimap on the right: the whole file drawn small, with the part on screen marked. Click or drag on it to go there. Turn it off with "Toggle the Minimap" in the command list (Ctrl+Shift+P).
 

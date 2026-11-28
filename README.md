@@ -1083,7 +1083,7 @@ let Qt free what a window had thrown away, so items piled up until the app crawl
 on its line; fixed, it builds), and Ubuntu's Godot 3 reporting a script error that lands on the script's line. Not
 checked here: Godot 4 itself (Flathub can't run in the build container), Godot's editor answering GDScript
 questions, and anything against a real Unreal Engine, which is far too large to fetch; those commands follow Epic's
-and Godot's documentation. Debugging inside Godot or Unreal from Code is not done.
+and Godot's documentation. Debugging inside Godot or Unreal came in round ten.
 
 **Code, round eight: what it takes from Visual Studio Code.** VS Code still ships for Linux (1.148, November 2026;
 only 32-bit ARM Linux was deprecated), so this isn't a rescue: it is so a project made there opens here as it is,
@@ -1194,6 +1194,25 @@ Then against the real things, where the build machine could reach them:
   container registry), so searching and fetching have only met a local stand-in speaking Open VSX's documented
   answers. Also unchecked: a second real machine over SSH, and a remote debugger behind a password prompt.
 Also fixed, found by the fuzz: completion asked for a line below zero raised an error.
+
+**Code, round ten: debugging the game itself** (for the studio trying Huginn OS; `apps/huginn_debug.py`,
+`apps/huginn_code.py`, `apps/qml/Code.qml`; `scripts/tests/code_round10_test.py`, 23 checks).
+- **Godot 4, GDScript.** Godot's editor is itself a debug adapter (Editor Settings › Network › Debug Adapter, port
+  6006) while the project is open in it. "Debug: The Game in Godot", "…the Scene Open in Godot's Editor" and "…This
+  Scene in Godot" (and F5 in a .gd or .tscn file) ask it to play the main scene, the current one or a res:// scene,
+  with Code's breakpoints; it stops there, and Code shows the call stack, locals and members, the game's printing,
+  stepping and expressions as for any program. The editor closed, Code says to open it (Build › Open in the
+  editor). Godot 3 can't be debugged from outside its editor, and says so.
+- **Unreal, C++.** "Debug: Unreal Editor with This Project" and "Debug: The Game on Its Own (Unreal)" run
+  `Engine/Binaries/Linux/UnrealEditor` with the .uproject (and `-game -log -windowed`) under GDB 14+, in the
+  project's folder, with the engine's own SIGUSR1/SIGUSR2 passed on rather than stopping, and Epic's pretty printers
+  (`Engine/Extras/GDBPrinters`) loaded when the engine has them, so FString, TArray and TMap show their contents.
+- The game-debugging commands appear in the palette only in a Godot or Unreal project.
+- Tested with a stand-in for Godot's editor that answers as Godot does (the request order Godot expects, launch
+  refused for the wrong project, breakpoints by real path, a stop with a two-frame stack, locals and members, the
+  game's output, carrying on to the end), and for Unreal with a small C program as UnrealEditor in a made-up engine
+  folder: GDB really stops at the breakpoint in it, shows its variables, and runs it to the end with `-game` passed.
+  Not tried: Godot 4's real editor and a real Unreal Engine (neither can run in the build container).
 
 **The "grub>" prompt after installing** (seen on real hardware; `search --file` and `configfile` by hand started the
 system, so the menu was fine and the pointer to it was not). GRUB finds its menu through a small pointer file that
