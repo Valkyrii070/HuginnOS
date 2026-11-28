@@ -489,6 +489,16 @@ GlassWindow {
         Toast { id: toast; anchors { horizontalCenter: parent.horizontalCenter; bottom: parent.bottom; bottomMargin: win.textOpen ? 160 : 70 } }
     ]
 
+    // ---------------------------------------------------------------- a folder being worked through: the window waits
+    Rectangle { visible: Backend.batchState.on; anchors.fill: parent; z: 60; radius: win.r; color: "#99000000"
+        MouseArea { anchors.fill: parent; acceptedButtons: Qt.AllButtons; hoverEnabled: true }
+        Rectangle { anchors.centerIn: parent; width: 300; height: 70; radius: 18; color: Theme.t.menu_bg; border.width: 1; border.color: Theme.t.menu_border
+            Label { anchors.centerIn: parent; text: "Working through the folder… " + Backend.batchState.done + " of " + Backend.batchState.of; font.weight: Font.DemiBold } } }
+    Rectangle { visible: Backend.recording; z: 30; anchors { top: parent.top; topMargin: 14; horizontalCenter: parent.horizontalCenter } width: recRow.width + 22; height: 28; radius: 14; color: Qt.rgba(1, 0.37, 0.34, 0.18); border.width: 1; border.color: "#FF5F57"
+        Row { id: recRow; anchors.centerIn: parent; spacing: 7
+            Rectangle { width: 9; height: 9; radius: 4.5; color: "#FF5F57"; anchors.verticalCenter: parent.verticalCenter }
+            Label { text: "Recording an action"; font.pixelSize: 12; font.weight: Font.DemiBold } } }
+
     // ---------------------------------------------------------------- the menu
     Rectangle { visible: win.menuOpen; z: 36; x: 120; y: 58; width: menuRow.width + 24; height: menuRow.height + 24; radius: 16; color: Theme.t.menu_bg; border.width: 1; border.color: Theme.t.menu_border
         MouseArea { anchors.fill: parent }
@@ -502,11 +512,12 @@ GlassWindow {
                                               [Backend.activeLayer.lockAlpha ? "Unlock Transparency" : "Lock Transparency", "lockalpha"], ["Convert to Smart Object", "smart"], ["Duplicate", "duplicate"], ["Merge Down", "merge"], ["Flatten", "flatten"], ["Rasterise", "rasterise"], ["Delete Layer", "delete"]] },
                     { title: "View", items: [[(Backend.rulersOn ? "Hide" : "Show") + " Rulers", "rulers"], [(Backend.snapOn ? "Stop Snapping" : "Snap to Guides"), "snap"], ["Clear Guides", "noguides"],
                                              ["Fit on Screen", "fit"], ["Actual Size", "actual"]] },
-                    { title: "Filters", items: Backend.filters.map(function (f) { return [f.name + ([ "invert", "desaturate", "autolevels"].indexOf(f.id) < 0 ? "…" : ""), "f:" + f.id] }) } ]
+                    { title: "Filters", items: Backend.filters.map(function (f) { return [f.name + ([ "invert", "desaturate", "autolevels"].indexOf(f.id) < 0 ? "…" : ""), "f:" + f.id] }) },
+                    { title: "Automate", items: [[Backend.recording ? "Stop Recording…" : "Start Recording", "record"], ["Actions…", "actions"], ["Merge Photos…", "merge"]] } ]
                 Column { required property var modelData; spacing: 1; width: win.menuCol
                     Label { text: modelData.title.toUpperCase(); secondary: true; font.pixelSize: 10; font.weight: Font.DemiBold; bottomPadding: 4; leftPadding: 8 }
                     Repeater { model: modelData.items
-                        Pressable { required property var modelData; width: win.menuCol; height: 28; radius: 8; color: hovered ? Theme.t.hover : "transparent"; enabled: Backend.hasDoc; opacity: enabled ? 1 : 0.4
+                        Pressable { required property var modelData; width: win.menuCol; height: 28; radius: 8; color: hovered ? Theme.t.hover : "transparent"; enabled: Backend.hasDoc || modelData[1] === "merge" || modelData[1] === "actions"; opacity: enabled ? 1 : 0.4
                             onClicked: win.act(modelData[1])
                             Label { x: 8; anchors.verticalCenter: parent.verticalCenter; text: modelData[0]; font.pixelSize: 12 } } } } } } }
     MouseArea { visible: win.menuOpen; anchors.fill: parent; z: 35; onClicked: win.menuOpen = false }
@@ -533,6 +544,9 @@ GlassWindow {
         else if (what === "adjust") open("adjust")
         else if (what === "styles") open("styles")
         else if (what === "place") { startBrowse(""); open("open", { place: true }) }
+        else if (what === "record") { if (Backend.recording) open("keepaction", { name: "" }); else Backend.startRecording() }
+        else if (what === "actions") open("actions")
+        else if (what === "merge") { startBrowse(""); open("merge", { how: "panorama", picked: [] }) }
     }
 
     // ---------------------------------------------------------------- sheets
@@ -542,16 +556,17 @@ GlassWindow {
         Rectangle { id: card; radius: 20
             x: kind === "styles" || kind === "history" || kind === "filter" || kind === "range" ? parent.width - width - 312 : (parent.width - width) / 2; y: kind === "styles" || kind === "history" ? 64 : kind === "filter" || kind === "range" ? parent.height - height - 28 : (parent.height - height) / 2; color: Theme.t.menu_bg; border.width: 1; border.color: Theme.t.menu_border
             readonly property string kind: win.sheet
-            readonly property bool browsing: kind === "open" || kind === "save" || kind === "export"
+            readonly property bool browsing: kind === "open" || kind === "save" || kind === "export" || kind === "merge" || kind === "batch"
             width: browsing ? 620 : kind === "colour" ? 340 : kind === "new" ? 640 : kind === "styles" ? 460 : ["history", "brushes", "gradients", "blend", "fonts", "adjust", "layer", "arrange", "combine"].indexOf(kind) >= 0 ? 360 : 440
-            height: browsing ? Math.min(win.height - 80, 560) : kind === "styles" ? Math.min(win.height - 130, 620) : kind === "history" ? Math.min(win.height - 130, histList.contentHeight + 156) : kind === "colour" ? 400 : kind === "new" ? 300 : kind === "fonts" || kind === "blend" ? Math.min(win.height - 100, 520)
+            height: browsing ? Math.min(win.height - 80, 560) : kind === "actions" ? Math.min(win.height - 80, 130 + Math.max(1, Backend.actions.length) * 70) : kind === "styles" ? Math.min(win.height - 130, 620) : kind === "history" ? Math.min(win.height - 130, histList.contentHeight + 156) : kind === "colour" ? 400 : kind === "new" ? 300 : kind === "fonts" || kind === "blend" ? Math.min(win.height - 100, 520)
                   : ["brushes", "gradients", "adjust", "layer", "arrange", "combine"].indexOf(kind) >= 0 ? Math.min(win.height - 70, sheetList.contentHeight + 110) : kind === "canvas" ? 300 : kind === "gradedit" ? 400 : kind === "range" ? 306 : kind === "strokesel" ? 264 : 220
             MouseArea { anchors.fill: parent }
             Label { x: 24; y: 20; font.pixelSize: 17; font.weight: Font.DemiBold
                 text: ({ new: "New picture", custom: "New picture", open: "Open a picture", save: "Save as an Easel picture", export: "Export", colour: ({ fg: "Main colour", bg: "Second colour", fill: "Fill", fill2: "Gradient's second colour", stroke: "Line" })[win.colourFor],
                          canvas: "Canvas size", imagesize: "Image size", filter: (Backend.filters.filter(function (f) { return f.id === win.sheetData.id })[0] || { name: "" }).name, feather: "Feather the selection", strokesel: "Outline the selection", smoothsel: "Smooth the selection", refinesel: "Refine the selection's edge", range: "Select by colour or tone", gradedit: "Make a gradient", bordersel: "Select a border", gradients: "Gradient",
                          grow: "Grow or shrink the selection", rename: "Rename the layer", brushes: "Brushes", blend: "Blend mode", fonts: "Font", adjust: "New adjustment layer",
-                         layer: "Layer", arrange: "Arrange", combine: "Combine shapes", history: "History", styles: "Layer style · " + (Backend.activeLayer.name || "") })[card.kind] || "" }
+                         layer: "Layer", arrange: "Arrange", combine: "Combine shapes", history: "History", actions: "Actions", keepaction: "Keep the recording as an action",
+                         merge: "Merge photos", batch: "Play “" + (win.sheetData.name || "") + "” on a folder", styles: "Layer style · " + (Backend.activeLayer.name || "") })[card.kind] || "" }
             // --- lists: brushes, blend modes, fonts, adjustments, layer actions, arranging, combining
             ListView { id: sheetList; visible: ["brushes", "gradients", "blend", "fonts", "adjust", "layer", "arrange", "combine"].indexOf(card.kind) >= 0; x: 12; y: 56; width: parent.width - 24; height: parent.height - 120; clip: true
                 boundsBehavior: Flickable.StopAtBounds
@@ -717,7 +732,7 @@ GlassWindow {
                     TextBox { id: hex; width: 120; mono: true; onAccepted: { if (win.colourFor === "fg" || win.colourFor === "bg") Backend.setColour(win.colourFor, text); else Backend.setStyle(win.colourFor, text) } }
                     Btn { visible: win.colourFor === "fill" || win.colourFor === "stroke"; text: "None"; onClicked: Backend.setStyle(win.colourFor, "") } } }
             // --- a size, an amount, a name
-            Column { visible: ["custom", "canvas", "imagesize", "filter", "feather", "grow", "strokesel", "smoothsel", "refinesel", "bordersel", "rename", "range"].indexOf(card.kind) >= 0; x: 24; y: 58; width: parent.width - 48; spacing: 12
+            Column { visible: ["custom", "canvas", "imagesize", "filter", "feather", "grow", "strokesel", "smoothsel", "refinesel", "bordersel", "rename", "range", "keepaction"].indexOf(card.kind) >= 0; x: 24; y: 58; width: parent.width - 48; spacing: 12
                 Row { visible: ["custom", "canvas", "imagesize"].indexOf(card.kind) >= 0; spacing: 10
                     Column { spacing: 4; Label { text: "Width (px)"; secondary: true; font.pixelSize: 11 } TextBox { id: wBox; width: 120; text: win.sheetData.w || ""
                         onEdited: if (card.kind === "imagesize" && win.sheetData.keep && Number(text) > 0) hBox.text = String(Math.round(Number(text) * Backend.docH / Backend.docW)) } }
@@ -745,7 +760,22 @@ GlassWindow {
                     options: [["inside", "Inside"], ["centre", "On the edge"], ["outside", "Outside"]]; onPicked: function (v) { var d = win.sheetData; d.where = v; win.sheetData = d } }
                 Label { visible: card.kind === "range"; width: parent.width; wrapMode: Text.WordWrap; secondary: true; font.pixelSize: 11
                     text: "What would be selected is washed in colour. For the front colour, pick it from the picture first with the eyedropper." }
-                TextBox { visible: card.kind === "rename"; id: nameBox; width: parent.width; text: win.sheetData.name || ""; onAccepted: okBtn.clicked() } }
+                TextBox { visible: card.kind === "rename" || card.kind === "keepaction"; id: nameBox; width: parent.width; text: win.sheetData.name || ""; placeholder: card.kind === "keepaction" ? "Its name, like Web-ready" : ""; onAccepted: okBtn.clicked() }
+                Label { visible: card.kind === "keepaction"; width: parent.width; wrapMode: Text.WordWrap; secondary: true; font.pixelSize: 11
+                    text: "Automate › Actions plays it on the open picture, or on every picture in a folder." } }
+            // --- the actions kept
+            ListView { id: actList; visible: card.kind === "actions"; x: 12; y: 56; width: parent.width - 24; height: parent.height - 120; clip: true; spacing: 4
+                boundsBehavior: Flickable.StopAtBounds; model: card.kind === "actions" ? Backend.actions : []
+                delegate: Rectangle { required property var modelData; width: actList.width; height: 64; radius: 12; color: Theme.t.group
+                    Column { x: 12; anchors.verticalCenter: parent.verticalCenter; width: parent.width - 250; spacing: 2
+                        Label { text: modelData.name; font.weight: Font.DemiBold; elide: Text.ElideRight; width: parent.width }
+                        Label { text: modelData.count + (modelData.count === 1 ? " step: " : " steps: ") + modelData.steps.join(", "); secondary: true; font.pixelSize: 11; elide: Text.ElideRight; width: parent.width } }
+                    Row { anchors { right: parent.right; rightMargin: 8; verticalCenter: parent.verticalCenter } spacing: 4
+                        Btn { text: "Play"; enabled: Backend.hasDoc; onClicked: { var i = modelData.index; win.sheet = ""; Backend.playAction(i) } }
+                        Btn { text: "On a Folder…"; onClicked: { var m = modelData; win.startBrowse(""); win.open("batch", { action: m.index, name: m.name }) } }
+                        Seg { icon: "trash"; tip: "Delete"; onClicked: Backend.deleteAction(modelData.index) } } }
+                Label { visible: Backend.actions.length === 0; width: parent.width; wrapMode: Text.WordWrap; secondary: true
+                    text: "No actions yet. Automate › Start Recording, do what you'd do to every picture (a size, a filter, an adjustment…), then Stop Recording to keep it." } }
             // --- the file browser for open, save and export
             Item { visible: card.browsing; x: 16; y: 54; width: parent.width - 32; height: parent.height - 54 - (card.kind === "open" ? 64 : card.kind === "export" ? 168 : 140)
                 Row { id: crumbs; x: 8; spacing: 6; height: 30
@@ -759,7 +789,9 @@ GlassWindow {
                         onClicked: { var m = modelData                      // read first: closing the sheet ends this row
                             if (m.dir) win.browseAt = m.path
                             else if (card.kind === "open") { var place = win.sheetData.place; if (place) Backend.placeFile(m.path); else Backend.open(m.path); win.sheet = "" }
-                            else saveName.text = m.name.replace(/\.[^.]+$/, "") }
+                            else if (card.kind === "merge") { var d = win.sheetData; var at = (d.picked || []).indexOf(m.path); d.picked = at >= 0 ? d.picked.filter(function (x) { return x !== m.path }) : (d.picked || []).concat([m.path]); win.sheetData = d }
+                            else if (card.kind !== "batch") saveName.text = m.name.replace(/\.[^.]+$/, "") }
+                        Glyph { visible: card.kind === "merge" && (win.sheetData.picked || []).indexOf(modelData.path) >= 0; anchors { right: parent.right; rightMargin: 12; verticalCenter: parent.verticalCenter } name: "check"; size: 15; ink: Theme.t.accent }
                         Glyph { x: 10; anchors.verticalCenter: parent.verticalCenter; name: modelData.dir ? "folder" : "image"; size: 15; ink: modelData.dir ? Theme.t.icon : Theme.t.accent }
                         Label { x: 36; width: parent.width - 50; elide: Text.ElideMiddle; anchors.verticalCenter: parent.verticalCenter; text: modelData.name; font.pixelSize: 12 } } } }
             Column { visible: card.kind === "save" || card.kind === "export"; x: 24; anchors { bottom: parent.bottom; bottomMargin: 70 } width: parent.width - 48; spacing: 8
@@ -774,10 +806,20 @@ GlassWindow {
                              psd: "Layers, blend modes and opacity, for Photoshop and anything that reads its files; shapes and type go in as pictures.",
                              ora: "Layers, blend modes and opacity, for Krita, GIMP and MyPaint." })[win.sheetData.format || "png"] }
                 Label { visible: card.kind === "save"; secondary: true; font.pixelSize: 11; text: "An .easel file keeps every layer, group, style, smart object, mask and shape, ready to change later." } }
+            Column { visible: card.kind === "merge" || card.kind === "batch"; x: 24; anchors { bottom: parent.bottom; bottomMargin: 70 } width: parent.width - 48; spacing: 8
+                SetChoice { visible: card.kind === "merge"; each: 132; value: win.sheetData.how || "panorama"
+                    options: Backend.merges.map(function (m) { return [m.id, m.name] }); onPicked: function (v) { var d = win.sheetData; d.how = v; win.sheetData = d } }
+                Label { width: parent.width; wrapMode: Text.WordWrap; secondary: true; font.pixelSize: 11
+                    text: card.kind === "batch" ? "Every picture in this folder, one after another; the results go in “Edited by Easel” beside them, in their own format. The pictures themselves aren't changed."
+                        : ({ panorama: "Overlapping shots joined into one wide picture. About a third in common between neighbours works best.",
+                             exposures: "The same scene shot darker and lighter (on a tripod or held steady), blended so the shadows and the sky both keep their detail.",
+                             focus: "The same scene focused near, middle and far; each part comes from the photo where it's sharpest." })[win.sheetData.how || "panorama"]
+                          + "  " + (win.sheetData.picked || []).length + " chosen." } }
             Row { anchors { right: parent.right; rightMargin: 20; bottom: parent.bottom; bottomMargin: 18 } spacing: 8
                 Btn { text: card.kind === "history" ? "Done" : "Cancel"; visible: card.kind !== "new" || Backend.hasDoc; onClicked: win.sheet = "" }
-                Btn { id: okBtn; primary: true; visible: ["custom", "canvas", "imagesize", "filter", "feather", "grow", "strokesel", "smoothsel", "refinesel", "bordersel", "rename", "save", "export", "range", "gradedit"].indexOf(card.kind) >= 0
-                    text: ({ custom: "Make", canvas: "Change", imagesize: "Resize", filter: "Apply", feather: "Feather", grow: "Change", strokesel: "Draw", smoothsel: "Smooth", refinesel: "Refine", bordersel: "Select", range: "Select", gradedit: "Keep", rename: "Rename", save: "Save", export: "Export" })[card.kind] || "OK"
+                Btn { id: okBtn; primary: true; visible: ["custom", "canvas", "imagesize", "filter", "feather", "grow", "strokesel", "smoothsel", "refinesel", "bordersel", "rename", "save", "export", "range", "gradedit", "keepaction", "merge", "batch"].indexOf(card.kind) >= 0
+                    enabled: card.kind !== "merge" || (win.sheetData.picked || []).length >= 2
+                    text: ({ keepaction: "Keep", merge: "Merge", batch: "Run on This Folder", custom: "Make", canvas: "Change", imagesize: "Resize", filter: "Apply", feather: "Feather", grow: "Change", strokesel: "Draw", smoothsel: "Smooth", refinesel: "Refine", bordersel: "Select", range: "Select", gradedit: "Keep", rename: "Rename", save: "Save", export: "Export" })[card.kind] || "OK"
                     onClicked: win.finishSheet() }
                 Btn { visible: card.kind === "styles"; text: "Clear All"; onClicked: Backend.clearFx() }
                 Btn { visible: card.kind === "colour" || card.kind === "styles"; text: "Done"; primary: true; onClicked: win.sheet = "" } }
@@ -824,6 +866,9 @@ GlassWindow {
         else if (k === "strokesel") { sheet = ""; Backend.strokeSelection(Math.max(1, Math.round((d.v !== undefined ? d.v : 0.1) * 40)), d.where || "centre") }
         else if (k === "grow") { sheet = ""; Backend.growSelection(Math.round(((d.v !== undefined ? d.v : 0.5) - 0.5) * 60)) }
         else if (k === "rename") { sheet = ""; Backend.setLayer(d.id, "name", nameBox.text) }
+        else if (k === "keepaction") { sheet = ""; Backend.stopRecording(nameBox.text) }
+        else if (k === "merge") { if ((d.picked || []).length < 2) return; sheet = ""; Backend.mergePhotos(d.how || "panorama", d.picked); view.fit() }
+        else if (k === "batch") { sheet = ""; Backend.batch(d.action, browseAt) }
         else if (k === "save") { if (!saveName.text.trim()) return; sheet = ""; Backend.saveAs(browseAt + "/" + saveName.text.trim()) }
         else if (k === "export") { if (!saveName.text.trim()) return; sheet = ""; var f = d.format || "png"; Backend.exportAs(browseAt + "/" + saveName.text.trim().replace(/\.[^.]+$/, "") + "." + f, 90) }
     }

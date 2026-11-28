@@ -504,3 +504,137 @@ def place_moved(place: dict, fn) -> dict:
     if place.get("quad"):
         out["quad"] = [list(fn(a, b)) for a, b in place["quad"]]
     return out
+
+
+# ------------------------------------------------------------------------------------------------ merging photos
+MERGES = {"panorama": "Panorama", "exposures": "Exposures (HDR)", "focus": "Focus stack"}
+MERGE_LIMIT = 24                     # photos at once
+
+
+def _bgr(rgba: np.ndarray) -> np.ndarray:
+    return np.ascontiguousarray(rgba[..., 2::-1])
+
+
+def _rgba(bgr: np.ndarray, alpha: np.ndarray = None) -> np.ndarray:
+    h, w = bgr.shape[:2]
+    out = np.empty((h, w, 4), np.uint8)
+    out[..., :3] = bgr[..., ::-1]
+    out[..., 3] = 255 if alpha is None else alpha
+    return out
+
+
+def _same_size(frames: list) -> list:
+    """Every frame at the first one's size (a camera's burst is; a phone's turned shot isn't)."""
+    import cv2
+    h, w = frames[0].shape[:2]
+    return [f if f.shape[:2] == (h, w) else cv2.resize(f, (w, h), interpolation=cv2.INTER_AREA) for f in frames]
+
+
+def _aligned(frames: list) -> list:
+    """Hand-held frames lined up with the first: a small shift and turn found by ECC (which doesn't mind one frame being
+    darker or blurrier than another, as brackets are), on smaller copies, then applied at full size. A frame that can't
+    be lined up, or would need a big move (not the same scene), is left as it is."""
+    import cv2
+    h, w = frames[0].shape[:2]
+    k = min(1.0, 800 / max(w, h))
+    small = lambda f: cv2.GaussianBlur(cv2.resize(cv2.cvtColor(f, cv2.COLOR_BGR2GRAY), (max(1, int(w * k)), max(1, int(h * k))),
+                                                  interpolation=cv2.INTER_AREA), (5, 5), 0).astype(np.float32)   # noqa: E731
+    base = small(frames[0])
+    out = [frames[0]]
+    for f in frames[1:]:
+        m = np.eye(2, 3, dtype=np.float32)
+        try:
+            _cc, m = cv2.findTransformECC(base, small(f), m, cv2.MOTION_EUCLIDEAN,
+                                          (cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 200, 1e-5), None, 5)
+        except cv2.error:
+            out.append(f)
+            continue
+        m[:, 2] /= k                                                   # (the shift back at full size)
+        if abs(m[0, 2]) > w * 0.1 or abs(m[1, 2]) > h * 0.1 or abs(m[0, 1]) > 0.1:
+            out.append(f)
+            continue
+        out.append(cv2.warpAffine(f, m, (w, h), flags=cv2.INTER_LINEAR | cv2.WARP_INVERSE_MAP, borderMode=cv2.BORDER_REPLICATE))
+    return out
+
+
+def merge_photos(how: str, pictures: list) -> np.ndarray:
+    """Several photos made into one (RGBA arrays in, one out):
+    panorama   overlapping shots stitched into one wide picture (OpenCV's stitcher); what no photo covered is clear
+    exposures  the same scene shot darker and lighter, blended so shadows and highlights both keep detail (exposure
+               fusion, Mertens: no tone mapping to tune)
+    focus      the same scene focused near to far, each part taken from the photo where it's sharpest
+    ValueError says why when it can't (too few photos, nothing in common)."""
+    import cv2
+    if how not in MERGES:
+        raise ValueError("That isn't a way to merge photos.")
+    if len(pictures) < 2:
+        raise ValueError("Choose two photos or more.")
+    if len(pictures) > MERGE_LIMIT:
+        raise ValueError(f"That's more than {MERGE_LIMIT} photos: merge them in parts.")
+    frames = [_bgr(p) for p in pictures]
+    if how == "panorama":
+        stitcher = cv2.Stitcher_create(cv2.Stitcher_PANORAMA)
+        status, pano = stitcher.stitch(frames)
+        if status != cv2.Stitcher_OK or pano is None:
+            raise ValueError({cv2.Stitcher_ERR_NEED_MORE_IMGS: "These photos don't overlap enough to join: shoot with about a third in common.",
+                              cv2.Stitcher_ERR_HOMOGRAPHY_EST_FAIL: "The photos couldn't be lined up with each other.",
+                              cv2.Stitcher_ERR_CAMERA_PARAMS_ADJUST_FAIL: "The photos couldn't be lined up with each other."}.get(status, "The photos couldn't be joined."))
+        covered = (pano.max(axis=2) > 0).astype(np.uint8) * 255      # (what no photo reached is black: made clear)
+        covered = cv2.morphologyEx(covered, cv2.MORPH_CLOSE, np.ones((3, 3), np.uint8))
+        return _rgba(pano, covered)
+    frames = _aligned(_same_size(frames))
+    if how == "exposures":
+        fused = cv2.createMergeMertens().process(frames)              # (8-bit in: it scales them itself)
+        return _rgba(np.clip(fused * 255 + 0.5, 0, 255).astype(np.uint8))
+    # focus: how sharp each photo is around each pixel (the Laplacian's size, spread a little), each pixel taken from the
+    # sharpest, blended softly where two are about as sharp so the seams don't show
+    sharp = []
+    for f in frames:
+        g = cv2.GaussianBlur(cv2.cvtColor(f, cv2.COLOR_BGR2GRAY), (3, 3), 0)
+        lap = np.abs(cv2.Laplacian(g, cv2.CV_32F, ksize=3))
+        sharp.append(cv2.GaussianBlur(lap, (0, 0), 4))
+    s = np.stack(sharp)
+    w8 = np.power(s / (s.max(axis=0, keepdims=True) + 1e-6), 8)    # the sharpest dominates; near-ties share
+    w8 /= w8.sum(axis=0, keepdims=True) + 1e-6
+    out = np.zeros(frames[0].shape, np.float32)
+    for f, wt in zip(frames, w8):
+        out += f.astype(np.float32) * wt[..., None]
+    return _rgba(np.clip(out + 0.5, 0, 255).astype(np.uint8))
+
+
+# ------------------------------------------------------------------------------------------------ actions
+# What can be recorded and played again: commands on the whole picture or the layer in front, with no pointer in them.
+# Each step: [name, [arguments]]. "resize" keeps the shape of the picture it's played on when it was recorded that way.
+ACTION_STEPS = {"filter": "Filter", "resize": "Image size", "canvas": "Canvas size", "turn": "Rotate or flip", "trim": "Trim edges",
+                "flatten": "Flatten", "selectAll": "Select all", "deselect": "Deselect", "invertSelection": "Invert the selection",
+                "feather": "Feather", "fillSelection": "Fill with colour", "duplicateLayer": "Duplicate the layer", "mergeDown": "Merge down",
+                "addAdjustment": "New adjustment", "setAdjust": "Adjust", "layer": "Layer change"}
+
+
+def clean_action(a) -> dict:
+    """An action as kept in easel-actions.json, made safe: a name and known steps with plain arguments, or None."""
+    if not isinstance(a, dict) or not isinstance(a.get("name"), str) or not isinstance(a.get("steps"), list):
+        return None
+    steps = []
+    for s in a["steps"][:500]:
+        if (isinstance(s, list) and len(s) == 2 and s[0] in ACTION_STEPS and isinstance(s[1], list)
+                and all(isinstance(x, (str, int, float, bool)) and not (isinstance(x, float) and not math.isfinite(x)) for x in s[1])):
+            steps.append([s[0], list(s[1])[:4]])
+    name = a["name"].strip()[:60]
+    return {"name": name, "steps": steps} if name and steps else None
+
+
+def describe_step(step: list) -> str:
+    name, args = step
+    label = ACTION_STEPS.get(name, name)
+    if name == "filter" and args:
+        return f"{label}: {args[0]}"
+    if name == "resize" and len(args) >= 3:
+        return f"{label}: {args[0]} wide" + (", in proportion" if args[2] else f" × {args[1]}")
+    if name in ("canvas",) and len(args) >= 2:
+        return f"{label}: {args[0]} × {args[1]}"
+    if name in ("turn", "addAdjustment") and args:
+        return f"{label}: {args[0]}"
+    if name in ("setAdjust", "layer") and len(args) >= 2:
+        return f"{label}: {args[0]} {args[1]}"
+    return label

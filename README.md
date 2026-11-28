@@ -1310,6 +1310,24 @@ three things an editor is expected to have.
   `def` snippet tabbed through, the outline and sticky lines, a conflict settled and marked resolved, the Markdown
   preview.
 
+**Easel, round twelve: actions and batches, photos merged** (`apps/huginn_easel_ui.py`, `apps/huginn_easel_more.py`,
+`apps/qml/Easel.qml`; `scripts/tests/easel_round12_test.py`, 30 checks, and `easel_round12_ui.py`, 11 in the window):
+- **Actions** (Automate › Start Recording … Stop Recording…): what's done to the whole picture or the layer in front is
+  kept as steps: filters, Image and Canvas Size, turns and flips, Trim, Flatten, select all/none/invert, Feather, Fill,
+  Duplicate, Merge Down, adjustment layers and their settings (a slider's run is one step), a layer's opacity, blend
+  and visibility. Strokes and other pointer work aren't (they belong to one picture). Image Size recorded in
+  proportion plays in each picture's own proportion. Kept in `easel-actions.json`, read back made safe (unknown steps,
+  odd arguments and nameless actions dropped). A red "Recording an action" badge shows while it records.
+- **Actions › Play** runs one on the open picture, each step its own in History. **On a Folder…** runs it on every
+  picture in a folder, one per turn of the event loop so the window stays alive (it waits behind a veil with the
+  count), each result exported to "Edited by Easel" beside them in its own format; a file that can't be opened is
+  named at the end and the rest go on; the picture that was open comes back.
+- **Merge Photos** (Automate, also with no picture open; tick two or more in the folder): **Panorama** (OpenCV's
+  stitcher; what no shot covered is clear), **Exposures** (exposure fusion, Mertens: shadows and highlights both
+  kept, nothing to tune), **Focus stack** (each part from the photo where it's sharpest, near-ties blended so seams
+  don't show). Brackets are lined up first (ECC, which doesn't mind one frame being darker or blurrier). The result is
+  a new picture on one layer. Up to 24 photos of 60 megapixels each.
+
 **Easel, round eleven: liquify, smooth tones, your own gradients, Colour Range**
 (`apps/huginn_easel.py`, `apps/huginn_easel_ui.py`, `apps/qml/Easel.qml`; `scripts/tests/easel_round11_test.py`, 76 checks):
 - *Liquify draws a patch at a time*, the last of the retouching tools to do so: under adjustment layers and blend
@@ -1397,7 +1415,7 @@ three of the gaps listed under round eight, narrowed.
   longer blend list. **What this does not make Easel**: see "Where Easel still falls short" below.
 
 **Where Easel still falls short of Photoshop and Affinity Photo** (so nobody is surprised; kept up to date, last after
-round eleven):
+round twelve):
 - *Colour depth and management*: 8 bits a channel, sRGB only. No 16- or 32-bit pictures, no ICC profiles, no CMYK, no
   soft proofing. This is the largest gap for print and for heavy tonal work, and it reaches into every pixel routine.
   (Round eleven takes the worst of the visible symptom away, steps in smooth tones, for gradients and for
@@ -1410,9 +1428,10 @@ round eleven):
 - *Brushes*: no textures, dual brushes, tilt, wet mixing or brush files from other programs (.abr).
 - *Type*: one style per text box. No paragraph controls (justify, indents, hyphenation), no OpenType features, and
   type doesn't stay editable in a Photoshop file.
-- *Photography*: no raw files, no lens corrections, no HDR or panorama merging, no focus stacking.
-- *The rest*: no actions or batch processing, no artboards or slices, no 3D or video, no plug-ins, no generative fill,
-  no channels panel, no pattern fills.
+- *Photography*: no raw files and no lens corrections. (Round twelve merges panoramas, exposures and focus stacks;
+  exposures are fused, not made into a 32-bit HDR picture to tone-map.)
+- *The rest*: actions can't record pointer work (strokes, a selection drawn) or pause for a choice; no artboards or
+  slices, no 3D or video, no plug-ins, no generative fill, no channels panel, no pattern fills.
 
 **Easel, the deep dives** (`apps/huginn_easel.py`, `apps/huginn_easel_ui.py`): four more ways in, after round six's
 command fuzz. Each has a script in `scripts/tests/` that runs as an ordinary user (they refuse root).

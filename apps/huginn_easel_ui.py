@@ -22,6 +22,7 @@ import huginn_easel_more as more
 
 DATA_HOME = Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local/share") / "huginn"
 PREFS = DATA_HOME / "easel.json"
+ACTIONS = DATA_HOME / "easel-actions.json"
 OPENABLE = (".easel", ".ora", ".psd", ".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff", ".gif", ".svg")
 PRESETS = [("Screen", 1920, 1080), ("4K screen", 3840, 2160), ("Square post", 1080, 1080), ("Story", 1080, 1920), ("A4 at 300 dpi", 2480, 3508),
            ("Letter at 300 dpi", 2550, 3300), ("App icon", 1024, 1024), ("Banner", 1500, 500), ("Phone wallpaper", 1290, 2796)]
@@ -83,6 +84,8 @@ class Easel(QObject):
         self.tolerance, self.contiguous, self.gradient_kind, self.gradient_clear = 0.12, True, "linear", False
         self.zoom = 1.0                                          # the view tells Easel, so handles and slack match the screen
         self._undo, self._redo = [], []
+        self._recording, self._replaying, self._batch = None, False, None      # actions: steps being kept; one playing; a folder's run
+        self._actions = self._load_actions()
         self._drag = None
         self._live = None
         self._picked = []
@@ -1234,6 +1237,7 @@ class Easel(QObject):
 
     @Slot(str)
     def addAdjustment(self, kind: str) -> None:
+        self._rec("addAdjustment", kind)
         if not self.doc or kind not in ez.ADJUSTMENTS:
             return
         self._push("New adjustment")
@@ -1249,6 +1253,7 @@ class Easel(QObject):
 
     @Slot(str, float)
     def setAdjust(self, key: str, value: float) -> None:
+        self._rec("setAdjust", key, value)
         l = self.doc.layer() if self.doc else None
         if not l or l["kind"] != "adjust":
             return
@@ -1293,6 +1298,7 @@ class Easel(QObject):
 
     @Slot(str, str, "QVariant")
     def setLayer(self, ident: str, key: str, value) -> None:
+        self._rec("layer", key, value) if key in ("opacity", "blend", "visible") and self.doc and ident == self.doc.layer()["id"] else None
         l = self.doc.layer(ident) if self.doc else None
         if not l or key not in ("name", "visible", "locked", "opacity", "blend", "maskOn", "clip", "lockAlpha"):
             return
@@ -1444,6 +1450,7 @@ class Easel(QObject):
 
     @Slot()
     def duplicateLayer(self) -> None:
+        self._rec("duplicateLayer")
         if not self.doc:
             return
         self._push("Duplicate layer")
@@ -1523,6 +1530,7 @@ class Easel(QObject):
 
     @Slot()
     def mergeDown(self) -> None:
+        self._rec("mergeDown")
         if not self.doc:
             return
         i = self.doc.index(self.doc.active)
@@ -1561,6 +1569,7 @@ class Easel(QObject):
 
     @Slot()
     def flatten(self) -> None:
+        self._rec("flatten")
         if not self.doc:
             return
         self._push("Flatten")
@@ -1649,6 +1658,7 @@ class Easel(QObject):
 
     @Slot()
     def selectAll(self) -> None:
+        self._rec("selectAll")
         if self.doc:
             self._push("Select all")
             self.doc.selection = ez.alpha_image(np.full((self.doc.h, self.doc.w), 255, np.uint8))
@@ -1657,6 +1667,7 @@ class Easel(QObject):
 
     @Slot()
     def deselect(self) -> None:
+        self._rec("deselect")
         if self.doc and self.doc.selection is not None:
             self._push("Deselect")
             self.doc.selection = None
@@ -1665,6 +1676,7 @@ class Easel(QObject):
 
     @Slot()
     def invertSelection(self) -> None:
+        self._rec("invertSelection")
         if not self.doc:
             return
         self._push("Invert selection")
@@ -1675,6 +1687,7 @@ class Easel(QObject):
 
     @Slot(float)
     def feather(self, radius: float) -> None:
+        self._rec("feather", radius)
         radius = _f(radius, 0.0, 250.0)
         if not self.doc or self.doc.selection is None or radius is None:
             return
@@ -2508,6 +2521,7 @@ class Easel(QObject):
     @Slot(int, int, str)
     def canvasSize(self, w: int, h: int, anchor: str) -> None:
         """anchor: one of tl t tr l c r bl b br: where the old picture sits on the new canvas."""
+        self._rec("canvas", int(w), int(h), anchor)
         if not self.doc or w < 1 or h < 1:
             return
         w, h = min(int(w), ez.SIDE_LIMIT), min(int(h), ez.SIDE_LIMIT)
@@ -2520,6 +2534,7 @@ class Easel(QObject):
     @Slot(int, int)
     def imageSize(self, w: int, h: int) -> None:
         """Scale everything: pixels are resampled, shapes simply grow."""
+        self._rec("resize", int(w), int(h), bool(self.doc) and abs(int(w) / max(1, int(h)) - self.doc.w / self.doc.h) < 0.01)
         if not self.doc or w < 1 or h < 1:
             return
         w, h = min(int(w), ez.SIDE_LIMIT), min(int(h), ez.SIDE_LIMIT)
@@ -2552,6 +2567,7 @@ class Easel(QObject):
     @Slot(str)
     def transformCanvas(self, how: str) -> None:
         """how: "cw", "ccw", "180", "fliph", "flipv"."""
+        self._rec("turn", how)
         if not self.doc or how not in ("cw", "ccw", "180", "fliph", "flipv"):
             return
         self._push({"cw": "Rotate right", "ccw": "Rotate left", "180": "Rotate 180°", "fliph": "Flip across", "flipv": "Flip upside down"}[how])
@@ -2608,6 +2624,7 @@ class Easel(QObject):
     @Slot()
     def trim(self) -> None:
         """Cut away the transparent edges."""
+        self._rec("trim")
         if not self.doc:
             return
         a = ez.alpha_of(self.doc.composite())
@@ -2619,6 +2636,7 @@ class Easel(QObject):
     # ------------------------------------------------------------------ editing what's selected
     @Slot()
     def fillSelection(self) -> None:
+        self._rec("fillSelection")
         target = self._target() if self.doc else None
         if target is None:
             return
@@ -2759,6 +2777,7 @@ class Easel(QObject):
 
     @Slot(str, float)
     def applyFilter(self, name: str, amount: float) -> None:
+        self._rec("filter", name, amount)
         amount = _f(amount, 0.0, 1.0)
         if amount is None:
             return
@@ -2784,6 +2803,201 @@ class Easel(QObject):
         layer[which] = ez.array_to_image(out)
         self.doc.touch(layer)
         self._refresh()
+
+    # ------------------------------------------------------------------ actions: what you did, played again (and over a folder)
+    def _rec(self, name: str, *args) -> None:
+        """Keep a step while recording (not while an action plays). A slider's run of the same setting is one step."""
+        if self._recording is None or self._replaying:
+            return
+        args = [a if isinstance(a, (str, bool)) or a is None else (int(a) if isinstance(a, int) else float(a)) for a in args]
+        last = self._recording[-1] if self._recording else None
+        if last and last[0] == name and name in ("setAdjust", "layer", "feather") and (name == "feather" or last[1][0] == args[0]):
+            self._recording[-1] = [name, args]
+        else:
+            self._recording.append([name, args])
+
+    def _load_actions(self) -> list:
+        try:
+            raw = json.loads(ACTIONS.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            raw = []
+        return [a for a in (more.clean_action(x) for x in (raw if isinstance(raw, list) else [])) if a][:200]
+
+    def _save_actions(self) -> None:
+        try:
+            ACTIONS.parent.mkdir(parents=True, exist_ok=True)
+            tmp = ACTIONS.with_suffix(".tmp")
+            tmp.write_text(json.dumps(self._actions, indent=1), encoding="utf-8")
+            os.replace(tmp, ACTIONS)
+        except OSError as err:
+            self.said.emit(f"Couldn't keep the actions: {err.strerror or err}", True)
+
+    @Property(bool, notify=changed)
+    def recording(self):
+        return self._recording is not None
+
+    @Property("QVariantList", notify=changed)
+    def actions(self):
+        return [{"index": i, "name": a["name"], "count": len(a["steps"]), "steps": [more.describe_step(st) for st in a["steps"]][:12]}
+                for i, a in enumerate(self._actions)]
+
+    @Slot()
+    def startRecording(self) -> None:
+        self._recording = []
+        self.changed.emit()
+        self.said.emit("Recording: filters, sizes, turns, selections, adjustments and layer changes are kept from now.", False)
+
+    @Slot(str)
+    def stopRecording(self, name: str) -> None:
+        steps, self._recording = self._recording or [], None
+        self.changed.emit()
+        a = more.clean_action({"name": (name or "").strip() or f"Action {len(self._actions) + 1}", "steps": steps})
+        if not a:
+            self.said.emit("Nothing that can be played again was done, so nothing was kept.", True)
+            return
+        self._actions = [x for x in self._actions if x["name"] != a["name"]] + [a]
+        self._save_actions()
+        self.changed.emit()
+        self.said.emit(f"Kept “{a['name']}”: {len(a['steps'])} steps.", False)
+
+    @Slot(int)
+    def deleteAction(self, index: int) -> None:
+        if 0 <= index < len(self._actions):
+            del self._actions[index]
+            self._save_actions()
+            self.changed.emit()
+
+    def _play(self, steps: list) -> int:
+        """Each step on the open picture, as if chosen from the menus; one that doesn't apply here is passed over."""
+        run = 0
+        self._replaying = True
+        try:
+            for name, args in steps:
+                if not self.doc:
+                    break
+                try:
+                    if name == "resize":
+                        w, h, keep = (list(args) + [0, 0, False])[:3]
+                        self.imageSize(int(w), max(1, round(self.doc.h * int(w) / self.doc.w)) if keep else int(h))
+                    elif name == "layer":
+                        self.setLayer(self.doc.layer()["id"], str(args[0]), args[1])
+                    elif name == "filter":
+                        self.applyFilter(str(args[0]), float(args[1]))
+                    elif name == "canvas":
+                        self.canvasSize(int(args[0]), int(args[1]), str(args[2]))
+                    elif name == "turn":
+                        self.transformCanvas(str(args[0]))
+                    elif name == "feather":
+                        self.feather(float(args[0]))
+                    elif name == "addAdjustment":
+                        self.addAdjustment(str(args[0]))
+                    elif name == "setAdjust":
+                        self.setAdjust(str(args[0]), float(args[1]))
+                    else:
+                        getattr(self, name)()
+                    run += 1
+                except (IndexError, TypeError, ValueError, KeyError):
+                    continue
+        finally:
+            self._replaying = False
+        return run
+
+    @Slot(int)
+    def playAction(self, index: int) -> None:
+        if not self.doc or not 0 <= index < len(self._actions):
+            return
+        a = self._actions[index]
+        n = self._play(a["steps"])
+        self.said.emit(f"Played “{a['name']}”" + ("." if n == len(a["steps"]) else f": {n} of {len(a['steps'])} steps applied here."), False)
+
+    @Slot(int, str)
+    def batch(self, index: int, folder: str) -> None:
+        """An action played on every picture in a folder, one at a time (the window stays free), each result exported
+        beside them in "Edited by Easel" in its own format (PNG for ones Easel can't write back)."""
+        folder = Path((folder or "").replace("file://", "")).expanduser()
+        if not 0 <= index < len(self._actions) or not folder.is_dir() or self._batch is not None:
+            return
+        files = sorted(p for p in folder.iterdir() if p.is_file() and p.suffix.lower() in OPENABLE and p.suffix.lower() not in (".easel", ".svg"))
+        if not files:
+            self.said.emit("There are no pictures in that folder.", True)
+            return
+        out = folder / "Edited by Easel"
+        self._batch = {"steps": self._actions[index]["steps"], "name": self._actions[index]["name"], "files": files, "out": out, "done": 0, "failed": [],
+                       "kept": (self.doc, self._undo, self._redo)}
+        self.changed.emit()
+        QTimer.singleShot(0, self._batch_next)
+
+    @Property("QVariantMap", notify=changed)
+    def batchState(self):
+        b = self._batch
+        return {"on": b is not None, "done": b["done"] if b else 0, "of": len(b["files"]) if b else 0}
+
+    def _batch_next(self) -> None:
+        b = self._batch
+        if b is None:
+            return
+        if not b["files"]:
+            self.doc, self._undo, self._redo = b["kept"]
+            self._batch = None
+            self.changed.emit()
+            self.painted.emit()
+            bad = f" {len(b['failed'])} couldn't be done: {', '.join(b['failed'][:3])}{'…' if len(b['failed']) > 3 else ''}." if b["failed"] else ""
+            self.said.emit(f"“{b['name']}” done on {b['done']} pictures, in “{b['out'].name}”.{bad}", bool(b["failed"]))
+            return
+        src = b["files"].pop(0)
+        try:
+            self.doc, self._undo, self._redo = ez.open_any(str(src)), [], []
+            self._play(b["steps"])
+            b["out"].mkdir(exist_ok=True)
+            ext = src.suffix.lower() if src.suffix.lower() in (".png", ".jpg", ".jpeg", ".webp", ".tif", ".tiff", ".bmp", ".psd", ".ora") else ".png"
+            target = b["out"] / (src.stem + ext)
+            if ext == ".ora":
+                self.doc.save_ora(str(target))
+            else:
+                self.doc.export(str(target), 92)
+            b["done"] += 1
+        except (OSError, ValueError, KeyError, MemoryError):
+            b["failed"].append(src.name)
+        self.changed.emit()
+        QTimer.singleShot(0, self._batch_next)
+
+    # ------------------------------------------------------------------ several photos made into one
+    @Property("QVariantList", constant=True)
+    def merges(self):
+        return [{"id": k, "name": v} for k, v in more.MERGES.items()]
+
+    @Slot(str, "QVariantList")
+    def mergePhotos(self, how: str, paths) -> None:
+        """Panorama, exposures or a focus stack from the photos chosen: a new picture, the result on one layer."""
+        paths = [str(p).replace("file://", "") for p in (paths or []) if isinstance(p, str)][: more.MERGE_LIMIT + 1]
+        pictures = []
+        for p in paths:
+            img = QImage(p)
+            if img.isNull():
+                self.said.emit(f"“{Path(p).name}” couldn't be read.", True)
+                return
+            if img.width() * img.height() > 60_000_000:
+                self.said.emit(f"“{Path(p).name}” is too big to merge (60 megapixels at most).", True)
+                return
+            pictures.append(ez.image_to_array(img.convertToFormat(QImage.Format.Format_ARGB32_Premultiplied)))
+        try:
+            out = more.merge_photos(how, pictures)
+        except ValueError as err:
+            self.said.emit(str(err), True)
+            return
+        except Exception as err:                                      # noqa: BLE001  (OpenCV's own errors)
+            self.said.emit(f"The photos couldn't be merged: {str(err).splitlines()[0][:160]}", True)
+            return
+        h, w = out.shape[:2]
+        if max(w, h) > ez.SIDE_LIMIT:
+            self.said.emit("The merged picture is too big for Easel.", True)
+            return
+        doc = ez.Document(w, h, None)
+        doc.layers[0]["image"] = ez.array_to_image(out)
+        doc.layers[0]["name"] = more.MERGES[how]
+        self.doc = doc
+        self._fresh()
+        self.said.emit(f"{more.MERGES[how]} made from {len(pictures)} photos.", False)
 
     # ------------------------------------------------------------------ the clipboard
     @Slot(bool)

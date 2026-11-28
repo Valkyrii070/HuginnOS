@@ -81,3 +81,9 @@ With the gradient tool, open the gradient list and choose New from This…. Clic
 that place, drag the markers to move the colours, and press Keep. Opacity makes the ringed colour see-through;
 Middle moves the place where it has half turned into the next colour. Your gradients stay in the list; Change and Forget
 are beside each one.
+
+## Actions and batches
+Automate › **Start Recording**, then do what you'd do to every picture: a size, a filter, an adjustment, a turn. **Stop Recording…** keeps it under a name. Automate › **Actions…** plays it on the open picture (each step can be undone), or **On a Folder…** runs it on every picture in a folder; the results go in "Edited by Easel" beside them, and the pictures themselves aren't changed. Brush strokes and other work with the pointer aren't recorded. An Image Size recorded in proportion keeps each picture's own proportion.
+
+## Merge Photos
+Automate › **Merge Photos…**, tick two photos or more, and choose: **Panorama** joins overlapping shots (about a third in common works best); **Exposures** blends the same scene shot darker and lighter so the shadows and the sky both keep detail; **Focus stack** takes each part from the photo where it's sharpest. Shots held by hand are lined up first. The result opens as a new picture.
