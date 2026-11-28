@@ -401,7 +401,8 @@ stage_customise() {
     # Huginn's own pointers (pointers/make_pointers.py), drawn into Huginn's icon theme as Adwaita keeps its own, the
     # other names as links; and X11's default pointer theme (/usr/share/icons/default) made Huginn's
     cp "$ROOT/pointers/make_pointers.py" "$CHROOT/tmp/make_pointers.py"
-    # (every realm's: Aurora's are "Huginn", the others Huginn-Bifrost, … and the look swaps to the realm's own)
+    # (every realm's: Aurora's are "Huginn", the others Huginn-Bifrost, … and the look swaps to the realm's own; and each
+    # again with a plain outline and no glow, Huginn-Plain, Huginn-Bifrost-Plain, …)
     if in_chroot env QT_QPA_PLATFORM=offscreen python3 /tmp/make_pointers.py --realms /usr/share/icons --links > "$WORK/pointers.log" 2>&1; then
         in_chroot update-alternatives --install /usr/share/icons/default/index.theme x-cursor-theme /usr/share/icons/Huginn/cursor.theme 100 >> "$WORK/pointers.log" 2>&1 || true
         in_chroot update-alternatives --set x-cursor-theme /usr/share/icons/Huginn/cursor.theme >> "$WORK/pointers.log" 2>&1 || true

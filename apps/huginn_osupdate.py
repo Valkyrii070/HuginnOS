@@ -487,7 +487,7 @@ POINTERS = "usr/share/icons/Huginn"
 
 def make_pointers(kit: Path, out: Path, runner=run) -> bool:
     """Huginn's pointers from the tree (pointers/make_pointers.py), every realm's, into `out`: Huginn/ (Aurora's),
-    Huginn-Bifrost/ and the rest, each with cursors/ and cursor.theme; every name a file of its own, since what an
+    Huginn-Bifrost/ and the rest, and the plain ones (Huginn-Plain/…), each with cursors/ and cursor.theme; every name a file of its own, since what an
     update puts in place is files. False when they couldn't be made."""
     if not (Path(kit) / "pointers/make_pointers.py").is_file():
         return False

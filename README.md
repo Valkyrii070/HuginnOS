@@ -2058,6 +2058,11 @@ app can ask for and packs them as an X cursor theme.
   Huginn-Bifrost, Huginn-Muspelheim, Huginn-Niflheim); Settings lists Huginn once, and the look (`huginn_look.py`)
   swaps to the realm's own when the realm changes, as long as the pointers are Huginn's. Updates draw all four. QtSvg can't clip or blur, so the sheen, glow and shadow are drawn in layers with
   QPainter.
+- **Huginn Plain**: the same pointers with an ordinary outline, white round the dark glass (near-black round frost),
+  and no glow round them, for anyone who finds the realm's rim too much. The marks, badges and busy drop keep the
+  realm's colours. Each realm has its plain theme too (Huginn-Plain, Huginn-Bifrost-Plain, …; `--plain` for one);
+  Settings › Appearance › Pointer lists Huginn Plain just after Huginn, and the look keeps plain ones plain when the
+  realm changes.
 - **Every name**: 30 drawn (CSS's names: default, pointer, text, wait, progress, help, grab, the eight resizes and
   the rest), 120 names in all with X's old ones, GTK's, and Qt's hashed ones. Sizes 24, 32, 48 and 64.
 - **Made with Qt alone** (QtSvg, offscreen), so the image build and updates draw them on the machine itself and no

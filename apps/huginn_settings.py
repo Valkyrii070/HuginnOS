@@ -1577,6 +1577,13 @@ def load_signin() -> dict:
             "me": first(mine[0]["full"]) if mine else "", "others": [first(p["full"]) for p in everyone if p["name"] != me][:4], "still": still}
 
 
+def pointer_choice(theme: str) -> str:
+    """What Settings shows as chosen: any realm's Huginn pointers are "Huginn", any realm's plain ones "Huginn-Plain"."""
+    if theme.startswith("Huginn"):
+        return "Huginn-Plain" if theme.endswith("-Plain") else "Huginn"
+    return theme
+
+
 def load_look() -> dict:
     """Which realm the sign-in screen wears, the icon and pointer themes, the live wallpapers."""
     realm = login_realm()
@@ -1598,8 +1605,7 @@ def load_look() -> dict:
         size = 24
     return {"loginRealm": realm, "canChange": os.access(LOGIN_LOOK, os.X_OK) and bool(HAVE("pkexec")),
             "iconThemes": hl.list_icon_themes(), "iconTheme": current_icon_theme(),
-            "pointerThemes": pointers, "pointerTheme": ("Huginn" if (kconfig_read(CONFIG / "kcminputrc", ["Mouse"], "cursorTheme", "") or "Huginn").startswith("Huginn")
-                                                        else kconfig_read(CONFIG / "kcminputrc", ["Mouse"], "cursorTheme", "")),
+            "pointerThemes": pointers, "pointerTheme": pointer_choice(kconfig_read(CONFIG / "kcminputrc", ["Mouse"], "cursorTheme", "") or "Huginn"),
             "pointerSize": size, "live": hl.list_live(), "appIcons": sorted(changed, key=lambda a: a["name"].lower())}
 
 
@@ -3044,12 +3050,12 @@ class SystemSettings(QObject):
 
         def work():
             nonlocal ident
-            if ident == "Huginn":                                # Huginn's pointers come in the realm's colours
+            if ident in ("Huginn", "Huginn-Plain"):             # Huginn's pointers come in the realm's colours
                 try:
                     import huginn_look
-                    ident = huginn_look.pointer_theme_for(huginn_look.read_settings()[0])
+                    ident = huginn_look.pointer_theme_for(huginn_look.read_settings()[0], ident == "Huginn-Plain")
                 except Exception:                                # noqa: BLE001
-                    ident = "Huginn"
+                    pass
             kconfig_write(CONFIG / "kcminputrc", ["Mouse"], "cursorTheme", ident)
             if HAVE("gsettings"):
                 RUN(["gsettings", "set", "org.gnome.desktop.interface", "cursor-theme", ident], None, 5)

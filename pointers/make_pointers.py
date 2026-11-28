@@ -2,7 +2,9 @@
 """Huginn's own pointers: every pointer an app can ask for, drawn here and packed as an X cursor theme.
 
     make_pointers.py <out folder> [--style glass|frost] [--realm aurora|bifrost|muspelheim|niflheim] [--links]
-    make_pointers.py --realms <icons folder> [--links]   all four realms' themes: Huginn (Aurora), Huginn-Bifrost, …
+    make_pointers.py --realms <icons folder> [--links]   all four realms' themes: Huginn (Aurora), Huginn-Bifrost, …,
+        and the same again with a plain outline: Huginn-Plain, Huginn-Bifrost-Plain, …
+    (--plain: one realm's plain-outline pointers)
         -> <out>/cursors/<name> (Xcursor files, sizes 24, 32, 48 and 64), <out>/cursor.theme (for X11's default:
            /usr/share/icons/default), and <out>/index.theme when there is none (the image puts them in Huginn's icon
            theme, /usr/share/icons/Huginn, as Adwaita keeps its pointers in its icons)
@@ -46,7 +48,15 @@ REALMS = {
     "niflheim": {"theme": "Huginn-Niflheim", "name": "Huginn Niflheim", "light": ("#A6D6FF", "#E6F4FF"), "deep": ("#2361AE", "#4A86CF"), "glow": (124, 196, 255),
                  "spin": ["#4F8DF7", "#7CC4FF", "#D6EEFF", "#9FD2FF", "#6FA8FF", "#B9E2FF"]},
 }
+# the plain ones: the same pointers with an ordinary outline (white round the dark glass, near-black round frost) and
+# no glow round them, for those who'd rather not have the realm's rim; the marks and the spinner keep the realm's colours
+PLAIN_RIMS = {"light": ("#FFFFFF", "#FFFFFF"), "deep": ("#14181D", "#14181D")}
 TEAL, VIOLET, RED = "#3DD6B5", "#7B61FF", "#FF5F57"
+
+
+def theme_name(realm: str, plain: bool = False) -> str:
+    """The theme's folder: Huginn (Aurora's), Huginn-Bifrost…, and Huginn-Plain, Huginn-Bifrost-Plain… for the plain ones."""
+    return REALMS[realm]["theme"] + ("-Plain" if plain else "")
 
 # ------------------------------------------------------------------------------------------------ the shapes
 # Huginn's own: the arrow is a notched dart (a raven's quill, not the old arrow with a stem), things that move are
@@ -255,12 +265,12 @@ ALIASES = {
 }
 
 
-def layers(name, style, turn=0.0, realm=REALM) -> tuple:
+def layers(name, style, turn=0.0, realm=REALM, plain=False) -> tuple:
     """A pointer's drawing as layers: (the rim and its dark edge, the glass body, the body alone in white for the
-    sheen, what goes on top), each an SVG."""
+    sheen, what goes on top), each an SVG. Plain: the rim an ordinary outline, not the realm's colours."""
     body, extras, _hot = SHAPES[name]
     s = STYLES[style]
-    rim1, rim2 = REALMS[realm][s["rims"]]
+    rim1, rim2 = (PLAIN_RIMS if plain else REALMS[realm])[s["rims"]]
     if isinstance(extras, Spinner):
         extras = ""                                            # (drawn by render())
     elif callable(extras):
@@ -281,9 +291,9 @@ def layers(name, style, turn=0.0, realm=REALM) -> tuple:
     return rim, glass, mask, top
 
 
-def svg(name, style, turn=0.0, realm=REALM) -> str:
+def svg(name, style, turn=0.0, realm=REALM, plain=False) -> str:
     """The pointer as one SVG, without the sheen, glow and spinner that render() adds (for looking at it elsewhere)."""
-    rim, glass, _mask, top = layers(name, style, turn, realm)
+    rim, glass, _mask, top = layers(name, style, turn, realm, plain)
     inner = lambda t: t[t.index(">") + 1:-len("</svg>")] if t else ""  # noqa: E731
     return '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">' + inner(rim) + inner(glass) + inner(top) + "</svg>"
 
@@ -311,11 +321,11 @@ def _soft(img: QImage, size: int, colour: QColor, shrink: int) -> QImage:
     return out.scaled(size, size, Qt.AspectRatioMode.IgnoreAspectRatio, Qt.TransformationMode.SmoothTransformation)
 
 
-def render(name: str, style: str, turn: float, size: int, realm: str = REALM) -> QImage:
-    """The pointer at size×size pixels, premultiplied ARGB: a faint glow in the realm's colour round it and a shadow
-    below, the rim, the glass, light across its top half (the sheen), what goes on top, and the spinner."""
+def render(name: str, style: str, turn: float, size: int, realm: str = REALM, plain: bool = False) -> QImage:
+    """The pointer at size×size pixels, premultiplied ARGB: a faint glow in the realm's colour round it (not the plain
+    ones) and a shadow below, the rim, the glass, light across its top half (the sheen), what goes on top, and the spinner."""
     s = STYLES[style]
-    rim, glass, mask, top = layers(name, style, turn, realm)
+    rim, glass, mask, top = layers(name, style, turn, realm, plain)
     art = _draw(rim, size)
     p = QPainter(art)
     p.drawImage(0, 0, _draw(glass, size))
@@ -337,7 +347,8 @@ def render(name: str, style: str, turn: float, size: int, realm: str = REALM) ->
     out = QImage(size, size, QImage.Format.Format_ARGB32_Premultiplied)
     out.fill(Qt.GlobalColor.transparent)
     p = QPainter(out)
-    p.drawImage(0, 0, _soft(art, size, QColor(*REALMS[realm]["glow"], s["glow"]), 6))
+    if not plain:
+        p.drawImage(0, 0, _soft(art, size, QColor(*REALMS[realm]["glow"], s["glow"]), 6))
     p.drawImage(round(size / 32), round(size * 1.4 / 32), _soft(art, size, QColor(0, 0, 0, 110), 5))
     p.drawImage(0, 0, art)
     p.end()
@@ -358,30 +369,33 @@ def xcursor(images) -> bytes:
     return header + toc + chunks
 
 
-def make(name, style, realm=REALM) -> bytes:
+def make(name, style, realm=REALM, plain=False) -> bytes:
     _body, extras, (hx, hy) = SHAPES[name]
     frames = FRAMES if callable(extras) or isinstance(extras, Spinner) else 1
     images = []
     for size in SIZES:
         for f in range(frames):
-            img = render(name, style, f / frames, size, realm)
+            img = render(name, style, f / frames, size, realm, plain)
             images.append((size, min(size - 1, round(hx * size / 32)), min(size - 1, round(hy * size / 32)), FRAME_MS if frames > 1 else 0, img))
     return xcursor(images)
 
 
-def write_theme(out: Path, style: str, links: bool, realm: str = REALM) -> int:
+def write_theme(out: Path, style: str, links: bool, realm: str = REALM, plain: bool = False) -> int:
     """One realm's pointers into a theme folder. Aurora's are "Huginn" (inside Huginn's icon theme); the others are
-    themes of pointers alone, "Huginn-Bifrost" and so on, which the look swaps to when the realm changes."""
+    themes of pointers alone, "Huginn-Bifrost" and so on, which the look swaps to when the realm changes; the plain
+    ones are "Huginn-Plain", "Huginn-Bifrost-Plain"…"""
     cursors = out / "cursors"
     cursors.mkdir(parents=True, exist_ok=True)
     r = REALMS[realm]
+    name_ = r["name"] + (" Plain" if plain else "")
     if not (out / "index.theme").exists():
-        (out / "index.theme").write_text(f"[Icon Theme]\nName={r['name']}\nComment=Huginn OS's own pointers"
-                                         + (f", in {realm.title()}'s colours\nInherits=Huginn\n" if realm != "aurora" else "\n"), encoding="utf-8")
-    (out / "cursor.theme").write_text(f"[Icon Theme]\nName={r['name']}\nInherits={r['theme']}\n", encoding="utf-8")
+        comment = "Huginn OS's own pointers" + (f", in {realm.title()}'s colours" if realm != "aurora" else "") + (", with a plain outline" if plain else "")
+        (out / "index.theme").write_text(f"[Icon Theme]\nName={name_}\nComment={comment}\n"
+                                         + ("Inherits=Huginn\n" if realm != "aurora" or plain else ""), encoding="utf-8")
+    (out / "cursor.theme").write_text(f"[Icon Theme]\nName={name_}\nInherits={theme_name(realm, plain)}\n", encoding="utf-8")
     count = 0
     for name in SHAPES:
-        data = make(name, style, realm)
+        data = make(name, style, realm, plain)
         (cursors / name).write_bytes(data)
         count += 1
         for other in ALIASES.get(name, []):
@@ -396,7 +410,7 @@ def write_theme(out: Path, style: str, links: bool, realm: str = REALM) -> int:
     return count
 
 
-def sheet(path: Path, styles, realms=("aurora",)) -> None:
+def sheet(path: Path, styles, realms=("aurora",), plain=False) -> None:
     """A picture of the main pointers at 48 px, each look (and realm) on dark and on light."""
     names = ["default", "pointer", "text", "wait", "progress", "help", "grab", "grabbing", "move", "crosshair",
              "not-allowed", "copy", "alias", "ns-resize", "nwse-resize", "col-resize", "zoom-in", "color-picker"]
@@ -412,7 +426,7 @@ def sheet(path: Path, styles, realms=("aurora",)) -> None:
             for bg in ("#1E2227", "#E9ECEF"):
                 p.fillRect(pad, y, cell * len(names), cell, QColor(bg))
                 for i, name in enumerate(names):
-                    p.drawImage(pad + i * cell + 8, y + 8, render(name, style, 0.15, 48, realm))
+                    p.drawImage(pad + i * cell + 8, y + 8, render(name, style, 0.15, 48, realm, plain))
                 y += cell + 8
     p.end()
     img.save(str(path))
@@ -429,13 +443,13 @@ if __name__ == "__main__":
         sys.exit(f"no realm {realm}: {', '.join(REALMS)}")
     if "--sheet" in args:
         chosen = [style] if "--style" in args else list(STYLES)
-        sheet(Path(args[args.index("--sheet") + 1]), chosen, list(REALMS) if realm == "all" else [realm])
+        sheet(Path(args[args.index("--sheet") + 1]), chosen, list(REALMS) if realm == "all" else [realm], "--plain" in args)
         sys.exit(0)
     if "--realms" in args:                                     # every realm's theme, side by side in an icons folder
         base = Path(args[args.index("--realms") + 1])
-        n = sum(write_theme(base / r["theme"], style, "--links" in args, key) for key, r in REALMS.items())
-        print(n, "pointers written for", len(REALMS), "realms")
+        n = sum(write_theme(base / theme_name(key, plain), style, "--links" in args, key, plain) for plain in (False, True) for key in REALMS)
+        print(n, "pointers written for", len(REALMS), "realms, with the realm's rim and plain")
         sys.exit(0)
     if not args or args[0].startswith("-"):
         sys.exit(__doc__)
-    print(write_theme(Path(args[0]), style, "--links" in args, realm), "pointers written")
+    print(write_theme(Path(args[0]), style, "--links" in args, realm, "--plain" in args), "pointers written")

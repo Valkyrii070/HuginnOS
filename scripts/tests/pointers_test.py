@@ -130,6 +130,8 @@ check("…and put every one in place as a file", all(f"usr/share/icons/Huginn/cu
 check("…every realm's, the other realms' with their own index (Huginn's index is the icon theme's)",
       all(f"usr/share/icons/Huginn-{r}/cursors/wait" in want and f"usr/share/icons/Huginn-{r}/index.theme" in want for r in ("Bifrost", "Muspelheim", "Niflheim"))
       and "pointers" not in str(want.get("usr/share/icons/Huginn/index.theme", ("",))[0]))
+check("…and the plain ones, each realm's", all(f"usr/share/icons/{t}/cursors/default" in want and f"usr/share/icons/{t}/index.theme" in want
+      for t in ("Huginn-Plain", "Huginn-Bifrost-Plain", "Huginn-Muspelheim-Plain", "Huginn-Niflheim-Plain")))
 check("…GTK told the pointer theme too", "gtk-cursor-theme-name=Huginn" in want["etc/gtk-3.0/settings.ini"][0].read_text())
 root = home / "root"
 (root / "usr/share/icons/Huginn/cursors").mkdir(parents=True)
@@ -176,6 +178,11 @@ realms = home / "realms"
 got = subprocess.run(tool + ["--realms", str(realms), "--links"], capture_output=True, text=True, timeout=600)
 check("every realm's pointers, side by side", got.returncode == 0 and all((realms / t / "cursors/default").is_file() for t in
       ("Huginn", "Huginn-Bifrost", "Huginn-Muspelheim", "Huginn-Niflheim")), got.stderr[-300:])
+check("…and each again with a plain outline", all((realms / t / "cursors/default").is_file() for t in
+      ("Huginn-Plain", "Huginn-Bifrost-Plain", "Huginn-Muspelheim-Plain", "Huginn-Niflheim-Plain")))
+plain_index = (realms / "Huginn-Plain/index.theme").read_text()
+check("…named Huginn Plain, falling back to Huginn", "Name=Huginn Plain" in plain_index and "Inherits=Huginn" in plain_index
+      and "Inherits=Huginn-Bifrost-Plain" in (realms / "Huginn-Bifrost-Plain/cursor.theme").read_text())
 bif = (realms / "Huginn-Bifrost/index.theme").read_text()
 check("…the others named for their realm, falling back to Huginn", "Name=Huginn Bifröst" in bif and "Inherits=Huginn" in bif
       and "Inherits=Huginn-Muspelheim" in (realms / "Huginn-Muspelheim/cursor.theme").read_text())
@@ -194,11 +201,35 @@ check("…a solid disc, with no white or dark ring round it", all(c.alpha() > 20
 check("the rims follow the realm too", mp.svg("default", "glass", 0, "muspelheim") != mp.svg("default", "glass", 0, "aurora") and "#FFAD7A" in mp.svg("default", "glass", 0, "muspelheim"))
 check("…and the marks (the link's orb)", "#FFAD7A" in mp.svg("pointer", "glass", 0, "muspelheim") and "@L1@" not in mp.svg("pointer", "glass", 0, "muspelheim"))
 check("a realm that isn't one is refused", subprocess.run(tool + [str(home / "y"), "--realm", "asgard"], capture_output=True).returncode != 0)
-# the look swaps Huginn's pointers to the realm's; anyone else's stay
-(share / "icons/Huginn-Bifrost/cursors").mkdir(parents=True)
-(share / "icons/Huginn-Bifrost/cursors/default").write_bytes(b"x")
+# the plain ones: the same pointer, an ordinary outline (white round dark glass, near-black round frost), no glow
+plain_svg, glow_svg = mp.svg("default", "glass", 0, "aurora", True), mp.svg("default", "glass", 0, "aurora")
+check("plain: the same shape and glass, only the outline differs", plain_svg != glow_svg
+      and plain_svg.replace("#FFFFFF", "").count("<path") == glow_svg.count("<path") and "#8AF5DE" not in plain_svg and "#8AF5DE" in glow_svg)
+check("…white round the dark glass, near-black round frost", plain_svg.count('stop-color="#FFFFFF"') == 2
+      and mp.svg("default", "frost", 0, "aurora", True).count('stop-color="#14181D"') == 2)
+check("…the marks keep the realm's colours", "#8AF5DE" in mp.svg("pointer", "glass", 0, "aurora", True))
+def tinted(img):
+    """Pixels round the shape (not solid) that carry a colour, not just the grey of a shadow."""
+    out = 0
+    for x in range(img.width()):
+        for y in range(img.height()):
+            c = img.pixelColor(x, y)
+            if 8 < c.alpha() < 160 and max(c.red(), c.green(), c.blue()) - min(c.red(), c.green(), c.blue()) > 40:
+                out += 1
+    return out
+check("…no glow round it (only the shadow's grey)", tinted(mp.render("default", "glass", 0, 64, "aurora", True)) == 0
+      and tinted(mp.render("default", "glass", 0, 64, "aurora")) > 20,
+      (tinted(mp.render("default", "glass", 0, 64, "aurora", True)), tinted(mp.render("default", "glass", 0, 64, "aurora"))))
+fire_plain = mean(mp.render("wait", "glass", 0.0, 64, "muspelheim", True))
+check("…the busy pointer still in the realm's colours", fire_plain[0] > fire_plain[2] + 80, fire_plain)
+# the look swaps Huginn's pointers to the realm's (plain ones staying plain); anyone else's stay
+for t in ("Huginn-Bifrost", "Huginn-Plain", "Huginn-Bifrost-Plain"):
+    (share / f"icons/{t}/cursors").mkdir(parents=True)
+    (share / f"icons/{t}/cursors/default").write_bytes(b"x")
+    (share / f"icons/{t}/index.theme").write_text(f"[Icon Theme]\nName={t.replace('-', ' ')}\n")
 for before, realm, after in (("Huginn", "bifrost", "Huginn-Bifrost"), ("Huginn-Bifrost", "aurora", "Huginn"), ("Adwaita", "bifrost", "Adwaita"),
-                             ("Huginn", "niflheim", "Huginn")):
+                             ("Huginn", "niflheim", "Huginn"), ("Huginn-Plain", "bifrost", "Huginn-Bifrost-Plain"),
+                             ("Huginn-Bifrost-Plain", "aurora", "Huginn-Plain"), ("Huginn-Plain", "niflheim", "Huginn-Plain")):
     kin.write_text(f"[Mouse]\ncursorTheme={before}\n")
     hl._realm_pointers(realm)
     check(f"{before} in {realm}: {after}", f"cursorTheme={after}" in kin.read_text(), kin.read_text())
@@ -206,6 +237,16 @@ import huginn_looks as hls  # noqa: E402
 hls.ICON_DIRS = [share / "icons"]
 ids = [t["id"] for t in hls.list_pointer_themes()]
 check("Settings lists Huginn once (the realm's colours come with it)", "Huginn" in ids and "Huginn-Bifrost" not in ids, ids)
+check("…and Huginn Plain once, just after it", ids[:2] == ["Huginn", "Huginn-Plain"] and "Huginn-Bifrost-Plain" not in ids, ids)
+icons.write_text("[Icon Theme]\nInherits=Huginn-Plain\n")
+kin.write_text("[Mouse]\ncursorTheme=Huginn-Plain\n")
+hl._realm_pointers("bifrost")
+check("…X11 apps' default follows the plain ones too", icons.read_text().strip().endswith("Inherits=Huginn-Bifrost-Plain"), icons.read_text())
+src = (KIT / "apps/huginn_settings.py").read_text()
+ns = {}
+exec(src[src.index("def pointer_choice"):src.index("def load_look")], ns)
+check("Settings shows any realm's plain ones as Huginn Plain chosen", [ns["pointer_choice"](t) for t in ("Huginn-Bifrost-Plain", "Huginn-Muspelheim", "Huginn", "Adwaita")]
+      == ["Huginn-Plain", "Huginn", "Huginn", "Adwaita"])
 
 shutil.rmtree(home, ignore_errors=True)
 print(f"\n{passed} passed, {failed} failed")

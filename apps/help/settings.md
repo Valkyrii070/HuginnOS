@@ -82,7 +82,9 @@ download an icon theme there (a .tar.gz or .tar.xz), then **Add icons from a fil
 puts its icon back.
 
 Appearance › **Pointer**: each pointer style shows its arrow, hand, text, waiting and moving pointers; click one to use
-it, and choose its size. Pointer styles you download are added the same way as icons.
+it, and choose its size. **Huginn** takes the realm's colours, with a soft glow round it; **Huginn Plain** is the
+same with an ordinary outline and no glow. Both follow the realm when you change it. Pointer styles you download are
+added the same way as icons.
 
 ## Accessibility
 Seeing: the screen reader (Orca) reads out what's on the screen (Super+Alt+S turns it on and off from anywhere); Zoom magnifies around the pointer (follow it, keep it centred, or push at the edges); Make everything bigger; High contrast; Solid surfaces instead of glass; Reduce motion; colour filters for colour blindness, or grey; and the pointer's size. Hearing: flash every screen white for a moment instead of playing the alert sound. **Live captions** (Super+Ctrl+L, or Live captions in the Control Centre) writes out what's playing, a video, a call or a game, in a dark bar over everything; drag it anywhere and it stays there, and hover it for its settings or to close it. It all happens on this computer with one of dictation's speech models (Settings › Keyboard & Mouse › Dictation; Quick keeps up best), in dictation's language; the sound never leaves the computer and nothing is kept. Choose the text size, the model when you have more than one, or Put Back the bar. Moving and typing: sticky keys (shortcuts one key at a time), slow keys (a key must be held a moment), bounce keys (ignore quick repeats), moving the pointer with the number keys, and the on-screen keyboard.

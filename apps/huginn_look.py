@@ -234,21 +234,30 @@ def _huginn_pointers() -> None:
 
 
 POINTER_THEMES = {"aurora": "Huginn", "bifrost": "Huginn-Bifrost", "muspelheim": "Huginn-Muspelheim", "niflheim": "Huginn-Niflheim"}
+# the same pointers with an ordinary outline and no glow (Settings › Appearance › Pointer: Huginn Plain)
+PLAIN_POINTER_THEMES = {realm: theme + "-Plain" for realm, theme in POINTER_THEMES.items()}
 
 
-def pointer_theme_for(realm: str) -> str:
-    """Huginn's pointers in a realm's colours (Aurora's are plain "Huginn"), when they're there."""
-    want = POINTER_THEMES.get(realm, "Huginn")
-    return want if (SHARE / "icons" / want / "cursors" / "default").exists() else "Huginn"
+def pointer_theme_for(realm: str, plain: bool = False) -> str:
+    """Huginn's pointers in a realm's colours (Aurora's are "Huginn"; plain ones "Huginn-Plain"…), when they're there."""
+    for want in ((PLAIN_POINTER_THEMES.get(realm, "Huginn-Plain"), "Huginn-Plain") if plain else ()) + (POINTER_THEMES.get(realm, "Huginn"),):
+        if (SHARE / "icons" / want / "cursors" / "default").exists():
+            return want
+    return "Huginn"
 
 
 def is_huginn_pointers(theme: str) -> bool:
-    return theme == "Huginn" or theme in POINTER_THEMES.values()
+    return theme == "Huginn" or theme in POINTER_THEMES.values() or theme in PLAIN_POINTER_THEMES.values()
+
+
+def is_plain_pointers(theme: str) -> bool:
+    return theme in PLAIN_POINTER_THEMES.values()
 
 
 def _realm_pointers(realm: str) -> bool:
     """Huginn's pointers follow the realm: when the pointer theme is Huginn's (any realm's), it becomes this realm's
-    (the compositor, Qt, GTK and X11 apps' default). Any other theme chosen in Settings stays. True when it changed."""
+    (the compositor, Qt, GTK and X11 apps' default), plain ones staying plain. Any other theme chosen in Settings stays.
+    True when it changed."""
     kin = CONFIG / "kcminputrc"
     ini = configparser.ConfigParser(interpolation=None, strict=False)
     ini.optionxform = str
@@ -257,7 +266,7 @@ def _realm_pointers(realm: str) -> bool:
     except configparser.Error:
         return False
     now = ini.get("Mouse", "cursorTheme", fallback="Huginn") or "Huginn"
-    want = pointer_theme_for(realm)
+    want = pointer_theme_for(realm, is_plain_pointers(now))
     if not is_huginn_pointers(now) or now == want:
         return False
     _ini(kin, {"cursorTheme": want}, "Mouse")
@@ -267,7 +276,8 @@ def _realm_pointers(realm: str) -> bool:
     _run(["gsettings", "set", "org.gnome.desktop.interface", "cursor-theme", want])
     default = Path.home() / ".icons" / "default" / "index.theme"
     try:
-        if default.exists() and any(f"Inherits={t}" in default.read_text(encoding="utf-8") for t in POINTER_THEMES.values()):
+        if default.exists() and any(f"Inherits={t}\n" in default.read_text(encoding="utf-8") + "\n"
+                                     for t in (*POINTER_THEMES.values(), *PLAIN_POINTER_THEMES.values())):
             default.write_text(f"[Icon Theme]\nInherits={want}\n", encoding="utf-8")
     except OSError:
         pass

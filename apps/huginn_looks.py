@@ -353,14 +353,14 @@ def list_pointer_themes() -> list:
             cur = folder / "cursors"
             if ident in seen or ident == "default" or not cur.is_dir():
                 continue
-            if ident.startswith("Huginn-"):                    # (Huginn's pointers in another realm's colours: "Huginn" follows the realm)
-                continue
+            if ident.startswith("Huginn-") and ident != "Huginn-Plain":   # (Huginn's in another realm's colours: "Huginn" and
+                continue                                                 # "Huginn-Plain" follow the realm)
             if not any((cur / n).exists() for n in ("left_ptr", "default", "arrow")):
                 continue
             seen.add(ident)
             info = _index(folder).get("Icon Theme", {})
             out.append({"id": ident, "name": info.get("Name", ident).replace("_", " "), "user": is_user_theme(ident), "folder": str(folder)})
-    first = {"Huginn": 0, "Adwaita": 1}
+    first = {"Huginn": 0, "Huginn-Plain": 1, "Adwaita": 2}
     return sorted(out, key=lambda t: (first.get(t["id"], 3), t["name"].lower()))
 
 
