@@ -76,3 +76,5 @@ oxygen-cursor-theme
 # KDE's is left, artwork included (2026-11-28)
 breeze-icon-theme
 kf6-breeze-icon-theme
+# GnuPG's passphrase window is Huginn's own (apps/huginn_pinentry.py); pinentry-qt brought KDE's libraries
+pinentry-qt

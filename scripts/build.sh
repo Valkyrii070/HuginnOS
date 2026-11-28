@@ -187,6 +187,16 @@ purge_unwanted() {
         in_chroot apt-get -y install "${missing[@]}"
     fi
     in_chroot apt-mark manual "${pkgs[@]}" >/dev/null
+    # Zero KDE: anything of KDE's still in the image (a dependency that changed) is said loudly and listed in the
+    # work folder, so it's seen at once rather than found later
+    local kde
+    kde="$(in_chroot dpkg-query -W -f='${Package}\n' 2>/dev/null | grep -E '^(kde|plasma|kwin|breeze|kf6|libkf6|libkf5|kio|kscreen|sddm|kded|kwallet|baloo|milou|kglobalacc|kactivit|libplasma|libkworkspace|libksysguard|qml6-module-org-kde|layer-shell-qt|liblayershellqt|qt6-style-kvantum|xdg-desktop-portal-kde|pinentry-qt)' || true)"
+    if [[ -n "$kde" ]]; then
+        printf '%s\n' "$kde" > "$WORK/kde-left.txt"
+        warn "KDE in the image ($(wc -l <<< "$kde") packages, listed in $WORK/kde-left.txt): add them to config/not-wanted.list or find what brings them"
+    else
+        rm -f "$WORK/kde-left.txt"
+    fi
     purge_old_kernels
 }
 

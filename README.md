@@ -1971,6 +1971,20 @@ package of the same app runs on the system's Qt, so it can. The App Store now of
   itself with stand-ins for flatpak, pkgcli and apt-cache: defaults, install, open, remove, the queue, a failure.
   The page in two pictures (preview mode). **Not tried installing a real package** from the store.
 
+## Zero KDE: the sweep of 2026-11-28
+
+Checked again from the package lists (every list's packages and their dependencies, as apt walks them with
+recommends off): no KDE package comes in. The one door left was GnuPG's: gpg-agent needs a pinentry, and the only
+graphical one that could be chosen (pinentry-qt) brings two KDE Frameworks libraries. So GnuPG now asks in Huginn's
+own window: **`apps/huginn_pinentry.py`** (`/usr/libexec/huginn-pinentry`, named in `/etc/gnupg/gpg-agent.conf`)
+speaks gpg-agent's Assuan protocol (descriptions, prompts, errors, a new passphrase typed twice, CONFIRM and MESSAGE,
+cancel as GnuPG's own error), shows `apps/qml/Pinentry.qml` (the administrator prompt's glass card, with a key), and
+hands over to pinentry-curses on a text console. Before, a passphrase asked for in the graphical session (Git signing
+from Code, Passwords' exports) had only the text pinentry, with no terminal to show it. pinentry-qt joined
+`not-wanted.list`, and the build now lists any KDE package that ends up in the image (`kde-left.txt` in the work
+folder) and says so loudly. `pinentry_test.py`: 16 checks, among them a real gpg-agent encrypting and decrypting
+with a passphrase through the pinentry's own conversation.
+
 ## Zero KDE: the shell's windows on Huginn's own module (2026-11-27)
 
 The last KDE code in the image was what the shell stood on: KDE's layer-shell-qt (how the bar, dock, launcher,
