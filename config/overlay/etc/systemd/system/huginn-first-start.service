@@ -1,0 +1,19 @@
+[Unit]
+Description=Huginn OS: what was chosen while installing (media formats, fonts, drivers, apps, things from Windows)
+Documentation=file:///usr/share/huginn-apps/huginn_first_start.py
+Wants=network-online.target
+After=network-online.target
+ConditionPathExists=/var/lib/huginn/first-start.json
+# keeps trying while there's no internet (it exits 75 then), every ten minutes
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+ExecStart=/usr/libexec/huginn-first-start
+Restart=on-failure
+RestartSec=10min
+Nice=10
+IOSchedulingClass=idle
+
+[Install]
+WantedBy=multi-user.target

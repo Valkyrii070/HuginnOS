@@ -6022,6 +6022,8 @@ def main() -> int:
     app = QGuiApplication(sys.argv[:1])
     app.setApplicationName(title)
     app.setDesktopFileName(f"huginn-{args.app}")
+    if args.app == "installer" and not args.light:          # the installer is always glass over the night sky
+        args.dark = True
     tokens, settings, theme = make_theme(args.dark, args.light, args.realm, persist=not args.shot, app=args.app)   # each app: its own colour
 
     sp = QStandardPaths
@@ -6149,9 +6151,9 @@ def main() -> int:
         backend = huginn_installer.Installer(args.demo)
         if args.demo and args.page:                         # previews: "disk" or "disk:shrink" opens that step
             step, _, mode = args.page.partition(":")
-            backend.showStep(step)
             if mode:
                 backend.setMode(mode)
+            backend.showStep(step)
     elif args.app == "tempo":
         import huginn_tempo
         backend = huginn_tempo.Tempo(args.demo)

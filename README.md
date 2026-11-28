@@ -1731,7 +1731,39 @@ above. Not seen: how smooth it looks on a real graphics card, more than one scre
 (the engine, as root). Started from the installation drive, the installer opens by itself; closing it leaves you
 trying Huginn OS, and it waits in the launcher.
 
-- **Steps**, in a rail at the left that can be gone back along: Welcome (language, then Try or Install), Keyboard
+- **The dock path** (2026-11-28, direction A of the installer mockups): the installer fills the screen with the night
+  sky. Its own top bar shows what it is, the network, the power, and help seeing, hearing and typing; each step sits in
+  a glass card; the steps are islands in a dock that keep their answers (any can be clicked; going forward stops at a
+  step with something missing), the one you're on raised and lit; the orb at the end is the last look, then Install.
+  Always dark (glass over the aurora), teal.
+  - New steps: **Ready?** (power from `/sys/class/power_supply`, room, the internet, Secure Boot from its EFI variable,
+    Windows' Fast Startup from the hibernation file's mark, BitLocker; graphics from `/sys/bus/pci`, Wi‑Fi, Bluetooth,
+    sound, a camera, memory; Wi‑Fi joined here); **Extras** (media formats downloaded from Ubuntu, built on the
+    computer, or not now; Microsoft's fonts with their licence; fonts for every script; NVIDIA's driver when there's an
+    NVIDIA card; printer drivers); **Apps** (what ships, game-development tools, Flathub, and the Linux versions of
+    apps found in Windows); **From Windows** (only when Windows stays: whose things, which folders with their counts,
+    copied or used where they are); **Safety** (encryption moved here, with an eight-word recovery key added as a
+    second LUKS key slot; restore points before updates, the firewall, security fixes by themselves). Help seeing and
+    typing (the screen reader, everything bigger, stronger contrast, less motion, the on-screen keyboard) works in the
+    installer at once and stays on for the person installed.
+  - `--probe-windows PART` (the engine, as root): Windows mounted read-only (ntfs3, else ntfs-3g) somewhere of its own,
+    its people and folders counted (for 12 s at most), apps found in Program Files, AppData and the Start menu,
+    unmounted.
+  - **After the first start** (`apps/huginn_first_start.py`, `huginn-first-start.service`): the engine writes what
+    needs the internet or time to `/var/lib/huginn/first-start.json`; the service, after the network, adds the
+    packages, NVIDIA's driver (`ubuntu-drivers`), apps from Flathub, builds FFmpeg with every format into `/usr/local`
+    (x264, x265, fdk-aac, libvpx, Opus, dav1d, LAME…), and copies the person's things from Windows (nothing
+    overwritten) or mounts Windows read-only at each start with a Windows folder in their home. Offline it exits 75 and
+    systemd tries again in ten minutes; each task is done once; one that fails three times is left and said in
+    `first-start.status.json`.
+  - Tested (`scripts/tests/installer_dock_test.py`, 54 checks): plans with the new parts and the ones refused (a
+    made-up recovery key, Windows on the disk being erased); what the first start is given; a made-up C: drive
+    surveyed (its people, not Public or Default; folders counted; four apps; Fast Startup on and off); the first
+    start's order, its dry run, copying without overwriting, mounting read-only once, waiting while offline, giving
+    up on a broken task after three tries; and the window: ten islands and the orb, answers kept, From Windows
+    there only when Windows stays, every new step's choices, the plan they make, the last look and the
+    installation's steps to the end, with no QML complaints.
+- **Steps** (before the dock path), in a rail at the left that can be gone back along: Welcome (language, then Try or Install), Keyboard
   (search, and a place to try it; picked from the language, applied to the live session at once), Network (Wi‑Fi
   through NetworkManager; optional), Disk, You (name → user name and computer name suggested, password with its
   strength, sign in by myself), Time zone (picked from the language), Ready (everything once more; the button says

@@ -9,17 +9,26 @@ disk) and writes one JSON line per step to stdout: {"step", "label", "fraction"}
                   goes in the room made after it),
                   "encrypt": false, "passphrase": "", "root": "/dev/sda3", "efi": "/dev/sda1", "formatEfi": false,
                   "hostname": "…", "user": {"name", "realName", "password", "autologin"}, "timezone": "Europe/Oslo",
-                  "locale": "nb_NO.UTF-8", "keyboard": {"layout": "no", "variant": ""}, "kernelArgs": ""}
+                  "locale": "nb_NO.UTF-8", "keyboard": {"layout": "no", "variant": ""}, "kernelArgs": "",
+                  "recoveryKey": "fjord-lantern-…" (encrypted: a second key that opens the disk),
+                  "extras": {"codecs": "download" | "build" | "none", "msfonts", "scripts", "printers", "nvidia"},
+                  "apps": {"gamedev", "flathub", "fromWindows": ["discord", …]},
+                  "windows": {"part": "/dev/sda3", "user": "Astrid", "folders": ["documents", …], "how": "copy" | "link"},
+                  "safety": {"restorePoints", "firewall", "autoUpdates"}}
     the steps    partition (sfdisk), format (FAT32 for EFI, btrfs with subvolumes @ for the system, @home, @snapshots
                  for restore points and @swap, LUKS2 when encrypted, with a plain ext4 /boot beside it), copy the
                  system (unsquashfs from the live medium), the kernel (casper keeps it beside the squashfs), settings
                  (hostname, fstab, crypttab, locale, keyboard, time zone, the person, sign-in), tidy up the live
                  session's pieces, initramfs and GRUB (UEFI with shim for Secure Boot, or BIOS), a swap file, the
-                 first restore point ("Just installed"), then unmount.
+                 first restore point ("Just installed"), then unmount. What needs the internet or time (media formats,
+                 fonts, drivers, apps from Flathub, your things from Windows) is written down for the first start:
+                 /var/lib/huginn/first-start.json, done in the background by huginn-first-start.service.
 
 Each disk action goes through Engine.run(), so tests can run the same engine against disk images.
 
     --probe-ntfs PART   (root) how far Windows' partition can shrink: one JSON line {"size", "min", "problem"}
+    --probe-windows PART  (root) what's in Windows, read-only: its people and their folders, apps with Linux
+                        versions, and whether it's half shut down (Fast Startup): one JSON line
 """
 import json
 import os
@@ -40,6 +49,149 @@ LIVE_ONLY = ["usr/share/applications/huginn-installer.desktop", "usr/share/polki
 WEIGHTS = [("disk", "Preparing the disk", 0.03), ("format", "Making the disk ready", 0.04), ("copy", "Copying Huginn OS", 0.68),
            ("kernel", "Copying the kernel", 0.01), ("settings", "Setting it up for you", 0.06), ("boot", "Making it start", 0.15),
            ("finish", "Finishing", 0.03)]
+
+
+# ---------------------------------------------------------------- what's done at the first start, and from Windows
+FIRST_START = "var/lib/huginn/first-start.json"
+CODEC_PACKAGES = ["ubuntu-restricted-addons", "libavcodec-extra", "gstreamer1.0-libav", "gstreamer1.0-plugins-ugly", "gstreamer1.0-plugins-bad"]
+SCRIPT_FONTS = ["fonts-noto-cjk", "fonts-noto-core", "fonts-noto-color-emoji"]
+PRINTER_PACKAGES = ["printer-driver-all", "hplip"]
+GAMEDEV_PACKAGES = ["git", "git-lfs", "podman", "build-essential", "clang", "cmake", "ninja-build", "python3-venv"]
+GAMEDEV_FLATPAKS = ["org.godotengine.Godot"]
+MSFONTS_EULA = "ttf-mscorefonts-installer msttcorefonts/accepted-mscorefonts-eula boolean true"
+# apps people use on Windows that have a Linux version on Flathub: key -> (name, Flathub id, what Windows calls it)
+WINDOWS_APPS = {
+    "discord": ("Discord", "com.discordapp.Discord", ("discord",)), "spotify": ("Spotify", "com.spotify.Client", ("spotify",)),
+    "vlc": ("VLC", "org.videolan.VLC", ("vlc media player", "videolan")), "obs": ("OBS Studio", "com.obsproject.Studio", ("obs studio", "obs-studio")),
+    "gimp": ("GIMP", "org.gimp.GIMP", ("gimp",)), "blender": ("Blender", "org.blender.Blender", ("blender",)),
+    "audacity": ("Audacity", "org.audacityteam.Audacity", ("audacity",)), "inkscape": ("Inkscape", "org.inkscape.Inkscape", ("inkscape",)),
+    "zoom": ("Zoom", "us.zoom.Zoom", ("zoom",)), "slack": ("Slack", "com.slack.Slack", ("slack",)),
+    "telegram": ("Telegram", "org.telegram.desktop", ("telegram",)), "signal": ("Signal", "org.signal.Signal", ("signal",)),
+    "vscode": ("Visual Studio Code", "com.visualstudio.code", ("visual studio code", "microsoft vs code")),
+    "chrome": ("Google Chrome", "com.google.Chrome", ("google chrome",)), "firefox": ("Firefox", "org.mozilla.firefox", ("firefox", "mozilla firefox")),
+    "thunderbird": ("Thunderbird", "org.mozilla.Thunderbird", ("thunderbird",)), "libreoffice": ("LibreOffice", "org.libreoffice.LibreOffice", ("libreoffice",)),
+    "heroic": ("Heroic (Epic and GOG games)", "com.heroicgameslauncher.hgl", ("epic games launcher", "gog galaxy")),
+    "kdenlive": ("Kdenlive", "org.kde.kdenlive", ("kdenlive",)), "krita": ("Krita", "org.kde.krita", ("krita",)),
+}
+WINDOWS_FOLDERS = {"documents": "Documents", "pictures": "Pictures", "music": "Music", "videos": "Videos", "desktop": "Desktop", "downloads": "Downloads"}
+NOT_PEOPLE = {"default", "default user", "public", "all users", "defaultappool", "wdagutilityaccount"}
+
+
+def first_start_tasks(plan: dict, windows_uuid: str = "") -> dict:
+    """What the plan asks for that is done at the first start, in the background: packages from Ubuntu (media formats,
+    fonts, printers, game-development tools), apps from Flathub, NVIDIA's driver, media formats built here, and the
+    person's things from Windows."""
+    ex, apps, win = plan.get("extras") or {}, plan.get("apps") or {}, plan.get("windows") or {}
+    packages, debconf, flatpaks, build = [], [], [], []
+    if ex.get("codecs") == "download":
+        packages += CODEC_PACKAGES
+    elif ex.get("codecs") == "build":
+        build.append("codecs")
+    if ex.get("msfonts"):
+        packages.append("ttf-mscorefonts-installer")
+        debconf.append(MSFONTS_EULA)
+    if ex.get("scripts"):
+        packages += SCRIPT_FONTS
+    if ex.get("printers"):
+        packages += PRINTER_PACKAGES
+    if apps.get("gamedev"):
+        packages += GAMEDEV_PACKAGES
+        flatpaks += GAMEDEV_FLATPAKS
+    flatpaks += [WINDOWS_APPS[k][1] for k in (apps.get("fromWindows") or []) if k in WINDOWS_APPS]
+    tasks = {"owner": (plan.get("user") or {}).get("name", ""), "packages": list(dict.fromkeys(packages)), "debconf": debconf,
+             "flatpaks": list(dict.fromkeys(flatpaks)), "flathub": apps.get("flathub", True) is not False, "build": build,
+             "drivers": bool(ex.get("nvidia")), "windows": None}
+    if windows_uuid and win.get("user") and (win.get("folders") or win.get("how") == "link"):
+        tasks["windows"] = {"uuid": windows_uuid, "user": str(win["user"]), "how": "link" if win.get("how") == "link" else "copy",
+                            "folders": [f for f in (win.get("folders") or []) if f in WINDOWS_FOLDERS]}
+    return tasks
+
+
+def windows_survey(root: Path, budget: float = 12.0) -> dict:
+    """What's in a Windows partition mounted at root (read-only): each person's folders (how many files, how big;
+    counting stops after `budget` seconds and says so), apps with Linux versions, and whether it's half shut down."""
+    out = {"users": [], "apps": [], "fastStartup": False, "counted": True}
+    try:
+        with open(root / "hiberfil.sys", "rb") as fh:        # Fast Startup leaves a hibernation file marked as in use
+            out["fastStartup"] = fh.read(4).lower() == b"hibr"
+    except OSError:
+        pass
+    users = root / "Users"
+    end = time.monotonic() + budget
+    try:
+        people = sorted(d for d in users.iterdir() if d.is_dir() and d.name.lower() not in NOT_PEOPLE and (d / "NTUSER.DAT").exists())
+    except OSError:
+        people = []
+    for d in people:
+        folders = {}
+        for key, name in WINDOWS_FOLDERS.items():
+            files = size = 0
+            for dirpath, _dirs, names in os.walk(d / name):
+                for n in names:
+                    try:
+                        size += os.lstat(os.path.join(dirpath, n)).st_size
+                        files += 1
+                    except OSError:
+                        pass
+                if time.monotonic() > end:
+                    out["counted"] = False
+                    break
+            folders[key] = {"files": files, "bytes": size}
+        out["users"].append({"name": d.name, "folders": folders})
+    seen = set()
+    places = [root / "Program Files", root / "Program Files (x86)", root / "ProgramData/Microsoft/Windows/Start Menu/Programs"]
+    for d in people:
+        places += [d / "AppData/Local", d / "AppData/Roaming", d / "AppData/Roaming/Microsoft/Windows/Start Menu/Programs"]
+    for place in places:
+        try:
+            names = [n.lower() for n in os.listdir(place)]
+        except OSError:
+            continue
+        for key, (_name, _id, words) in WINDOWS_APPS.items():
+            if key not in seen and any(any(n == w or n.startswith(w + " ") or n == w + ".lnk" or n.startswith(w + ".") for n in names) for w in words):
+                seen.add(key)
+    out["apps"] = sorted(seen)
+    return out
+
+
+def probe_windows(part: str) -> dict:
+    """Mount Windows read-only somewhere of its own, survey it, and let go of it."""
+    where = Path(tempfile.mkdtemp(prefix="huginn-windows-"))
+    try:
+        for cmd in (["mount", "-t", "ntfs3", "-o", "ro,nodev,nosuid,noexec", part, str(where)],
+                    ["mount", "-t", "ntfs-3g", "-o", "ro,nodev,nosuid,noexec", part, str(where)]):
+            r = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+            if r.returncode == 0:
+                break
+        else:
+            return {"users": [], "apps": [], "fastStartup": "hibernat" in (r.stderr or "").lower(), "problem": why_ntfs(r.stderr or "")}
+        try:
+            return dict(windows_survey(where), problem="")
+        finally:
+            subprocess.run(["umount", str(where)], capture_output=True, timeout=60)
+    finally:
+        try:
+            where.rmdir()
+        except OSError:
+            pass
+
+
+RECOVERY_WORDS = (
+    "acorn amber anchor antler apple arch arrow ash aspen aurora autumn badger barley basin beacon bear birch bison blaze bloom "
+    "boulder bramble breeze brook cabin canyon cedar cinder clover comet copper coral cove crane creek crest crystal cypress dawn "
+    "delta dew dune dusk eagle echo ember fable falcon fern field finch fjord flint forest fox frost garnet geyser glacier glade "
+    "granite grove gull harbor harvest hawk hazel heath heron hollow honey horizon iris island ivy jade juniper kelp kestrel lake "
+    "lantern larch lark laurel ledge lichen lily linden lotus lynx maple marble marsh meadow mesa meteor mint mist moose moss moth "
+    "nectar needle north oak oasis ocean olive onyx orbit orchid osprey otter owl pebble pepper pine plover plume pond poppy prairie "
+    "quartz quill rain raven reef ridge river robin rowan saffron sage salmon sand sapling shore sierra silver sky slate sparrow "
+    "spruce star stone storm summit swallow swan tern thistle thorn thrush tide timber topaz tundra twig valley velvet violet "
+    "walnut wave willow wind winter wren yarrow zephyr").split()
+
+
+def recovery_key(words: int = 8) -> str:
+    """A key that opens the disk if the password is forgotten: eight words (about 60 bits), easy to write down."""
+    import secrets
+    return "-".join(secrets.choice(RECOVERY_WORDS) for _ in range(words))
 
 
 class Failed(Exception):
@@ -217,6 +369,15 @@ def check_plan(p: dict) -> list:
             problems.append("Encryption needs the installer to make the partitions (erase, or use free space).")
     if p.get("encrypt") and len(p.get("passphrase", "")) < 8:
         problems.append("The disk password is too short (8 characters at least).")
+    if p.get("encrypt") and p.get("recoveryKey") and not re.fullmatch(r"[a-z]+(-[a-z]+){5,}", str(p["recoveryKey"])):
+        problems.append("The recovery key isn't one the installer made.")
+    if (p.get("extras") or {}).get("codecs", "none") not in ("download", "build", "none"):
+        problems.append("No way to add the media formats was chosen.")
+    win = p.get("windows") or {}
+    if win and (win.get("user") or win.get("folders")) and not re.fullmatch(r"/dev/[A-Za-z0-9/_-]+", str(win.get("part", ""))):
+        problems.append("Windows' partition wasn't named.")
+    if win and win.get("part") and p.get("mode") == "erase" and str(win["part"]).startswith(str(p.get("disk", "")) + ("p" if str(p.get("disk", ""))[-1:].isdigit() else "")):
+        problems.append("Windows is on the disk being erased: there'd be nothing to bring from it.")
     u = p.get("user") or {}
     if not good_username(u.get("name", "")):
         problems.append("The user name can only have small letters, digits, - and _, and must start with a letter.")
@@ -401,6 +562,14 @@ class Engine:
         root = self.dev["root"]
         if p.get("encrypt"):
             self.run(["cryptsetup", "luksFormat", "--type", "luks2", "--batch-mode", "--label", "Huginn OS", "--key-file=-", root], stdin=p["passphrase"], timeout=600)
+            if p.get("recoveryKey"):                       # a second key, for when the password is forgotten
+                fd, keyfile = tempfile.mkstemp(prefix="huginn-key-", dir="/run" if Path("/run").is_dir() else None)
+                try:
+                    os.write(fd, p["recoveryKey"].encode())
+                    os.close(fd)
+                    self.run(["cryptsetup", "luksAddKey", "--batch-mode", "--key-file=-", root, keyfile], stdin=p["passphrase"], timeout=600)
+                finally:
+                    os.unlink(keyfile)
             self.run(["cryptsetup", "open", "--key-file=-", root, MAPPER], stdin=p["passphrase"])
             self.opened = True
             self.dev["rootfs"] = f"/dev/mapper/{MAPPER}"
@@ -567,8 +736,87 @@ class Engine:
         for f in (t / "etc/machine-id", t / "var/lib/dbus/machine-id"):
             if f.exists():
                 f.write_text("") if f.name == "machine-id" and f.parent.name == "etc" else f.unlink()
+        self.safety()
+        self.access()
+        self.later()
         self.swapfile()
         self.step("settings", 1)
+
+    def safety(self) -> None:
+        """The firewall, restore points before updates, and updates by themselves, as chosen."""
+        sf, t = self.p.get("safety") or {}, self.t
+        ufw = t / "etc/ufw/ufw.conf"
+        if ufw.exists() and "firewall" in sf:
+            txt = ufw.read_text()
+            want = "yes" if sf["firewall"] else "no"
+            txt = re.sub(r"^ENABLED=.*$", f"ENABLED={want}", txt, flags=re.M) if re.search(r"^ENABLED=", txt, flags=re.M) else txt + f"ENABLED={want}\n"
+            ufw.write_text(txt)
+        hook = t / "etc/apt/apt.conf.d/80huginn-restore-point"
+        if sf.get("restorePoints") is False and hook.exists():
+            hook.unlink()
+        if "autoUpdates" in sf:
+            u = (self.p.get("user") or {}).get("name", "")
+            cfg = t / "home" / u / ".config/huginn-shell/settings.json"
+            try:
+                data = json.loads(cfg.read_text()) if cfg.exists() else {}
+            except ValueError:
+                data = {}
+            data["autoUpdate"] = "true" if sf["autoUpdates"] else "false"
+            cfg.parent.mkdir(parents=True, exist_ok=True)
+            cfg.write_text(json.dumps(data, indent=1))
+            self.run(["chown", "-R", f"{u}:{u}", f"/home/{u}/.config"], chroot=True, check=False)
+
+    def access(self) -> None:
+        """Help seeing, hearing and typing turned on while installing stays on: the screen reader, everything bigger,
+        less motion, the on-screen keyboard (the files Settings › Accessibility keeps them in)."""
+        ac = self.p.get("access") or {}
+        if not any(ac.values()):
+            return
+        u = (self.p.get("user") or {}).get("name", "")
+        cfg = self.t / "home" / u / ".config"
+        cfg.mkdir(parents=True, exist_ok=True)
+        js = cfg / "huginn-shell/settings.json"
+        try:
+            data = json.loads(js.read_text()) if js.exists() else {}
+        except ValueError:
+            data = {}
+        if ac.get("bigger"):
+            data["uiScale"] = "1.25"
+        if ac.get("motion"):
+            data["reduceMotion"] = "true"
+            (cfg / "kdeglobals").write_text("[KDE]\nAnimationDurationFactor=0\n")
+        js.parent.mkdir(parents=True, exist_ok=True)
+        js.write_text(json.dumps(data, indent=1))
+        if ac.get("reader"):
+            (cfg / "kaccessrc").write_text("[ScreenReader]\nEnabled=true\n")
+        if ac.get("osk"):
+            (cfg / "kwinrc").write_text("[Wayland]\nInputMethod=squeekboard\n")
+        self.run(["chown", "-R", f"{u}:{u}", f"/home/{u}/.config"], chroot=True, check=False)
+
+    def later(self) -> None:
+        """Write down what's done at the first start (it needs the internet, or time), and turn on what does it."""
+        win = self.p.get("windows") or {}
+        uuid = ""
+        if win.get("part") and win.get("user"):
+            try:
+                uuid = self.uuid(win["part"])
+            except (Failed, OSError, subprocess.SubprocessError):
+                uuid = ""
+        tasks = first_start_tasks(self.p, uuid)
+        busy = tasks["packages"] or tasks["flatpaks"] or tasks["build"] or tasks["drivers"] or tasks["windows"] or not tasks["flathub"]
+        if not busy:
+            return
+        f = self.t / FIRST_START
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text(json.dumps(tasks, indent=1))
+        os.chmod(f, 0o600)
+        unit = self.t / "etc/systemd/system/huginn-first-start.service"
+        if unit.exists():
+            wants = self.t / "etc/systemd/system/multi-user.target.wants"
+            wants.mkdir(parents=True, exist_ok=True)
+            link = wants / "huginn-first-start.service"
+            if not link.exists() and not link.is_symlink():
+                link.symlink_to("/etc/systemd/system/huginn-first-start.service")
 
     def groups(self, wanted: list) -> list:
         names = {line.split(":")[0] for line in (self.t / "etc/group").read_text().splitlines() if line}
@@ -747,6 +995,9 @@ def main() -> int:
         return 1
     if len(sys.argv) == 3 and sys.argv[1] == "--probe-ntfs" and re.fullmatch(r"/dev/[A-Za-z0-9/_-]+", sys.argv[2]):
         print(json.dumps(probe_ntfs(sys.argv[2])))
+        return 0
+    if len(sys.argv) == 3 and sys.argv[1] == "--probe-windows" and re.fullmatch(r"/dev/[A-Za-z0-9/_-]+", sys.argv[2]):
+        print(json.dumps(probe_windows(sys.argv[2])))
         return 0
     try:
         plan = json.loads(sys.stdin.read())
